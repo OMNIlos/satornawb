@@ -95,7 +95,33 @@ function marketplaceIdentity(text) {
 }
 
 function trackNumber(text) {
-  return text.match(/(?:трек|track|отслеживан(?:ие|ия))\s*[:#№-]?\s*([a-z0-9-]{5,})/iu)?.[1] || null
+  const value = String(text || '')
+  return (
+    value.match(/\b(P\d{2}\s?\d{3}\s?\d{3}\s?\d{3}R?)\b/iu)?.[1]
+    || value.match(/\b(103\s?\d{3}\s?\d{5})\b/u)?.[1]
+    || value.match(/\b(\d{3}\s?\d{3}\s?\d{3}\s?\d{5})\b/u)?.[1]
+    || value.match(/(?:трек|track|отслеживан(?:ие|ия))\s*[:#№-]?\s*([a-z0-9 -]{5,})/iu)?.[1]
+    || null
+  )
+}
+
+function deliveryService(text) {
+  if (/яндекс\s+доставк/iu.test(text)) return 'Яндекс Доставка'
+  if (/сдэк/iu.test(text)) return 'СДЭК'
+  if (/почта\s+россии/iu.test(text)) return 'Почта России'
+  if (/авито/iu.test(text)) return 'Авито'
+  return null
+}
+
+function statusFromText(text) {
+  const value = String(text || '').toLocaleLowerCase('ru-RU')
+  if (value.includes('возврат')) return 'on_return'
+  if (value.includes('отправьте заказ')) return 'ready_to_ship'
+  if (value.includes('ждёт выдачи') || value.includes('ждет выдачи') || value.includes('едет к покупателю')) return 'in_transit'
+  if (value.includes('напишите поддержке') || value.includes('спор')) return 'in_dispute'
+  if (value.includes('заказ отмен')) return 'canceled'
+  if (value.includes('заверш')) return 'closed'
+  return null
 }
 
 function itemUrl(root) {
@@ -130,6 +156,8 @@ function imageUrl(root) {
 
 function imageUrls(root, limit = 1) {
   const images = all(root, [
+    '[data-marker="images-row"] img',
+    'img[data-testid="image"]',
     'img[data-marker*="image"]',
     'img[src*="avito.st"]',
     'img[src]',
@@ -180,6 +208,8 @@ function imageUrlOld(root) {
 }
 
 function orderCandidates() {
+  const orderRows = Array.from(document.querySelectorAll('[data-marker="order-row"]'))
+  if (orderRows.length) return orderRows
   const nodes = all(document, [
     '[data-marker*="order"]',
     '[data-marker*="delivery"]',
@@ -193,6 +223,54 @@ function orderCandidates() {
       return text.length > 30 && /(заказ|отправлен|достав|трек|получател|покупател|авито доставка)/iu.test(text)
     })
     .slice(0, 80)
+}
+
+function orderDetailsLink(root) {
+  return first(root, [
+    'a[href^="/orders/"]',
+    'a[href*="/orders/"]',
+  ])
+}
+
+function orderIdFromLink(root) {
+  const href = orderDetailsLink(root)?.getAttribute('href') || ''
+  return href.match(/\/orders\/([^?/#]+)/i)?.[1] || null
+}
+
+function visibleProductImages(root, limit) {
+  const images = all(root, [
+    '[data-marker="images-row"] img',
+    'img[data-testid="image"]',
+    'img[alt][src*="avito.st"]',
+    'img[alt]',
+  ])
+  return images
+    .map((image) => ({
+      title: String(image.getAttribute('alt') || '').trim(),
+      url: absoluteUrl(image.currentSrc || image.src || image.getAttribute('src') || image.getAttribute('data-src')),
+    }))
+    .filter((item) => item.title || item.url)
+    .filter((item, index, array) => {
+      const key = `${item.title}|${item.url || ''}`
+      return array.findIndex((candidate) => `${candidate.title}|${candidate.url || ''}` === key) === index
+    })
+    .slice(0, limit)
+}
+
+function cleanFallbackTitle(text) {
+  return String(text || '')
+    .replace(/Отправьте заказ.*?(?=\d+\s*₽|$)/iu, '')
+    .replace(/Возврат:.*?(?=\d+\s*₽|$)/iu, '')
+    .replace(/Едет к покупателю.*?(?=\d+\s*₽|$)/iu, '')
+    .replace(/Жд[её]т выдачи покупателю.*?(?=\d+\s*₽|$)/iu, '')
+    .replace(/\bДо\s+\d{1,2}\s+[а-яё]+\s+включительно\b/giu, '')
+    .replace(/\d[\d\s]*₽(?:\s*·\s*\d+\s*товар[а-я]*)?/giu, '')
+    .replace(/\b(?:СДЭК|Яндекс Доставка|Почта России|Авито|Подробнее|Собрать)\b/giu, '')
+    .replace(/\bP\d{2}\s?\d{3}\s?\d{3}\s?\d{3}R?\b/giu, '')
+    .replace(/\b103\s?\d{3}\s?\d{5}\b/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120) || 'Товар Авито'
 }
 
 function showCollectorOverlay(lines, variant = 'info') {
@@ -224,21 +302,26 @@ function showCollectorOverlay(lines, variant = 'info') {
 function collectOrder(root, options) {
   const text = textOf(root)
   const url = itemUrl(root)
-  const title = itemTitle(root, text)
+  const imageLimit = options.photoMode === 'two' ? 2 : 1
+  const visibleImages = options.photoMode === 'none' ? [] : visibleProductImages(root, imageLimit)
+  const fallbackPhotos = options.photoMode === 'none' ? [] : imageUrls(root, imageLimit)
+  const fallbackTitle = itemTitle(root, text)
+  const title = visibleImages[0]?.title || (fallbackTitle === text.split(/[.!?]/)[0]?.slice(0, 120) ? cleanFallbackTitle(text) : fallbackTitle) || cleanFallbackTitle(text)
   const combined = [title, text].join('\n')
-  const photos = options.photoMode === 'none' ? [] : imageUrls(root, options.photoMode === 'two' ? 2 : 1)
   const parsedChatText = options.sizeMode === 'chat_ai' ? chatText(root) : null
-  const orderId = orderIdentity(text, root)
-  const marketplaceId = marketplaceIdentity(text)
+  const orderId = orderIdFromLink(root) || orderIdentity(text, root)
+  const marketplaceId = orderId || marketplaceIdentity(text)
   if (!orderId && !marketplaceId) return null
+  const itemPhotos = visibleImages.map((image) => image.url).filter(Boolean)
+  const photos = itemPhotos.length ? itemPhotos : fallbackPhotos
   return {
     orderId,
     marketplaceId,
-    status: null,
-    deliveryService: /авито доставк/iu.test(text) ? 'Avito Доставка' : null,
+    status: statusFromText(text),
+    deliveryService: deliveryService(text),
     trackNumber: trackNumber(text),
     buyerName: text.match(/(?:покупатель|получатель)\s*[:—-]\s*([а-яёa-z .-]{2,40})/iu)?.[1]?.trim() || null,
-    pageUrl: location.href,
+    pageUrl: absoluteUrl(orderDetailsLink(root)?.getAttribute('href')) || location.href,
     items: [{
       itemId: itemIdFromUrl(url),
       title,
@@ -280,7 +363,7 @@ function collectSnapshot(optionsPayload) {
     sellerArticle: missingRows.filter((item) => item.sellerArticle).length,
   }
   showCollectorOverlay([
-    `Найдено блоков: ${candidates.length}`,
+    `Найдено строк заказов Avito: ${candidates.length}`,
     `Собрано заказов: ${orders.length}`,
     `Позиций: ${items.length}`,
     `Не найдено: фото ${missing.imageUrl}, размер ${missing.size}, цвет ${missing.color}, артикул ${missing.sellerArticle}`,
