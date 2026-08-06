@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <title>Satorna Avito Orders</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <h1>Заказы Авито</h1>
+      <label>
+        Backend URL
+        <input id="backendUrl" placeholder="http://localhost:8000">
+      </label>
+      <label>
+        Токен Satorna
+        <input id="accessToken" type="password" placeholder="Bearer token из Satorna">
+      </label>
+      <div class="actions">
+        <button id="saveBtn" type="button">Сохранить</button>
+        <button id="collectBtn" type="button">Собрать заказы</button>
+      </div>
+      <p id="status">Откройте страницу заказов Avito и нажмите сбор.</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
