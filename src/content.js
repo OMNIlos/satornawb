@@ -104,7 +104,7 @@ function parseArticle(text) {
 
 function parseColor(text) {
   const lower = String(text || '').toLocaleLowerCase('ru-RU')
-  const explicit = lower.match(/цвет\s*[:—-]\s*([а-яёa-z -]{3,24})/iu)
+  const explicit = lower.match(/цвет\s*[:—-]?\s*([а-яёa-z -]{3,24})/iu)
   if (explicit?.[1]) return explicit[1].trim().split(/[,.]/)[0]
   const found = COLOR_HINTS.find(([hint]) => lower.includes(hint))
   return found?.[1] || null
@@ -112,13 +112,20 @@ function parseColor(text) {
 
 function parseSize(text) {
   const value = String(text || '')
-  const explicit = Array.from(value.matchAll(/(?:размер|р-р|size)\s*[:—-]?\s*([0-9]{2}(?:-[0-9]{2})?|[2-5]?XL|XXL|XS|[SML])/giu)).pop()
+  const explicit = Array.from(value.matchAll(/(?:размер|р-р|size)\s*[:—-]?\s*([0-9]{2}(?:-[0-9]{2})?(?:\s*\([^)]+\))?|[2-5]?XL|XXL|XS|[SML])/giu)).pop()
   if (explicit?.[1]) return explicit[1].toUpperCase()
   const numeric = Array.from(value.matchAll(/\b([3-6][0-9](?:-[3-6][0-9])?)\b/gu)).pop()
   if (numeric?.[1]) return numeric[1]
   const upper = ` ${value.toUpperCase()} `
   const found = SIZE_VALUES.find((size) => upper.includes(` ${size} `))
   return found || null
+}
+
+function normalizedTitle(value) {
+  return String(value || '')
+    .toLocaleLowerCase('ru-RU')
+    .replace(/[^a-zа-яё0-9]+/giu, ' ')
+    .trim()
 }
 
 function orderIdentity(text, root) {
@@ -341,17 +348,43 @@ function documentImageUrls(root, limit) {
 }
 
 function itemUrlsFromDocument(root) {
+  const html = String(root.documentElement?.innerHTML || '')
+    .replace(/\\u002F/g, '/')
+    .replace(/\\\//g, '/')
   const urls = all(root, [
     'a[href*="/items/"]',
     'a[href*="_"][href*="/"]',
   ])
     .map((link) => absoluteUrl(link.getAttribute('href')))
     .filter((url) => url && /avito\.ru\/.+_\d{5,}/i.test(url))
+  const htmlUrls = Array.from(html.matchAll(/(?:https:\/\/www\.avito\.ru)?(\/[a-zа-яё0-9_%/-]+_\d{5,})(?:[?"'<\s]|$)/giu))
+    .map((match) => absoluteUrl(match[1]))
+    .filter((url) => url && /avito\.ru\/.+_\d{5,}/i.test(url))
   const canonical = root.querySelector('link[rel="canonical"]')?.getAttribute('href')
   const ogUrl = metaContent(root, 'meta[property="og:url"]')
-  return [...urls, absoluteUrl(canonical), absoluteUrl(ogUrl)]
+  return [...urls, ...htmlUrls, absoluteUrl(canonical), absoluteUrl(ogUrl)]
     .filter((url) => url && !/\/orders\//i.test(url))
     .filter((url, index, array) => array.indexOf(url) === index)
+}
+
+function searchResultUrls(root, queryTitle) {
+  const titleNeedle = normalizedTitle(queryTitle).split(' ').filter((part) => part.length > 2).slice(0, 5)
+  const urls = all(root, [
+    '[data-marker="item"] a[href*="_"]',
+    '[data-marker="item-title"]',
+    'a[itemprop="url"]',
+    'a[href*="_"]',
+  ])
+    .map((node) => {
+      const link = node.tagName === 'A' ? node : node.closest?.('a[href]')
+      const href = absoluteUrl(link?.getAttribute('href'))
+      const text = normalizedTitle(textOf(link) || link?.getAttribute('title') || '')
+      return { href, score: titleNeedle.filter((part) => text.includes(part)).length }
+    })
+    .filter((row) => row.href && /avito\.ru\/.+_\d{5,}/i.test(row.href) && !/\/orders\//i.test(row.href))
+    .sort((a, b) => b.score - a.score)
+    .map((row) => row.href)
+  return urls.filter((url, index, array) => array.indexOf(url) === index)
 }
 
 function extractCurrentPageDetails(optionsPayload) {
@@ -368,6 +401,7 @@ function extractCurrentPageDetails(optionsPayload) {
     description,
     images,
     itemUrls: itemUrlsFromDocument(document),
+    searchUrls: searchResultUrls(document, optionsPayload?.queryTitle || ''),
     itemId: itemIdFromUrl(location.href),
     status: statusFromText(text),
     deliveryService: deliveryService(text),
@@ -395,6 +429,20 @@ function requestTabDetails(url, options) {
         return
       }
       resolve({ ok: true, details: response.details || null })
+    })
+  })
+}
+
+function findItemByTitle(title, options) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'AVITO_FIND_ITEM_TAB', title, options }, (response) => {
+      if (chrome.runtime.lastError || !response?.ok) {
+        const error = chrome.runtime.lastError?.message || response?.error || 'Не удалось найти объявление'
+        logEvent('warn', 'item search failed', { title, error })
+        resolve({ ok: false, error })
+        return
+      }
+      resolve({ ok: true, url: response.url || null, details: response.details || null })
     })
   })
 }
@@ -451,14 +499,21 @@ async function enrichOrderFromDetails(order, options) {
     if (detailChatText && !item.chatText) item.chatText = detailChatText
 
     const itemUrl = item.itemUrl || itemUrls[itemIndex] || itemUrls[0]
-    if (!itemUrl) continue
-    const itemResponse = await requestTabDetails(itemUrl, options)
+    let itemResponse = itemUrl ? await requestTabDetails(itemUrl, options) : null
+    if (!itemResponse?.ok && !itemUrl && item.title) {
+      const searchResponse = await findItemByTitle(item.title, options)
+      if (searchResponse?.ok && searchResponse.details) {
+        itemResponse = { ok: true, details: searchResponse.details }
+      } else if (searchResponse?.error) {
+        errors.push(searchResponse.error)
+      }
+    }
     const itemDetails = itemResponse?.ok ? itemResponse.details : null
     if (itemDetails) {
       itemPages += 1
       mergeItemDetails(item, {
-        itemUrl,
-        itemId: itemDetails.itemId || itemIdFromUrl(itemUrl),
+        itemUrl: itemDetails.url || itemUrl,
+        itemId: itemDetails.itemId || itemIdFromUrl(itemDetails.url || itemUrl),
         title: itemDetails.title,
         description: itemDetails.description,
         images: options.photoMode === 'none' ? [] : (itemDetails.images || []).slice(0, imageLimit),

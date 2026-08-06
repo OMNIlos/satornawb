@@ -206,6 +206,22 @@ async function extractDetailsInTab(url, options) {
   }
 }
 
+async function findItemByTitle(title, options) {
+  const query = String(title || '').trim()
+  if (!query) throw new Error('Нет названия товара для поиска объявления')
+  const searchUrl = `https://www.avito.ru/all?q=${encodeURIComponent(query)}`
+  await writeLog('info', 'opening item search tab', { title: query, url: searchUrl })
+  const search = await extractDetailsInTab(searchUrl, { ...(options || {}), queryTitle: query })
+  const foundUrl = Array.isArray(search.searchUrls) ? search.searchUrls[0] : null
+  if (!foundUrl) {
+    await writeLog('warn', 'item search returned no urls', { title: query })
+    return { url: null, details: null }
+  }
+  await writeLog('info', 'item search matched url', { title: query, url: foundUrl })
+  const details = await extractDetailsInTab(foundUrl, options || {})
+  return { url: foundUrl, details }
+}
+
 async function avitoOrdersTab() {
   const tabs = await tabsQuery({ url: 'https://www.avito.ru/orders*' })
   const existing = tabs.find((tab) => tab.id)
@@ -264,6 +280,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'AVITO_EXTRACT_DETAILS_TAB') {
     extractDetailsInTab(message.url, message.options)
       .then((response) => sendResponse({ ok: true, details: response }))
+      .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }))
+    return true
+  }
+  if (message?.type === 'AVITO_FIND_ITEM_TAB') {
+    findItemByTitle(message.title, message.options)
+      .then((response) => sendResponse({ ok: true, ...response }))
       .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }))
     return true
   }
