@@ -16,7 +16,7 @@ Chrome Manifest V3 extension for collecting Avito seller order details that are 
 10. Paste the long-lived `sat_avito_...` token and API Backend URL into the extension popup.
 11. Open a logged-in Avito orders page and click `Собрать заказы`.
 
-`API Backend URL` can be local, for example `http://localhost:8000`, or production, for example `https://api.your-domain.ru`. Do not paste the frontend URL such as `https://ogni-frontend.vercel.app`; the extension must post to the API backend.
+`API Backend URL` can be local, for example `http://localhost:8000`, direct production API, for example `https://api.your-domain.ru`, or the production frontend URL if it proxies `/api/v1/avito/orders/browser-snapshot`, for example `https://ogni-frontend.vercel.app`.
 
 ## What It Sends
 

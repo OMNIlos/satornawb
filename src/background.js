@@ -76,7 +76,7 @@ async function postSnapshot(payload) {
       // Ignore body read failures.
     }
     if (response.status === 405 && looksLikeFrontendUrl(backendUrl)) {
-      throw new Error('В Backend URL вставлен адрес фронта. Скопируйте именно API Backend URL на странице /avito/orders и сохраните его в расширении.')
+      throw new Error('Фронт ещё не принимает заказы расширения. Обновите деплой фронта или проверьте, что на нём включён proxy в API backend.')
     }
     throw new Error(message)
   }
