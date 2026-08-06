@@ -344,6 +344,41 @@ function itemUrlsFromDocument(root) {
     .filter((url, index, array) => array.indexOf(url) === index)
 }
 
+function extractCurrentPageDetails(optionsPayload) {
+  const options = normalizeOptions(optionsPayload)
+  const imageLimit = options.photoMode === 'two' ? 2 : 1
+  const text = textOf(document)
+  const title = documentTitle(document)
+  const description = documentDescription(document)
+  const images = options.photoMode === 'none' ? [] : documentImageUrls(document, imageLimit)
+  return {
+    ok: true,
+    url: location.href,
+    title,
+    description,
+    images,
+    itemUrls: itemUrlsFromDocument(document),
+    itemId: itemIdFromUrl(location.href),
+    status: statusFromText(text),
+    deliveryService: deliveryService(text),
+    trackNumber: trackNumber(text),
+    chatText: options.sizeMode === 'chat_ai' ? chatText(document) || text.slice(0, 4000) : null,
+    textPreview: text.slice(0, 1000),
+  }
+}
+
+function requestTabDetails(url, options) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'AVITO_EXTRACT_DETAILS_TAB', url, options }, (response) => {
+      if (chrome.runtime.lastError || !response?.ok) {
+        resolve({ ok: false, error: chrome.runtime.lastError?.message || response?.error || 'Не удалось открыть деталку' })
+        return
+      }
+      resolve({ ok: true, details: response.details || null })
+    })
+  })
+}
+
 function mergeItemDetails(item, details, options) {
   const text = [details.title, details.description, item.description].filter(Boolean).join('\n')
   const photos = details.images?.length ? details.images : item.imageUrls || []
@@ -361,27 +396,27 @@ function mergeItemDetails(item, details, options) {
 async function enrichOrderFromDetails(order, options) {
   const detailUrls = [order.pageUrl].filter((url) => url && !url.includes('#'))
   const imageLimit = options.photoMode === 'two' ? 2 : 1
-  let orderDoc = null
+  let orderDetails = null
+  const errors = []
   for (const url of detailUrls) {
-    try {
-      orderDoc = await fetchDocument(url)
+    const response = await requestTabDetails(url, options)
+    if (response?.ok && response.details) {
+      orderDetails = response.details
       break
-    } catch (_error) {
-      orderDoc = null
     }
+    if (response?.error) errors.push(response.error)
   }
-  if (!orderDoc) return { order, checked: false, itemPages: 0 }
+  if (!orderDetails) return { order, checked: false, itemPages: 0, errors }
 
-  if (!order.status) order.status = statusFromText(textOf(orderDoc))
-  if (!order.deliveryService) order.deliveryService = deliveryService(textOf(orderDoc))
-  if (!order.trackNumber) order.trackNumber = trackNumber(textOf(orderDoc))
+  if (!order.status) order.status = orderDetails.status
+  if (!order.deliveryService) order.deliveryService = orderDetails.deliveryService
+  if (!order.trackNumber) order.trackNumber = orderDetails.trackNumber
 
-  const itemUrls = itemUrlsFromDocument(orderDoc)
-  const orderImages = options.photoMode === 'none' ? [] : documentImageUrls(orderDoc, imageLimit)
-  const orderDescription = documentDescription(orderDoc)
-  const orderTitle = documentTitle(orderDoc)
-  const detailTexts = [orderTitle, orderDescription, textOf(orderDoc)].filter(Boolean).join('\n')
-  const detailChatText = options.sizeMode === 'chat_ai' ? chatText(orderDoc) || detailTexts.slice(0, 4000) : null
+  const itemUrls = orderDetails.itemUrls || []
+  const orderImages = options.photoMode === 'none' ? [] : (orderDetails.images || []).slice(0, imageLimit)
+  const orderDescription = orderDetails.description || ''
+  const orderTitle = orderDetails.title || null
+  const detailChatText = orderDetails.chatText || null
   let itemPages = 0
 
   if (!order.items.length) order.items = [{ title: orderTitle || 'Товар Авито', quantity: 1 }]
@@ -397,25 +432,25 @@ async function enrichOrderFromDetails(order, options) {
 
     const itemUrl = item.itemUrl || itemUrls[itemIndex] || itemUrls[0]
     if (!itemUrl) continue
-    try {
-      const itemDoc = await fetchDocument(itemUrl)
+    const itemResponse = await requestTabDetails(itemUrl, options)
+    const itemDetails = itemResponse?.ok ? itemResponse.details : null
+    if (itemDetails) {
       itemPages += 1
-      const description = documentDescription(itemDoc)
-      const title = documentTitle(itemDoc)
-      const images = options.photoMode === 'none' ? [] : documentImageUrls(itemDoc, imageLimit)
       mergeItemDetails(item, {
         itemUrl,
-        itemId: itemIdFromUrl(itemUrl),
-        title,
-        description,
-        images,
+        itemId: itemDetails.itemId || itemIdFromUrl(itemUrl),
+        title: itemDetails.title,
+        description: itemDetails.description,
+        images: options.photoMode === 'none' ? [] : (itemDetails.images || []).slice(0, imageLimit),
       }, options)
-    } catch (_error) {
+      if (itemDetails.chatText && !item.chatText) item.chatText = itemDetails.chatText
+    } else {
+      if (itemResponse?.error) errors.push(itemResponse.error)
       if (!item.itemUrl) item.itemUrl = itemUrl
       if (!item.itemId) item.itemId = itemIdFromUrl(itemUrl)
     }
   }
-  return { order, checked: true, itemPages }
+  return { order, checked: true, itemPages, errors }
 }
 
 function cleanFallbackTitle(text) {
@@ -709,6 +744,7 @@ async function collectSnapshot(optionsPayload) {
   const collected = []
   let detailPages = 0
   let itemPages = 0
+  const detailErrors = []
   for (let index = 0; index < candidates.length; index += 1) {
     const baseOrder = collectOrder(candidates[index], options)
     if (baseOrder) {
@@ -726,6 +762,7 @@ async function collectSnapshot(optionsPayload) {
       const enriched = await enrichOrderFromDetails(baseOrder, options)
       if (enriched.checked) detailPages += 1
       itemPages += enriched.itemPages || 0
+      if (enriched.errors?.length) detailErrors.push(...enriched.errors)
       collected.push(enriched.order)
     }
     if (index === 0 || (index + 1) % 2 === 0 || index + 1 === candidates.length) {
@@ -734,6 +771,7 @@ async function collectSnapshot(optionsPayload) {
       showCollectorOverlay([
         `Обработано заказов: ${index + 1} из ${candidates.length}`,
         `Деталок заказа: ${detailPages}, объявлений: ${itemPages}`,
+        detailErrors.length ? `Ошибок деталок: ${detailErrors.length} · ${detailErrors[detailErrors.length - 1]}` : 'Деталки читаются через вкладки расширения',
       ], 'info', {
         phase: 'Собираем описания и фото',
         candidates: candidates.length,
@@ -753,6 +791,7 @@ async function collectSnapshot(optionsPayload) {
     `Собрано заказов: ${orders.length}`,
     `Позиций: ${items.length}`,
     `Проверено деталок: ${detailPages}, объявлений: ${itemPages}`,
+    detailErrors.length ? `Ошибок деталок: ${detailErrors.length} · последняя: ${detailErrors[detailErrors.length - 1]}` : 'Ошибок деталок нет',
     `Не найдено: фото ${missing.imageUrl}, размер ${missing.size}, цвет ${missing.color}, артикул ${missing.sellerArticle}`,
   ], 'ok', {
     phase: 'Сбор завершен',
@@ -776,6 +815,7 @@ async function collectSnapshot(optionsPayload) {
       notes: [
         'Собраны данные со страницы заказов, деталей заказа и доступных страниц объявлений Avito.',
         `Проверено деталей заказа: ${detailPages}. Проверено объявлений: ${itemPages}.`,
+        detailErrors.length ? `Ошибки деталей: ${detailErrors.slice(-3).join(' | ')}` : 'Ошибок деталей нет.',
         options.sizeMode === 'chat_ai'
           ? 'Размер будет дополнительно проверен backend AI-разбором по тексту чата.'
           : 'AI не используется, если размер выбран из описания или отключен.',
@@ -786,6 +826,10 @@ async function collectSnapshot(optionsPayload) {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'AVITO_PAGE_EXTRACT_DETAILS') {
+    sendResponse(extractCurrentPageDetails(message.options))
+    return false
+  }
   if (message?.type !== 'AVITO_ORDERS_COLLECT_NOW') return false
   collectSnapshot(message.options)
     .then((payload) => sendResponse({ ok: true, payload }))

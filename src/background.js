@@ -101,6 +101,10 @@ function tabsUpdate(tabId, updateProperties) {
   return new Promise((resolve) => chrome.tabs.update(tabId, updateProperties, resolve))
 }
 
+function tabsRemove(tabId) {
+  return new Promise((resolve) => chrome.tabs.remove(tabId, resolve))
+}
+
 function tabsSendMessage(tabId, message) {
   return new Promise((resolve, reject) => {
     chrome.tabs.sendMessage(tabId, message, (response) => {
@@ -142,6 +146,30 @@ function waitForTabComplete(tabId, timeoutMs = 30000) {
   })
 }
 
+function assertAvitoUrl(value) {
+  const url = new URL(String(value || ''))
+  if (url.protocol !== 'https:' || url.hostname !== 'www.avito.ru') {
+    throw new Error('Расширение может открывать детали только на www.avito.ru')
+  }
+  return url.toString()
+}
+
+async function extractDetailsInTab(url, options) {
+  const resolvedUrl = assertAvitoUrl(url)
+  const tab = await tabsCreate({ url: resolvedUrl, active: false })
+  if (!tab?.id) throw new Error('Не удалось открыть деталку Avito')
+  try {
+    await waitForTabComplete(tab.id, 45000)
+    await executeContentScript(tab.id)
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    const response = await tabsSendMessage(tab.id, { type: 'AVITO_PAGE_EXTRACT_DETAILS', options: options || {} })
+    if (!response?.ok) throw new Error(response?.error || 'Не удалось прочитать деталку Avito')
+    return response
+  } finally {
+    await tabsRemove(tab.id)
+  }
+}
+
 async function avitoOrdersTab() {
   const tabs = await tabsQuery({ url: 'https://www.avito.ru/orders*' })
   const existing = tabs.find((tab) => tab.id)
@@ -181,6 +209,12 @@ async function collectAndPostFromAvito() {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'AVITO_EXTRACT_DETAILS_TAB') {
+    extractDetailsInTab(message.url, message.options)
+      .then((response) => sendResponse({ ok: true, details: response }))
+      .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }))
+    return true
+  }
   if (message?.type === 'AVITO_ORDERS_OPEN_AND_COLLECT') {
     collectAndPostFromAvito()
       .then(sendResponse)
