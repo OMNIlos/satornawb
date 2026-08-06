@@ -4,12 +4,14 @@ Chrome Manifest V3 extension for collecting Avito seller order details that are 
 
 ## Local Install
 
-1. Open `chrome://extensions`.
-2. Enable Developer mode.
-3. Click Load unpacked.
-4. Select this folder: `avito-orders-extension`.
-5. Open a logged-in Avito orders page.
-6. Open the extension popup, set backend URL, paste the Satorna access token, and click `Собрать заказы`.
+1. Run `npm install`.
+2. Run `npm run build`.
+3. Open `chrome://extensions`.
+4. Enable Developer mode.
+5. Click Load unpacked.
+6. Select `avito-orders-extension/dist`.
+7. Open a logged-in Avito orders page.
+8. Open the extension popup, set backend URL, paste the Satorna access token, and click `Собрать заказы`.
 
 ## What It Sends
 

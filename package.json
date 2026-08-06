@@ -1,0 +1,10 @@
+{
+  "name": "satorna-avito-orders-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/content.js && node --check src/background.js && node --check src/popup.js && node scripts/validate-manifest.mjs",
+    "build": "npm run check && node scripts/build.mjs"
+  }
+}
