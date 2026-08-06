@@ -1,5 +1,6 @@
-const DEFAULT_BACKEND_URL = 'http://localhost:8000'
+const DEFAULT_BACKEND_URL = 'https://ogni-frontend.vercel.app'
 const SNAPSHOT_PATH = '/api/v1/avito/orders/browser-snapshot'
+const AVITO_ORDERS_URL = 'https://www.avito.ru/orders'
 
 function normalizeBackendUrl(value) {
   const text = String(value || DEFAULT_BACKEND_URL).trim().replace(/\/+$/, '')
@@ -38,7 +39,6 @@ function authorizationValue(value) {
 
 async function readSettings() {
   return chrome.storage.sync.get({
-    backendUrl: DEFAULT_BACKEND_URL,
     accessToken: '',
     lastStatus: '',
     lastSnapshotAt: '',
@@ -58,7 +58,7 @@ async function postSnapshot(payload) {
   if (!token) {
     throw new Error('Добавьте токен Satorna в настройках расширения')
   }
-  const backendUrl = await resolveBackendUrl(settings.backendUrl)
+  const backendUrl = await resolveBackendUrl(DEFAULT_BACKEND_URL)
   const response = await fetch(`${backendUrl}${SNAPSHOT_PATH}`, {
     method: 'POST',
     headers: {
@@ -83,7 +83,104 @@ async function postSnapshot(payload) {
   return response.json()
 }
 
+function tabsQuery(query) {
+  return new Promise((resolve) => chrome.tabs.query(query, resolve))
+}
+
+function tabsCreate(createProperties) {
+  return new Promise((resolve) => chrome.tabs.create(createProperties, resolve))
+}
+
+function tabsUpdate(tabId, updateProperties) {
+  return new Promise((resolve) => chrome.tabs.update(tabId, updateProperties, resolve))
+}
+
+function tabsSendMessage(tabId, message) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      const error = chrome.runtime.lastError
+      if (error) {
+        reject(new Error(error.message))
+        return
+      }
+      resolve(response)
+    })
+  })
+}
+
+function executeContentScript(tabId) {
+  return chrome.scripting.executeScript({ target: { tabId }, files: ['src/content.js'] })
+}
+
+function waitForTabComplete(tabId, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener)
+      reject(new Error('Avito долго загружается. Откройте страницу заказов и попробуйте ещё раз.'))
+    }, timeoutMs)
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId !== tabId || changeInfo.status !== 'complete') return
+      clearTimeout(timer)
+      chrome.tabs.onUpdated.removeListener(listener)
+      resolve()
+    }
+    chrome.tabs.onUpdated.addListener(listener)
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError) return
+      if (tab?.status === 'complete') {
+        clearTimeout(timer)
+        chrome.tabs.onUpdated.removeListener(listener)
+        resolve()
+      }
+    })
+  })
+}
+
+async function avitoOrdersTab() {
+  const tabs = await tabsQuery({ url: 'https://www.avito.ru/orders*' })
+  const existing = tabs.find((tab) => tab.id)
+  if (existing?.id) {
+    await tabsUpdate(existing.id, { active: true })
+    return existing
+  }
+  return tabsCreate({ url: AVITO_ORDERS_URL, active: true })
+}
+
+async function collectFromAvitoOrdersPage() {
+  const tab = await avitoOrdersTab()
+  if (!tab?.id) throw new Error('Не удалось открыть страницу заказов Avito')
+  await waitForTabComplete(tab.id)
+  try {
+    return await tabsSendMessage(tab.id, { type: 'AVITO_ORDERS_COLLECT_NOW' })
+  } catch (_error) {
+    await executeContentScript(tab.id)
+    return tabsSendMessage(tab.id, { type: 'AVITO_ORDERS_COLLECT_NOW' })
+  }
+}
+
+async function collectAndPostFromAvito() {
+  await saveStatus({ ok: false, message: 'Открываем заказы Avito...' })
+  const collected = await collectFromAvitoOrdersPage()
+  if (!collected?.ok) throw new Error(collected?.error || 'Не удалось прочитать страницу заказов Avito')
+  const payload = collected.payload
+  await saveStatus({ ok: false, message: `Нашли заказов на странице: ${payload?.orders?.length || 0}. Отправляем в Satorna...` })
+  const result = await postSnapshot(payload)
+  const meta = result?.browserSnapshot
+  const text = `Собрано заказов: ${meta?.orders ?? payload?.orders?.length ?? 0}`
+  await saveStatus({ ok: true, message: text })
+  return { ok: true, result, message: text }
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'AVITO_ORDERS_OPEN_AND_COLLECT') {
+    collectAndPostFromAvito()
+      .then(sendResponse)
+      .catch((error) => {
+        const text = error instanceof Error ? error.message : String(error)
+        return saveStatus({ ok: false, message: text }).then(() => sendResponse({ ok: false, error: text }))
+      })
+    return true
+  }
   if (message?.type !== 'AVITO_ORDERS_COLLECTED') return false
   postSnapshot(message.payload)
     .then((result) => {

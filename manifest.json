@@ -3,7 +3,7 @@
   "name": "Satorna Avito Orders Collector",
   "version": "0.1.0",
   "description": "Collects Avito order details from the seller browser page for Satorna picking lists.",
-  "permissions": ["activeTab", "storage", "scripting"],
+  "permissions": ["activeTab", "storage", "scripting", "tabs"],
   "host_permissions": ["https://www.avito.ru/*", "http://localhost:*/*", "http://127.0.0.1:*/*", "https://*/*"],
   "background": {
     "service_worker": "src/background.js"
