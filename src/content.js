@@ -163,8 +163,7 @@ function parseColor(text) {
   const lower = String(text || '').toLocaleLowerCase('ru-RU')
   const explicit = lower.match(/цвет\s*[:—-]?\s*([а-яёa-z -]{3,24})/iu)
   if (explicit?.[1]) return explicit[1].trim().split(/[,.]/)[0]
-  const found = COLOR_HINTS.find(([hint]) => lower.includes(hint))
-  return found?.[1] || null
+  return null
 }
 
 function parseSize(text) {
@@ -183,6 +182,33 @@ function normalizedTitle(value) {
     .toLocaleLowerCase('ru-RU')
     .replace(/[^a-zа-яё0-9]+/giu, ' ')
     .trim()
+}
+
+function slugifyAvitoTitle(title) {
+  const map = {
+    а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e',
+    ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l',
+    м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's',
+    т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch',
+    ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e',
+    ю: 'yu', я: 'ya',
+  }
+  return String(title || '')
+    .toLocaleLowerCase('ru-RU')
+    .replace(/[а-яё]/giu, (char) => map[char.toLocaleLowerCase('ru-RU')] ?? char)
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+function extractAvitoItemIdFromText(text) {
+  const ids = String(text || '').match(/\b\d{9,12}\b/g) || []
+  return ids.find((id) => !id.startsWith('70000000') && !id.startsWith('103')) || null
+}
+
+function buildAvitoItemUrl(title, itemId) {
+  const slug = slugifyAvitoTitle(title)
+  if (!slug || !itemId) return null
+  return `https://www.avito.ru/voronezh/odezhda_obuv_aksessuary/${slug}_${itemId}`
 }
 
 function orderIdentity(text, root) {
@@ -597,6 +623,7 @@ async function extractCurrentPageDetails(optionsPayload) {
   const options = normalizeOptions(optionsPayload)
   const imageLimit = options.photoMode === 'two' ? 2 : 1
   const text = textOf(document)
+  const rawText = String(document.body?.innerText || text)
   const title = documentTitle(document)
   const description = documentDescription(document)
   const images = options.photoMode === 'none' ? [] : documentImageUrls(document, imageLimit)
@@ -606,6 +633,7 @@ async function extractCurrentPageDetails(optionsPayload) {
     url: location.href,
     title,
     description,
+    pageText: rawText,
     images,
     itemUrls: resolved.candidates.map((item) => item.url),
     itemUrlCandidates: resolved.candidates.slice(0, 20),
@@ -619,7 +647,7 @@ async function extractCurrentPageDetails(optionsPayload) {
     deliveryService: deliveryService(text),
     trackNumber: trackNumber(text),
     chatText: options.sizeMode === 'chat_ai' ? chatText(document) || text.slice(0, 4000) : null,
-    textPreview: text.slice(0, 1000),
+    textPreview: rawText.slice(0, 1000),
   }
   logEvent('info', 'page details extracted', {
     url: details.url,
@@ -650,7 +678,7 @@ function requestTabDetails(url, options) {
 }
 
 function mergeItemDetails(item, details, options) {
-  const text = [details.title, details.description, item.description].filter(Boolean).join('\n')
+  const text = [details.pageText, details.description, item.description].filter(Boolean).join('\n')
   const photos = details.images?.length ? details.images : item.imageUrls || []
   if (details.itemUrl && !item.itemUrl) item.itemUrl = details.itemUrl
   if (details.itemId && !item.itemId) item.itemId = details.itemId
@@ -696,6 +724,7 @@ async function enrichOrderFromDetails(order, options) {
     mergeItemDetails(item, {
       title: orderTitle,
       description: orderDescription,
+      pageText: orderDetails.pageText || orderDescription,
       images: orderImages,
     }, options)
     if (detailChatText && !item.chatText) item.chatText = detailChatText
@@ -730,6 +759,7 @@ async function enrichOrderFromDetails(order, options) {
         itemId: itemDetails.itemId || itemIdFromUrl(itemDetails.url || itemUrl),
         title: itemDetails.title,
         description: itemDetails.description,
+        pageText: itemDetails.pageText || itemDetails.description,
         images: options.photoMode === 'none' ? [] : (itemDetails.images || []).slice(0, imageLimit),
       }, options)
       if (itemDetails.chatText && !item.chatText) item.chatText = itemDetails.chatText
@@ -957,12 +987,14 @@ function showCollectorOverlay(lines, variant = 'info', stats = {}) {
 
 function collectOrder(root, options) {
   const text = textOf(root)
-  const url = itemUrl(root)
   const imageLimit = options.photoMode === 'two' ? 2 : 1
   const visibleImages = options.photoMode === 'none' ? [] : visibleProductImages(root, imageLimit)
   const fallbackPhotos = options.photoMode === 'none' ? [] : imageUrls(root, imageLimit)
   const fallbackTitle = itemTitle(root, text)
   const title = visibleImages[0]?.title || (fallbackTitle === text.split(/[.!?]/)[0]?.slice(0, 120) ? cleanFallbackTitle(text) : fallbackTitle) || cleanFallbackTitle(text)
+  const directUrl = itemUrl(root)
+  const avitoItemId = itemIdFromUrl(directUrl) || extractAvitoItemIdFromText(text)
+  const url = directUrl || buildAvitoItemUrl(title, avitoItemId)
   const combined = [title, text].join('\n')
   const parsedChatText = options.sizeMode === 'chat_ai' ? chatText(root) : null
   const orderId = orderIdFromLink(root) || orderIdentity(text, root)
@@ -979,14 +1011,14 @@ function collectOrder(root, options) {
     buyerName: text.match(/(?:покупатель|получатель)\s*[:—-]\s*([а-яёa-z .-]{2,40})/iu)?.[1]?.trim() || null,
     pageUrl: absoluteUrl(orderDetailsLink(root)?.getAttribute('href')) || location.href,
     items: [{
-      itemId: itemIdFromUrl(url),
+      itemId: itemIdFromUrl(url) || avitoItemId,
       title,
       itemUrl: url,
       quantity: Number(text.match(/(?:кол-во|количество)\s*[:—-]?\s*(\d+)/iu)?.[1] || 1),
       priceKopecks: parseKopecks(text),
       sellerArticle: options.articleFromDescription ? parseArticle(combined) : null,
       size: options.sizeMode === 'description' ? parseSize(combined) : null,
-      color: options.colorFromDescription ? parseColor(combined) : null,
+      color: null,
       imageUrl: photos[0] || null,
       imageUrls: photos,
       description: text,
