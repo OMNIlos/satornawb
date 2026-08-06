@@ -405,6 +405,57 @@ function linkSamples(root) {
     .slice(0, 12)
 }
 
+function isVisibleElement(node) {
+  if (!(node instanceof HTMLElement)) return false
+  const box = node.getBoundingClientRect()
+  const style = window.getComputedStyle(node)
+  return box.width > 0 && box.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'
+}
+
+function clickableForNode(node) {
+  if (!(node instanceof HTMLElement)) return null
+  return node.closest('a, button, [role="link"], [role="button"], [tabindex]') || node
+}
+
+function findOrderListingClickTarget(title) {
+  const titleNeedle = normalizedTitle(title)
+  const titleParts = titleNeedle.split(' ').filter((part) => part.length > 2)
+  const minScore = titleNeedle ? Math.min(25, Math.max(10, titleParts.length * 8)) : 8
+  const rows = Array.from(document.querySelectorAll('a, button, [role="link"], [role="button"], [tabindex], h1, h2, h3, span, div'))
+    .filter(isVisibleElement)
+    .map((node) => {
+      const rawText = textOf(node)
+      const normalized = normalizedTitle(rawText)
+      const matchedParts = titleParts.filter((part) => normalized.includes(part)).length
+      const exactish = titleNeedle && (normalized === titleNeedle || normalized.includes(titleNeedle) || titleNeedle.includes(normalized))
+      const context = textOf(node.closest('[data-marker*="order"], section, article, main') || document.body)
+      return {
+        node,
+        rawText,
+        score: (exactish ? 100 : 0) + matchedParts * 10 + (/заказ/iu.test(context) ? 5 : 0),
+      }
+    })
+    .filter((row) => row.rawText.length >= 3 && row.rawText.length <= 140 && row.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+  const candidate = rows[0]
+  if (!candidate) return null
+  return { target: clickableForNode(candidate.node), text: candidate.rawText, score: candidate.score }
+}
+
+function openListingFromOrderDetail(title) {
+  const found = findOrderListingClickTarget(title)
+  if (!found?.target) {
+    logEvent('warn', 'order listing click target not found', { title, linkSamples: linkSamples(document) })
+    return { ok: false, error: 'Не нашли кликабельное название товара в деталке заказа' }
+  }
+  found.target.scrollIntoView({ block: 'center', inline: 'center' })
+  ;['pointerdown', 'mousedown', 'mouseup', 'click'].forEach((eventName) => {
+    found.target.dispatchEvent(new MouseEvent(eventName, { bubbles: true, cancelable: true, view: window }))
+  })
+  logEvent('info', 'order listing click target clicked', { title, text: found.text, score: found.score })
+  return { ok: true, text: found.text, score: found.score }
+}
+
 function extractCurrentPageDetails(optionsPayload) {
   const options = normalizeOptions(optionsPayload)
   const imageLimit = options.photoMode === 'two' ? 2 : 1
@@ -472,7 +523,7 @@ async function enrichOrderFromDetails(order, options) {
   let orderDetails = null
   const errors = []
   for (const url of detailUrls) {
-    const response = await requestTabDetails(url, options)
+    const response = await requestTabDetails(url, { ...options, orderItemTitle: order.items?.[0]?.title || '' })
     if (response?.ok && response.details) {
       orderDetails = response.details
       break
@@ -940,6 +991,10 @@ async function collectSnapshot(optionsPayload) {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'AVITO_PAGE_EXTRACT_DETAILS') {
     sendResponse(extractCurrentPageDetails(message.options))
+    return false
+  }
+  if (message?.type === 'AVITO_OPEN_LISTING_FROM_ORDER') {
+    sendResponse(openListingFromOrderDetail(message.title || message.options?.orderItemTitle || ''))
     return false
   }
   if (message?.type !== 'AVITO_ORDERS_COLLECT_NOW') return false

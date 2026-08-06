@@ -179,6 +179,27 @@ function assertAvitoUrl(value) {
   return url.toString()
 }
 
+function isAvitoListingUrl(value) {
+  try {
+    const url = new URL(String(value || ''))
+    if (url.protocol !== 'https:' || url.hostname !== 'www.avito.ru') return false
+    if (/\/orders(?:\/|$)/i.test(url.pathname)) return false
+    return /_[0-9]{5,}(?:\/)?$/i.test(url.pathname) || /\/items\/[0-9]+(?:\/)?$/i.test(url.pathname)
+  } catch (_error) {
+    return false
+  }
+}
+
+async function waitForTabListingUrl(tabId, timeoutMs = 9000) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const tab = await chrome.tabs.get(tabId)
+    if (isAvitoListingUrl(tab?.url)) return tab.url
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  return null
+}
+
 async function extractDetailsInTab(url, options) {
   const resolvedUrl = assertAvitoUrl(url)
   await writeLog('info', 'opening detail tab', { url: resolvedUrl })
@@ -199,6 +220,27 @@ async function extractDetailsInTab(url, options) {
       await new Promise((resolve) => setTimeout(resolve, 700))
     }
     if (!response?.ok) throw new Error(response?.error || 'Не удалось прочитать деталку Avito')
+    if (isOrderDetail && (!Array.isArray(response.itemUrls) || response.itemUrls.length === 0)) {
+      const clicked = await tabsSendMessage(tab.id, {
+        type: 'AVITO_OPEN_LISTING_FROM_ORDER',
+        title: options?.orderItemTitle || '',
+        options: options || {},
+      })
+      await writeLog(clicked?.ok ? 'info' : 'warn', 'order listing click attempted', {
+        url: resolvedUrl,
+        clicked: Boolean(clicked?.ok),
+        title: options?.orderItemTitle || '',
+        text: clicked?.text || null,
+        error: clicked?.error || null,
+      })
+      if (clicked?.ok) {
+        const listingUrl = await waitForTabListingUrl(tab.id, 9000)
+        if (listingUrl) {
+          response.itemUrls = [listingUrl]
+          await writeLog('info', 'order listing url captured after click', { orderUrl: resolvedUrl, listingUrl })
+        }
+      }
+    }
     await writeLog('info', 'detail extracted', {
       url: resolvedUrl,
       title: response.title,
