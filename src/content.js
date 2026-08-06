@@ -67,25 +67,57 @@ function absoluteUrl(value) {
   }
 }
 
-function isAvitoListingUrl(value) {
-  const url = absoluteUrl(value)
+function normalizeAvitoUrl(value) {
+  if (!value) return null
+  const variants = [
+    String(value),
+    String(value).replace(/\\u002F/g, '/').replace(/\\\//g, '/').replace(/&amp;/g, '&').replace(/&quot;/g, '"'),
+  ]
+  for (const variant of variants) {
+    try {
+      const decoded = decodeURIComponent(variant)
+      const url = new URL(decoded, location.origin)
+      if (!/(\.|^)avito\.ru$/i.test(url.hostname)) continue
+      url.hash = ''
+      return url.toString()
+    } catch (_error) {
+      try {
+        const url = new URL(variant, location.origin)
+        if (!/(\.|^)avito\.ru$/i.test(url.hostname)) continue
+        url.hash = ''
+        return url.toString()
+      } catch (_nestedError) {
+        // Try the next representation.
+      }
+    }
+  }
+  return null
+}
+
+function isProbablyItemUrl(value) {
+  const url = normalizeAvitoUrl(value)
   if (!url) return false
   try {
     const parsed = new URL(url)
-    if (parsed.hostname !== 'www.avito.ru') return false
-    if (/\/orders(?:\/|$)/i.test(parsed.pathname)) return false
-    return /_[0-9]{5,}(?:\/)?$/i.test(parsed.pathname) || /\/items\/[0-9]+(?:\/)?$/i.test(parsed.pathname)
+    const badPrefixes = ['/orders', '/profile', '/messenger', '/favorites', '/cart', '/user', '/legal', '/help', '/brands', '/shops']
+    if (badPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))) return false
+    if (/_[0-9]{6,12}(?:\/)?$/i.test(parsed.pathname)) return true
+    if (/\/items\/[0-9]+(?:\/)?$/i.test(parsed.pathname)) return true
+    if (/[?&]item(?:_|I)?d=\d{6,12}/i.test(parsed.search)) return true
+    return false
   } catch {
     return false
   }
 }
 
 function listingUrl(value) {
-  return isAvitoListingUrl(value) ? absoluteUrl(value) : null
+  const url = normalizeAvitoUrl(value)
+  return url && isProbablyItemUrl(url) ? url : null
 }
 
 function decodedHtml(root) {
-  return String(root.documentElement?.innerHTML || '')
+  const scripts = Array.from(root.scripts || []).map((script) => script.textContent || '').join('\n')
+  return [String(root.documentElement?.innerHTML || ''), scripts].join('\n')
     .replace(/\\u002F/g, '/')
     .replace(/\\\//g, '/')
     .replace(/&amp;/g, '&')
@@ -372,27 +404,100 @@ function documentImageUrls(root, limit) {
     .slice(0, limit)
 }
 
-function itemUrlsFromDocument(root) {
-  const html = decodedHtml(root)
-  const urls = all(root, ['a[href]', '[href]'])
-    .map((link) => listingUrl(link.getAttribute('href')))
-    .filter(Boolean)
-  const attributeUrls = Array.from(root.querySelectorAll('*'))
-    .flatMap((node) => Array.from(node.attributes || []).map((attr) => attr.value))
-    .map((value) => String(value || '').replace(/\\u002F/g, '/').replace(/\\\//g, '/'))
-    .flatMap((value) => {
-      const matches = Array.from(value.matchAll(/(?:https:\/\/www\.avito\.ru)?(\/[^\s"'<>]+(?:_[0-9]{5,}|\/items\/[0-9]+)[^\s"'<>]*)/giu))
-      return matches.map((match) => listingUrl(match[1]))
+function uniqueCandidates(items) {
+  const map = new Map()
+  items.forEach((item) => {
+    if (!item?.url) return
+    const prev = map.get(item.url)
+    if (!prev || item.score > prev.score) map.set(item.url, item)
+  })
+  return Array.from(map.values()).sort((a, b) => b.score - a.score)
+}
+
+function titleWords(value) {
+  return normalizedTitle(value).split(' ').filter((part) => part.length >= 4)
+}
+
+function itemUrlCandidatesFromAnchors(root, orderTitle) {
+  const words = titleWords(orderTitle)
+  return all(root, ['a[href]'])
+    .map((link) => {
+      const url = listingUrl(link.getAttribute('href'))
+      if (!url) return null
+      const text = normalizedTitle(textOf(link) || link.getAttribute('title') || '')
+      let score = 50
+      if (words.some((word) => text.includes(word))) score += 30
+      if (link.closest('[data-marker*="order"]')) score += 20
+      if (link.querySelector('img')) score += 10
+      return { url, source: 'anchor', score, text: textOf(link).slice(0, 120) }
     })
     .filter(Boolean)
-  const htmlUrls = Array.from(html.matchAll(/(?:https:\/\/www\.avito\.ru)?(\/[^\s"'<>]+(?:_[0-9]{5,}|\/items\/[0-9]+)[^\s"'<>]*)/giu))
-    .map((match) => listingUrl(match[1]))
+}
+
+function itemUrlCandidatesFromMeta(root) {
+  return [
+    ['meta[property="og:url"]', metaContent(root, 'meta[property="og:url"]')],
+    ['link[rel="canonical"]', root.querySelector('link[rel="canonical"]')?.getAttribute('href')],
+  ]
+    .map(([source, raw]) => {
+      const url = listingUrl(raw)
+      return url ? { url, source, score: 40 } : null
+    })
     .filter(Boolean)
-  const canonical = root.querySelector('link[rel="canonical"]')?.getAttribute('href')
-  const ogUrl = metaContent(root, 'meta[property="og:url"]')
-  return [...urls, ...attributeUrls, ...htmlUrls, listingUrl(canonical), listingUrl(ogUrl)]
+}
+
+function itemUrlCandidatesFromScripts(root) {
+  const html = decodedHtml(root)
+  const patterns = [
+    /https?:\/\/(?:www\.)?avito\.ru\/[^\s"'<>\\]+_[0-9]{6,12}/giu,
+    /(?:https:\/\/www\.avito\.ru)?(\/[^\s"'<>]+_[0-9]{6,12})/giu,
+    /"url"\s*:\s*"([^"]+_[0-9]{6,12})"/giu,
+    /"itemUrl"\s*:\s*"([^"]+)"/giu,
+    /"item_url"\s*:\s*"([^"]+)"/giu,
+    /"canonicalUrl"\s*:\s*"([^"]+_[0-9]{6,12})"/giu,
+  ]
+  return patterns.flatMap((pattern) => Array.from(html.matchAll(pattern)).map((match) => {
+    const raw = match[1] || match[0]
+    const url = listingUrl(raw)
+    return url ? { url, source: 'script/html', score: 35 } : null
+  })).filter(Boolean)
+}
+
+function itemUrlCandidatesFromAttributes(root) {
+  return Array.from(root.querySelectorAll('*'))
+    .flatMap((node) => Array.from(node.attributes || []).map((attr) => ({ name: attr.name, value: attr.value })))
+    .flatMap((attr) => {
+      const text = String(attr.value || '').replace(/\\u002F/g, '/').replace(/\\\//g, '/')
+      const matches = Array.from(text.matchAll(/(?:https:\/\/www\.avito\.ru)?(\/[^\s"'<>]+(?:_[0-9]{6,12}|\/items\/[0-9]+)[^\s"'<>]*)/giu))
+      return matches.map((match) => {
+        const url = listingUrl(match[1])
+        return url ? { url, source: `attribute:${attr.name}`, score: 32 } : null
+      })
+    })
     .filter(Boolean)
-    .filter((url, index, array) => array.indexOf(url) === index)
+}
+
+function resolveItemUrlFromOrderPage(orderTitle) {
+  const candidates = uniqueCandidates([
+    ...itemUrlCandidatesFromAnchors(document, orderTitle),
+    ...itemUrlCandidatesFromMeta(document),
+    ...itemUrlCandidatesFromScripts(document),
+    ...itemUrlCandidatesFromAttributes(document),
+  ])
+  return {
+    itemUrl: candidates[0]?.url || null,
+    candidates,
+  }
+}
+
+function itemUrlsFromDocument(root, orderTitle) {
+  if (root === document) return resolveItemUrlFromOrderPage(orderTitle).candidates.map((item) => item.url)
+  return uniqueCandidates([
+    ...itemUrlCandidatesFromAnchors(root, orderTitle),
+    ...itemUrlCandidatesFromMeta(root),
+    ...itemUrlCandidatesFromScripts(root),
+    ...itemUrlCandidatesFromAttributes(root),
+  ]).map((item) => item.url)
 }
 
 function linkSamples(root) {
@@ -456,21 +561,59 @@ function openListingFromOrderDetail(title) {
   return { ok: true, text: found.text, score: found.score }
 }
 
-function extractCurrentPageDetails(optionsPayload) {
+function metaDebug(root) {
+  return {
+    ogUrl: metaContent(root, 'meta[property="og:url"]'),
+    ogImage: metaContent(root, 'meta[property="og:image"]'),
+    canonical: root.querySelector('link[rel="canonical"]')?.getAttribute('href') || null,
+    description: metaContent(root, 'meta[name="description"]'),
+  }
+}
+
+function htmlItemIds(root) {
+  const html = decodedHtml(root)
+  return Array.from(html.matchAll(/(?:itemId|item_id|avitoId|avito_id)["':\s]+([0-9]{6,12})/giu))
+    .map((match) => match[1])
+    .filter((value, index, array) => array.indexOf(value) === index)
+    .slice(0, 20)
+}
+
+async function waitForDomReady(timeoutMs = 8000) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const bodyText = textOf(document.body)
+    const hasOrderText = /заказ|доставка|трек|отправ|стоимость|итого/iu.test(bodyText)
+    const hasItemText = /описание|характеристики|размер|цвет|артикул/iu.test(bodyText)
+    const hasLinks = document.querySelectorAll('a[href]').length > 0
+    const hasImages = document.querySelectorAll('img').length > 0
+    if ((hasOrderText || hasItemText) && (hasLinks || hasImages || bodyText.length > 500)) return true
+    await sleep(500)
+  }
+  return false
+}
+
+async function extractCurrentPageDetails(optionsPayload) {
+  await waitForDomReady()
   const options = normalizeOptions(optionsPayload)
   const imageLimit = options.photoMode === 'two' ? 2 : 1
   const text = textOf(document)
   const title = documentTitle(document)
   const description = documentDescription(document)
   const images = options.photoMode === 'none' ? [] : documentImageUrls(document, imageLimit)
+  const resolved = resolveItemUrlFromOrderPage(optionsPayload?.orderItemTitle || title || '')
   const details = {
     ok: true,
     url: location.href,
     title,
     description,
     images,
-    itemUrls: itemUrlsFromDocument(document),
+    itemUrls: resolved.candidates.map((item) => item.url),
+    itemUrlCandidates: resolved.candidates.slice(0, 20),
     linkSamples: linkSamples(document),
+    linksCount: document.querySelectorAll('a[href]').length,
+    imagesCount: document.querySelectorAll('img').length,
+    metas: metaDebug(document),
+    htmlItemIds: htmlItemIds(document),
     itemId: itemIdFromUrl(location.href),
     status: statusFromText(text),
     deliveryService: deliveryService(text),
@@ -484,6 +627,9 @@ function extractCurrentPageDetails(optionsPayload) {
     descriptionLength: details.description?.length || 0,
     images: details.images.length,
     itemUrls: details.itemUrls.length,
+    candidates: details.itemUrlCandidates.slice(0, 5),
+    linksCount: details.linksCount,
+    imagesCount: details.imagesCount,
     linkSamples: details.linkSamples.slice(0, 5),
   })
   return details
@@ -557,10 +703,15 @@ async function enrichOrderFromDetails(order, options) {
     const itemUrl = item.itemUrl || itemUrls[itemIndex] || itemUrls[0]
     const itemResponse = itemUrl ? await requestTabDetails(itemUrl, options) : null
     if (!itemUrl) {
-      errors.push('В деталке заказа не найдена прямая ссылка на объявление')
+      errors.push(`URL объявления не найден: ссылок ${orderDetails.linksCount || 0}, кандидатов ${orderDetails.itemUrlCandidates?.length || 0}, id в html ${orderDetails.htmlItemIds?.length || 0}`)
       logEvent('warn', 'item url not found in order detail', {
         orderId: order.orderId,
         itemTitle: item.title,
+        linksCount: orderDetails.linksCount || 0,
+        imagesCount: orderDetails.imagesCount || 0,
+        htmlItemIds: orderDetails.htmlItemIds || [],
+        candidates: orderDetails.itemUrlCandidates || [],
+        metas: orderDetails.metas || {},
         linkSamples: orderDetails.linkSamples || [],
       })
     }
@@ -990,8 +1141,10 @@ async function collectSnapshot(optionsPayload) {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'AVITO_PAGE_EXTRACT_DETAILS') {
-    sendResponse(extractCurrentPageDetails(message.options))
-    return false
+    extractCurrentPageDetails(message.options)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }))
+    return true
   }
   if (message?.type === 'AVITO_OPEN_LISTING_FROM_ORDER') {
     sendResponse(openListingFromOrderDetail(message.title || message.options?.orderItemTitle || ''))

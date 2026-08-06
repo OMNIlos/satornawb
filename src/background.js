@@ -247,6 +247,10 @@ async function extractDetailsInTab(url, options) {
       images: response.images?.length || 0,
       itemUrls: response.itemUrls?.length || 0,
       itemUrl: response.itemUrls?.[0] || null,
+      candidates: response.itemUrlCandidates?.slice?.(0, 5) || [],
+      linksCount: response.linksCount || 0,
+      imagesCount: response.imagesCount || 0,
+      htmlItemIds: response.htmlItemIds || [],
       linkSamples: response.linkSamples || [],
     })
     return response
