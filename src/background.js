@@ -130,9 +130,9 @@ function tabsRemove(tabId) {
   return new Promise((resolve) => chrome.tabs.remove(tabId, resolve))
 }
 
-function tabsSendMessage(tabId, message) {
+function tabsSendMessage(tabId, message, options) {
   return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, message, (response) => {
+    chrome.tabs.sendMessage(tabId, message, options || {}, (response) => {
       const error = chrome.runtime.lastError
       if (error) {
         reject(new Error(error.message))
@@ -143,8 +143,51 @@ function tabsSendMessage(tabId, message) {
   })
 }
 
-function executeContentScript(tabId) {
-  return chrome.scripting.executeScript({ target: { tabId }, files: ['src/content.js'] })
+function executeContentScript(tabId, allFrames = false) {
+  return chrome.scripting.executeScript({ target: { tabId, allFrames }, files: ['src/content.js'] })
+}
+
+async function classifyFrames(tabId, expectedTitle) {
+  const frames = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    args: [String(expectedTitle || '')],
+    func: (rawExpectedTitle) => {
+      const text = document.body?.innerText || ''
+      const expected = String(rawExpectedTitle || '').toLowerCase()
+      const hasExpectedTitle = expected ? text.toLowerCase().includes(expected) : false
+      const hasOrderWords = /заказ|трек|доставка|получатель|отправьте|чат|стоимость|итого/i.test(text)
+      const hasOnlyPublicShell = text.includes('Продавать') && text.includes('Покупать') && text.includes('Карьера') && !hasExpectedTitle && !hasOrderWords
+      return {
+        url: location.href,
+        documentTitle: document.title,
+        bodyLength: text.length,
+        bodyPreview: text.slice(0, 1000),
+        hasExpectedTitle,
+        hasOrderWords,
+        hasOnlyPublicShell,
+        anchorsCount: document.querySelectorAll('a[href]').length,
+        imagesCount: document.querySelectorAll('img').length,
+      }
+    },
+  })
+  return frames.map((frame) => ({ frameId: frame.frameId, ...(frame.result || {}) }))
+}
+
+function bestFrame(frames, isOrderDetail) {
+  if (!Array.isArray(frames) || !frames.length) return null
+  const sorted = [...frames].sort((a, b) => {
+    const score = (frame) => {
+      let value = 0
+      if (frame.hasExpectedTitle) value += 100
+      if (frame.hasOrderWords) value += 50
+      if (!frame.hasOnlyPublicShell) value += 10
+      value += Math.min(20, Math.floor((frame.bodyLength || 0) / 500))
+      if (!isOrderDetail && /_[0-9]{6,12}/.test(frame.url || '')) value += 100
+      return value
+    }
+    return score(b) - score(a)
+  })
+  return sorted[0]
 }
 
 function waitForTabComplete(tabId, timeoutMs = 30000) {
@@ -203,29 +246,47 @@ async function waitForTabListingUrl(tabId, timeoutMs = 9000) {
 async function extractDetailsInTab(url, options) {
   const resolvedUrl = assertAvitoUrl(url)
   await writeLog('info', 'opening detail tab', { url: resolvedUrl })
-  const tab = await tabsCreate({ url: resolvedUrl, active: false })
+  const isOrderDetail = /\/orders\//i.test(resolvedUrl)
+  const tab = await tabsCreate({ url: resolvedUrl, active: isOrderDetail })
   if (!tab?.id) throw new Error('Не удалось открыть деталку Avito')
   try {
     await waitForTabComplete(tab.id, 45000)
-    await executeContentScript(tab.id)
+    await executeContentScript(tab.id, true)
     let response = null
-    const isOrderDetail = /\/orders\//i.test(resolvedUrl)
     const startedAt = Date.now()
+    let selectedFrame = null
+    let frameDebug = []
     while (Date.now() - startedAt < 9000) {
-      response = await tabsSendMessage(tab.id, { type: 'AVITO_PAGE_EXTRACT_DETAILS', options: options || {} })
+      frameDebug = await classifyFrames(tab.id, options?.orderItemTitle || '')
+      selectedFrame = bestFrame(frameDebug, isOrderDetail)
+      const messageOptions = selectedFrame?.frameId ? { frameId: selectedFrame.frameId } : undefined
+      response = await tabsSendMessage(tab.id, { type: 'AVITO_PAGE_EXTRACT_DETAILS', options: options || {} }, messageOptions)
       if (!response?.ok) throw new Error(response?.error || 'Не удалось прочитать деталку Avito')
+      response.frameDebug = frameDebug
+      response.selectedFrame = selectedFrame
       const hasListingLink = Array.isArray(response.itemUrls) && response.itemUrls.length > 0
       const hasListingContent = !isOrderDetail && ((response.description?.length || 0) > 20 || (response.images?.length || 0) > 0)
-      if ((isOrderDetail && hasListingLink) || hasListingContent) break
+      const hasOrderContent = !isOrderDetail || selectedFrame?.hasExpectedTitle || selectedFrame?.hasOrderWords
+      if ((isOrderDetail && hasOrderContent && (hasListingLink || Date.now() - startedAt > 3500)) || hasListingContent) break
       await new Promise((resolve) => setTimeout(resolve, 700))
     }
     if (!response?.ok) throw new Error(response?.error || 'Не удалось прочитать деталку Avito')
+    if (isOrderDetail && !selectedFrame?.hasExpectedTitle && !selectedFrame?.hasOrderWords) {
+      response.detailNotRendered = true
+      response.detailNotRenderedReason = 'DETAIL_PAGE_NOT_RENDERED'
+      await writeLog('warn', 'order detail did not render expected content', {
+        url: resolvedUrl,
+        expectedTitle: options?.orderItemTitle || '',
+        selectedFrame,
+        frames: frameDebug,
+      })
+    }
     if (isOrderDetail && (!Array.isArray(response.itemUrls) || response.itemUrls.length === 0)) {
       const clicked = await tabsSendMessage(tab.id, {
         type: 'AVITO_OPEN_LISTING_FROM_ORDER',
         title: options?.orderItemTitle || '',
         options: options || {},
-      })
+      }, selectedFrame?.frameId ? { frameId: selectedFrame.frameId } : undefined)
       await writeLog(clicked?.ok ? 'info' : 'warn', 'order listing click attempted', {
         url: resolvedUrl,
         clicked: Boolean(clicked?.ok),
@@ -251,6 +312,8 @@ async function extractDetailsInTab(url, options) {
       linksCount: response.linksCount || 0,
       imagesCount: response.imagesCount || 0,
       htmlItemIds: response.htmlItemIds || [],
+      selectedFrame: response.selectedFrame || null,
+      detailNotRendered: Boolean(response.detailNotRendered),
       linkSamples: response.linkSamples || [],
     })
     return response

@@ -703,10 +703,17 @@ async function enrichOrderFromDetails(order, options) {
     const itemUrl = item.itemUrl || itemUrls[itemIndex] || itemUrls[0]
     const itemResponse = itemUrl ? await requestTabDetails(itemUrl, options) : null
     if (!itemUrl) {
-      errors.push(`URL объявления не найден: ссылок ${orderDetails.linksCount || 0}, кандидатов ${orderDetails.itemUrlCandidates?.length || 0}, id в html ${orderDetails.htmlItemIds?.length || 0}`)
+      const renderReason = orderDetails.detailNotRendered
+        ? 'деталка Avito не отдала контент заказа'
+        : 'URL объявления не найден'
+      errors.push(`${renderReason}: ссылок ${orderDetails.linksCount || 0}, кандидатов ${orderDetails.itemUrlCandidates?.length || 0}, id в html ${orderDetails.htmlItemIds?.length || 0}`)
       logEvent('warn', 'item url not found in order detail', {
         orderId: order.orderId,
         itemTitle: item.title,
+        detailNotRendered: Boolean(orderDetails.detailNotRendered),
+        detailNotRenderedReason: orderDetails.detailNotRenderedReason || null,
+        selectedFrame: orderDetails.selectedFrame || null,
+        frameDebug: orderDetails.frameDebug || [],
         linksCount: orderDetails.linksCount || 0,
         imagesCount: orderDetails.imagesCount || 0,
         htmlItemIds: orderDetails.htmlItemIds || [],
