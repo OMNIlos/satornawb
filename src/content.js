@@ -143,6 +143,32 @@ function orderCandidates() {
     .slice(0, 80)
 }
 
+function showCollectorOverlay(lines, variant = 'info') {
+  const id = 'satorna-avito-orders-progress'
+  let box = document.getElementById(id)
+  if (!box) {
+    box = document.createElement('div')
+    box.id = id
+    box.style.position = 'fixed'
+    box.style.right = '18px'
+    box.style.bottom = '18px'
+    box.style.zIndex = '2147483647'
+    box.style.width = '320px'
+    box.style.padding = '14px'
+    box.style.borderRadius = '12px'
+    box.style.boxShadow = '0 18px 45px rgba(15,23,42,.22)'
+    box.style.font = '13px/1.35 Arial, sans-serif'
+    document.documentElement.appendChild(box)
+  }
+  box.style.background = variant === 'error' ? '#FEF2F2' : variant === 'ok' ? '#ECFDF5' : '#EFF6FF'
+  box.style.border = variant === 'error' ? '1px solid #FECACA' : variant === 'ok' ? '1px solid #BBF7D0' : '1px solid #BFDBFE'
+  box.style.color = variant === 'error' ? '#991B1B' : variant === 'ok' ? '#065F46' : '#1E3A8A'
+  box.innerHTML = [
+    '<b style="display:block;margin-bottom:7px">Satorna собирает заказы Avito</b>',
+    ...lines.map((line) => `<div style="margin-top:3px">${String(line).replace(/[<>&]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[char]))}</div>`),
+  ].join('')
+}
+
 function collectOrder(root) {
   const text = textOf(root)
   const url = itemUrl(root)
@@ -186,10 +212,37 @@ function dedupeOrders(orders) {
 }
 
 function collectSnapshot() {
+  showCollectorOverlay(['Ищем блоки заказов на странице...'])
+  const candidates = orderCandidates()
+  const orders = dedupeOrders(candidates.map(collectOrder).filter(Boolean))
+  const items = orders.flatMap((order) => order.items || [])
+  const missing = {
+    imageUrl: items.filter((item) => !item.imageUrl).length,
+    size: items.filter((item) => !item.size).length,
+    color: items.filter((item) => !item.color).length,
+    sellerArticle: items.filter((item) => !item.sellerArticle).length,
+  }
+  showCollectorOverlay([
+    `Найдено блоков: ${candidates.length}`,
+    `Собрано заказов: ${orders.length}`,
+    `Позиций: ${items.length}`,
+    `Не найдено: фото ${missing.imageUrl}, размер ${missing.size}, цвет ${missing.color}, артикул ${missing.sellerArticle}`,
+  ], 'ok')
   return {
     capturedAt: new Date().toISOString(),
     pageUrl: location.href,
-    orders: dedupeOrders(orderCandidates().map(collectOrder).filter(Boolean)),
+    collector: {
+      status: 'completed',
+      candidates: candidates.length,
+      orders: orders.length,
+      items: items.length,
+      missing,
+      notes: [
+        'Собраны данные, которые были видны в DOM страницы Avito.',
+        'Размер, цвет и артикул дополнительно проверяются backend AI-разбором после отправки.',
+      ],
+    },
+    orders,
   }
 }
 

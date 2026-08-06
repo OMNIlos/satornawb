@@ -163,7 +163,8 @@ async function collectAndPostFromAvito() {
   const collected = await collectFromAvitoOrdersPage()
   if (!collected?.ok) throw new Error(collected?.error || 'Не удалось прочитать страницу заказов Avito')
   const payload = collected.payload
-  await saveStatus({ ok: false, message: `Нашли заказов на странице: ${payload?.orders?.length || 0}. Отправляем в Satorna...` })
+  const missing = payload?.collector?.missing || {}
+  await saveStatus({ ok: false, message: `Нашли заказов: ${payload?.orders?.length || 0}. Не найдено: фото ${missing.imageUrl || 0}, размер ${missing.size || 0}, цвет ${missing.color || 0}. Отправляем в Satorna...` })
   const result = await postSnapshot(payload)
   const meta = result?.browserSnapshot
   const text = `Собрано заказов: ${meta?.orders ?? payload?.orders?.length ?? 0}`
