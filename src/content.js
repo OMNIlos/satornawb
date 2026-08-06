@@ -174,8 +174,6 @@ function parseSize(text) {
   const value = String(text || '')
   const explicit = Array.from(value.matchAll(/(?:размер|р-р|size)\s*[:—-]?\s*([0-9]{2}(?:-[0-9]{2})?(?:\s*\([^)]+\))?|[2-5]?XL|XXL|XS|[SML])/giu)).pop()
   if (explicit?.[1]) return explicit[1].toUpperCase()
-  const numeric = Array.from(value.matchAll(/\b([3-6][0-9](?:-[3-6][0-9])?)\b/gu)).pop()
-  if (numeric?.[1]) return numeric[1]
   const upper = ` ${value.toUpperCase()} `
   const found = SIZE_VALUES.find((size) => upper.includes(` ${size} `))
   return found || null
