@@ -15,6 +15,12 @@ const COLOR_HINTS = [
 ]
 
 const SIZE_VALUES = ['5XL', '4XL', '3XL', '2XL', 'XXL', 'XL', 'XS', 'S', 'M', 'L']
+const DEFAULT_COLLECT_OPTIONS = {
+  photoMode: 'one',
+  colorFromDescription: true,
+  sizeMode: 'description',
+  articleFromDescription: true,
+}
 
 function textOf(node) {
   return String(node?.innerText || node?.textContent || '').replace(/\s+/g, ' ').trim()
@@ -119,6 +125,52 @@ function itemTitle(root, text) {
 }
 
 function imageUrl(root) {
+  return imageUrls(root, 1)[0] || null
+}
+
+function imageUrls(root, limit = 1) {
+  const images = all(root, [
+    'img[data-marker*="image"]',
+    'img[src*="avito.st"]',
+    'img[src]',
+  ])
+  return images
+    .map((image) => absoluteUrl(image.currentSrc || image.src || image.getAttribute('src')))
+    .filter(Boolean)
+    .filter((value, index, array) => array.indexOf(value) === index)
+    .slice(0, limit)
+}
+
+function chatText(root) {
+  const nodes = all(root, [
+    '[data-marker*="chat"]',
+    '[data-marker*="message"]',
+    '[class*="chat"]',
+    '[class*="message"]',
+  ])
+  return nodes.map(textOf).filter((text) => text.length > 8).join('\n').slice(0, 4000) || null
+}
+
+function normalizeOptions(options) {
+  const raw = { ...DEFAULT_COLLECT_OPTIONS, ...(options || {}) }
+  return {
+    photoMode: ['none', 'one', 'two'].includes(raw.photoMode) ? raw.photoMode : DEFAULT_COLLECT_OPTIONS.photoMode,
+    colorFromDescription: Boolean(raw.colorFromDescription),
+    sizeMode: ['none', 'description', 'chat_ai'].includes(raw.sizeMode) ? raw.sizeMode : DEFAULT_COLLECT_OPTIONS.sizeMode,
+    articleFromDescription: Boolean(raw.articleFromDescription),
+  }
+}
+
+function requestedMissing(item, options) {
+  return {
+    imageUrl: options.photoMode === 'none' ? false : !item.imageUrl,
+    size: options.sizeMode === 'none' ? false : !item.size,
+    color: !options.colorFromDescription ? false : !item.color,
+    sellerArticle: !options.articleFromDescription ? false : !item.sellerArticle,
+  }
+}
+
+function imageUrlOld(root) {
   const image = first(root, [
     'img[data-marker*="image"]',
     'img[src*="avito.st"]',
@@ -169,11 +221,13 @@ function showCollectorOverlay(lines, variant = 'info') {
   ].join('')
 }
 
-function collectOrder(root) {
+function collectOrder(root, options) {
   const text = textOf(root)
   const url = itemUrl(root)
   const title = itemTitle(root, text)
   const combined = [title, text].join('\n')
+  const photos = options.photoMode === 'none' ? [] : imageUrls(root, options.photoMode === 'two' ? 2 : 1)
+  const parsedChatText = options.sizeMode === 'chat_ai' ? chatText(root) : null
   const orderId = orderIdentity(text, root)
   const marketplaceId = marketplaceIdentity(text)
   if (!orderId && !marketplaceId) return null
@@ -191,12 +245,13 @@ function collectOrder(root) {
       itemUrl: url,
       quantity: Number(text.match(/(?:кол-во|количество)\s*[:—-]?\s*(\d+)/iu)?.[1] || 1),
       priceKopecks: parseKopecks(text),
-      sellerArticle: parseArticle(combined),
-      size: parseSize(combined),
-      color: parseColor(combined),
-      imageUrl: imageUrl(root),
+      sellerArticle: options.articleFromDescription ? parseArticle(combined) : null,
+      size: options.sizeMode === 'description' ? parseSize(combined) : null,
+      color: options.colorFromDescription ? parseColor(combined) : null,
+      imageUrl: photos[0] || null,
+      imageUrls: photos,
       description: text,
-      chatText: null,
+      chatText: parsedChatText,
     }],
   }
 }
@@ -211,16 +266,18 @@ function dedupeOrders(orders) {
   return Array.from(byKey.values())
 }
 
-function collectSnapshot() {
+function collectSnapshot(optionsPayload) {
+  const options = normalizeOptions(optionsPayload)
   showCollectorOverlay(['Ищем блоки заказов на странице...'])
   const candidates = orderCandidates()
-  const orders = dedupeOrders(candidates.map(collectOrder).filter(Boolean))
+  const orders = dedupeOrders(candidates.map((node) => collectOrder(node, options)).filter(Boolean))
   const items = orders.flatMap((order) => order.items || [])
+  const missingRows = items.map((item) => requestedMissing(item, options))
   const missing = {
-    imageUrl: items.filter((item) => !item.imageUrl).length,
-    size: items.filter((item) => !item.size).length,
-    color: items.filter((item) => !item.color).length,
-    sellerArticle: items.filter((item) => !item.sellerArticle).length,
+    imageUrl: missingRows.filter((item) => item.imageUrl).length,
+    size: missingRows.filter((item) => item.size).length,
+    color: missingRows.filter((item) => item.color).length,
+    sellerArticle: missingRows.filter((item) => item.sellerArticle).length,
   }
   showCollectorOverlay([
     `Найдено блоков: ${candidates.length}`,
@@ -237,9 +294,12 @@ function collectSnapshot() {
       orders: orders.length,
       items: items.length,
       missing,
+      options,
       notes: [
         'Собраны данные, которые были видны в DOM страницы Avito.',
-        'Размер, цвет и артикул дополнительно проверяются backend AI-разбором после отправки.',
+        options.sizeMode === 'chat_ai'
+          ? 'Размер будет дополнительно проверен backend AI-разбором по тексту чата.'
+          : 'AI не используется, если размер выбран из описания или отключен.',
       ],
     },
     orders,
@@ -248,6 +308,6 @@ function collectSnapshot() {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== 'AVITO_ORDERS_COLLECT_NOW') return false
-  sendResponse({ ok: true, payload: collectSnapshot() })
+  sendResponse({ ok: true, payload: collectSnapshot(message.options) })
   return false
 })

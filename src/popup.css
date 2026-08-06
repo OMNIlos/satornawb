@@ -36,6 +36,42 @@ input {
   background: #fff;
 }
 
+select {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 8px 9px;
+  font: inherit;
+  background: #fff;
+}
+
+.collect-options {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.collect-options h2 {
+  margin: 0;
+  color: #1e3a8a;
+  font-size: 13px;
+}
+
+.check-row {
+  grid-template-columns: 16px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.check-row input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+}
+
 .actions {
   display: flex;
   gap: 8px;

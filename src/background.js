@@ -40,6 +40,12 @@ function authorizationValue(value) {
 async function readSettings() {
   return chrome.storage.sync.get({
     accessToken: '',
+    collectOptions: {
+      photoMode: 'one',
+      colorFromDescription: true,
+      sizeMode: 'description',
+      articleFromDescription: true,
+    },
     lastStatus: '',
     lastSnapshotAt: '',
   })
@@ -150,11 +156,13 @@ async function collectFromAvitoOrdersPage() {
   const tab = await avitoOrdersTab()
   if (!tab?.id) throw new Error('Не удалось открыть страницу заказов Avito')
   await waitForTabComplete(tab.id)
+  const settings = await readSettings()
+  const message = { type: 'AVITO_ORDERS_COLLECT_NOW', options: settings.collectOptions || {} }
   try {
-    return await tabsSendMessage(tab.id, { type: 'AVITO_ORDERS_COLLECT_NOW' })
+    return await tabsSendMessage(tab.id, message)
   } catch (_error) {
     await executeContentScript(tab.id)
-    return tabsSendMessage(tab.id, { type: 'AVITO_ORDERS_COLLECT_NOW' })
+    return tabsSendMessage(tab.id, message)
   }
 }
 

@@ -12,6 +12,33 @@
         Токен Satorna
         <input id="accessToken" type="password" placeholder="Скопируйте на странице /avito/orders">
       </label>
+      <section class="collect-options" aria-label="Настройки сбора">
+        <h2>Какие данные собирать</h2>
+        <label>
+          Фото товара
+          <select id="photoMode">
+            <option value="none">Не собирать</option>
+            <option value="one">1 фото</option>
+            <option value="two">2 фото</option>
+          </select>
+        </label>
+        <label>
+          Размер
+          <select id="sizeMode">
+            <option value="none">Не собирать</option>
+            <option value="description">Из описания</option>
+            <option value="chat_ai">Из чата с AI ✨</option>
+          </select>
+        </label>
+        <label class="check-row">
+          <input id="colorFromDescription" type="checkbox">
+          <span>Цвет из описания</span>
+        </label>
+        <label class="check-row">
+          <input id="articleFromDescription" type="checkbox">
+          <span>Артикул из описания</span>
+        </label>
+      </section>
       <div class="actions">
         <button id="saveBtn" type="button">Сохранить</button>
         <button id="collectBtn" type="button">Собрать заказы</button>

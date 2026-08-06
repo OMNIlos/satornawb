@@ -14,7 +14,8 @@ Chrome Manifest V3 extension for collecting Avito seller order details that are 
 8. Open `/avito/orders` in Satorna.
 9. Click `Создать токен` or `Перегенерировать токен`.
 10. Paste the long-lived `sat_avito_...` token into the extension popup.
-11. Click `Собрать заказы`; the extension opens `https://www.avito.ru/orders` and sends the collected data to Satorna.
+11. Choose what to collect: product photos, color/article from description, and size from description or chat AI.
+12. Click `Собрать заказы`; the extension opens `https://www.avito.ru/orders` and sends the collected data to Satorna.
 
 Production Satorna URL is built into the extension: `https://ogni-frontend.vercel.app`.
 
