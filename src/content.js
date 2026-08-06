@@ -1115,18 +1115,21 @@ async function collectSnapshot(optionsPayload) {
         sources: baseOrder.items?.[0]?.sources || {},
         image: Boolean(baseOrder.items?.[0]?.imageUrl),
       })
+      const previewOrders = dedupeOrders([...collected, baseOrder])
+      const { items: previewItems, missing: previewMissing } = missingSummary(previewOrders, options)
       showCollectorOverlay([
-        `Заказ ${index + 1} из ${candidates.length}: открываем детали`,
+        `Заказ ${index + 1} из ${candidates.length}: ищем карточку товара`,
         baseOrder.orderId ? `ID: ${baseOrder.orderId}` : 'ID заказа не найден',
         baseOrder.items?.[0]?.itemId ? `ID объявления: ${baseOrder.items[0].itemId}` : 'ID объявления: не найден',
         baseOrder.items?.[0]?.itemUrl ? 'Карточка товара: ссылка собрана' : 'Карточка товара: ссылки пока нет',
       ], 'info', {
-        phase: 'Читаем детали заказов',
+        phase: 'Ищем карточки и поля',
         candidates: candidates.length,
         total: candidates.length,
         processed: index,
-        orders: dedupeOrders(collected).length,
-        items: collected.flatMap((item) => item.items || []).length,
+        orders: previewOrders.length,
+        items: previewItems.length,
+        missing: previewMissing,
       })
       const enriched = await enrichOrderFromDetails(baseOrder, options)
       if (enriched.checked) detailPages += 1
