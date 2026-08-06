@@ -1118,6 +1118,8 @@ async function collectSnapshot(optionsPayload) {
       showCollectorOverlay([
         `Заказ ${index + 1} из ${candidates.length}: открываем детали`,
         baseOrder.orderId ? `ID: ${baseOrder.orderId}` : 'ID заказа не найден',
+        baseOrder.items?.[0]?.itemId ? `ID объявления: ${baseOrder.items[0].itemId}` : 'ID объявления: не найден',
+        baseOrder.items?.[0]?.itemUrl ? 'Карточка товара: ссылка собрана' : 'Карточка товара: ссылки пока нет',
       ], 'info', {
         phase: 'Читаем детали заказов',
         candidates: candidates.length,
@@ -1147,6 +1149,22 @@ async function collectSnapshot(optionsPayload) {
         },
       })
       collected.push(enriched.order)
+      const liveItem = enriched.order.items?.[0] || {}
+      const liveMissing = requestedMissing(liveItem, options)
+      showCollectorOverlay([
+        `Заказ ${index + 1} из ${candidates.length}: ${liveItem.title || 'товар'}`,
+        liveItem.itemUrl ? 'Карточка товара: проверена или поставлена в очередь' : 'Карточка товара: ссылка не найдена',
+        `Найдено: фото ${liveItem.imageUrl ? 'да' : 'нет'}, размер ${liveItem.size ? 'да' : 'нет'}, цвет ${liveItem.color ? 'да' : 'нет'}, артикул ${liveItem.sellerArticle ? 'да' : 'нет'}`,
+        (liveMissing.size || liveMissing.color || liveMissing.sellerArticle) ? 'Часть данных ещё не найдена' : 'Данные товара собраны',
+      ], liveItem.itemUrl ? 'info' : 'warn', {
+        phase: 'Проверяем товар',
+        candidates: candidates.length,
+        total: candidates.length,
+        processed: index + 1,
+        orders: dedupeOrders(collected).length,
+        items: collected.flatMap((item) => item.items || []).length,
+        missing: missingSummary(dedupeOrders(collected), options).missing,
+      })
     }
     if (index === 0 || (index + 1) % 2 === 0 || index + 1 === candidates.length) {
       const partialOrders = dedupeOrders(collected)
