@@ -6,6 +6,12 @@ function normalizeBackendUrl(value) {
   return text || DEFAULT_BACKEND_URL
 }
 
+function authorizationValue(value) {
+  const token = String(value || '').trim()
+  if (!token) return ''
+  return /^bearer\s+/i.test(token) ? token : `Bearer ${token}`
+}
+
 async function readSettings() {
   return chrome.storage.sync.get({
     backendUrl: DEFAULT_BACKEND_URL,
@@ -31,7 +37,7 @@ async function postSnapshot(payload) {
   const response = await fetch(`${normalizeBackendUrl(settings.backendUrl)}${SNAPSHOT_PATH}`, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${token}`,
+      'Authorization': authorizationValue(token),
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
