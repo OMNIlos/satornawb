@@ -205,6 +205,32 @@ function extractAvitoItemIdFromText(text) {
   return ids.find((id) => !id.startsWith('70000000') && !id.startsWith('103')) || null
 }
 
+function extractAvitoItemIdFromRow(root, text) {
+  const direct = itemIdFromUrl(itemUrl(root)) || extractAvitoItemIdFromText(text)
+  if (direct) return direct
+  const html = String(root.innerHTML || '')
+    .replace(/\\u002F/g, '/')
+    .replace(/\\\//g, '/')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+  const patterns = [
+    /_[0-9]{6,12}(?=[/?#"'<\s]|$)/giu,
+    /(?:itemId|item_id|avitoId|avito_id|adId|advertId)["':=\s]+([0-9]{6,12})/giu,
+    /\/items\/([0-9]{6,12})/giu,
+  ]
+  for (const pattern of patterns) {
+    for (const match of html.matchAll(pattern)) {
+      const raw = match[1] || match[0].replace(/^_/, '')
+      const found = extractAvitoItemIdFromText(raw)
+      if (found) return found
+    }
+  }
+  const attributeText = Array.from(root.querySelectorAll('*'))
+    .flatMap((node) => Array.from(node.attributes || []).map((attr) => attr.value))
+    .join('\n')
+  return extractAvitoItemIdFromText(attributeText)
+}
+
 function buildAvitoItemUrl(title, itemId) {
   const slug = slugifyAvitoTitle(title)
   if (!slug || !itemId) return null
@@ -993,7 +1019,7 @@ function collectOrder(root, options) {
   const fallbackTitle = itemTitle(root, text)
   const title = visibleImages[0]?.title || (fallbackTitle === text.split(/[.!?]/)[0]?.slice(0, 120) ? cleanFallbackTitle(text) : fallbackTitle) || cleanFallbackTitle(text)
   const directUrl = itemUrl(root)
-  const avitoItemId = itemIdFromUrl(directUrl) || extractAvitoItemIdFromText(text)
+  const avitoItemId = extractAvitoItemIdFromRow(root, text)
   const url = directUrl || buildAvitoItemUrl(title, avitoItemId)
   const combined = [title, text].join('\n')
   const parsedChatText = options.sizeMode === 'chat_ai' ? chatText(root) : null
@@ -1023,6 +1049,11 @@ function collectOrder(root, options) {
       imageUrls: photos,
       description: text,
       chatText: parsedChatText,
+      sources: {
+        itemUrl: directUrl ? 'row_link' : url ? 'row_item_id_slug' : null,
+        itemId: avitoItemId ? 'row_dom' : null,
+        imageUrl: photos[0] ? 'order_row' : null,
+      },
     }],
   }
 }
@@ -1077,6 +1108,9 @@ async function collectSnapshot(optionsPayload) {
         orderId: baseOrder.orderId,
         pageUrl: baseOrder.pageUrl,
         title: baseOrder.items?.[0]?.title,
+        itemId: baseOrder.items?.[0]?.itemId || null,
+        itemUrl: baseOrder.items?.[0]?.itemUrl || null,
+        sources: baseOrder.items?.[0]?.sources || {},
         image: Boolean(baseOrder.items?.[0]?.imageUrl),
       })
       showCollectorOverlay([
@@ -1101,6 +1135,9 @@ async function collectSnapshot(optionsPayload) {
         errors: enriched.errors || [],
         item: {
           title: enriched.order.items?.[0]?.title,
+          itemId: enriched.order.items?.[0]?.itemId || null,
+          itemUrl: enriched.order.items?.[0]?.itemUrl || null,
+          sources: enriched.order.items?.[0]?.sources || {},
           image: Boolean(enriched.order.items?.[0]?.imageUrl),
           size: enriched.order.items?.[0]?.size || null,
           color: enriched.order.items?.[0]?.color || null,
