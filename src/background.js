@@ -187,14 +187,25 @@ async function extractDetailsInTab(url, options) {
   try {
     await waitForTabComplete(tab.id, 45000)
     await executeContentScript(tab.id)
-    await new Promise((resolve) => setTimeout(resolve, 600))
-    const response = await tabsSendMessage(tab.id, { type: 'AVITO_PAGE_EXTRACT_DETAILS', options: options || {} })
+    let response = null
+    const isOrderDetail = /\/orders\//i.test(resolvedUrl)
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < 9000) {
+      response = await tabsSendMessage(tab.id, { type: 'AVITO_PAGE_EXTRACT_DETAILS', options: options || {} })
+      if (!response?.ok) throw new Error(response?.error || 'Не удалось прочитать деталку Avito')
+      const hasListingLink = Array.isArray(response.itemUrls) && response.itemUrls.length > 0
+      const hasListingContent = !isOrderDetail && ((response.description?.length || 0) > 20 || (response.images?.length || 0) > 0)
+      if ((isOrderDetail && hasListingLink) || hasListingContent) break
+      await new Promise((resolve) => setTimeout(resolve, 700))
+    }
     if (!response?.ok) throw new Error(response?.error || 'Не удалось прочитать деталку Avito')
     await writeLog('info', 'detail extracted', {
       url: resolvedUrl,
       title: response.title,
       images: response.images?.length || 0,
       itemUrls: response.itemUrls?.length || 0,
+      itemUrl: response.itemUrls?.[0] || null,
+      linkSamples: response.linkSamples || [],
     })
     return response
   } catch (error) {
@@ -204,22 +215,6 @@ async function extractDetailsInTab(url, options) {
     await tabsRemove(tab.id)
     await writeLog('info', 'detail tab closed', { url: resolvedUrl })
   }
-}
-
-async function findItemByTitle(title, options) {
-  const query = String(title || '').trim()
-  if (!query) throw new Error('Нет названия товара для поиска объявления')
-  const searchUrl = `https://www.avito.ru/all?q=${encodeURIComponent(query)}`
-  await writeLog('info', 'opening item search tab', { title: query, url: searchUrl })
-  const search = await extractDetailsInTab(searchUrl, { ...(options || {}), queryTitle: query })
-  const foundUrl = Array.isArray(search.searchUrls) ? search.searchUrls[0] : null
-  if (!foundUrl) {
-    await writeLog('warn', 'item search returned no urls', { title: query })
-    return { url: null, details: null }
-  }
-  await writeLog('info', 'item search matched url', { title: query, url: foundUrl })
-  const details = await extractDetailsInTab(foundUrl, options || {})
-  return { url: foundUrl, details }
 }
 
 async function avitoOrdersTab() {
@@ -280,12 +275,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'AVITO_EXTRACT_DETAILS_TAB') {
     extractDetailsInTab(message.url, message.options)
       .then((response) => sendResponse({ ok: true, details: response }))
-      .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }))
-    return true
-  }
-  if (message?.type === 'AVITO_FIND_ITEM_TAB') {
-    findItemByTitle(message.title, message.options)
-      .then((response) => sendResponse({ ok: true, ...response }))
       .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }))
     return true
   }
