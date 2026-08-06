@@ -1,3 +1,7 @@
+{
+if (!window.__satornaAvitoOrdersContentLoaded) {
+window.__satornaAvitoOrdersContentLoaded = true
+
 const COLOR_HINTS = [
   ['черн', 'черный'],
   ['бел', 'белый'],
@@ -1259,3 +1263,5 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     })
   return true
 })
+}
+}
