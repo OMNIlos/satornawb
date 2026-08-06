@@ -718,7 +718,8 @@ function mergeItemDetails(item, details, options) {
 }
 
 async function enrichOrderFromDetails(order, options) {
-  const detailUrls = [order.pageUrl].filter((url) => url && !url.includes('#'))
+  const hasRowItemUrl = order.items?.some((item) => item.itemUrl)
+  const detailUrls = hasRowItemUrl ? [] : [order.pageUrl].filter((url) => url && !url.includes('#'))
   const imageLimit = options.photoMode === 'two' ? 2 : 1
   let orderDetails = null
   const errors = []
@@ -730,7 +731,8 @@ async function enrichOrderFromDetails(order, options) {
     }
     if (response?.error) errors.push(response.error)
   }
-  if (!orderDetails) return { order, checked: false, itemPages: 0, errors }
+  if (!orderDetails && !hasRowItemUrl) return { order, checked: false, itemPages: 0, errors }
+  if (!orderDetails) orderDetails = { itemUrls: [], images: [], description: '', title: null, chatText: null }
 
   if (!order.status) order.status = orderDetails.status
   if (!order.deliveryService) order.deliveryService = orderDetails.deliveryService
