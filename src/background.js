@@ -1,6 +1,25 @@
 const DEFAULT_BACKEND_URL = 'https://ogni-frontend.vercel.app'
 const SNAPSHOT_PATH = '/api/v1/avito/orders/browser-snapshot'
 const AVITO_ORDERS_URL = 'https://www.avito.ru/orders'
+const LOG_KEY = 'satornaAvitoLogs'
+
+async function writeLog(level, message, data = {}) {
+  const entry = {
+    at: new Date().toISOString(),
+    level,
+    message,
+    data,
+  }
+  const method = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'
+  console[method]('[Satorna Avito]', message, data)
+  try {
+    const stored = await chrome.storage.local.get({ [LOG_KEY]: [] })
+    const logs = Array.isArray(stored[LOG_KEY]) ? stored[LOG_KEY] : []
+    await chrome.storage.local.set({ [LOG_KEY]: [...logs, entry].slice(-200) })
+  } catch (error) {
+    console.warn('[Satorna Avito] log storage failed', error)
+  }
+}
 
 function normalizeBackendUrl(value) {
   const text = String(value || DEFAULT_BACKEND_URL).trim().replace(/\/+$/, '')
@@ -59,6 +78,10 @@ async function saveStatus(status) {
 }
 
 async function postSnapshot(payload) {
+  await writeLog('info', 'posting snapshot', {
+    orders: payload?.orders?.length || 0,
+    items: payload?.orders?.reduce?.((sum, order) => sum + (order.items?.length || 0), 0) || 0,
+  })
   const settings = await readSettings()
   const token = String(settings.accessToken || '').trim()
   if (!token) {
@@ -84,8 +107,10 @@ async function postSnapshot(payload) {
     if (response.status === 405 && looksLikeFrontendUrl(backendUrl)) {
       throw new Error('Фронт ещё не принимает заказы расширения. Обновите деплой фронта или проверьте, что на нём включён proxy в API backend.')
     }
+    await writeLog('error', 'backend rejected snapshot', { status: response.status, message })
     throw new Error(message)
   }
+  await writeLog('info', 'snapshot posted', { status: response.status })
   return response.json()
 }
 
@@ -156,6 +181,7 @@ function assertAvitoUrl(value) {
 
 async function extractDetailsInTab(url, options) {
   const resolvedUrl = assertAvitoUrl(url)
+  await writeLog('info', 'opening detail tab', { url: resolvedUrl })
   const tab = await tabsCreate({ url: resolvedUrl, active: false })
   if (!tab?.id) throw new Error('Не удалось открыть деталку Avito')
   try {
@@ -164,9 +190,19 @@ async function extractDetailsInTab(url, options) {
     await new Promise((resolve) => setTimeout(resolve, 600))
     const response = await tabsSendMessage(tab.id, { type: 'AVITO_PAGE_EXTRACT_DETAILS', options: options || {} })
     if (!response?.ok) throw new Error(response?.error || 'Не удалось прочитать деталку Avito')
+    await writeLog('info', 'detail extracted', {
+      url: resolvedUrl,
+      title: response.title,
+      images: response.images?.length || 0,
+      itemUrls: response.itemUrls?.length || 0,
+    })
     return response
+  } catch (error) {
+    await writeLog('error', 'detail extraction failed', { url: resolvedUrl, error: error instanceof Error ? error.message : String(error) })
+    throw error
   } finally {
     await tabsRemove(tab.id)
+    await writeLog('info', 'detail tab closed', { url: resolvedUrl })
   }
 }
 
@@ -195,6 +231,7 @@ async function collectFromAvitoOrdersPage() {
 }
 
 async function collectAndPostFromAvito() {
+  await writeLog('info', 'collection requested from popup')
   await saveStatus({ ok: false, message: 'Открываем заказы Avito...' })
   const collected = await collectFromAvitoOrdersPage()
   if (!collected?.ok) throw new Error(collected?.error || 'Не удалось прочитать страницу заказов Avito')
@@ -205,10 +242,25 @@ async function collectAndPostFromAvito() {
   const meta = result?.browserSnapshot
   const text = `Собрано заказов: ${meta?.orders ?? payload?.orders?.length ?? 0}`
   await saveStatus({ ok: true, message: text })
+  await writeLog('info', 'collection finished', { message: text })
   return { ok: true, result, message: text }
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'AVITO_LOG') {
+    writeLog(message.level || 'info', message.message || 'event', message.data || {})
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }))
+    return true
+  }
+  if (message?.type === 'AVITO_LOGS_GET') {
+    chrome.storage.local.get({ [LOG_KEY]: [] }).then((stored) => sendResponse({ ok: true, logs: stored[LOG_KEY] || [] }))
+    return true
+  }
+  if (message?.type === 'AVITO_LOGS_CLEAR') {
+    chrome.storage.local.set({ [LOG_KEY]: [] }).then(() => sendResponse({ ok: true }))
+    return true
+  }
   if (message?.type === 'AVITO_EXTRACT_DETAILS_TAB') {
     extractDetailsInTab(message.url, message.options)
       .then((response) => sendResponse({ ok: true, details: response }))

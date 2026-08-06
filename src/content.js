@@ -30,6 +30,16 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[char]))
 }
 
+function logEvent(level, message, data = {}) {
+  const method = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'
+  console[method]('[Satorna Avito]', message, data)
+  try {
+    chrome.runtime.sendMessage({ type: 'AVITO_LOG', level, message, data })
+  } catch (_error) {
+    // Console logging still works if the background worker is unavailable.
+  }
+}
+
 function textOf(node) {
   return String(node?.innerText || node?.textContent || '').replace(/\s+/g, ' ').trim()
 }
@@ -351,7 +361,7 @@ function extractCurrentPageDetails(optionsPayload) {
   const title = documentTitle(document)
   const description = documentDescription(document)
   const images = options.photoMode === 'none' ? [] : documentImageUrls(document, imageLimit)
-  return {
+  const details = {
     ok: true,
     url: location.href,
     title,
@@ -365,13 +375,23 @@ function extractCurrentPageDetails(optionsPayload) {
     chatText: options.sizeMode === 'chat_ai' ? chatText(document) || text.slice(0, 4000) : null,
     textPreview: text.slice(0, 1000),
   }
+  logEvent('info', 'page details extracted', {
+    url: details.url,
+    title: details.title,
+    descriptionLength: details.description?.length || 0,
+    images: details.images.length,
+    itemUrls: details.itemUrls.length,
+  })
+  return details
 }
 
 function requestTabDetails(url, options) {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage({ type: 'AVITO_EXTRACT_DETAILS_TAB', url, options }, (response) => {
       if (chrome.runtime.lastError || !response?.ok) {
-        resolve({ ok: false, error: chrome.runtime.lastError?.message || response?.error || 'Не удалось открыть деталку' })
+        const error = chrome.runtime.lastError?.message || response?.error || 'Не удалось открыть деталку'
+        logEvent('warn', 'tab details request failed', { url, error })
+        resolve({ ok: false, error })
         return
       }
       resolve({ ok: true, details: response.details || null })
@@ -738,8 +758,10 @@ function highlightOrderRows(nodes) {
 
 async function collectSnapshot(optionsPayload) {
   const options = normalizeOptions(optionsPayload)
+  logEvent('info', 'collection started on orders page', { url: location.href, options })
   showCollectorOverlay(['Ищем строки заказов на странице Avito...'], 'info', { phase: 'Поиск заказов' })
   const candidates = orderCandidates()
+  logEvent('info', 'order rows found', { count: candidates.length })
   highlightOrderRows(candidates)
   const collected = []
   let detailPages = 0
@@ -748,6 +770,14 @@ async function collectSnapshot(optionsPayload) {
   for (let index = 0; index < candidates.length; index += 1) {
     const baseOrder = collectOrder(candidates[index], options)
     if (baseOrder) {
+      logEvent('info', 'order row parsed', {
+        index: index + 1,
+        total: candidates.length,
+        orderId: baseOrder.orderId,
+        pageUrl: baseOrder.pageUrl,
+        title: baseOrder.items?.[0]?.title,
+        image: Boolean(baseOrder.items?.[0]?.imageUrl),
+      })
       showCollectorOverlay([
         `Заказ ${index + 1} из ${candidates.length}: открываем детали`,
         baseOrder.orderId ? `ID: ${baseOrder.orderId}` : 'ID заказа не найден',
@@ -763,6 +793,19 @@ async function collectSnapshot(optionsPayload) {
       if (enriched.checked) detailPages += 1
       itemPages += enriched.itemPages || 0
       if (enriched.errors?.length) detailErrors.push(...enriched.errors)
+      logEvent(enriched.checked ? 'info' : 'warn', 'order enrichment finished', {
+        orderId: enriched.order.orderId,
+        checked: enriched.checked,
+        itemPages: enriched.itemPages || 0,
+        errors: enriched.errors || [],
+        item: {
+          title: enriched.order.items?.[0]?.title,
+          image: Boolean(enriched.order.items?.[0]?.imageUrl),
+          size: enriched.order.items?.[0]?.size || null,
+          color: enriched.order.items?.[0]?.color || null,
+          article: enriched.order.items?.[0]?.sellerArticle || null,
+        },
+      })
       collected.push(enriched.order)
     }
     if (index === 0 || (index + 1) % 2 === 0 || index + 1 === candidates.length) {
@@ -786,6 +829,15 @@ async function collectSnapshot(optionsPayload) {
   }
   const orders = dedupeOrders(collected)
   const { items, missing } = missingSummary(orders, options)
+  logEvent('info', 'collection completed on orders page', {
+    candidates: candidates.length,
+    orders: orders.length,
+    items: items.length,
+    detailPages,
+    itemPages,
+    missing,
+    detailErrors: detailErrors.slice(-10),
+  })
   showCollectorOverlay([
     `Найдено строк заказов Avito: ${candidates.length}`,
     `Собрано заказов: ${orders.length}`,

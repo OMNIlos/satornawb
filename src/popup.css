@@ -102,3 +102,72 @@ button {
   margin: 0;
   color: #4b5563;
 }
+
+.logs {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 10px;
+}
+
+.logs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.logs h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+#clearLogsBtn {
+  padding: 5px 8px;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 12px;
+}
+
+.logs-list {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.log-row {
+  display: grid;
+  gap: 2px;
+  border-bottom: 1px solid #f3f4f6;
+  padding-bottom: 6px;
+}
+
+.log-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.log-row b {
+  color: #111827;
+}
+
+.log-row.warn b {
+  color: #b45309;
+}
+
+.log-row.error b {
+  color: #b91c1c;
+}
+
+.log-row code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #6b7280;
+}
