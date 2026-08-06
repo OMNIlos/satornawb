@@ -22,6 +22,14 @@ const DEFAULT_COLLECT_OPTIONS = {
   articleFromDescription: true,
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[char]))
+}
+
 function textOf(node) {
   return String(node?.innerText || node?.textContent || '').replace(/\s+/g, ' ').trim()
 }
@@ -273,30 +281,201 @@ function cleanFallbackTitle(text) {
     .slice(0, 120) || 'Товар Авито'
 }
 
-function showCollectorOverlay(lines, variant = 'info') {
+function ensureCollectorStyles() {
+  const id = 'satorna-avito-orders-styles'
+  if (document.getElementById(id)) return
+  const style = document.createElement('style')
+  style.id = id
+  style.textContent = `
+    #satorna-avito-orders-progress {
+      position: fixed;
+      top: 54px;
+      right: 16px;
+      bottom: 16px;
+      z-index: 2147483647;
+      width: min(424px, calc(100vw - 32px));
+      border-radius: 18px;
+      overflow: hidden;
+      background: radial-gradient(circle at 10% 8%, rgba(249, 115, 22, .18), transparent 34%), linear-gradient(160deg, #17131a 0%, #0d0d12 62%, #171016 100%);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, .42);
+      color: #f8fafc;
+      font: 14px/1.45 Arial, sans-serif;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+    #satorna-avito-orders-progress.satorna-collapsed { display: none; }
+    .satorna-panel-head {
+      min-height: 78px;
+      padding: 20px 22px;
+      border-bottom: 1px solid rgba(255, 255, 255, .1);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .satorna-panel-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    .satorna-panel-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #fb923c;
+      box-shadow: 0 0 0 5px rgba(251, 146, 60, .12);
+    }
+    .satorna-panel-close {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.06);
+      color: rgba(255,255,255,.72);
+      cursor: pointer;
+      font-size: 22px;
+      line-height: 1;
+    }
+    .satorna-panel-body {
+      padding: 22px;
+      color: rgba(248,250,252,.78);
+      overflow: auto;
+    }
+    .satorna-panel-hint {
+      color: rgba(248,250,252,.36);
+      text-align: center;
+      margin-top: 4px;
+    }
+    .satorna-panel-progress {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.09);
+      overflow: hidden;
+      margin: 16px 0 18px;
+    }
+    .satorna-panel-progress span {
+      display: block;
+      height: 100%;
+      width: var(--satorna-progress, 0%);
+      border-radius: inherit;
+      background: linear-gradient(90deg, #fb923c, #22c55e);
+      transition: width .18s ease;
+    }
+    .satorna-panel-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .satorna-panel-stat {
+      border: 1px solid rgba(255,255,255,.09);
+      border-radius: 12px;
+      padding: 12px;
+      background: rgba(255,255,255,.045);
+    }
+    .satorna-panel-stat span {
+      display: block;
+      color: rgba(248,250,252,.5);
+      font-size: 12px;
+    }
+    .satorna-panel-stat b {
+      display: block;
+      margin-top: 4px;
+      font-size: 20px;
+      color: #fff;
+    }
+    .satorna-panel-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .satorna-panel-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      padding-bottom: 8px;
+      color: rgba(248,250,252,.68);
+    }
+    .satorna-panel-row b { color: #fff; }
+    .satorna-panel-result {
+      margin: 0 8px 8px;
+      border-radius: 12px;
+      padding: 14px;
+      background: #ecfdf5;
+      border: 1px solid #bbf7d0;
+      color: #047857;
+      font-size: 13px;
+    }
+    .satorna-panel-result.warn {
+      background: #fff7ed;
+      border-color: #fed7aa;
+      color: #9a3412;
+    }
+    .satorna-panel-result.error {
+      background: #fef2f2;
+      border-color: #fecaca;
+      color: #991b1b;
+    }
+    .satorna-order-highlight {
+      outline: 1.5px solid #fb923c !important;
+      outline-offset: 2px !important;
+      border-radius: 14px !important;
+    }
+    @media (max-width: 700px) {
+      #satorna-avito-orders-progress {
+        top: 12px;
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+        width: auto;
+      }
+    }
+  `
+  document.documentElement.appendChild(style)
+}
+
+function showCollectorOverlay(lines, variant = 'info', stats = {}) {
   const id = 'satorna-avito-orders-progress'
+  ensureCollectorStyles()
   let box = document.getElementById(id)
   if (!box) {
     box = document.createElement('div')
     box.id = id
-    box.style.position = 'fixed'
-    box.style.right = '18px'
-    box.style.bottom = '18px'
-    box.style.zIndex = '2147483647'
-    box.style.width = '320px'
-    box.style.padding = '14px'
-    box.style.borderRadius = '12px'
-    box.style.boxShadow = '0 18px 45px rgba(15,23,42,.22)'
-    box.style.font = '13px/1.35 Arial, sans-serif'
     document.documentElement.appendChild(box)
   }
-  box.style.background = variant === 'error' ? '#FEF2F2' : variant === 'ok' ? '#ECFDF5' : '#EFF6FF'
-  box.style.border = variant === 'error' ? '1px solid #FECACA' : variant === 'ok' ? '1px solid #BBF7D0' : '1px solid #BFDBFE'
-  box.style.color = variant === 'error' ? '#991B1B' : variant === 'ok' ? '#065F46' : '#1E3A8A'
+  box.classList.remove('satorna-collapsed')
+  const processed = Number(stats.processed || 0)
+  const total = Number(stats.total || 0)
+  const progress = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0
+  const missing = stats.missing || {}
+  const resultClass = variant === 'error' ? 'error' : variant === 'ok' ? '' : 'warn'
   box.innerHTML = [
-    '<b style="display:block;margin-bottom:7px">Satorna собирает заказы Avito</b>',
-    ...lines.map((line) => `<div style="margin-top:3px">${String(line).replace(/[<>&]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[char]))}</div>`),
+    '<div class="satorna-panel-head">',
+    '<div class="satorna-panel-title"><span class="satorna-panel-dot"></span><span>Собранные заказы</span></div>',
+    '<button class="satorna-panel-close" type="button" aria-label="Закрыть">×</button>',
+    '</div>',
+    '<div class="satorna-panel-body">',
+    total ? `<div><b>${escapeHtml(stats.phase || 'Сбор заказов')}</b><div class="satorna-panel-progress" style="--satorna-progress:${progress}%"><span></span></div></div>` : '<div class="satorna-panel-hint">Нажмите “Собрать заказы”</div>',
+    '<div class="satorna-panel-grid">',
+    `<div class="satorna-panel-stat"><span>Найдено блоков</span><b>${escapeHtml(stats.candidates ?? total ?? 0)}</b></div>`,
+    `<div class="satorna-panel-stat"><span>Обработано</span><b>${escapeHtml(processed)} / ${escapeHtml(total)}</b></div>`,
+    `<div class="satorna-panel-stat"><span>Заказов</span><b>${escapeHtml(stats.orders ?? 0)}</b></div>`,
+    `<div class="satorna-panel-stat"><span>Позиций</span><b>${escapeHtml(stats.items ?? 0)}</b></div>`,
+    '</div>',
+    '<div class="satorna-panel-list">',
+    `<div class="satorna-panel-row"><span>Фото не найдено</span><b>${escapeHtml(missing.imageUrl ?? 0)}</b></div>`,
+    `<div class="satorna-panel-row"><span>Размер не найден</span><b>${escapeHtml(missing.size ?? 0)}</b></div>`,
+    `<div class="satorna-panel-row"><span>Цвет не найден</span><b>${escapeHtml(missing.color ?? 0)}</b></div>`,
+    `<div class="satorna-panel-row"><span>Артикул не найден</span><b>${escapeHtml(missing.sellerArticle ?? 0)}</b></div>`,
+    '</div>',
+    '</div>',
+    `<div class="satorna-panel-result ${resultClass}">${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join('')}</div>`,
   ].join('')
+  box.querySelector('.satorna-panel-close')?.addEventListener('click', () => box.classList.add('satorna-collapsed'))
 }
 
 function collectOrder(root, options) {
@@ -349,11 +528,39 @@ function dedupeOrders(orders) {
   return Array.from(byKey.values())
 }
 
-function collectSnapshot(optionsPayload) {
+function highlightOrderRows(nodes) {
+  nodes.forEach((node) => {
+    if (node instanceof HTMLElement) node.classList.add('satorna-order-highlight')
+  })
+}
+
+async function collectSnapshot(optionsPayload) {
   const options = normalizeOptions(optionsPayload)
-  showCollectorOverlay(['Ищем блоки заказов на странице...'])
+  showCollectorOverlay(['Ищем строки заказов на странице Avito...'], 'info', { phase: 'Поиск заказов' })
   const candidates = orderCandidates()
-  const orders = dedupeOrders(candidates.map((node) => collectOrder(node, options)).filter(Boolean))
+  highlightOrderRows(candidates)
+  const collected = []
+  for (let index = 0; index < candidates.length; index += 1) {
+    const order = collectOrder(candidates[index], options)
+    if (order) collected.push(order)
+    if (index === 0 || (index + 1) % 5 === 0 || index + 1 === candidates.length) {
+      const partialOrders = dedupeOrders(collected)
+      const partialItems = partialOrders.flatMap((item) => item.items || [])
+      showCollectorOverlay([
+        `Обработано строк: ${index + 1} из ${candidates.length}`,
+        `Собрано заказов: ${partialOrders.length}`,
+      ], 'info', {
+        phase: 'Читаем страницу Avito',
+        candidates: candidates.length,
+        total: candidates.length,
+        processed: index + 1,
+        orders: partialOrders.length,
+        items: partialItems.length,
+      })
+      await sleep(25)
+    }
+  }
+  const orders = dedupeOrders(collected)
   const items = orders.flatMap((order) => order.items || [])
   const missingRows = items.map((item) => requestedMissing(item, options))
   const missing = {
@@ -367,7 +574,15 @@ function collectSnapshot(optionsPayload) {
     `Собрано заказов: ${orders.length}`,
     `Позиций: ${items.length}`,
     `Не найдено: фото ${missing.imageUrl}, размер ${missing.size}, цвет ${missing.color}, артикул ${missing.sellerArticle}`,
-  ], 'ok')
+  ], 'ok', {
+    phase: 'Сбор завершен',
+    candidates: candidates.length,
+    total: candidates.length,
+    processed: candidates.length,
+    orders: orders.length,
+    items: items.length,
+    missing,
+  })
   return {
     capturedAt: new Date().toISOString(),
     pageUrl: location.href,
@@ -391,6 +606,12 @@ function collectSnapshot(optionsPayload) {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== 'AVITO_ORDERS_COLLECT_NOW') return false
-  sendResponse({ ok: true, payload: collectSnapshot(message.options) })
-  return false
+  collectSnapshot(message.options)
+    .then((payload) => sendResponse({ ok: true, payload }))
+    .catch((error) => {
+      const text = error instanceof Error ? error.message : String(error)
+      showCollectorOverlay([text], 'error')
+      sendResponse({ ok: false, error: text })
+    })
+  return true
 })
