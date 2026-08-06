@@ -57,6 +57,27 @@ function absoluteUrl(value) {
   }
 }
 
+function srcsetUrl(value) {
+  const text = String(value || '').trim()
+  if (!text) return null
+  const candidates = text.split(',').map((part) => part.trim().split(/\s+/)[0]).filter(Boolean)
+  return candidates.length ? absoluteUrl(candidates[candidates.length - 1]) : null
+}
+
+function imageSource(image) {
+  return absoluteUrl(
+    image?.currentSrc
+    || image?.src
+    || image?.getAttribute?.('src')
+    || image?.getAttribute?.('data-src')
+    || image?.getAttribute?.('data-url')
+  ) || srcsetUrl(image?.getAttribute?.('srcset') || image?.getAttribute?.('data-srcset'))
+}
+
+function metaContent(root, selector) {
+  return root.querySelector(selector)?.getAttribute('content')?.trim() || null
+}
+
 function parseKopecks(text) {
   const match = String(text || '').replace(/\s+/g, '').match(/(\d+)(?:[,.](\d{1,2}))?\s*(?:₽|руб)/i)
   if (!match) return null
@@ -168,10 +189,11 @@ function imageUrls(root, limit = 1) {
     'img[data-testid="image"]',
     'img[data-marker*="image"]',
     'img[src*="avito.st"]',
+    'img[srcset*="avito.st"]',
     'img[src]',
   ])
   return images
-    .map((image) => absoluteUrl(image.currentSrc || image.src || image.getAttribute('src')))
+    .map(imageSource)
     .filter(Boolean)
     .filter((value, index, array) => array.indexOf(value) === index)
     .slice(0, limit)
@@ -250,12 +272,13 @@ function visibleProductImages(root, limit) {
     '[data-marker="images-row"] img',
     'img[data-testid="image"]',
     'img[alt][src*="avito.st"]',
+    'img[alt][srcset*="avito.st"]',
     'img[alt]',
   ])
   return images
     .map((image) => ({
       title: String(image.getAttribute('alt') || '').trim(),
-      url: absoluteUrl(image.currentSrc || image.src || image.getAttribute('src') || image.getAttribute('data-src')),
+      url: imageSource(image),
     }))
     .filter((item) => item.title || item.url)
     .filter((item, index, array) => {
@@ -263,6 +286,136 @@ function visibleProductImages(root, limit) {
       return array.findIndex((candidate) => `${candidate.title}|${candidate.url || ''}` === key) === index
     })
     .slice(0, limit)
+}
+
+async function fetchDocument(url) {
+  const resolved = absoluteUrl(url)
+  if (!resolved) return null
+  const response = await fetch(resolved, {
+    method: 'GET',
+    credentials: 'include',
+    cache: 'no-store',
+    headers: { 'Accept': 'text/html,application/xhtml+xml' },
+  })
+  if (!response.ok) throw new Error(`Avito вернул ${response.status} для ${resolved}`)
+  const html = await response.text()
+  return new DOMParser().parseFromString(html, 'text/html')
+}
+
+function documentTitle(root) {
+  return textOf(first(root, ['[data-marker="item-view/title-info"]', 'h1', 'meta[property="og:title"]']))
+    || metaContent(root, 'meta[property="og:title"]')
+    || metaContent(root, 'meta[name="title"]')
+    || null
+}
+
+function documentDescription(root) {
+  const selectors = [
+    '[data-marker="item-view/item-description"]',
+    '[itemprop="description"]',
+    '[data-marker*="description"]',
+    '[class*="description"]',
+  ]
+  const nodeText = textOf(first(root, selectors))
+  return nodeText || metaContent(root, 'meta[property="og:description"]') || metaContent(root, 'meta[name="description"]') || ''
+}
+
+function documentImageUrls(root, limit) {
+  const metaImages = [
+    metaContent(root, 'meta[property="og:image"]'),
+    metaContent(root, 'meta[name="twitter:image"]'),
+  ].map(absoluteUrl).filter(Boolean)
+  return [...metaImages, ...imageUrls(root, limit)]
+    .filter((value, index, array) => value && array.indexOf(value) === index)
+    .slice(0, limit)
+}
+
+function itemUrlsFromDocument(root) {
+  const urls = all(root, [
+    'a[href*="/items/"]',
+    'a[href*="_"][href*="/"]',
+  ])
+    .map((link) => absoluteUrl(link.getAttribute('href')))
+    .filter((url) => url && /avito\.ru\/.+_\d{5,}/i.test(url))
+  const canonical = root.querySelector('link[rel="canonical"]')?.getAttribute('href')
+  const ogUrl = metaContent(root, 'meta[property="og:url"]')
+  return [...urls, absoluteUrl(canonical), absoluteUrl(ogUrl)]
+    .filter((url) => url && !/\/orders\//i.test(url))
+    .filter((url, index, array) => array.indexOf(url) === index)
+}
+
+function mergeItemDetails(item, details, options) {
+  const text = [details.title, details.description, item.description].filter(Boolean).join('\n')
+  const photos = details.images?.length ? details.images : item.imageUrls || []
+  if (details.itemUrl && !item.itemUrl) item.itemUrl = details.itemUrl
+  if (details.itemId && !item.itemId) item.itemId = details.itemId
+  if (details.title && (!item.title || item.title === 'Товар Авито' || item.title === 'Товар')) item.title = details.title
+  if (photos.length && !item.imageUrl) item.imageUrl = photos[0]
+  if (photos.length) item.imageUrls = photos
+  if (details.description) item.description = details.description
+  if (options.articleFromDescription && !item.sellerArticle) item.sellerArticle = parseArticle(text)
+  if (options.colorFromDescription && !item.color) item.color = parseColor(text)
+  if (options.sizeMode === 'description' && !item.size) item.size = parseSize(text)
+}
+
+async function enrichOrderFromDetails(order, options) {
+  const detailUrls = [order.pageUrl].filter((url) => url && !url.includes('#'))
+  const imageLimit = options.photoMode === 'two' ? 2 : 1
+  let orderDoc = null
+  for (const url of detailUrls) {
+    try {
+      orderDoc = await fetchDocument(url)
+      break
+    } catch (_error) {
+      orderDoc = null
+    }
+  }
+  if (!orderDoc) return { order, checked: false, itemPages: 0 }
+
+  if (!order.status) order.status = statusFromText(textOf(orderDoc))
+  if (!order.deliveryService) order.deliveryService = deliveryService(textOf(orderDoc))
+  if (!order.trackNumber) order.trackNumber = trackNumber(textOf(orderDoc))
+
+  const itemUrls = itemUrlsFromDocument(orderDoc)
+  const orderImages = options.photoMode === 'none' ? [] : documentImageUrls(orderDoc, imageLimit)
+  const orderDescription = documentDescription(orderDoc)
+  const orderTitle = documentTitle(orderDoc)
+  const detailTexts = [orderTitle, orderDescription, textOf(orderDoc)].filter(Boolean).join('\n')
+  const detailChatText = options.sizeMode === 'chat_ai' ? chatText(orderDoc) || detailTexts.slice(0, 4000) : null
+  let itemPages = 0
+
+  if (!order.items.length) order.items = [{ title: orderTitle || 'Товар Авито', quantity: 1 }]
+
+  for (let itemIndex = 0; itemIndex < order.items.length; itemIndex += 1) {
+    const item = order.items[itemIndex]
+    mergeItemDetails(item, {
+      title: orderTitle,
+      description: orderDescription,
+      images: orderImages,
+    }, options)
+    if (detailChatText && !item.chatText) item.chatText = detailChatText
+
+    const itemUrl = item.itemUrl || itemUrls[itemIndex] || itemUrls[0]
+    if (!itemUrl) continue
+    try {
+      const itemDoc = await fetchDocument(itemUrl)
+      itemPages += 1
+      const description = documentDescription(itemDoc)
+      const title = documentTitle(itemDoc)
+      const images = options.photoMode === 'none' ? [] : documentImageUrls(itemDoc, imageLimit)
+      mergeItemDetails(item, {
+        itemUrl,
+        itemId: itemIdFromUrl(itemUrl),
+        title,
+        description,
+        images,
+      }, options)
+    } catch (_error) {
+      if (!item.itemUrl) item.itemUrl = itemUrl
+      if (!item.itemId) item.itemId = itemIdFromUrl(itemUrl)
+    }
+  }
+  return { order, checked: true, itemPages }
 }
 
 function cleanFallbackTitle(text) {
@@ -528,6 +681,20 @@ function dedupeOrders(orders) {
   return Array.from(byKey.values())
 }
 
+function missingSummary(orders, options) {
+  const items = orders.flatMap((order) => order.items || [])
+  const missingRows = items.map((item) => requestedMissing(item, options))
+  return {
+    items,
+    missing: {
+      imageUrl: missingRows.filter((item) => item.imageUrl).length,
+      size: missingRows.filter((item) => item.size).length,
+      color: missingRows.filter((item) => item.color).length,
+      sellerArticle: missingRows.filter((item) => item.sellerArticle).length,
+    },
+  }
+}
+
 function highlightOrderRows(nodes) {
   nodes.forEach((node) => {
     if (node instanceof HTMLElement) node.classList.add('satorna-order-highlight')
@@ -540,39 +707,52 @@ async function collectSnapshot(optionsPayload) {
   const candidates = orderCandidates()
   highlightOrderRows(candidates)
   const collected = []
+  let detailPages = 0
+  let itemPages = 0
   for (let index = 0; index < candidates.length; index += 1) {
-    const order = collectOrder(candidates[index], options)
-    if (order) collected.push(order)
-    if (index === 0 || (index + 1) % 5 === 0 || index + 1 === candidates.length) {
-      const partialOrders = dedupeOrders(collected)
-      const partialItems = partialOrders.flatMap((item) => item.items || [])
+    const baseOrder = collectOrder(candidates[index], options)
+    if (baseOrder) {
       showCollectorOverlay([
-        `Обработано строк: ${index + 1} из ${candidates.length}`,
-        `Собрано заказов: ${partialOrders.length}`,
+        `Заказ ${index + 1} из ${candidates.length}: открываем детали`,
+        baseOrder.orderId ? `ID: ${baseOrder.orderId}` : 'ID заказа не найден',
       ], 'info', {
-        phase: 'Читаем страницу Avito',
+        phase: 'Читаем детали заказов',
+        candidates: candidates.length,
+        total: candidates.length,
+        processed: index,
+        orders: dedupeOrders(collected).length,
+        items: collected.flatMap((item) => item.items || []).length,
+      })
+      const enriched = await enrichOrderFromDetails(baseOrder, options)
+      if (enriched.checked) detailPages += 1
+      itemPages += enriched.itemPages || 0
+      collected.push(enriched.order)
+    }
+    if (index === 0 || (index + 1) % 2 === 0 || index + 1 === candidates.length) {
+      const partialOrders = dedupeOrders(collected)
+      const { items: partialItems, missing: partialMissing } = missingSummary(partialOrders, options)
+      showCollectorOverlay([
+        `Обработано заказов: ${index + 1} из ${candidates.length}`,
+        `Деталок заказа: ${detailPages}, объявлений: ${itemPages}`,
+      ], 'info', {
+        phase: 'Собираем описания и фото',
         candidates: candidates.length,
         total: candidates.length,
         processed: index + 1,
         orders: partialOrders.length,
         items: partialItems.length,
+        missing: partialMissing,
       })
-      await sleep(25)
     }
+    await sleep(120)
   }
   const orders = dedupeOrders(collected)
-  const items = orders.flatMap((order) => order.items || [])
-  const missingRows = items.map((item) => requestedMissing(item, options))
-  const missing = {
-    imageUrl: missingRows.filter((item) => item.imageUrl).length,
-    size: missingRows.filter((item) => item.size).length,
-    color: missingRows.filter((item) => item.color).length,
-    sellerArticle: missingRows.filter((item) => item.sellerArticle).length,
-  }
+  const { items, missing } = missingSummary(orders, options)
   showCollectorOverlay([
     `Найдено строк заказов Avito: ${candidates.length}`,
     `Собрано заказов: ${orders.length}`,
     `Позиций: ${items.length}`,
+    `Проверено деталок: ${detailPages}, объявлений: ${itemPages}`,
     `Не найдено: фото ${missing.imageUrl}, размер ${missing.size}, цвет ${missing.color}, артикул ${missing.sellerArticle}`,
   ], 'ok', {
     phase: 'Сбор завершен',
@@ -594,7 +774,8 @@ async function collectSnapshot(optionsPayload) {
       missing,
       options,
       notes: [
-        'Собраны данные, которые были видны в DOM страницы Avito.',
+        'Собраны данные со страницы заказов, деталей заказа и доступных страниц объявлений Avito.',
+        `Проверено деталей заказа: ${detailPages}. Проверено объявлений: ${itemPages}.`,
         options.sizeMode === 'chat_ai'
           ? 'Размер будет дополнительно проверен backend AI-разбором по тексту чата.'
           : 'AI не используется, если размер выбран из описания или отключен.',
