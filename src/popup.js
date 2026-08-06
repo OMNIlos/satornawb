@@ -8,6 +8,16 @@ function setStatus(text) {
   statusEl.textContent = text
 }
 
+function normalizeInputUrl(value) {
+  const text = String(value || '').trim()
+  if (!text) return 'http://localhost:8000'
+  try {
+    return new URL(text).origin
+  } catch (_error) {
+    return text.replace(/\/+$/, '')
+  }
+}
+
 async function loadSettings() {
   const settings = await chrome.storage.sync.get({
     backendUrl: 'http://localhost:8000',
@@ -21,10 +31,12 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
+  const backendUrl = normalizeInputUrl(backendUrlInput.value)
   await chrome.storage.sync.set({
-    backendUrl: backendUrlInput.value.trim() || 'http://localhost:8000',
+    backendUrl,
     accessToken: accessTokenInput.value.trim(),
   })
+  backendUrlInput.value = backendUrl
   setStatus('Настройки сохранены')
 }
 
