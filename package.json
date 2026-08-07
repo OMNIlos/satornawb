@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/content.js && node --check src/background.js && node --check src/popup.js && node scripts/validate-manifest.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm test && node --check src/content.js && node --check src/background.js && node --check src/page-state.js && node --check src/popup.js && node scripts/validate-manifest.mjs",
     "build": "npm run check && node scripts/build.mjs"
   }
 }

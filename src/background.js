@@ -243,6 +243,59 @@ async function waitForTabListingUrl(tabId, timeoutMs = 9000) {
   return null
 }
 
+async function extractPageRuntimeDiagnostics(tabId, frameId, title, pageUrl) {
+  const target = Number.isInteger(frameId) ? { tabId, frameIds: [frameId] } : { tabId }
+  try {
+    await chrome.scripting.executeScript({
+      target,
+      world: 'MAIN',
+      files: ['src/page-state.js'],
+    })
+    const results = await chrome.scripting.executeScript({
+      target,
+      world: 'MAIN',
+      func: async (expectedTitle, orderPageUrl) => {
+        const api = globalThis.SatornaAvitoPageState
+        const inspected = api?.inspectDocument(document, expectedTitle) || {
+          candidates: [],
+          reactRoots: 0,
+          resourceUrls: [],
+        }
+        const stateCandidates = Array.isArray(inspected.candidates) ? inspected.candidates : []
+        let timezone = ''
+        try {
+          timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+        } catch (_error) {
+          // The profile order endpoint also works without this hint.
+        }
+        const directResource = api?.profileOrderResourceUrl(orderPageUrl, timezone)
+        inspected.resourceUrls = Array.from(new Set([
+          ...(inspected.resourceUrls || []),
+          directResource,
+        ].filter(Boolean)))
+        if (inspected.resourceUrls.length) {
+          const loaded = await api?.loadCandidatesFromOrderResources(inspected.resourceUrls, expectedTitle)
+          inspected.candidates = loaded?.candidates?.length ? loaded.candidates : stateCandidates
+          inspected.candidateSource = loaded?.candidates?.length ? 'profile-order-api' : 'page-state'
+          inspected.resourceRequests = loaded?.requests || []
+          inspected.resourceText = loaded?.resourceText || ''
+        }
+        return inspected
+      },
+      args: [title || '', pageUrl || ''],
+    })
+    const diagnostics = results.map((entry) => entry?.result).find((result) => result && typeof result === 'object')
+    return diagnostics || { candidates: [], reactRoots: 0, resourceUrls: [] }
+  } catch (error) {
+    await writeLog('warn', 'react page state extraction failed', {
+      tabId,
+      frameId: Number.isInteger(frameId) ? frameId : null,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return { candidates: [], reactRoots: 0, resourceUrls: [], error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 async function extractDetailsInTab(url, options) {
   const resolvedUrl = assertAvitoUrl(url)
   await writeLog('info', 'opening detail tab', { url: resolvedUrl })
@@ -282,6 +335,51 @@ async function extractDetailsInTab(url, options) {
       })
     }
     if (isOrderDetail && (!Array.isArray(response.itemUrls) || response.itemUrls.length === 0)) {
+      const runtime = await extractPageRuntimeDiagnostics(
+        tab.id,
+        selectedFrame?.frameId,
+        options?.orderItemTitle || '',
+        resolvedUrl,
+      )
+      const stateCandidates = Array.isArray(runtime.candidates) ? runtime.candidates : []
+      response.reactStateCandidates = stateCandidates.slice(0, 20)
+      response.reactItemIds = stateCandidates.map((candidate) => candidate.itemId).filter(Boolean)
+      response.runtimeResourceUrls = Array.isArray(runtime.resourceUrls) ? runtime.resourceUrls : []
+      if (runtime.resourceText) {
+        response.pageText = [response.pageText, runtime.resourceText].filter(Boolean).join('\n')
+      }
+      await writeLog('info', 'order detail runtime diagnostics', {
+        orderUrl: resolvedUrl,
+        frameId: Number.isInteger(selectedFrame?.frameId) ? selectedFrame.frameId : null,
+        reactRoots: runtime.reactRoots || 0,
+        statePropertyKeys: Array.isArray(runtime.statePropertyKeys) ? runtime.statePropertyKeys.slice(0, 40) : [],
+        reactCandidates: stateCandidates.length,
+        reactItemIds: response.reactItemIds.slice(0, 10),
+        resourceUrls: response.runtimeResourceUrls.slice(-20),
+        resourceRequests: Array.isArray(runtime.resourceRequests) ? runtime.resourceRequests.slice(-10) : [],
+        resourceTextLength: String(runtime.resourceText || '').length,
+        candidateSource: runtime.candidateSource || null,
+        error: runtime.error || null,
+      })
+      const stateItemUrl = stateCandidates.find((candidate) => candidate.itemUrl)?.itemUrl
+      if (stateItemUrl) {
+        response.itemUrls = [stateItemUrl]
+        response.itemUrlCandidates = [
+          {
+            url: stateItemUrl,
+            source: runtime.candidateSource || 'page-state',
+            score: stateCandidates[0]?.score || 100,
+          },
+          ...(response.itemUrlCandidates || []),
+        ]
+        await writeLog('info', 'order listing url found from order data', {
+          orderUrl: resolvedUrl,
+          listingUrl: stateItemUrl,
+          itemId: stateCandidates[0]?.itemId || null,
+        })
+      }
+    }
+    if (isOrderDetail && (!Array.isArray(response.itemUrls) || response.itemUrls.length === 0)) {
       const clicked = await tabsSendMessage(tab.id, {
         type: 'AVITO_OPEN_LISTING_FROM_ORDER',
         title: options?.orderItemTitle || '',
@@ -312,6 +410,8 @@ async function extractDetailsInTab(url, options) {
       linksCount: response.linksCount || 0,
       imagesCount: response.imagesCount || 0,
       htmlItemIds: response.htmlItemIds || [],
+      reactItemIds: response.reactItemIds || [],
+      reactStateCandidates: response.reactStateCandidates?.slice?.(0, 5) || [],
       selectedFrame: response.selectedFrame || null,
       detailNotRendered: Boolean(response.detailNotRendered),
       linkSamples: response.linkSamples || [],
