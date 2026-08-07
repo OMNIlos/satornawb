@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Satorna Avito Orders Collector",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Collects Avito order details from the seller browser page for Satorna picking lists.",
   "permissions": ["activeTab", "storage", "scripting", "tabs"],
   "host_permissions": ["https://www.avito.ru/*", "http://localhost:*/*", "http://127.0.0.1:*/*", "https://*/*"],
@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "matches": ["https://www.avito.ru/*"],
-      "js": ["src/content.js"],
+      "js": ["src/page-state.js", "src/content.js"],
       "run_at": "document_idle",
       "all_frames": true
     }

@@ -186,3 +186,34 @@ test('binds itemId to the matching product block in the profile order payload', 
   assert.equal(loaded?.candidates[0]?.itemId, '8226657890')
   assert.equal(loaded?.candidates[0]?.itemUrl, 'https://www.avito.ru/items/8226657890')
 })
+
+test('loads the listing candidate directly from an orders-list page', async () => {
+  const requestedUrls = []
+  const fetchApi = async (url) => {
+    requestedUrls.push(url)
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        widgets: [{
+          payload: 'action://open?itemId=8098284629',
+          quantity: 1,
+          title: 'Лонгслив y2k opium archive anime',
+        }],
+      }),
+    }
+  }
+
+  const loaded = await globalThis.SatornaAvitoPageState?.loadCandidateForOrderPage?.(
+    'https://www.avito.ru/orders/70000000486515763?source=orders_list',
+    'Лонгслив y2k opium archive anime',
+    fetchApi,
+    'Asia/Yekaterinburg',
+  )
+
+  assert.deepEqual(requestedUrls, [
+    'https://www.avito.ru/web/2/profile/order?referenceID=70000000486515763&templateVersion=0&srcp=orders_list&location=Asia%2FYekaterinburg',
+  ])
+  assert.equal(loaded?.candidate?.itemId, '8098284629')
+  assert.equal(loaded?.candidate?.itemUrl, 'https://www.avito.ru/items/8098284629')
+})

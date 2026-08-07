@@ -720,7 +720,35 @@ function mergeItemDetails(item, details, options) {
 }
 
 async function enrichOrderFromDetails(order, options) {
-  const hasRowItemUrl = order.items?.some((item) => item.itemUrl)
+  let hasRowItemUrl = order.items?.some((item) => item.itemUrl)
+  if (!hasRowItemUrl && order.pageUrl && order.items?.[0]) {
+    let timezone = ''
+    try {
+      timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+    } catch (_error) {
+      // The profile order endpoint also works without a location hint.
+    }
+    const direct = await globalThis.SatornaAvitoPageState?.loadCandidateForOrderPage?.(
+      order.pageUrl,
+      order.items[0].title || '',
+      globalThis.fetch,
+      timezone,
+    )
+    const candidate = direct?.candidate
+    if (candidate?.itemUrl) {
+      order.items[0].itemUrl = candidate.itemUrl
+      order.items[0].itemId = candidate.itemId || itemIdFromUrl(candidate.itemUrl)
+      hasRowItemUrl = true
+    }
+    logEvent(candidate?.itemUrl ? 'info' : 'warn', 'order listing resolved from orders-list API', {
+      orderId: order.orderId,
+      itemTitle: order.items[0].title || '',
+      itemId: candidate?.itemId || null,
+      itemUrl: candidate?.itemUrl || null,
+      resourceUrl: direct?.resourceUrl || null,
+      requests: direct?.requests || [],
+    })
+  }
   const detailUrls = hasRowItemUrl ? [] : [order.pageUrl].filter((url) => url && !url.includes('#'))
   const imageLimit = options.photoMode === 'two' ? 2 : 1
   let orderDetails = null

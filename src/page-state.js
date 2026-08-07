@@ -315,6 +315,30 @@ async function loadCandidatesFromOrderResources(resourceUrls, expectedTitle = ''
   }
 }
 
+async function loadCandidateForOrderPage(
+  pageUrl,
+  expectedTitle = '',
+  fetchApi = globalThis.fetch,
+  timezone = '',
+) {
+  const resourceUrl = profileOrderResourceUrl(pageUrl, timezone)
+  if (!resourceUrl) {
+    return {
+      candidate: null,
+      candidates: [],
+      requests: [],
+      resourceText: '',
+      resourceUrl: null,
+    }
+  }
+  const loaded = await loadCandidatesFromOrderResources([resourceUrl], expectedTitle, fetchApi)
+  return {
+    ...loaded,
+    candidate: loaded.candidates[0] || null,
+    resourceUrl,
+  }
+}
+
 globalThis.SatornaAvitoPageState = {
   findCandidates,
   findOrderPayloadCandidates,
@@ -323,6 +347,7 @@ globalThis.SatornaAvitoPageState = {
   inspectDocument,
   profileOrderResourceUrl,
   loadCandidatesFromOrderResources,
+  loadCandidateForOrderPage,
 }
 globalThis[PAGE_STATE_API] = true
 }
