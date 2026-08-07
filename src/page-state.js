@@ -275,6 +275,33 @@ function relevantPayloadText(root) {
   return lines.join('\n').slice(0, 30000)
 }
 
+function extractChannelIds(root) {
+  let source = ''
+  try {
+    source = JSON.stringify(root)
+  } catch (_error) {
+    return []
+  }
+  const values = []
+  const patterns = [
+    /"channelId"\s*:\s*"([^"]+)"/gi,
+    /channelId(?:%3D|=)(u2[iI]-[~]?[a-zA-Z0-9_-]+)/gi,
+    /(u2[iI]-[~]?[a-zA-Z0-9_-]{8,})/g,
+  ]
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      let value = String(match[1] || match[0] || '').split('&')[0]
+      try {
+        value = decodeURIComponent(value)
+      } catch (_error) {
+        // Keep the original value.
+      }
+      if (/^u2[iI]-[~]?[a-zA-Z0-9_-]{8,}$/.test(value) && !values.includes(value)) values.push(value)
+    }
+  }
+  return values
+}
+
 async function loadCandidatesFromOrderResources(resourceUrls, expectedTitle = '', fetchApi = globalThis.fetch) {
   const urls = Array.from(new Set((resourceUrls || [])
     .map((value) => String(value || ''))
@@ -311,6 +338,7 @@ async function loadCandidatesFromOrderResources(resourceUrls, expectedTitle = ''
       all.findIndex((value) => (value.itemId || value.itemUrl) === (candidate.itemId || candidate.itemUrl)) === index
     )).sort((left, right) => right.score - left.score).slice(0, 20),
     requests,
+    channelIds: payloads.flatMap(extractChannelIds).filter((value, index, all) => all.indexOf(value) === index),
     resourceText: payloads.map(relevantPayloadText).filter(Boolean).join('\n').slice(0, 30000),
   }
 }
@@ -327,6 +355,7 @@ async function loadCandidateForOrderPage(
       candidate: null,
       candidates: [],
       requests: [],
+      channelIds: [],
       resourceText: '',
       resourceUrl: null,
     }
@@ -344,6 +373,7 @@ globalThis.SatornaAvitoPageState = {
   findOrderPayloadCandidates,
   collectFromDocument,
   networkResourceUrls,
+  extractChannelIds,
   inspectDocument,
   profileOrderResourceUrl,
   loadCandidatesFromOrderResources,

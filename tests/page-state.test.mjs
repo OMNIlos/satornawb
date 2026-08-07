@@ -51,6 +51,31 @@ test('builds a listing URL when React state exposes only the Avito item id', asy
   )
 })
 
+test('returns unique channel ids with the listing candidate', async () => {
+  const fetchApi = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      channel: { channelId: 'u2i-~buyer-item' },
+      duplicateAction: 'avito://chat?channelId=u2i-~buyer-item&isMiniMessenger=true',
+      widgets: [{
+        payload: 'action://open?itemId=8098284629',
+        quantity: 1,
+        title: 'Лонгслив y2k opium archive anime',
+      }],
+    }),
+  })
+
+  const loaded = await globalThis.SatornaAvitoPageState.loadCandidateForOrderPage(
+    'https://www.avito.ru/orders/70000000486515763?source=orders_list',
+    'Лонгслив y2k opium archive anime',
+    fetchApi,
+    'Asia/Yekaterinburg',
+  )
+
+  assert.deepEqual(loaded.channelIds, ['u2i-~buyer-item'])
+})
+
 test('keeps only Avito order and item resource URLs for runtime diagnostics', () => {
   const resources = globalThis.SatornaAvitoPageState?.networkResourceUrls?.({
     getEntriesByType: () => [
