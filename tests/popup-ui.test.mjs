@@ -4,6 +4,7 @@ import test from 'node:test'
 
 const html = await readFile(new URL('../src/popup.html', import.meta.url), 'utf8')
 const js = await readFile(new URL('../src/popup.js', import.meta.url), 'utf8')
+const contentJs = await readFile(new URL('../src/content.js', import.meta.url), 'utf8')
 
 function section(id) {
   const match = html.match(new RegExp(`<section[^>]+id="${id}"[\\s\\S]*?<\\/section>`))
@@ -27,4 +28,26 @@ test('popup script switches between collect and settings screens', () => {
   assert.match(js, /setActiveScreen/)
   assert.match(js, /settingsTab/)
   assert.match(js, /collectTab/)
+})
+
+test('collect action is locked until Satorna token is configured', () => {
+  assert.match(section('collectScreen'), /id="collectTokenHint"/)
+  assert.match(js, /function syncCollectButtonState/)
+  assert.match(js, /collectBtn\.disabled = !hasToken/)
+  assert.match(js, /Сначала вставьте токен/)
+})
+
+test('saving settings gives visible confirmation on the settings button', () => {
+  assert.match(js, /setSaveFeedback/)
+  assert.match(js, /saveBtn\.classList\.add\('saved'\)/)
+  assert.match(js, /Сохранено/)
+})
+
+test('Avito page overlay uses the Satorna light theme without a bottom debug result block', () => {
+  assert.match(contentJs, /background: #FFFFFF/)
+  assert.match(contentJs, /#2563EB/)
+  assert.doesNotMatch(contentJs, /radial-gradient\(circle at 10% 8%/)
+  assert.doesNotMatch(contentJs, /#17131a/)
+  assert.doesNotMatch(contentJs, /satorna-panel-result/)
+  assert.doesNotMatch(contentJs, /grid-template-rows: auto 1fr auto/)
 })

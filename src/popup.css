@@ -178,11 +178,21 @@ h2 {
   font-size: 14px;
 }
 
+.primary-action:disabled {
+  background: #cbd5e1;
+  color: #64748b;
+}
+
 .secondary-action,
 .run-summary button,
 .settings-head button {
   background: #eef2f7;
   color: #1f2937;
+}
+
+.secondary-action.saved {
+  background: #dcfce7;
+  color: #166534;
 }
 
 button:disabled {
@@ -198,6 +208,18 @@ button:disabled {
   background: var(--brand-soft);
   color: #1d4ed8;
   font-weight: 700;
+}
+
+.token-hint {
+  display: none;
+  margin-top: -4px;
+  color: #d97706;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.token-hint.visible {
+  display: block;
 }
 
 .run-summary {

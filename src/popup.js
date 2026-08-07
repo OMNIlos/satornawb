@@ -15,6 +15,9 @@ const settingsScreen = document.getElementById('settingsScreen')
 const connectionBadge = document.getElementById('connectionBadge')
 const lastRunText = document.getElementById('lastRunText')
 const openSettingsHintBtn = document.getElementById('openSettingsHintBtn')
+const collectTokenHint = document.getElementById('collectTokenHint')
+
+let saveFeedbackTimer = 0
 
 const DEFAULT_COLLECT_OPTIONS = {
   photoMode: 'one',
@@ -49,6 +52,25 @@ function updateConnectionState(settings) {
   connectionBadge.textContent = hasToken ? 'подключено' : 'не настроено'
   connectionBadge.classList.toggle('ok', hasToken)
   lastRunText.textContent = settings.lastSnapshotAt ? formatTime(settings.lastSnapshotAt) : 'ещё не запускался'
+  syncCollectButtonState(hasToken)
+}
+
+function syncCollectButtonState(hasToken = Boolean(accessTokenInput.value.trim())) {
+  collectBtn.disabled = !hasToken
+  collectTokenHint.classList.toggle('visible', !hasToken)
+}
+
+function setSaveFeedback(saved) {
+  window.clearTimeout(saveFeedbackTimer)
+  if (saved) {
+    saveBtn.classList.add('saved')
+  } else {
+    saveBtn.classList.remove('saved')
+  }
+  saveBtn.textContent = saved ? 'Сохранено' : 'Сохранить настройки'
+  if (saved) {
+    saveFeedbackTimer = window.setTimeout(() => setSaveFeedback(false), 1800)
+  }
 }
 
 function renderLogs(logs) {
@@ -103,11 +125,18 @@ async function saveSettings() {
   }
   await chrome.storage.sync.set(settings)
   updateConnectionState(settings)
+  setSaveFeedback(true)
   setStatus('Настройки сохранены')
 }
 
 async function collectOrders() {
-  await saveSettings()
+  const accessToken = accessTokenInput.value.trim()
+  if (!accessToken) {
+    setActiveScreen('settings')
+    setStatus('Сначала вставьте токен Satorna')
+    syncCollectButtonState(false)
+    return
+  }
   setActiveScreen('collect')
   setStatus('Открываем Avito и собираем заказы...')
   const posted = await chrome.runtime.sendMessage({ type: 'AVITO_ORDERS_OPEN_AND_COLLECT' })
@@ -126,12 +155,23 @@ saveBtn.addEventListener('click', () => {
   saveSettings().catch((error) => setStatus(error instanceof Error ? error.message : String(error)))
 })
 
+accessTokenInput.addEventListener('input', () => {
+  setSaveFeedback(false)
+  syncCollectButtonState()
+})
+
 collectBtn.addEventListener('click', () => {
+  if (!accessTokenInput.value.trim()) {
+    setActiveScreen('settings')
+    setStatus('Сначала вставьте токен Satorna')
+    syncCollectButtonState(false)
+    return
+  }
   collectBtn.disabled = true
   collectOrders()
     .catch((error) => setStatus(error instanceof Error ? error.message : String(error)))
     .finally(() => {
-      collectBtn.disabled = false
+      syncCollectButtonState()
     })
 })
 

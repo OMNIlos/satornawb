@@ -873,18 +873,19 @@ function ensureCollectorStyles() {
       width: min(424px, calc(100vw - 32px));
       border-radius: 18px;
       overflow: hidden;
-      background: radial-gradient(circle at 10% 8%, rgba(249, 115, 22, .18), transparent 34%), linear-gradient(160deg, #17131a 0%, #0d0d12 62%, #171016 100%);
-      box-shadow: 0 24px 70px rgba(0, 0, 0, .42);
-      color: #f8fafc;
+      background: #FFFFFF;
+      border: 1px solid #D7E3F7;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, .18);
+      color: #0F172A;
       font: 14px/1.45 Arial, sans-serif;
       display: grid;
-      grid-template-rows: auto 1fr auto;
+      grid-template-rows: auto 1fr;
     }
     #satorna-avito-orders-progress.satorna-collapsed { display: none; }
     .satorna-panel-head {
       min-height: 78px;
       padding: 20px 22px;
-      border-bottom: 1px solid rgba(255, 255, 255, .1);
+      border-bottom: 1px solid #E5EAF4;
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
@@ -902,34 +903,34 @@ function ensureCollectorStyles() {
       width: 8px;
       height: 8px;
       border-radius: 999px;
-      background: #fb923c;
-      box-shadow: 0 0 0 5px rgba(251, 146, 60, .12);
+      background: #2563EB;
+      box-shadow: 0 0 0 5px rgba(37, 99, 235, .12);
     }
     .satorna-panel-close {
       width: 36px;
       height: 36px;
       border-radius: 10px;
-      border: 1px solid rgba(255,255,255,.12);
-      background: rgba(255,255,255,.06);
-      color: rgba(255,255,255,.72);
+      border: 1px solid #D7E3F7;
+      background: #F8FBFF;
+      color: #64748B;
       cursor: pointer;
       font-size: 22px;
       line-height: 1;
     }
     .satorna-panel-body {
       padding: 22px;
-      color: rgba(248,250,252,.78);
+      color: #334155;
       overflow: auto;
     }
     .satorna-panel-hint {
-      color: rgba(248,250,252,.36);
+      color: #94A3B8;
       text-align: center;
       margin-top: 4px;
     }
     .satorna-panel-progress {
       height: 8px;
       border-radius: 999px;
-      background: rgba(255,255,255,.09);
+      background: #E5EAF4;
       overflow: hidden;
       margin: 16px 0 18px;
     }
@@ -938,7 +939,7 @@ function ensureCollectorStyles() {
       height: 100%;
       width: var(--satorna-progress, 0%);
       border-radius: inherit;
-      background: linear-gradient(90deg, #fb923c, #22c55e);
+      background: linear-gradient(90deg, #2563EB, #22C55E);
       transition: width .18s ease;
     }
     .satorna-panel-grid {
@@ -948,21 +949,21 @@ function ensureCollectorStyles() {
       margin-top: 14px;
     }
     .satorna-panel-stat {
-      border: 1px solid rgba(255,255,255,.09);
+      border: 1px solid #E5EAF4;
       border-radius: 12px;
       padding: 12px;
-      background: rgba(255,255,255,.045);
+      background: #F8FAFC;
     }
     .satorna-panel-stat span {
       display: block;
-      color: rgba(248,250,252,.5);
+      color: #64748B;
       font-size: 12px;
     }
     .satorna-panel-stat b {
       display: block;
       margin-top: 4px;
       font-size: 20px;
-      color: #fff;
+      color: #0F172A;
     }
     .satorna-panel-list {
       display: grid;
@@ -973,32 +974,32 @@ function ensureCollectorStyles() {
       display: flex;
       justify-content: space-between;
       gap: 10px;
-      border-bottom: 1px solid rgba(255,255,255,.08);
+      border-bottom: 1px solid #E5EAF4;
       padding-bottom: 8px;
-      color: rgba(248,250,252,.68);
+      color: #475569;
     }
-    .satorna-panel-row b { color: #fff; }
-    .satorna-panel-result {
-      margin: 0 8px 8px;
+    .satorna-panel-row b { color: #0F172A; }
+    .satorna-panel-message {
+      margin-top: 16px;
       border-radius: 12px;
-      padding: 14px;
-      background: #ecfdf5;
-      border: 1px solid #bbf7d0;
-      color: #047857;
+      padding: 13px 14px;
+      background: #EFF6FF;
+      border: 1px solid #BFDBFE;
+      color: #1D4ED8;
       font-size: 13px;
     }
-    .satorna-panel-result.warn {
-      background: #fff7ed;
-      border-color: #fed7aa;
-      color: #9a3412;
+    .satorna-panel-message.warn {
+      background: #FFFBEB;
+      border-color: #FDE68A;
+      color: #92400E;
     }
-    .satorna-panel-result.error {
-      background: #fef2f2;
-      border-color: #fecaca;
-      color: #991b1b;
+    .satorna-panel-message.error {
+      background: #FEF2F2;
+      border-color: #FECACA;
+      color: #991B1B;
     }
     .satorna-order-highlight {
-      outline: 1.5px solid #fb923c !important;
+      outline: 1.5px solid #2563EB !important;
       outline-offset: 2px !important;
       border-radius: 14px !important;
     }
@@ -1029,7 +1030,7 @@ function showCollectorOverlay(lines, variant = 'info', stats = {}) {
   const total = Number(stats.total || 0)
   const progress = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0
   const missing = stats.missing || {}
-  const resultClass = variant === 'error' ? 'error' : variant === 'ok' ? '' : 'warn'
+  const messageClass = variant === 'error' ? 'error' : variant === 'ok' ? '' : 'warn'
   box.innerHTML = [
     '<div class="satorna-panel-head">',
     '<div class="satorna-panel-title"><span class="satorna-panel-dot"></span><span>Собранные заказы</span></div>',
@@ -1049,8 +1050,8 @@ function showCollectorOverlay(lines, variant = 'info', stats = {}) {
     `<div class="satorna-panel-row"><span>Цвет не найден</span><b>${escapeHtml(missing.color ?? 0)}</b></div>`,
     `<div class="satorna-panel-row"><span>Артикул не найден</span><b>${escapeHtml(missing.sellerArticle ?? 0)}</b></div>`,
     '</div>',
+    lines.length ? `<div class="satorna-panel-message ${messageClass}">${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join('')}</div>` : '',
     '</div>',
-    `<div class="satorna-panel-result ${resultClass}">${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join('')}</div>`,
   ].join('')
   box.querySelector('.satorna-panel-close')?.addEventListener('click', () => box.classList.add('satorna-collapsed'))
 }
