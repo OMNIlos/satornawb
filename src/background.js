@@ -146,7 +146,16 @@ function tabsSendMessage(tabId, message, options) {
 }
 
 function executeContentScript(tabId, allFrames = false) {
-  return chrome.scripting.executeScript({ target: { tabId, allFrames }, files: ['src/content.js'] })
+  return chrome.scripting.executeScript({
+    target: { tabId, allFrames },
+    files: [
+      'src/item-size.js',
+      'src/order-chat.js',
+      'src/size-policy.js',
+      'src/page-state.js',
+      'src/content.js',
+    ],
+  })
 }
 
 async function classifyFrames(tabId, expectedTitle) {
@@ -482,9 +491,13 @@ async function collectAndPostFromAvito() {
   await saveStatus({ ok: false, message: `Нашли заказов: ${payload?.orders?.length || 0}. Не найдено: фото ${missing.imageUrl || 0}, размер ${missing.size || 0}, цвет ${missing.color || 0}. Отправляем в Satorna...` })
   const result = await postSnapshot(payload)
   const meta = result?.browserSnapshot
-  const text = `Собрано заказов: ${meta?.orders ?? payload?.orders?.length ?? 0}`
+  const ai = meta?.aiExtraction || {}
+  const sizeText = payload?.collector?.options?.sizeMode === 'chat_ai'
+    ? ` Размеры: AI ${ai.aiSizeCount || 0}, из характеристик ${ai.descriptionFallbackCount || 0}, не найдено ${ai.missingFinalSizeCount || 0}.`
+    : ''
+  const text = `Собрано заказов: ${meta?.orders ?? payload?.orders?.length ?? 0}.${sizeText}`
   await saveStatus({ ok: true, message: text })
-  await writeLog('info', 'collection finished', { message: text })
+  await writeLog('info', 'collection finished', { message: text, aiExtraction: ai })
   return { ok: true, result, message: text }
 }
 

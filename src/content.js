@@ -674,7 +674,7 @@ async function extractCurrentPageDetails(optionsPayload) {
     status: statusFromText(text),
     deliveryService: deliveryService(text),
     trackNumber: trackNumber(text),
-    chatText: options.sizeMode === 'chat_ai' ? chatText(document) || text.slice(0, 4000) : null,
+    chatText: null,
     textPreview: rawText.slice(0, 1000),
   }
   logEvent('info', 'page details extracted', {
@@ -716,12 +716,18 @@ function mergeItemDetails(item, details, options) {
   if (details.description) item.description = details.description
   if (options.articleFromDescription && !item.sellerArticle) item.sellerArticle = parseArticle(text)
   if (options.colorFromDescription && !item.color) item.color = parseColor(text)
-  if (options.sizeMode === 'description' && !item.size) item.size = parseSize(text)
+  const explicitSize = globalThis.SatornaAvitoItemSize.parseExplicitListingSize(text)
+  globalThis.SatornaAvitoSizePolicy.applySizeEvidence(
+    item,
+    options.sizeMode,
+    explicitSize,
+    item.chatText || details.chatText || null,
+  )
 }
 
 async function enrichOrderFromDetails(order, options) {
   let hasRowItemUrl = order.items?.some((item) => item.itemUrl)
-  if (!hasRowItemUrl && order.pageUrl && order.items?.[0]) {
+  if ((!hasRowItemUrl || options.sizeMode === 'chat_ai') && order.pageUrl && order.items?.[0]) {
     let timezone = ''
     try {
       timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
@@ -740,6 +746,19 @@ async function enrichOrderFromDetails(order, options) {
       order.items[0].itemId = candidate.itemId || itemIdFromUrl(candidate.itemUrl)
       hasRowItemUrl = true
     }
+    let orderChat = null
+    if (globalThis.SatornaAvitoOrderChat.shouldCollectOrderChat(options.sizeMode, direct?.channelIds)) {
+      orderChat = await globalThis.SatornaAvitoOrderChat.loadOrderChat(direct.channelIds, globalThis.fetch)
+      logEvent('info', 'order chat collected', {
+        orderId: order.orderId,
+        channelIds: direct.channelIds.length,
+        rawMessages: orderChat.rawCount,
+        retainedMessages: orderChat.retainedCount,
+        truncated: orderChat.truncated,
+        requests: orderChat.requests,
+      })
+    }
+    if (order.items?.[0] && orderChat?.chatText) order.items[0].chatText = orderChat.chatText
     logEvent(candidate?.itemUrl ? 'info' : 'warn', 'order listing resolved from orders-list API', {
       orderId: order.orderId,
       itemTitle: order.items[0].title || '',
@@ -772,7 +791,6 @@ async function enrichOrderFromDetails(order, options) {
   const orderImages = options.photoMode === 'none' ? [] : (orderDetails.images || []).slice(0, imageLimit)
   const orderDescription = orderDetails.description || ''
   const orderTitle = orderDetails.title || null
-  const detailChatText = orderDetails.chatText || null
   let itemPages = 0
 
   if (!order.items.length) order.items = [{ title: orderTitle || 'Товар Авито', quantity: 1 }]
@@ -785,8 +803,6 @@ async function enrichOrderFromDetails(order, options) {
       pageText: orderDetails.pageText || orderDescription,
       images: orderImages,
     }, options)
-    if (detailChatText && !item.chatText) item.chatText = detailChatText
-
     const itemUrl = item.itemUrl || itemUrls[itemIndex] || itemUrls[0]
     const itemResponse = itemUrl ? await requestTabDetails(itemUrl, options) : null
     if (!itemUrl) {
@@ -820,7 +836,6 @@ async function enrichOrderFromDetails(order, options) {
         pageText: itemDetails.pageText || itemDetails.description,
         images: options.photoMode === 'none' ? [] : (itemDetails.images || []).slice(0, imageLimit),
       }, options)
-      if (itemDetails.chatText && !item.chatText) item.chatText = itemDetails.chatText
     } else {
       if (itemResponse?.error) errors.push(itemResponse.error)
       if (!item.itemUrl) item.itemUrl = itemUrl
@@ -1054,7 +1069,6 @@ function collectOrder(root, options) {
   const avitoItemId = extractAvitoItemIdFromRow(root, text)
   const url = directUrl || buildAvitoItemUrl(title, avitoItemId)
   const combined = [title, text].join('\n')
-  const parsedChatText = options.sizeMode === 'chat_ai' ? chatText(root) : null
   const orderId = orderIdFromLink(root) || orderIdentity(text, root)
   const marketplaceId = orderId || marketplaceIdentity(text)
   if (!orderId && !marketplaceId) return null
@@ -1075,12 +1089,13 @@ function collectOrder(root, options) {
       quantity: Number(text.match(/(?:кол-во|количество)\s*[:—-]?\s*(\d+)/iu)?.[1] || 1),
       priceKopecks: parseKopecks(text),
       sellerArticle: options.articleFromDescription ? parseArticle(combined) : null,
-      size: options.sizeMode === 'description' ? parseSize(combined) : null,
+      size: null,
+      descriptionSize: null,
       color: null,
       imageUrl: photos[0] || null,
       imageUrls: photos,
       description: text,
-      chatText: parsedChatText,
+      chatText: null,
       sources: {
         itemUrl: directUrl ? 'row_link' : url ? 'row_item_id_slug' : null,
         itemId: avitoItemId ? 'row_dom' : null,
