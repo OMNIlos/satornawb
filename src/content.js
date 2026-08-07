@@ -1038,8 +1038,8 @@ function showCollectorOverlay(lines, variant = 'info', stats = {}) {
     '<div class="satorna-panel-body">',
     total ? `<div><b>${escapeHtml(stats.phase || 'Сбор заказов')}</b><div class="satorna-panel-progress" style="--satorna-progress:${progress}%"><span></span></div></div>` : '<div class="satorna-panel-hint">Нажмите “Собрать заказы”</div>',
     '<div class="satorna-panel-grid">',
-    `<div class="satorna-panel-stat"><span>Найдено блоков</span><b>${escapeHtml(stats.candidates ?? total ?? 0)}</b></div>`,
-    `<div class="satorna-panel-stat"><span>Обработано</span><b>${escapeHtml(processed)} / ${escapeHtml(total)}</b></div>`,
+    `<div class="satorna-panel-stat"><span>На странице</span><b>${escapeHtml(stats.candidates ?? total ?? 0)}</b></div>`,
+    `<div class="satorna-panel-stat"><span>Готово</span><b>${escapeHtml(processed)} / ${escapeHtml(total)}</b></div>`,
     `<div class="satorna-panel-stat"><span>Заказов</span><b>${escapeHtml(stats.orders ?? 0)}</b></div>`,
     `<div class="satorna-panel-stat"><span>Позиций</span><b>${escapeHtml(stats.items ?? 0)}</b></div>`,
     '</div>',
@@ -1135,7 +1135,7 @@ function highlightOrderRows(nodes) {
 async function collectSnapshot(optionsPayload) {
   const options = normalizeOptions(optionsPayload)
   logEvent('info', 'collection started on orders page', { url: location.href, options })
-  showCollectorOverlay(['Ищем строки заказов на странице Avito...'], 'info', { phase: 'Поиск заказов' })
+  showCollectorOverlay(['Ищем заказы на странице Avito...'], 'info', { phase: 'Подготовка сбора' })
   const candidates = orderCandidates()
   logEvent('info', 'order rows found', { count: candidates.length })
   highlightOrderRows(candidates)
@@ -1160,12 +1160,11 @@ async function collectSnapshot(optionsPayload) {
       const previewOrders = dedupeOrders([...collected, baseOrder])
       const { items: previewItems, missing: previewMissing } = missingSummary(previewOrders, options)
       showCollectorOverlay([
-        `Заказ ${index + 1} из ${candidates.length}: ищем карточку товара`,
-        baseOrder.orderId ? `ID: ${baseOrder.orderId}` : 'ID заказа не найден',
-        baseOrder.items?.[0]?.itemId ? `ID объявления: ${baseOrder.items[0].itemId}` : 'ID объявления: не найден',
-        baseOrder.items?.[0]?.itemUrl ? 'Карточка товара: ссылка собрана' : 'Карточка товара: ссылки пока нет',
+        `Заказ ${index + 1} из ${candidates.length}`,
+        baseOrder.items?.[0]?.title ? `Товар: ${baseOrder.items[0].title}` : 'Товар найден',
+        baseOrder.items?.[0]?.itemUrl ? 'Карточка товара найдена' : 'Ищем карточку товара',
       ], 'info', {
-        phase: 'Ищем карточки и поля',
+        phase: 'Собираем товары',
         candidates: candidates.length,
         total: candidates.length,
         processed: index,
@@ -1198,11 +1197,10 @@ async function collectSnapshot(optionsPayload) {
       const liveMissing = requestedMissing(liveItem, options)
       showCollectorOverlay([
         `Заказ ${index + 1} из ${candidates.length}: ${liveItem.title || 'товар'}`,
-        liveItem.itemUrl ? 'Карточка товара: проверена или поставлена в очередь' : 'Карточка товара: ссылка не найдена',
-        `Найдено: фото ${liveItem.imageUrl ? 'да' : 'нет'}, размер ${liveItem.size ? 'да' : 'нет'}, цвет ${liveItem.color ? 'да' : 'нет'}, артикул ${liveItem.sellerArticle ? 'да' : 'нет'}`,
-        (liveMissing.size || liveMissing.color || liveMissing.sellerArticle) ? 'Часть данных ещё не найдена' : 'Данные товара собраны',
-      ], liveItem.itemUrl ? 'info' : 'warn', {
-        phase: 'Проверяем товар',
+        `Фото ${liveItem.imageUrl ? 'есть' : 'не найдено'} · размер ${liveItem.size ? 'есть' : 'не найден'} · цвет ${liveItem.color ? 'есть' : 'не найден'}`,
+        (liveMissing.imageUrl || liveMissing.size || liveMissing.color || liveMissing.sellerArticle) ? 'Дособираем недостающие поля' : 'Данные товара собраны',
+      ], (liveMissing.imageUrl || liveMissing.size || liveMissing.color || liveMissing.sellerArticle) ? 'warn' : 'info', {
+        phase: 'Проверяем позиции',
         candidates: candidates.length,
         total: candidates.length,
         processed: index + 1,
@@ -1216,10 +1214,10 @@ async function collectSnapshot(optionsPayload) {
       const { items: partialItems, missing: partialMissing } = missingSummary(partialOrders, options)
       showCollectorOverlay([
         `Обработано заказов: ${index + 1} из ${candidates.length}`,
-        `Деталок заказа: ${detailPages}, объявлений: ${itemPages}`,
-        detailErrors.length ? `Ошибок деталок: ${detailErrors.length} · ${detailErrors[detailErrors.length - 1]}` : 'Деталки читаются через вкладки расширения',
+        `Позиций собрано: ${partialItems.length}`,
+        detailErrors.length ? 'Часть данных не найдена, подробности в логах расширения' : 'Сбор идёт нормально',
       ], 'info', {
-        phase: 'Собираем описания и фото',
+        phase: 'Собираем данные',
         candidates: candidates.length,
         total: candidates.length,
         processed: index + 1,
@@ -1242,12 +1240,10 @@ async function collectSnapshot(optionsPayload) {
     detailErrors: detailErrors.slice(-10),
   })
   showCollectorOverlay([
-    `Найдено строк заказов Avito: ${candidates.length}`,
     `Собрано заказов: ${orders.length}`,
-    `Позиций: ${items.length}`,
-    `Проверено деталок: ${detailPages}, объявлений: ${itemPages}`,
-    detailErrors.length ? `Ошибок деталок: ${detailErrors.length} · последняя: ${detailErrors[detailErrors.length - 1]}` : 'Ошибок деталок нет',
-    `Не найдено: фото ${missing.imageUrl}, размер ${missing.size}, цвет ${missing.color}, артикул ${missing.sellerArticle}`,
+    `Позиций для производства: ${items.length}`,
+    `Не хватает: фото ${missing.imageUrl}, размер ${missing.size}, цвет ${missing.color}, артикул ${missing.sellerArticle}`,
+    detailErrors.length ? 'Есть неполные позиции, подробности сохранены в настройках расширения.' : 'Все доступные данные отправлены в Satorna.',
   ], 'ok', {
     phase: 'Сбор завершен',
     candidates: candidates.length,

@@ -5,51 +5,111 @@
     <title>Satorna Avito Orders</title>
     <link rel="stylesheet" href="popup.css">
   </head>
-  <body>
-    <main>
-      <h1>Заказы Авито</h1>
-      <label>
-        Токен Satorna
-        <input id="accessToken" type="password" placeholder="Скопируйте на странице /avito/orders">
-      </label>
-      <section class="collect-options" aria-label="Настройки сбора">
-        <h2>Какие данные собирать</h2>
-        <label>
-          Фото товара
-          <select id="photoMode">
-            <option value="none">Не собирать</option>
-            <option value="one">1 фото</option>
-            <option value="two">2 фото</option>
-          </select>
-        </label>
-        <label>
-          Размер
-          <select id="sizeMode">
-            <option value="none">Не собирать</option>
-            <option value="description">Из описания</option>
-            <option value="chat_ai">Из чата с AI ✨</option>
-          </select>
-        </label>
-        <label class="check-row">
-          <input id="colorFromDescription" type="checkbox">
-          <span>Цвет из описания</span>
-        </label>
-        <label class="check-row">
-          <input id="articleFromDescription" type="checkbox">
-          <span>Артикул из описания</span>
-        </label>
-      </section>
-      <div class="actions">
-        <button id="saveBtn" type="button">Сохранить</button>
-        <button id="collectBtn" type="button">Собрать заказы</button>
-      </div>
-      <p id="status">Нажмите сбор. Расширение само откроет заказы Avito.</p>
-      <section class="logs" aria-label="Логи расширения">
-        <div class="logs-head">
-          <h2>Логи</h2>
-          <button id="clearLogsBtn" type="button">Очистить</button>
+  <body data-screen="collect">
+    <main class="popup-shell">
+      <header class="popup-header">
+        <div>
+          <p class="eyebrow">Satorna</p>
+          <h1>Заказы Авито</h1>
         </div>
-        <div id="logsList" class="logs-list">Логов пока нет</div>
+        <span id="connectionBadge" class="connection-badge">не настроено</span>
+      </header>
+
+      <nav class="screen-tabs" aria-label="Разделы расширения">
+        <button id="collectTab" class="active" type="button" data-target-screen="collect">Сбор</button>
+        <button id="settingsTab" type="button" data-target-screen="settings">Настройки</button>
+      </nav>
+
+      <section id="collectScreen" class="screen active" data-screen-panel="collect" aria-label="Сбор заказов">
+        <div class="hero-card">
+          <div class="hero-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M8 6h13" />
+              <path d="M8 12h13" />
+              <path d="M8 18h13" />
+              <path d="M3 6h.01" />
+              <path d="M3 12h.01" />
+              <path d="M3 18h.01" />
+            </svg>
+          </div>
+          <div class="hero-copy">
+            <b>Сбор для листа подбора</b>
+            <span>Откроем Avito, соберём товары, фото, размеры, цвета и отправим в Satorna.</span>
+          </div>
+        </div>
+
+        <button id="collectBtn" class="primary-action" type="button">Собрать заказы</button>
+        <p id="status" class="status-line">Нажмите сбор. Расширение само откроет заказы Avito.</p>
+
+        <div class="run-summary">
+          <div>
+            <span>Последний сбор</span>
+            <b id="lastRunText">ещё не запускался</b>
+          </div>
+          <button id="openSettingsHintBtn" type="button">Проверить настройки</button>
+        </div>
+      </section>
+
+      <section id="settingsScreen" class="screen" data-screen-panel="settings" aria-label="Настройки расширения">
+        <section id="connectionSettings" class="settings-card">
+          <div class="settings-head">
+            <div>
+              <h2>Подключение</h2>
+              <p>Токен берётся на странице Satorna `/avito/orders`.</p>
+            </div>
+          </div>
+          <label>
+            Токен Satorna
+            <input id="accessToken" type="password" placeholder="Вставьте токен расширения">
+          </label>
+        </section>
+
+        <section id="dataSettings" class="settings-card">
+          <div class="settings-head">
+            <div>
+              <h2>Данные заказа</h2>
+              <p>Что добавлять к каждой позиции в листе подбора.</p>
+            </div>
+          </div>
+          <div class="field-grid">
+            <label>
+              Фото товара
+              <select id="photoMode">
+                <option value="none">Не собирать</option>
+                <option value="one">1 фото</option>
+                <option value="two">2 фото</option>
+              </select>
+            </label>
+            <label>
+              Размер
+              <select id="sizeMode">
+                <option value="none">Не собирать</option>
+                <option value="description">Из описания</option>
+                <option value="chat_ai">Из чата с AI</option>
+              </select>
+            </label>
+          </div>
+          <label class="switch-row">
+            <input id="colorFromDescription" type="checkbox">
+            <span><b>Цвет из описания</b><small>Берём только явное поле цвета.</small></span>
+          </label>
+          <label class="switch-row">
+            <input id="articleFromDescription" type="checkbox">
+            <span><b>Артикул из описания</b><small>Полезно для печати и стикеров.</small></span>
+          </label>
+          <button id="saveBtn" class="secondary-action" type="button">Сохранить настройки</button>
+        </section>
+
+        <section id="diagnosticsSettings" class="settings-card diagnostics-card">
+          <div class="settings-head">
+            <div>
+              <h2>Диагностика</h2>
+              <p>Технические события сборщика, если нужно разобраться в проблеме.</p>
+            </div>
+            <button id="clearLogsBtn" type="button">Очистить</button>
+          </div>
+          <div id="logsList" class="logs-list">Логов пока нет</div>
+        </section>
       </section>
     </main>
     <script src="popup.js"></script>
