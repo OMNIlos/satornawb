@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+globalThis.location = { href: 'https://www.avito.ru/orders' }
+delete globalThis.SatornaAvitoItemPhoto
+await import(`../src/item-photo.js?red=${Date.now()}`)
+
 test('finds an Avito item hidden in React order-detail props', async () => {
   delete globalThis.SatornaAvitoPageState
   await import(`../src/page-state.js?red=${Date.now()}`).catch(() => {})
@@ -157,6 +161,33 @@ test('loads the ordered Avito item from the profile order JSON resource', async 
   }])
   assert.match(loaded?.resourceText || '', /Размер:\s*M/)
   assert.match(loaded?.resourceText || '', /Цвет:\s*черный/)
+})
+
+test('keeps the product image from the profile order JSON candidate', async () => {
+  const fetchApi = async (url) => ({
+    ok: true,
+    status: 200,
+    url,
+    json: async () => ({
+      result: {
+        order: {
+          item: {
+            id: '8226657890',
+            title: 'Футболка ERD Mulholland Drive',
+            imageUrl: 'https://70.img.avito.st/image/erd.jpg',
+          },
+        },
+      },
+    }),
+  })
+
+  const loaded = await globalThis.SatornaAvitoPageState?.loadCandidatesFromOrderResources?.(
+    ['https://www.avito.ru/web/2/profile/order?referenceID=70000000486519208'],
+    'Футболка ERD Mulholland Drive',
+    fetchApi,
+  )
+
+  assert.equal(loaded?.candidates[0]?.imageUrl, 'https://70.img.avito.st/image/erd.jpg')
 })
 
 test('builds the profile order JSON URL when the performance entry is missing', () => {

@@ -17,6 +17,7 @@
       "matches": ["https://www.avito.ru/*"],
       "js": [
         "src/item-size.js",
+        "src/item-photo.js",
         "src/order-chat.js",
         "src/size-policy.js",
         "src/page-state.js",

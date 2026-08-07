@@ -136,13 +136,8 @@ function srcsetUrl(value) {
 }
 
 function imageSource(image) {
-  return absoluteUrl(
-    image?.currentSrc
-    || image?.src
-    || image?.getAttribute?.('src')
-    || image?.getAttribute?.('data-src')
-    || image?.getAttribute?.('data-url')
-  ) || srcsetUrl(image?.getAttribute?.('srcset') || image?.getAttribute?.('data-srcset'))
+  return globalThis.SatornaAvitoItemPhoto?.imageSource?.(image)
+    || srcsetUrl(image?.getAttribute?.('srcset') || image?.getAttribute?.('data-srcset'))
 }
 
 function metaContent(root, selector) {
@@ -452,7 +447,7 @@ function documentImageUrls(root, limit) {
   const metaImages = [
     metaContent(root, 'meta[property="og:image"]'),
     metaContent(root, 'meta[name="twitter:image"]'),
-  ].map(absoluteUrl).filter(Boolean)
+  ].map((value) => globalThis.SatornaAvitoItemPhoto?.normalizeImageUrl?.(value)).filter(Boolean)
   return [...metaImages, ...imageUrls(root, limit)]
     .filter((value, index, array) => value && array.indexOf(value) === index)
     .slice(0, limit)
@@ -744,6 +739,8 @@ async function enrichOrderFromDetails(order, options) {
     if (candidate?.itemUrl) {
       order.items[0].itemUrl = candidate.itemUrl
       order.items[0].itemId = candidate.itemId || itemIdFromUrl(candidate.itemUrl)
+      if (candidate.imageUrl && !order.items[0].imageUrl) order.items[0].imageUrl = candidate.imageUrl
+      if (candidate.imageUrls?.length && !order.items[0].imageUrls?.length) order.items[0].imageUrls = candidate.imageUrls
       hasRowItemUrl = true
     }
     let orderChat = null

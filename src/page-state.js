@@ -87,10 +87,12 @@ function findCandidates(root, expectedTitle = '') {
       const score = (itemId ? 50 : 0) + (itemUrl ? 50 : 0) + matchScore
       const matchesExpectedTitle = !normalizedTitle(expectedTitle) || matchScore > 0
       if ((itemId || itemUrl) && score >= 50 && matchesExpectedTitle) {
+        const imageUrls = globalThis.SatornaAvitoItemPhoto?.extractPayloadImages?.(value, 5) || []
         found.push({
           itemId: itemId || itemUrl?.match(/(?:_|\/items\/)(\d{6,12})(?:\/)?$/i)?.[1] || null,
           itemUrl: itemUrl || fallbackItemUrl(title || expectedTitle, itemId),
           title,
+          ...(imageUrls.length ? { imageUrl: imageUrls[0], imageUrls } : {}),
           score,
         })
       }
@@ -147,10 +149,12 @@ function findOrderPayloadCandidates(root, expectedTitle = '') {
     idMatches.sort((left, right) => left.distance - right.distance)
     const itemId = idMatches[0]?.itemId
     if (!itemId) continue
+    const imageUrls = globalThis.SatornaAvitoItemPhoto?.extractPayloadImages?.(context, 5) || []
     candidates.push({
       itemId,
       itemUrl: fallbackItemUrl(title, itemId),
       title,
+      ...(imageUrls.length ? { imageUrl: imageUrls[0], imageUrls } : {}),
       score: 200 + matchScore,
     })
   }
