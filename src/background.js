@@ -1,3 +1,5 @@
+importScripts('runtime-retry.js')
+
 const DEFAULT_BACKEND_URL = 'https://ogni-frontend.vercel.app'
 const SNAPSHOT_PATH = '/api/v1/avito/orders/browser-snapshot'
 const AVITO_ORDERS_URL = 'https://www.avito.ru/orders'
@@ -246,45 +248,63 @@ async function waitForTabListingUrl(tabId, timeoutMs = 9000) {
 async function extractPageRuntimeDiagnostics(tabId, frameId, title, pageUrl) {
   const target = Number.isInteger(frameId) ? { tabId, frameIds: [frameId] } : { tabId }
   try {
-    await chrome.scripting.executeScript({
-      target,
-      world: 'MAIN',
-      files: ['src/page-state.js'],
+    const diagnostics = await globalThis.SatornaRuntimeRetry.retryPageStateInspection(async () => {
+      await chrome.scripting.executeScript({
+        target,
+        world: 'MAIN',
+        files: ['src/page-state.js'],
+      })
+      const results = await chrome.scripting.executeScript({
+        target,
+        world: 'MAIN',
+        func: async (expectedTitle, orderPageUrl) => {
+          const api = globalThis.SatornaAvitoPageState
+          if (!api) {
+            return {
+              apiAvailable: false,
+              candidates: [],
+              reactRoots: 0,
+              resourceUrls: [],
+            }
+          }
+          const inspected = api.inspectDocument(document, expectedTitle) || {
+            candidates: [],
+            reactRoots: 0,
+            resourceUrls: [],
+          }
+          inspected.apiAvailable = true
+          const stateCandidates = Array.isArray(inspected.candidates) ? inspected.candidates : []
+          let timezone = ''
+          try {
+            timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+          } catch (_error) {
+            // The profile order endpoint also works without this hint.
+          }
+          const directResource = api.profileOrderResourceUrl(orderPageUrl, timezone)
+          inspected.resourceUrls = Array.from(new Set([
+            ...(inspected.resourceUrls || []),
+            directResource,
+          ].filter(Boolean)))
+          if (inspected.resourceUrls.length) {
+            const loaded = await api.loadCandidatesFromOrderResources(inspected.resourceUrls, expectedTitle)
+            inspected.candidates = loaded?.candidates?.length ? loaded.candidates : stateCandidates
+            inspected.candidateSource = loaded?.candidates?.length ? 'profile-order-api' : 'page-state'
+            inspected.resourceRequests = loaded?.requests || []
+            inspected.resourceText = loaded?.resourceText || ''
+          }
+          return inspected
+        },
+        args: [title || '', pageUrl || ''],
+      })
+      return results.map((entry) => entry?.result).find((result) => result && typeof result === 'object') || {
+        apiAvailable: false,
+        candidates: [],
+        reactRoots: 0,
+        resourceUrls: [],
+      }
+    }, 3, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250))
     })
-    const results = await chrome.scripting.executeScript({
-      target,
-      world: 'MAIN',
-      func: async (expectedTitle, orderPageUrl) => {
-        const api = globalThis.SatornaAvitoPageState
-        const inspected = api?.inspectDocument(document, expectedTitle) || {
-          candidates: [],
-          reactRoots: 0,
-          resourceUrls: [],
-        }
-        const stateCandidates = Array.isArray(inspected.candidates) ? inspected.candidates : []
-        let timezone = ''
-        try {
-          timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
-        } catch (_error) {
-          // The profile order endpoint also works without this hint.
-        }
-        const directResource = api?.profileOrderResourceUrl(orderPageUrl, timezone)
-        inspected.resourceUrls = Array.from(new Set([
-          ...(inspected.resourceUrls || []),
-          directResource,
-        ].filter(Boolean)))
-        if (inspected.resourceUrls.length) {
-          const loaded = await api?.loadCandidatesFromOrderResources(inspected.resourceUrls, expectedTitle)
-          inspected.candidates = loaded?.candidates?.length ? loaded.candidates : stateCandidates
-          inspected.candidateSource = loaded?.candidates?.length ? 'profile-order-api' : 'page-state'
-          inspected.resourceRequests = loaded?.requests || []
-          inspected.resourceText = loaded?.resourceText || ''
-        }
-        return inspected
-      },
-      args: [title || '', pageUrl || ''],
-    })
-    const diagnostics = results.map((entry) => entry?.result).find((result) => result && typeof result === 'object')
     return diagnostics || { candidates: [], reactRoots: 0, resourceUrls: [] }
   } catch (error) {
     await writeLog('warn', 'react page state extraction failed', {
@@ -359,6 +379,8 @@ async function extractDetailsInTab(url, options) {
         resourceRequests: Array.isArray(runtime.resourceRequests) ? runtime.resourceRequests.slice(-10) : [],
         resourceTextLength: String(runtime.resourceText || '').length,
         candidateSource: runtime.candidateSource || null,
+        apiAvailable: Boolean(runtime.apiAvailable),
+        inspectorAttempts: runtime.inspectorAttempts || 0,
         error: runtime.error || null,
       })
       const stateItemUrl = stateCandidates.find((candidate) => candidate.itemUrl)?.itemUrl
