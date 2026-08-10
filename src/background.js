@@ -62,6 +62,7 @@ function authorizationValue(value) {
 
 async function readSettings() {
   return chrome.storage.sync.get({
+    backendUrl: DEFAULT_BACKEND_URL,
     accessToken: '',
     collectOptions: {
       photoMode: 'one',
@@ -72,6 +73,31 @@ async function readSettings() {
     lastStatus: '',
     lastSnapshotAt: '',
   })
+}
+
+async function apiUrlFromSettings(settings) {
+  return resolveBackendUrl(settings?.backendUrl || DEFAULT_BACKEND_URL)
+}
+
+async function readApiJson(response, { backendUrl, action }) {
+  const text = await response.text()
+  if (!response.ok) {
+    const message = text ? `Backend вернул ${response.status}: ${text.slice(0, 240)}` : `Backend вернул ${response.status}`
+    await writeLog('error', 'backend request failed', { action, status: response.status, backendUrl, message })
+    throw new Error(message)
+  }
+  try {
+    return text ? JSON.parse(text) : {}
+  } catch (_error) {
+    const preview = text.slice(0, 80).replace(/\s+/g, ' ')
+    await writeLog('error', 'backend returned non-json response', {
+      action,
+      backendUrl,
+      status: response.status,
+      preview,
+    })
+    throw new Error('Satorna вернула страницу вместо API-ответа. Проверьте адрес backend в настройках расширения или обновите деплой Satorna.')
+  }
 }
 
 async function saveStatus(status) {
@@ -92,7 +118,7 @@ async function postSnapshot(payload) {
   if (!token) {
     throw new Error('Добавьте токен Satorna в настройках расширения')
   }
-  const backendUrl = await resolveBackendUrl(DEFAULT_BACKEND_URL)
+  const backendUrl = await apiUrlFromSettings(settings)
   const response = await fetch(`${backendUrl}${SNAPSHOT_PATH}`, {
     method: 'POST',
     headers: {
@@ -101,38 +127,23 @@ async function postSnapshot(payload) {
     },
     body: JSON.stringify(payload),
   })
-  if (!response.ok) {
-    let message = `Backend вернул ${response.status}`
-    try {
-      const text = await response.text()
-      if (text) message = `${message}: ${text.slice(0, 240)}`
-    } catch (_error) {
-      // Ignore body read failures.
-    }
-    if (response.status === 405 && looksLikeFrontendUrl(backendUrl)) {
-      throw new Error('Фронт ещё не принимает заказы расширения. Обновите деплой фронта или проверьте, что на нём включён proxy в API backend.')
-    }
-    await writeLog('error', 'backend rejected snapshot', { status: response.status, message })
-    throw new Error(message)
+  if (response.status === 405 && looksLikeFrontendUrl(backendUrl)) {
+    throw new Error('Фронт ещё не принимает заказы расширения. Обновите деплой фронта или проверьте, что на нём включён proxy в API backend.')
   }
   await writeLog('info', 'snapshot posted', { status: response.status })
-  return response.json()
+  return readApiJson(response, { backendUrl, action: 'post_snapshot' })
 }
 
 async function fetchReturnsInventory() {
   const settings = await readSettings()
   const token = String(settings.accessToken || '').trim()
   if (!token) return []
-  const backendUrl = await resolveBackendUrl(DEFAULT_BACKEND_URL)
+  const backendUrl = await apiUrlFromSettings(settings)
   const response = await fetch(`${backendUrl}${RETURNS_SYNC_PATH}`, {
     method: 'GET',
     headers: { Authorization: authorizationValue(token) },
   })
-  if (!response.ok) {
-    await writeLog('warn', 'returns inventory request failed', { status: response.status })
-    return []
-  }
-  const payload = await response.json()
+  const payload = await readApiJson(response, { backendUrl, action: 'fetch_returns_inventory' })
   return Array.isArray(payload?.items) ? payload.items : []
 }
 
