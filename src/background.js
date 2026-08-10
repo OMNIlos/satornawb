@@ -484,12 +484,12 @@ async function avitoOrdersTab(url = AVITO_ORDERS_URL) {
   return tabsCreate({ url, active: true })
 }
 
-async function collectFromAvitoOrdersPage(url = AVITO_ORDERS_URL) {
+async function collectFromAvitoOrdersPage(url = AVITO_ORDERS_URL, collectionLabel = 'заказов') {
   const tab = await avitoOrdersTab(url)
   if (!tab?.id) throw new Error('Не удалось открыть страницу заказов Avito')
   await waitForTabComplete(tab.id)
   const settings = await readSettings()
-  const message = { type: 'AVITO_ORDERS_COLLECT_NOW', options: settings.collectOptions || {} }
+  const message = { type: 'AVITO_ORDERS_COLLECT_NOW', options: { ...(settings.collectOptions || {}), collectionLabel } }
   try {
     return await tabsSendMessage(tab.id, message)
   } catch (_error) {
@@ -534,10 +534,10 @@ function combineCollections(ordersPayload, returnsPayload) {
 async function collectAndPostFromAvito() {
   await writeLog('info', 'collection requested from popup')
   await saveStatus({ ok: false, message: 'Открываем заказы Avito...' })
-  const collected = await collectFromAvitoOrdersPage(AVITO_ORDERS_URL)
+  const collected = await collectFromAvitoOrdersPage(AVITO_ORDERS_URL, 'заказов')
   if (!collected?.ok) throw new Error(collected?.error || 'Не удалось прочитать страницу заказов Avito')
   await saveStatus({ ok: false, message: `Заказы собраны: ${collected.payload?.orders?.length || 0}. Открываем возвраты Avito...` })
-  const collectedReturns = await collectFromAvitoOrdersPage(AVITO_RETURNS_URL)
+  const collectedReturns = await collectFromAvitoOrdersPage(AVITO_RETURNS_URL, 'возвратов')
   if (!collectedReturns?.ok) throw new Error(collectedReturns?.error || 'Не удалось прочитать страницу возвратов Avito')
   const payload = combineCollections(collected.payload, collectedReturns.payload)
   const missing = payload?.collector?.missing || {}
