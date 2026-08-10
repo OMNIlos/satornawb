@@ -154,8 +154,9 @@ function parseKopecks(text) {
 
 function parseArticle(text) {
   const value = String(text || '')
-  const match = value.match(/(?:арт(?:икул)?|sku|id\s*товара)\s*[:#№-]?\s*([a-zа-яё0-9_-]{2,40})/iu)
-  return match?.[1] || null
+  const match = value.match(/(?:^|[^\p{L}\p{N}_])(?:арт(?:икул)?|sku|id\s*товара)\s*[:#№-]?\s*([a-zа-яё0-9_-]{2,40})/iu)
+  const article = String(match?.[1] || '').trim()
+  return article && /[0-9_]/.test(article) ? article : null
 }
 
 function parseColor(text) {
