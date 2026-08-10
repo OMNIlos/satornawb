@@ -3,6 +3,7 @@ importScripts('runtime-retry.js')
 const DEFAULT_BACKEND_URL = 'https://ogni-frontend.vercel.app'
 const SNAPSHOT_PATH = '/api/v1/avito/orders/browser-snapshot'
 const AVITO_ORDERS_URL = 'https://www.avito.ru/orders'
+const AVITO_RETURNS_URL = 'https://www.avito.ru/orders?status=on_return'
 const LOG_KEY = 'satornaAvitoLogs'
 
 async function writeLog(level, message, data = {}) {
@@ -82,7 +83,8 @@ async function saveStatus(status) {
 async function postSnapshot(payload) {
   await writeLog('info', 'posting snapshot', {
     orders: payload?.orders?.length || 0,
-    items: payload?.orders?.reduce?.((sum, order) => sum + (order.items?.length || 0), 0) || 0,
+    returns: payload?.returns?.length || 0,
+    items: [...(payload?.orders || []), ...(payload?.returns || [])].reduce((sum, order) => sum + (order.items?.length || 0), 0),
   })
   const settings = await readSettings()
   const token = String(settings.accessToken || '').trim()
@@ -457,18 +459,18 @@ async function extractDetailsInTab(url, options) {
   }
 }
 
-async function avitoOrdersTab() {
+async function avitoOrdersTab(url = AVITO_ORDERS_URL) {
   const tabs = await tabsQuery({ url: 'https://www.avito.ru/orders*' })
   const existing = tabs.find((tab) => tab.id)
   if (existing?.id) {
-    await tabsUpdate(existing.id, { active: true })
+    await tabsUpdate(existing.id, { active: true, url })
     return existing
   }
-  return tabsCreate({ url: AVITO_ORDERS_URL, active: true })
+  return tabsCreate({ url, active: true })
 }
 
-async function collectFromAvitoOrdersPage() {
-  const tab = await avitoOrdersTab()
+async function collectFromAvitoOrdersPage(url = AVITO_ORDERS_URL) {
+  const tab = await avitoOrdersTab(url)
   if (!tab?.id) throw new Error('Не удалось открыть страницу заказов Avito')
   await waitForTabComplete(tab.id)
   const settings = await readSettings()
@@ -481,21 +483,58 @@ async function collectFromAvitoOrdersPage() {
   }
 }
 
+function combineCollections(ordersPayload, returnsPayload) {
+  const orders = Array.isArray(ordersPayload?.orders) ? ordersPayload.orders : []
+  const returns = (Array.isArray(returnsPayload?.orders) ? returnsPayload.orders : [])
+    .filter((order) => !order?.status || order.status === 'on_return')
+    .map((order) => ({ ...order, status: order.status || 'on_return' }))
+  const all = [...orders, ...returns]
+  const missing = ['imageUrl', 'size', 'color', 'sellerArticle'].reduce((result, key) => {
+    result[key] = (ordersPayload?.collector?.missing?.[key] || 0) + (returnsPayload?.collector?.missing?.[key] || 0)
+    return result
+  }, {})
+  return {
+    capturedAt: new Date().toISOString(),
+    pageUrl: ordersPayload?.pageUrl || AVITO_ORDERS_URL,
+    collector: {
+      ...(ordersPayload?.collector || {}),
+      status: 'completed',
+      pages: {
+        orders: ordersPayload?.pageUrl || AVITO_ORDERS_URL,
+        returns: returnsPayload?.pageUrl || AVITO_RETURNS_URL,
+      },
+      orders: orders.length,
+      returns: returns.length,
+      items: all.reduce((sum, order) => sum + (order.items?.length || 0), 0),
+      missing,
+      notes: [
+        'Собраны данные заказов и возвратов Avito.',
+        'API остаётся главным источником возвратов, расширение добавляет фото, цвет и размер.',
+      ],
+    },
+    orders,
+    returns,
+  }
+}
+
 async function collectAndPostFromAvito() {
   await writeLog('info', 'collection requested from popup')
   await saveStatus({ ok: false, message: 'Открываем заказы Avito...' })
-  const collected = await collectFromAvitoOrdersPage()
+  const collected = await collectFromAvitoOrdersPage(AVITO_ORDERS_URL)
   if (!collected?.ok) throw new Error(collected?.error || 'Не удалось прочитать страницу заказов Avito')
-  const payload = collected.payload
+  await saveStatus({ ok: false, message: `Заказы собраны: ${collected.payload?.orders?.length || 0}. Открываем возвраты Avito...` })
+  const collectedReturns = await collectFromAvitoOrdersPage(AVITO_RETURNS_URL)
+  if (!collectedReturns?.ok) throw new Error(collectedReturns?.error || 'Не удалось прочитать страницу возвратов Avito')
+  const payload = combineCollections(collected.payload, collectedReturns.payload)
   const missing = payload?.collector?.missing || {}
-  await saveStatus({ ok: false, message: `Нашли заказов: ${payload?.orders?.length || 0}. Не найдено: фото ${missing.imageUrl || 0}, размер ${missing.size || 0}, цвет ${missing.color || 0}. Отправляем в Satorna...` })
+  await saveStatus({ ok: false, message: `Нашли заказов: ${payload?.orders?.length || 0}, возвратов: ${payload?.returns?.length || 0}. Не найдено: фото ${missing.imageUrl || 0}, размер ${missing.size || 0}, цвет ${missing.color || 0}. Отправляем в Satorna...` })
   const result = await postSnapshot(payload)
   const meta = result?.browserSnapshot
   const ai = meta?.aiExtraction || {}
   const sizeText = payload?.collector?.options?.sizeMode === 'chat_ai'
     ? ` Размеры: AI ${ai.aiSizeCount || 0}, из характеристик ${ai.descriptionFallbackCount || 0}, не найдено ${ai.missingFinalSizeCount || 0}.`
     : ''
-  const text = `Собрано заказов: ${meta?.orders ?? payload?.orders?.length ?? 0}.${sizeText}`
+  const text = `Собрано заказов: ${meta?.orders ?? payload?.orders?.length ?? 0}, возвратов: ${meta?.returns ?? payload?.returns?.length ?? 0}.${sizeText}`
   await saveStatus({ ok: true, message: text })
   await writeLog('info', 'collection finished', { message: text, aiExtraction: ai })
   return { ok: true, result, message: text }
