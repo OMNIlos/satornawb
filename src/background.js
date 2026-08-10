@@ -2,10 +2,9 @@ importScripts('runtime-retry.js')
 
 const DEFAULT_BACKEND_URL = 'https://ogni-frontend.vercel.app'
 const SNAPSHOT_PATH = '/api/v1/avito/orders/browser-snapshot'
-const RETURNS_SYNC_PATH = '/api/v1/avito/orders/returns-sync'
 const AVITO_ORDERS_URL = 'https://www.avito.ru/orders'
+const AVITO_RETURNS_URL = 'https://www.avito.ru/orders?status%5B%5D=on_return'
 const LOG_KEY = 'satornaAvitoLogs'
-const SIZE_VALUES = ['XXXL', 'XXL', 'XL', 'XS', 'S', 'M', 'L', '42', '44', '46', '48', '50', '52', '54', '56', '58', '60']
 
 async function writeLog(level, message, data = {}) {
   const entry = {
@@ -132,19 +131,6 @@ async function postSnapshot(payload) {
   }
   await writeLog('info', 'snapshot posted', { status: response.status })
   return readApiJson(response, { backendUrl, action: 'post_snapshot' })
-}
-
-async function fetchReturnsInventory() {
-  const settings = await readSettings()
-  const token = String(settings.accessToken || '').trim()
-  if (!token) return []
-  const backendUrl = await apiUrlFromSettings(settings)
-  const response = await fetch(`${backendUrl}${RETURNS_SYNC_PATH}`, {
-    method: 'GET',
-    headers: { Authorization: authorizationValue(token) },
-  })
-  const payload = await readApiJson(response, { backendUrl, action: 'fetch_returns_inventory' })
-  return Array.isArray(payload?.items) ? payload.items : []
 }
 
 function tabsQuery(query) {
@@ -512,108 +498,10 @@ async function collectFromAvitoOrdersPage(url = AVITO_ORDERS_URL) {
   }
 }
 
-function parseArticle(text) {
-  const value = String(text || '')
-  const match = value.match(/(?:^|[^\p{L}\p{N}_])(?:арт(?:икул)?|sku|id\s*товара)\s*[:#№-]?\s*([a-zа-яё0-9_-]{2,40})/iu)
-  return safeSellerArticle(match?.[1])
-}
-
-function safeSellerArticle(value) {
-  const text = String(value || '').trim()
-  if (!text || !/[0-9_]/.test(text)) return null
-  return text
-}
-
-function parseColor(text) {
-  const lower = String(text || '').toLocaleLowerCase('ru-RU')
-  const explicit = lower.match(/цвет\s*[:—-]?\s*([а-яёa-z -]{3,24})/iu)
-  if (explicit?.[1]) return explicit[1].trim().split(/[,.]/)[0]
-  return null
-}
-
-function parseSize(text) {
-  const value = String(text || '')
-  const explicit = Array.from(value.matchAll(/(?:размер|р-р|size)\s*[:—-]?\s*([0-9]{2}(?:-[0-9]{2})?(?:\s*\([^)]+\))?|[2-5]?XL|XXL|XS|[SML])/giu)).pop()
-  if (explicit?.[1]) return explicit[1].toUpperCase()
-  const upper = ` ${value.toUpperCase()} `
-  const found = SIZE_VALUES.find((size) => upper.includes(` ${size} `))
-  return found || null
-}
-
-function avitoReturnOrderUrl(item) {
-  const orderId = String(item?.returnOrderId || '').trim()
-  return orderId ? `https://www.avito.ru/orders/${encodeURIComponent(orderId)}` : null
-}
-
-async function collectReturnOrderFromInventoryItem(item, options) {
-  const orderUrl = avitoReturnOrderUrl(item)
-  if (!orderUrl) return null
-  const orderDetails = await extractDetailsInTab(orderUrl, { ...options, orderItemTitle: item.title || '' })
-  const itemUrl = orderDetails?.itemUrls?.[0] || null
-  const itemDetails = itemUrl ? await extractDetailsInTab(itemUrl, { ...options, orderItemTitle: item.title || '' }) : null
-  const text = [
-    itemDetails?.pageText,
-    itemDetails?.description,
-    orderDetails?.pageText,
-    orderDetails?.description,
-    item.title,
-  ].filter(Boolean).join('\n')
-  const photos = itemDetails?.images?.length ? itemDetails.images : (orderDetails?.images || [])
-  return {
-    orderId: item.returnOrderId,
-    marketplaceId: item.marketplaceId,
-    accountId: item.accountId || null,
-    accountName: item.accountName || 'Авито',
-    status: 'on_return',
-    returnStatus: item.returnStatus || null,
-    pageUrl: orderUrl,
-    items: [{
-      itemId: item.itemId || itemDetails?.itemId || null,
-      title: item.title || itemDetails?.title || orderDetails?.title || 'Товар Авито',
-      itemUrl: itemDetails?.url || itemUrl,
-      quantity: item.quantity || 1,
-      priceKopecks: item.priceKopecks || null,
-      sellerArticle: parseArticle(text) || safeSellerArticle(item.sellerArticle) || null,
-      size: parseSize(text) || item.size || null,
-      descriptionSize: parseSize(text) || item.size || null,
-      color: parseColor(text) || item.color || null,
-      imageUrl: photos[0] || item.imageUrl || null,
-      imageUrls: photos,
-      description: text.slice(0, 8000),
-      chatText: null,
-      sources: {
-        itemUrl: itemUrl ? 'return_order_detail' : null,
-        imageUrl: photos[0] ? 'return_item_page' : null,
-        size: parseSize(text) ? 'return_item_page' : null,
-        color: parseColor(text) ? 'return_item_page' : null,
-        sellerArticle: parseArticle(text) ? 'return_item_page' : null,
-      },
-    }],
-  }
-}
-
-async function collectReturnsFromInventory(options) {
-  const inventory = (await fetchReturnsInventory()).slice(0, 20)
-  const returns = []
-  for (let index = 0; index < inventory.length; index += 1) {
-    const item = inventory[index]
-    await saveStatus({ ok: false, message: `Возвраты: собираем ${index + 1} из ${inventory.length}` })
-    try {
-      const order = await collectReturnOrderFromInventoryItem(item, options)
-      if (order) returns.push(order)
-    } catch (error) {
-      await writeLog('warn', 'return order enrichment failed', {
-        returnOrderId: item?.returnOrderId,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-  return returns
-}
-
 function combineCollections(ordersPayload, returnsPayload) {
   const orders = Array.isArray(ordersPayload?.orders) ? ordersPayload.orders : []
-  const returns = Array.isArray(returnsPayload?.returns) ? returnsPayload.returns : []
+  const returns = (Array.isArray(returnsPayload?.orders) ? returnsPayload.orders : [])
+    .map((order) => ({ ...order, status: 'on_return' }))
   const all = [...orders, ...returns]
   const missing = ['imageUrl', 'size', 'color', 'sellerArticle'].reduce((result, key) => {
     result[key] = (ordersPayload?.collector?.missing?.[key] || 0) + (returnsPayload?.collector?.missing?.[key] || 0)
@@ -627,15 +515,15 @@ function combineCollections(ordersPayload, returnsPayload) {
       status: 'completed',
       pages: {
         orders: ordersPayload?.pageUrl || AVITO_ORDERS_URL,
-        returns: 'список API + детали Avito',
+        returns: returnsPayload?.pageUrl || AVITO_RETURNS_URL,
       },
       orders: orders.length,
       returns: returns.length,
       items: all.reduce((sum, order) => sum + (order.items?.length || 0), 0),
       missing,
       notes: [
-        'Собраны данные заказов и возвратов Avito.',
-        'API остаётся главным источником возвратов, расширение добавляет фото, цвет и размер.',
+        'Собраны данные со страниц заказов и возвратов Avito.',
+        'Возвраты собираются тем же способом, что и обычные заказы.',
       ],
     },
     orders,
@@ -648,10 +536,10 @@ async function collectAndPostFromAvito() {
   await saveStatus({ ok: false, message: 'Открываем заказы Avito...' })
   const collected = await collectFromAvitoOrdersPage(AVITO_ORDERS_URL)
   if (!collected?.ok) throw new Error(collected?.error || 'Не удалось прочитать страницу заказов Avito')
-  const settings = await readSettings()
-  await saveStatus({ ok: false, message: `Заказы собраны: ${collected.payload?.orders?.length || 0}. Собираем товары из возвратов...` })
-  const returns = await collectReturnsFromInventory(settings.collectOptions || {})
-  const payload = combineCollections(collected.payload, { returns })
+  await saveStatus({ ok: false, message: `Заказы собраны: ${collected.payload?.orders?.length || 0}. Открываем возвраты Avito...` })
+  const collectedReturns = await collectFromAvitoOrdersPage(AVITO_RETURNS_URL)
+  if (!collectedReturns?.ok) throw new Error(collectedReturns?.error || 'Не удалось прочитать страницу возвратов Avito')
+  const payload = combineCollections(collected.payload, collectedReturns.payload)
   const missing = payload?.collector?.missing || {}
   await saveStatus({ ok: false, message: `Нашли заказов: ${payload?.orders?.length || 0}, возвратов: ${payload?.returns?.length || 0}. Не найдено: фото ${missing.imageUrl || 0}, размер ${missing.size || 0}, цвет ${missing.color || 0}. Отправляем в Satorna...` })
   const result = await postSnapshot(payload)
