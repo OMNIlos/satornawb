@@ -1,0 +1,23 @@
+*,
+*::before,
+*::after {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+  scroll-behavior: auto !important;
+}
+
+.toast {
+  transition: none !important;
+}
+
+.calendar-popover,
+.drawer,
+.drawer-overlay,
+.modal-overlay,
+.notif-panel,
+.dd-menu,
+#g-tip {
+  transition: none !important;
+}

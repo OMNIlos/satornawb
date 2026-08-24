@@ -1,0 +1,1449 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>INDEEPA WB → Vella: объем работ</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --paper: #ffffff;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --soft: #eef3f8;
+      --accent: #4f46e5;
+      --accent-soft: #eef2ff;
+      --good: #0f766e;
+      --warn: #b45309;
+      --bad: #b91c1c;
+      --shadow: 0 20px 45px rgba(23, 32, 51, .08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.5;
+    }
+
+    a { color: inherit; }
+
+    .page {
+      max-width: 1680px;
+      margin: 0 auto;
+      padding: 34px 28px 64px;
+    }
+
+    .hero {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 34px;
+      margin-bottom: 22px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: #3730a3;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 42px;
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    .hero p {
+      max-width: 860px;
+      margin: 18px 0 0;
+      font-size: 18px;
+      color: var(--muted);
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 26px;
+    }
+
+    .hero-metric {
+      border: 1px solid var(--line);
+      background: #fbfcfe;
+      border-radius: 14px;
+      padding: 16px;
+    }
+
+    .hero-metric b {
+      display: block;
+      font-size: 24px;
+      line-height: 1.1;
+      margin-bottom: 6px;
+    }
+
+    .hero-metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .note {
+      margin-top: 18px;
+      border-left: 4px solid var(--warn);
+      background: #fffbeb;
+      padding: 12px 14px;
+      border-radius: 10px;
+      color: #78350f;
+      font-size: 14px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 230px minmax(0, 1fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .toc {
+      position: sticky;
+      top: 18px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: 0 12px 28px rgba(23, 32, 51, .06);
+    }
+
+    .toc h2 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+    }
+
+    .toc a {
+      display: block;
+      padding: 8px 10px;
+      border-radius: 9px;
+      color: #344054;
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    .toc a:hover { background: var(--soft); }
+
+    .section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 26px;
+      margin-bottom: 18px;
+      box-shadow: 0 12px 28px rgba(23, 32, 51, .05);
+    }
+
+    .section h2 {
+      margin: 0 0 12px;
+      font-size: 28px;
+      line-height: 1.15;
+    }
+
+    .section h3 {
+      margin: 22px 0 8px;
+      font-size: 18px;
+    }
+
+    .lead {
+      color: var(--muted);
+      font-size: 16px;
+      margin: 0 0 18px;
+    }
+
+    .shots {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 18px;
+      margin: 18px 0;
+    }
+
+    .shots.three {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .shot {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      background: #f8fafc;
+    }
+
+    .shot img {
+      width: 100%;
+      display: block;
+      height: auto;
+      max-height: 760px;
+      object-fit: contain;
+      object-position: top center;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .shot a {
+      display: block;
+      cursor: zoom-in;
+      background: #fff;
+    }
+
+    .shot a:hover img {
+      filter: brightness(.98);
+    }
+
+    .shot figcaption {
+      margin: 0;
+      padding: 10px 12px;
+      font-size: 13px;
+      color: var(--muted);
+      background: #fff;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px;
+      margin-top: 14px;
+    }
+
+    .box {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fbfcfe;
+      padding: 16px;
+    }
+
+    .box h3 { margin-top: 0; }
+
+    ul {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+
+    li { margin: 5px 0; }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: var(--soft);
+      color: #344054;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .tag.good { background: #ccfbf1; color: var(--good); }
+    .tag.warn { background: #fef3c7; color: var(--warn); }
+    .tag.bad { background: #fee2e2; color: var(--bad); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 14px;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 11px 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #f8fafc;
+      color: #475467;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+
+    td:last-child, th:last-child { white-space: nowrap; }
+
+    .wrap-last td:last-child,
+    .wrap-last th:last-child {
+      white-space: normal;
+    }
+
+    .callout {
+      border: 1px solid #bfdbfe;
+      background: #eff6ff;
+      color: #1e3a8a;
+      border-radius: 14px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+
+    .summary {
+      border: 1px solid #c7d2fe;
+      background: #eef2ff;
+      border-radius: 16px;
+      padding: 18px;
+      font-size: 16px;
+    }
+
+    .footer {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 22px;
+    }
+
+    @media (max-width: 900px) {
+      .page { padding: 18px 12px 40px; }
+      h1 { font-size: 32px; }
+      .hero, .section { padding: 20px; }
+      .layout { display: block; }
+      .toc { position: static; margin-bottom: 18px; }
+      .hero-grid, .split, .shots { grid-template-columns: 1fr; }
+      .shots.three { grid-template-columns: 1fr; }
+      td:last-child, th:last-child { white-space: normal; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .page { max-width: none; padding: 0; }
+      .toc { display: none; }
+      .layout { display: block; }
+      .hero, .section {
+        box-shadow: none;
+        break-inside: avoid;
+      }
+      .shot img { max-height: 300px; object-fit: contain; background: #fff; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div class="eyebrow">Внутренне для Фила · WB / INDEEPA</div>
+      <h1>Что нужно собрать в Vella, чтобы заменить INDEEPA по WB</h1>
+      <p>
+        INDEEPA оказалась не просто репрайсером. Внутри есть репрайсер, NRP-аналитика, финансовые отчеты, стратегии,
+        safeguards и права доступа. У нас уже есть сильная Vella-оболочка, но production-слой еще нужно собрать.
+      </p>
+      <div class="hero-grid">
+        <div class="hero-metric">
+          <b>5-7 недель</b>
+          <span>v1 replacement minimum: критичный WB-контур без full parity</span>
+        </div>
+        <div class="hero-metric">
+          <b>+2-3 недели</b>
+          <span>production hardening после подтвержденных gaps и UAT</span>
+        </div>
+        <div class="hero-metric">
+          <b>Отдельный CR</b>
+          <span>full INDEEPA parity: rule-engine, BI-глубина, campaign detail</span>
+        </div>
+      </div>
+      <div class="note">
+        Скриншоты ниже из живого кабинета Марии. Каждый скрин кликается и открывается в полном размере в новой вкладке.
+        Документ подготовлен для внутреннего обсуждения с Филом.
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav class="toc">
+        <h2>Содержание</h2>
+        <a href="#implementation-cut">0. V1 cut и gates</a>
+        <a href="#nrp-map">1. NRP как BI-модуль</a>
+        <a href="#pnl">2. Unit WB / P&amp;L</a>
+        <a href="#planfact">3. План-факт</a>
+        <a href="#rnp">4. РнП / реклама</a>
+        <a href="#rating">5. Рейтинг товара</a>
+        <a href="#settings">6. Настройки репрайсера</a>
+        <a href="#strategies">7. Стратегии</a>
+        <a href="#safety">8. Защита от скачков</a>
+        <a href="#access">9. Аккаунты и доступы</a>
+        <a href="#live-appendix">10. Подробные скрины</a>
+        <a href="#scope">11. Итоговый объем</a>
+      </nav>
+
+      <div>
+        <section class="section" id="implementation-cut">
+          <h2>0. Рекомендуемый v1 cut перед разработкой</h2>
+          <p class="lead">
+            Этот файл начинался как аудит живого INDEEPA. После детализации PRD его нужно читать как scope-gate:
+            что берем в Vella v1, что блокирует старт разработки и что сразу выносим в change request.
+          </p>
+
+          <div class="summary">
+            <b>Формулировка для Фила:</b><br>
+            Vella v1 заменяет критичный WB-контур INDEEPA: безопасный репрайсер, настройки, ключевые стратегии,
+            NRP-lite, Excel и права доступа. Это не полная копия INDEEPA. Full parity с rule-engine,
+            глубокой BI-аналитикой и детализацией кампаний нужно считать отдельным расширением.
+          </div>
+
+          <div class="split">
+            <div class="box">
+              <h3>Входит в v1 replacement</h3>
+              <ul>
+                <li>Репрайсер WB: таблица SKU, drawer товара, расчет маржи, price draft, отправка цен.</li>
+                <li>17 глобальных настроек репрайсера с preset/dropdown-логикой и audit.</li>
+                <li>Typed strategies 4599, 4600 и ночной режим после уточнения окна.</li>
+                <li>Safety-layer: P_min/P_max, лимит изменения, дневной лимит, guards по СПП, остаткам и себестоимости.</li>
+                <li>Роли: просмотр, настройки, отправка цен, финансы, администрирование.</li>
+                <li>NRP-lite: Unit P&amp;L, РнП, план-факт, рейтинг SKU в прозрачной Vella-логике.</li>
+                <li>Excel import/export, большие таблицы, sticky columns, preview и approval.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Не обещаем в v1</h3>
+              <ul>
+                <li>Полный INDEEPA rule-engine с визуальным конструктором правил.</li>
+                <li>Full NRP BI parity со всеми pivot-таблицами и внутренними деталями.</li>
+                <li>Campaign detail parity как в INDEEPA.</li>
+                <li>Ozon, cross-marketplace и competitor following.</li>
+                <li>Копирование black-box `Indeepa.Index`.</li>
+                <li>PDF/share отчеты и прямую 1С-интеграцию как обязательный scope.</li>
+              </ul>
+            </div>
+          </div>
+
+          <h3>Что блокирует старт разработки</h3>
+          <table class="wrap-last">
+            <thead>
+              <tr>
+                <th>Статус</th>
+                <th>Кто</th>
+                <th>Что закрыть</th>
+                <th>Почему важно</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>BLOCKER</td>
+                <td>Мария</td>
+                <td>Правила 4442/4445, уровень применения стратегий, СПП fallback, статусы товара для рейтинга</td>
+                <td>Без этого нельзя безопасно считать стратегии и рекомендации по ценам</td>
+              </tr>
+              <tr>
+                <td>BLOCKER</td>
+                <td>Максим</td>
+                <td>P&amp;L-формулы, налоги, хранение, общие расходы, доступ менеджеров к финансовым полям</td>
+                <td>Без этого P&amp;L и NRP-lite могут показать неверную прибыльность</td>
+              </tr>
+              <tr>
+                <td>BLOCKER</td>
+                <td>Backend discovery</td>
+                <td>WB Ads source, mapping отчетов, price apply/status, source freshness/confidence</td>
+                <td>Без этого нельзя подтвердить данные, ошибки отправки цен и надежность метрик</td>
+              </tr>
+              <tr>
+                <td>LATER</td>
+                <td>Фил</td>
+                <td>Full rule-engine, full NRP BI parity, campaign detail parity, Ozon/cross-marketplace</td>
+                <td>Это отдельные change requests, не v1 replacement</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3>Рекомендуемый путь разработки</h3>
+          <table class="wrap-last">
+            <thead>
+              <tr>
+                <th>Этап</th>
+                <th>Фокус</th>
+                <th>Gate перед стартом</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Sprint A</td>
+                <td>Source mapping, account/token, roles, settings model</td>
+                <td>Принять PRD-pack как baseline и закрыть текущие BLOCKER/CONFIRM статусы</td>
+              </tr>
+              <tr>
+                <td>Sprint B</td>
+                <td>Repricer core, price guards, apply jobs</td>
+                <td>Подтвердить P_min/P_max, СПП fallback и обработку WB price apply/status</td>
+              </tr>
+              <tr>
+                <td>Sprint C</td>
+                <td>Typed strategies 4599/4600/night, dry-run</td>
+                <td>Подтвердить 4599/4600 и ночное окно; 4445 оставить disabled/discovery_required до правил Марии</td>
+              </tr>
+              <tr>
+                <td>Sprint D</td>
+                <td>NRP-lite: P&amp;L, РнП, план-факт, рейтинг</td>
+                <td>Подтвердить WB Ads source и P&amp;L-формулы Максима</td>
+              </tr>
+              <tr>
+                <td>Sprint E</td>
+                <td>Excel, большие таблицы, UAT</td>
+                <td>Подготовить реальные SKU, import templates и UAT-набор Марии/Максима</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="section" id="nrp-map">
+          <h2>1. NRP — это не один отчет, а BI-модуль</h2>
+          <p class="lead">
+            В INDEEPA NRP состоит из нескольких самостоятельных блоков. Их нельзя покрыть одним экраном отчета.
+          </p>
+          <figure class="shot">
+            <img src="indeepa-nrp-live-2026-05-18/02-expanded-menu.png" alt="Карта NRP в INDEEPA">
+            <figcaption>NRP-навигация: PL, План-Факт, РнП, Рейтинг товара.</figcaption>
+          </figure>
+          <div class="split">
+            <div class="box">
+              <h3>Что есть в INDEEPA</h3>
+              <ul>
+                <li><b>PL / Unit WB</b> — экономика и P&amp;L по товарам.</li>
+                <li><b>План-Факт WB</b> — планы и выполнение.</li>
+                <li><b>РнП WB</b> — рекламная воронка и эффективность.</li>
+                <li><b>Рейтинг товара WB</b> — группы товаров по прибыльности и качеству.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Как объяснить клиенту</h3>
+              <p>
+                Мария на созвонах подтвердила не полный NRP, а ключевые сценарии:
+                ABC, P&amp;L, план-факт, РнП/реклама и точные финансовые данные. Полная глубина NRP — это отдельный объем.
+              </p>
+            </div>
+            <div class="box">
+              <h3>Важно по покрытию</h3>
+              <p>
+                В NRP много данных спрятано не на первом экране, а во внутренних таблицах:
+                отдельные вертикальные скроллы, горизонтальные pivot-таблицы, правые списки и нижние графики.
+                Поэтому ниже добавлены не только верхние экраны, но и скрины из глубины каждого блока.
+              </p>
+            </div>
+          </div>
+          <div class="tag-row">
+            <span class="tag good">V1: NRP-lite</span>
+            <span class="tag warn">Full parity: отдельное расширение</span>
+          </div>
+          <div class="box">
+            <h3>Что именно есть в меню NRP</h3>
+            <ul>
+              <li><b>PL:</b> Кросс-PL, Unit WB, Unit Ozon, Unit YM.</li>
+              <li><b>План-Факт:</b> Кросс План-факт, План-факт WB, План-факт Ozon, План-факт YM.</li>
+              <li><b>РнП:</b> РнП WB, РнП Ozon.</li>
+              <li><b>Рейтинговая система:</b> Рейтинг товара WB, Ozon, YM.</li>
+            </ul>
+            <p>В v1 нам нужен WB-контур. Кросс-маркетплейс и Ozon/YM — отдельное расширение, если клиент попросит.</p>
+          </div>
+        </section>
+
+        <section class="section" id="pnl">
+          <h2>2. Unit WB / P&amp;L — экономика товара</h2>
+          <p class="lead">
+            Это блок, где смотрят не просто оборот, а что реально зарабатывает SKU после себестоимости, логистики,
+            комиссий, хранения, рекламы и прочих расходов.
+          </p>
+          <div class="shots">
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/23-unit-wb-reshoot-loaded.png" alt="Unit WB P&amp;L">
+              <figcaption>Unit WB: P&amp;L, остатки, расходы, фильтры. Переснято после загрузки данных.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/03-unit-wb-scroll-map.png" alt="Unit WB scroll map">
+              <figcaption>В блоке много независимых скроллов и таблиц, это не один экран.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/25-unit-wb-article-table-mid.png" alt="Unit WB таблица артикулов">
+              <figcaption>Нижняя таблица Unit WB по артикулам: это отдельный virtual scroll, которого нет на первом экране.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/26-unit-wb-article-table-bottom-right.png" alt="Unit WB таблица артикулов снизу справа">
+              <figcaption>Та же таблица после прокрутки вниз и вправо: нужно учитывать много скрытых колонок и строк.</figcaption>
+            </figure>
+          </div>
+          <div class="split">
+            <div class="box">
+              <h3>Что зафиксировано в INDEEPA</h3>
+              <ul>
+                <li>Фильтры: период, кабинет, бренд, категория, внутренний тег, SKU/артикул МП, учет нераспределенных расходов, Indeepa.Index, ID склейки, стратегия.</li>
+                <li>Блоки: P&amp;L, остатки на сегодня, рейтинг Indeepa.Index, дополнительные расходы репрайсера, нераспределенные расходы.</li>
+                <li>Остатки разделены на общий, FBO/FBS, штуки, себестоимость и цену реализации.</li>
+                <li>Нижняя таблица по артикулам имеет отдельный большой virtual scroll и горизонтальную прокрутку.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Нужно собрать в Vella</h3>
+              <ul>
+                <li>P&amp;L по SKU/бренду/категории.</li>
+                <li>Разделение оперативных и закрытых финансовых данных.</li>
+                <li>Финансовые отчеты WB как источник правды.</li>
+                <li>Ручной/Excel ввод операционных расходов.</li>
+                <li>Правила распределения расходов по брендам и площадкам.</li>
+                <li>Блок “что съедает маржу”.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Оценка</h3>
+              <p><b>7-12 дней</b> на production P&amp;L v1.</p>
+              <p>Главный риск — не интерфейс, а источники данных, закрытие периода WB и правила Максима по расходам.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="planfact">
+          <h2>3. План-факт — контроль выполнения плана</h2>
+          <p class="lead">
+            В INDEEPA план-факт шире, чем наша текущая карточка в дайджесте: там есть планы по SKU, бренду, кабинету и категории.
+          </p>
+          <div class="shots">
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/24-plan-fact-wb-reshoot-loaded.png" alt="План-факт WB">
+              <figcaption>План-факт WB: факт, план, отклонение, прогноз. Переснято после загрузки данных.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/04-plan-fact-wb-analytics-scroll.png" alt="Нижняя аналитика план-факта">
+              <figcaption>Нижняя аналитика план-факта: таблицы и дополнительные блоки.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/19-plan-sku-screen-selected.png" alt="План по SKU">
+              <figcaption>Отдельный экран ввода плана по SKU.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/20-plan-brand-screen.png" alt="План по бренду">
+              <figcaption>Отдельный экран ввода плана по бренду.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/21-plan-cabinet-screen.png" alt="План по кабинету">
+              <figcaption>Отдельный экран ввода плана по кабинету.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/22-plan-category-screen.png" alt="План по категории">
+              <figcaption>Отдельный экран ввода плана по категории.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/27-planfact-pivot-hscroll-mid.png" alt="План-факт pivot середина">
+              <figcaption>План-факт: середина горизонтальной pivot-таблицы с дополнительными периодами и метриками.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/28-planfact-pivot-hscroll-right.png" alt="План-факт pivot справа">
+              <figcaption>План-факт: правая часть pivot-таблицы. Для parity нужен полноценный горизонтальный режим.</figcaption>
+            </figure>
+          </div>
+          <div class="split">
+            <div class="box">
+              <h3>Что зафиксировано в INDEEPA</h3>
+              <ul>
+                <li>Фильтры: период, выбор плана, выбор метрики, кабинет, бренд, категория, внутренний тег, SKU, нераспределенные расходы, ID склейки.</li>
+                <li>Блоки: сводный, собственные расходы, общие сведения, аналитика.</li>
+                <li>Отдельные экраны ввода планов: SKU, бренд, кабинет, категория.</li>
+                <li>Импорт Excel до 150к строк, правый блок параметров год/месяц, сохранение через disabled/enabled state.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>V1 для Vella</h3>
+              <ul>
+                <li>План-факт по компании и менеджерам.</li>
+                <li>План/факт по маржинальной прибыли.</li>
+                <li>% выполнения, прогноз на месяц, минимум в день.</li>
+                <li>Ручной ввод или импорт плана.</li>
+                <li>История изменений.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Расширение</h3>
+              <ul>
+                <li>Планы по SKU/бренду/кабинету/категории как в INDEEPA.</li>
+                <li>Большой Excel import.</li>
+                <li>Отдельные права на редактирование планов.</li>
+              </ul>
+            </div>
+          </div>
+          <div class="tag-row">
+            <span class="tag good">V1: 4-7 дней</span>
+            <span class="tag warn">Full parity: 10-15 дней</span>
+          </div>
+        </section>
+
+        <section class="section" id="rnp">
+          <h2>4. РнП WB — реклама как воронка</h2>
+          <p class="lead">
+            РнП показывает путь от рекламы до заказа: показы, клики, карточка, корзина, заказ, расходы и эффективность.
+          </p>
+          <div class="shots">
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/05-rnp-wb-loaded-2.png" alt="РнП WB">
+              <figcaption>РнП WB: рекламная воронка по датам.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/05-rnp-wb-expanded-rows-loaded.png" alt="РнП с раскрытиями">
+              <figcaption>Раскрытия по статусам рекламных кампаний.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/05-rnp-wb-hscroll-right.png" alt="РнП горизонтальный скролл">
+              <figcaption>Горизонтальный скролл по дневным метрикам.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/12-campaign-detail-modal-scroll.png" alt="Модалка кампании">
+              <figcaption>Детали рекламной кампании: товары, бренды, даты, метрики.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/13-campaign-detail-modal-bottom.png" alt="Модалка кампании нижняя часть">
+              <figcaption>Нижняя часть модалки кампании: продолжение полей и метрик, это не один экран.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/29-rnp-bottom-promotion-dynamics.png" alt="РнП нижняя динамика">
+              <figcaption>Нижняя часть РнП: графики динамики и динамики расходов на рекламу.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/30-rnp-campaign-list-bottom.png" alt="РнП список кампаний снизу">
+              <figcaption>Правый список рекламных кампаний тоже прокручивается отдельно, до нижних строк.</figcaption>
+            </figure>
+          </div>
+          <div class="split">
+            <div class="box">
+              <h3>Что зафиксировано в INDEEPA</h3>
+              <ul>
+                <li>Фильтры: период, тип РК, статус РК, кампания, кабинет, бренд, категория, внутренний тег, артикул, ID склейки.</li>
+                <li>Метрики: показы, переходы в карточку, клики, CTR, корзины, ATCR, заказы, OCR, CR, расходы, CPC, CPO, TACoO, ACoO, CPM.</li>
+                <li>Раскрытия по статусам кампаний: активно, на паузе, нет данных, закрыто.</li>
+                <li>Правый список кампаний имеет отдельный vertical scroll и модалку деталей.</li>
+                <li>Нижние блоки: динамика и динамика расходов на рекламу.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Что нужно в Vella</h3>
+              <ul>
+                <li>Фильтр по SKU, менеджеру и периоду.</li>
+                <li>Показы, клики, CTR, корзины, заказы, продажи.</li>
+                <li>ДРР, CPC, CPO, ROMI/ROI где возможно.</li>
+                <li>Статусы: выгодная, проверить, кандидат на остановку.</li>
+                <li>Связь с ABC и репрайсером.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Что не обещать в v1</h3>
+              <p>Автоматическое отключение рекламы. В v1 правильнее делать review candidate и объяснение, почему кампанию нужно проверить.</p>
+            </div>
+          </div>
+          <div class="tag-row">
+            <span class="tag good">Базовый РнП: 6-10 дней</span>
+            <span class="tag warn">Campaign details: +3-5 дней</span>
+          </div>
+        </section>
+
+        <section class="section" id="rating">
+          <h2>5. Рейтинг товара / Indeepa.Index</h2>
+          <p class="lead">
+            INDEEPA группирует товары по качеству и экономике. У нас это лучше сделать прозрачным Vella-рейтингом, без черного ящика.
+          </p>
+          <div class="shots">
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/06-rating-wb-clean-loaded.png" alt="Рейтинг товара WB">
+              <figcaption>Рейтинг товара WB / Indeepa.Index.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/06-rating-wb-category-cards-scroll.png" alt="Категории рейтинга">
+              <figcaption>Категории: локомотивы, прибыльные, перспективные, слабые, убыточные, новинки.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/06-rating-wb-category-cards-hscroll.png" alt="Категории рейтинга горизонтальный просмотр">
+              <figcaption>Карточки категорий и графики рейтинга требуют отдельного просмотра, часть содержимого уходит вправо.</figcaption>
+            </figure>
+          </div>
+          <div class="split">
+            <div class="box">
+              <h3>Что зафиксировано в INDEEPA</h3>
+              <ul>
+                <li>Фильтры: период, кабинет, бренд, категория, учет нераспределенных расходов, товар с остатком, внутренний тег, скорость продаж.</li>
+                <li>Категории: локомотив, прибыльный, перспективный, слабый, убыточный, новинка.</li>
+                <li>График количества карточек в категориях рейтинга.</li>
+                <li>Карточки категорий показывают выручку, продажи, расходы, маржу, остатки, скорость и оборачиваемость.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Что нужно в Vella</h3>
+              <ul>
+                <li>Локомотив, прибыльный, перспективный, слабый, убыточный, новинка.</li>
+                <li>Причина попадания в статус.</li>
+                <li>Связь со скоростью продаж, остатками, маржой и рекламой.</li>
+                <li>Переход от статуса к действию.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Важно</h3>
+              <p>Не копировать `Indeepa.Index` как black box. У Vella должна быть объяснимая логика.</p>
+            </div>
+          </div>
+          <div class="tag-row">
+            <span class="tag good">Vella rating: 4-7 дней</span>
+          </div>
+        </section>
+
+        <section class="section" id="settings">
+          <h2>6. Настройки репрайсера — 17 параметров</h2>
+          <p class="lead">
+            В INDEEPA это не пара тумблеров, а большой набор настроек, которые влияют на экономику и безопасность цены.
+          </p>
+          <div class="shots">
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/01-params-top.png" alt="Параметры репрайсера">
+              <figcaption>17 параметров репрайсера в кабинете Марии.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/08-dropdown-3-1-change-per-update.png" alt="Лимит изменения цены за обновление">
+              <figcaption>Dropdown лимита изменения цены за одно обновление: отдельный range, не общий percent select.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/09-dropdown-wallet.png" alt="WB wallet presets">
+              <figcaption>Dropdown WB-кошелька: разные проценты и режимы.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/10-dropdown-schedule.png" alt="Расписание пересчета">
+              <figcaption>Расписание автоматического пересчета.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/11-dropdown-interval.png" alt="Интервал отправки цен">
+              <figcaption>Интервал автоматической отправки новых цен.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/02-extensions-full.png" alt="Расширения репрайсера">
+              <figcaption>Вкладка Расширения: источники данных и зависимости стратегий.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/03-overrides.png" alt="Переопределения">
+              <figcaption>Переопределения: у Марии записей нет, но extension point в продукте нужен.</figcaption>
+            </figure>
+          </div>
+          <div class="split">
+            <div class="box">
+              <h3>17 параметров Марии</h3>
+              <ul>
+                <li>Margin mode: сейчас `От цены со скидкой`.</li>
+                <li>Расписание пересчета: `Ежечасно`.</li>
+                <li>Интервал отправки цен: `Не ограничивать`.</li>
+                <li>WB-кошелек: `Кошелёк: 4%`.</li>
+                <li>Цена до скидки: разрешить; отмена скидок: запретить.</li>
+                <li>Per-update limit: `6%`; daily limit: `20%`.</li>
+                <li>Лимиты себестоимости/min price, игнорирование порогов, шаг скидки.</li>
+                <li>Историческая логистика, коэффициенты хранения/логистики, индекс локализации.</li>
+                <li>Прогнозная СПП и ограничение входа в акцию.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Что нужно собрать</h3>
+              <ul>
+                <li>Typed settings model и все enum/range presets.</li>
+                <li>Разные типы dropdown: margin, schedule, hour interval, wallet, boolean, percent ranges, discount step.</li>
+                <li>Сохранение настроек, diff перед сохранением и audit изменений.</li>
+                <li>Права на редактирование настроек.</li>
+                <li>Связь настроек с price engine и dry-run preview.</li>
+              </ul>
+            </div>
+          </div>
+          <div class="tag-row">
+            <span class="tag good">1-2 недели</span>
+            <span class="tag warn">Можно делать параллельно с репрайсером</span>
+          </div>
+        </section>
+
+        <section class="section" id="strategies">
+          <h2>7. Стратегии репрайсера</h2>
+          <p class="lead">
+            У Марии есть несколько стратегий. Для v1 лучше реализовать конкретные typed strategies, а не полный конструктор правил.
+          </p>
+          <div class="shots">
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/04-strategies.png" alt="Список стратегий">
+              <figcaption>Список стратегий в INDEEPA.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/12-strategy-4599-formulas.png" alt="Формулы стратегии 4599">
+              <figcaption>Стратегия 4599: формулы, расписание и переход в правила.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/13-strategy-4442-formulas.png" alt="Формулы стратегии 4442">
+              <figcaption>Стратегия 4442: ночной рост цен, расписание 01:00-05:00 и постоянная формула.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/14-strategy-4600-formulas.png" alt="Формулы стратегии 4600">
+              <figcaption>Стратегия 4600: поддержание динамики выручки.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/16-rules-4599-baskets-orders.png" alt="Правила 4599">
+              <figcaption>Стратегия 4599: корзины и заказы.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/19-rules-4600-revenue-dynamics.png" alt="Правила 4600">
+              <figcaption>Стратегия 4600: динамика выручки.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/15-strategy-4445-formulas.png" alt="СПП и оборачиваемость">
+              <figcaption>Стратегия 4445: СПП + оборачиваемость, правила требуют уточнения.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/17-rules-4442-night-1.png" alt="Правила ночного роста 1">
+              <figcaption>Правила 4442, формула 1: экран открыт, но заполненные правила в снимке не видны.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/20-rules-4445-spp.png" alt="Правила СПП">
+              <figcaption>Правила 4445: экран открыт, но конкретные условия нужно уточнить отдельно.</figcaption>
+            </figure>
+          </div>
+          <div class="split">
+            <div class="box">
+              <h3>Зафиксированные стратегии</h3>
+              <ul>
+                <li><b>4599:</b> динамика корзин и заказов, матрица +3/+1/-1/-3, потолок +5% к базовой цене.</li>
+                <li><b>4442:</b> ночной рост цен, окно 01:00-05:00; конкретные правила в снимке не отобразились.</li>
+                <li><b>4600:</b> поддержание динамики выручки: от -5% до +5% по диапазонам 75/85/95/105/115/125%.</li>
+                <li><b>4445:</b> СПП + оборачиваемость; формула есть, условия нужно уточнить.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>V1 typed strategies</h3>
+              <ul>
+                <li>`baskets_orders_4599`.</li>
+                <li>`revenue_dynamics_4600`.</li>
+                <li>`night_price_mode` после уточнения окна.</li>
+                <li>`spp_turnover` после уточнения правил 4445.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Что вынести отдельно</h3>
+              <p>Полный rule-engine как INDEEPA: visual builder, поля, операторы, формулы, расписания. Это не v1.</p>
+            </div>
+          </div>
+          <div class="tag-row">
+            <span class="tag good">Typed strategies: 1.5-2.5 недели</span>
+            <span class="tag bad">Rule-engine: отдельный scope</span>
+          </div>
+        </section>
+
+        <section class="section" id="safety">
+          <h2>8. Защита от скачков — безопасная отправка цен</h2>
+          <p class="lead">
+            Самый рискованный слой: система не должна отправить опасные цены из-за сбоя WB, СПП, остатков или неверной себестоимости.
+          </p>
+          <figure class="shot">
+            <img src="indeepa-repricer-settings-live-2026-05-18/06-price-jumps.png" alt="Защита от скачков цен">
+            <figcaption>INDEEPA контролирует скачки входных метрик, а не только цену.</figcaption>
+          </figure>
+          <div class="split">
+            <div class="box">
+              <h3>Price guards</h3>
+              <ul>
+                <li>Лимит за одно обновление.</li>
+                <li>Дневной лимит.</li>
+                <li>P_min / P_max.</li>
+                <li>Promo / min_price guard.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Input guards</h3>
+              <ul>
+                <li>Остатки.</li>
+                <li>СПП.</li>
+                <li>Себестоимость.</li>
+                <li>Логистика/доставка.</li>
+                <li>% выкупа.</li>
+                <li>Промо-аномалии.</li>
+              </ul>
+            </div>
+          </div>
+          <div class="callout">
+            Нужен видимый freeze/warning state: менеджер должен понимать, почему цены не отправляются и кто может разблокировать.
+          </div>
+          <div class="box">
+            <h3>Зафиксированные anti-spike метрики</h3>
+            <ul>
+              <li>Общая стоимость стока, изменение %.</li>
+              <li>Сумма себестоимости, изменение %.</li>
+              <li>Доставка к клиенту, изменение %.</li>
+              <li>% выкупа, изменение %.</li>
+              <li>Промо и СПП, изменение %.</li>
+              <li>Общий сток в штуках и изменение %.</li>
+            </ul>
+          </div>
+          <div class="tag-row">
+            <span class="tag good">1-2 недели</span>
+            <span class="tag warn">Критично для production</span>
+          </div>
+        </section>
+
+        <section class="section" id="access">
+          <h2>9. Аккаунты и доступы</h2>
+          <p class="lead">
+            В production недостаточно скрыть кнопку. Нужна реальная permission model для настроек, финансов и отправки цен.
+          </p>
+          <div class="shots">
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/05-accounts.png" alt="Аккаунты">
+              <figcaption>Аккаунт WB, статус token, срок действия.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/07-access.png" alt="Доступы">
+              <figcaption>Права: просмотр, редактирование настроек, установка цен.</figcaption>
+            </figure>
+          </div>
+          <div class="box">
+            <h3>Что нужно собрать</h3>
+            <ul>
+              <li>Account health: подключен ли WB, валиден ли token, когда истекает.</li>
+              <li>Роли: viewer, settings_editor, price_sender, finance access, manager access.</li>
+              <li>Backend enforcement.</li>
+              <li>Audit действий и отправки цен.</li>
+            </ul>
+          </div>
+          <div class="tag-row">
+            <span class="tag good">3-6 дней</span>
+          </div>
+        </section>
+
+        <section class="section" id="live-appendix">
+          <h2>10. Подробные скрины INDEEPA</h2>
+          <p class="lead">
+            Ниже — дополнительные экраны, которые показывают глубину модуля: таблицы, прокрутки, dropdown,
+            модалки, стратегии и отдельные экраны ввода планов.
+          </p>
+
+          <h3>NRP / Unit WB</h3>
+          <div class="shots three">
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/03-unit-wb-top.png" alt="Unit WB top">
+              <figcaption>Unit WB: первый экран.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/23-unit-wb-reshoot-loaded.png" alt="Unit WB loaded">
+              <figcaption>Unit WB после загрузки данных.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/03-unit-wb-loaded-after-map.png" alt="Unit WB loaded after map">
+              <figcaption>Unit WB: блоки P&amp;L/остатки/расходы.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/03-unit-wb-scroll-map.png" alt="Unit WB scroll map">
+              <figcaption>Unit WB: карта независимых скроллов.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/25-unit-wb-article-table-mid.png" alt="Unit WB article table mid">
+              <figcaption>Unit WB: нижняя таблица артикулов, середина.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/26-unit-wb-article-table-bottom-right.png" alt="Unit WB article table bottom right">
+              <figcaption>Unit WB: нижняя таблица, низ и правые колонки.</figcaption>
+            </figure>
+          </div>
+
+          <h3>NRP / План-факт WB</h3>
+          <div class="shots three">
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/04-plan-fact-wb-top.png" alt="Plan fact top">
+              <figcaption>План-факт: первый экран.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/24-plan-fact-wb-reshoot-loaded.png" alt="Plan fact loaded">
+              <figcaption>План-факт после загрузки данных.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/04-plan-fact-wb-analytics-scroll.png" alt="Plan fact analytics scroll">
+              <figcaption>План-факт: нижняя аналитика.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/04-plan-fact-wb-scroll-map.png" alt="Plan fact scroll map">
+              <figcaption>План-факт: карта внутренних таблиц.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/27-planfact-pivot-hscroll-mid.png" alt="Plan fact pivot mid">
+              <figcaption>План-факт: горизонтальный scroll, середина.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/28-planfact-pivot-hscroll-right.png" alt="Plan fact pivot right">
+              <figcaption>План-факт: горизонтальный scroll, правая часть.</figcaption>
+            </figure>
+          </div>
+
+          <h3>NRP / Экраны ввода планов</h3>
+          <div class="shots three">
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/10-plan-fact-before-plan-links.png" alt="Plan fact links">
+              <figcaption>Переходы к заполнению планов.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/19-plan-sku-screen-selected.png" alt="Plan SKU selected">
+              <figcaption>План по SKU: таблица ввода.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/20-plan-brand-screen.png" alt="Plan brand">
+              <figcaption>План по бренду.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/21-plan-cabinet-screen.png" alt="Plan cabinet">
+              <figcaption>План по кабинету.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/22-plan-category-screen.png" alt="Plan category">
+              <figcaption>План по категории.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/18-new-tab-plan-fact.png" alt="Plan fact new tab">
+              <figcaption>План-факт в отдельной вкладке после переходов.</figcaption>
+            </figure>
+          </div>
+
+          <h3>NRP / РнП WB</h3>
+          <div class="shots three">
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/05-rnp-wb-top.png" alt="RNP top">
+              <figcaption>РнП: первый экран.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/05-rnp-wb-loaded-2.png" alt="RNP loaded">
+              <figcaption>РнП после загрузки данных.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/05-rnp-wb-scroll-map.png" alt="RNP scroll map">
+              <figcaption>РнП: карта скроллов и правой таблицы.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/05-rnp-wb-expanded-rows-loaded.png" alt="RNP expanded rows">
+              <figcaption>РнП: раскрытые строки метрик.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/05-rnp-wb-vscroll-mid.png" alt="RNP vertical scroll">
+              <figcaption>РнП: вертикальный scroll по метрикам.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/05-rnp-wb-hscroll-right.png" alt="RNP horizontal scroll">
+              <figcaption>РнП: горизонтальный scroll по датам.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/05-rnp-wb-period-grain-dropdown-clean.png" alt="RNP grain dropdown">
+              <figcaption>РнП: dropdown детализации периода.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/29-rnp-bottom-promotion-dynamics.png" alt="RNP bottom dynamics">
+              <figcaption>РнП: нижние графики динамики.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/30-rnp-campaign-list-bottom.png" alt="RNP campaign list bottom">
+              <figcaption>РнП: правый список кампаний, нижние строки.</figcaption>
+            </figure>
+          </div>
+
+          <h3>NRP / Детали рекламной кампании</h3>
+          <div class="shots three">
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/08-rnp-campaign-detail-click.png" alt="RNP campaign detail click">
+              <figcaption>Клик по кампании из правой таблицы.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/09-rnp-campaign-detail-cell-click.png" alt="RNP campaign detail cell click">
+              <figcaption>Открытие деталей по строке кампании.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/12-campaign-detail-modal-scroll.png" alt="Campaign detail modal">
+              <figcaption>Модалка кампании: верх/середина.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/13-campaign-detail-modal-bottom.png" alt="Campaign detail modal bottom">
+              <figcaption>Модалка кампании: нижняя часть.</figcaption>
+            </figure>
+          </div>
+
+          <h3>NRP / Рейтинг товара WB</h3>
+          <div class="shots three">
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/06-rating-wb-top.png" alt="Rating top">
+              <figcaption>Рейтинг товара: первый экран.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/06-rating-wb-clean-loaded.png" alt="Rating loaded">
+              <figcaption>Рейтинг товара после загрузки.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/06-rating-wb-scroll-900.png" alt="Rating scroll">
+              <figcaption>Рейтинг товара: прокрутка ниже.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/06-rating-wb-category-cards-scroll.png" alt="Rating cards scroll">
+              <figcaption>Карточки категорий рейтинга.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-nrp-live-2026-05-18/06-rating-wb-category-cards-hscroll.png" alt="Rating cards hscroll">
+              <figcaption>Категории рейтинга: горизонтальный просмотр.</figcaption>
+            </figure>
+          </div>
+
+          <h3>Репрайсер / вкладки настроек</h3>
+          <div class="shots three">
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/01-params-top.png" alt="Repricer params">
+              <figcaption>Параметры: 17 глобальных настроек.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/02-extensions-full.png" alt="Repricer extensions full">
+              <figcaption>Расширения: полный список источников.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/02-extensions-scroll-650.png" alt="Repricer extensions scroll">
+              <figcaption>Расширения: прокрутка ниже.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/03-overrides.png" alt="Repricer overrides">
+              <figcaption>Переопределения: пустая таблица, но модуль есть.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/04-strategies.png" alt="Repricer strategies">
+              <figcaption>Стратегии Марии.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/05-accounts.png" alt="Repricer accounts">
+              <figcaption>Аккаунты и статус WB token.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/06-price-jumps.png" alt="Price jumps">
+              <figcaption>Защита от скачков входных метрик.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/07-access.png" alt="Access">
+              <figcaption>Доступы: просмотр, настройки, установка цен.</figcaption>
+            </figure>
+          </div>
+
+          <h3>Репрайсер / dropdown и presets</h3>
+          <div class="shots three">
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/08-dropdown-3-1-change-per-update.png" alt="Dropdown 3.1">
+              <figcaption>3.1: лимит изменения цены за одно обновление.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/09-dropdown-wallet.png" alt="Wallet dropdown">
+              <figcaption>WB-кошелек: preset-проценты.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/10-dropdown-schedule.png" alt="Schedule dropdown">
+              <figcaption>Расписание автоматического пересчета.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/11-dropdown-interval.png" alt="Interval dropdown">
+              <figcaption>Интервал автоматической отправки цен.</figcaption>
+            </figure>
+          </div>
+
+          <h3>Репрайсер / стратегии и правила</h3>
+          <div class="shots three">
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/12-strategy-4599-formulas.png" alt="Strategy 4599 formulas">
+              <figcaption>4599: формулы стратегии корзин/заказов.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/16-rules-4599-baskets-orders.png" alt="Strategy 4599 rules">
+              <figcaption>4599: правила корзин/заказов.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/13-strategy-4442-formulas.png" alt="Strategy 4442 formulas">
+              <figcaption>4442: формулы ночного роста.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/17-rules-4442-night-1.png" alt="Strategy 4442 rule one">
+              <figcaption>4442: экран правил, формула 1.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/18-rules-4442-night-2.png" alt="Strategy 4442 rule two">
+              <figcaption>4442: экран правил, формула 2.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/14-strategy-4600-formulas.png" alt="Strategy 4600 formulas">
+              <figcaption>4600: формулы динамики выручки.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/19-rules-4600-revenue-dynamics.png" alt="Strategy 4600 rules">
+              <figcaption>4600: правила динамики выручки.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/15-strategy-4445-formulas.png" alt="Strategy 4445 formulas">
+              <figcaption>4445: СПП + оборачиваемость, формула.</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="indeepa-repricer-settings-live-2026-05-18/20-rules-4445-spp.png" alt="Strategy 4445 rules">
+              <figcaption>4445: экран правил для СПП.</figcaption>
+            </figure>
+          </div>
+
+          <div class="callout">
+            По стратегиям 4442 и 4445 видно, что они заведены в INDEEPA, но конкретные условия правил на снимках не читаются.
+            Для оценки их лучше считать отдельным уточнением у Марии.
+          </div>
+        </section>
+
+        <section class="section" id="scope">
+          <h2>11. Итоговый объем</h2>
+          <p class="lead">
+            Важно: сроки ниже не складываются арифметически, потому что часть работ можно вести параллельно.
+            После live-аудита INDEEPA рабочий cut для разработки лучше считать от Sprint A-E, а не от старой оценки.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Уровень</th>
+                <th>Что означает</th>
+                <th>Оценка</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>v1 replacement minimum</td>
+                <td>Критичный WB-контур: репрайсер, настройки, guards, typed strategies, NRP-lite, Excel, роли, UAT</td>
+                <td>5-7 production-недель</td>
+              </tr>
+              <tr>
+                <td>Production hardening</td>
+                <td>Усиление после реального UAT: edge cases WB API, расширенные guards, performance, операционные отчеты</td>
+                <td>+2-3 недели по подтвержденным gaps</td>
+              </tr>
+              <tr>
+                <td>Full INDEEPA parity</td>
+                <td>Rule-engine, full NRP BI, campaign detail parity, Ozon/cross-marketplace, competitor following</td>
+                <td>Отдельный change request</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Блок</th>
+                <th>Уже есть</th>
+                <th>Осталось</th>
+                <th>Оценка</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Vella UI / оболочка</td>
+                <td>Оболочка, таблицы, карточка товара, сохраненные виды, preview, журнал действий</td>
+                <td>Довести под реальные данные и новые settings</td>
+                <td>25-35% UI-работы</td>
+              </tr>
+              <tr>
+                <td>Репрайсер</td>
+                <td>UX и логика понятны</td>
+                <td>Backend, WB sync/upload, settings, стратегии, errors</td>
+                <td>2-3 недели</td>
+              </tr>
+              <tr>
+                <td>Настройки INDEEPA</td>
+                <td>Зафиксированы в research</td>
+                <td>Модель, UI, сохранение, audit, права</td>
+                <td>1-2 недели</td>
+              </tr>
+              <tr>
+                <td>Safety</td>
+                <td>Концепция есть</td>
+                <td>Input guards, freeze state, unblock flow</td>
+                <td>1-2 недели</td>
+              </tr>
+              <tr>
+                <td>NRP-lite</td>
+                <td>Структура и разбор INDEEPA есть</td>
+                <td>P&amp;L, ABC, РнП, plan-fact, rating на данных</td>
+                <td>2.5-4 недели</td>
+              </tr>
+              <tr>
+                <td>WB backend/data</td>
+                <td>ТЗ и mapping-направление</td>
+                <td>API adapters, imports, financial reports, freshness</td>
+                <td>2-3 недели</td>
+              </tr>
+              <tr>
+                <td>Роли/audit/export</td>
+                <td>Частично заложено</td>
+                <td>Permissions, Excel import/export, audit persistence</td>
+                <td>1-2 недели</td>
+              </tr>
+              <tr>
+                <td>UAT</td>
+                <td>Не начат полноценно</td>
+                <td>Сверка с Марией/Максимом на реальных данных</td>
+                <td>1-1.5 недели</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="summary">
+            <b>Формулировка для Фила:</b><br>
+            Мы уже сделали большую часть продуктового понимания и интерфейсной оболочки WB. Но INDEEPA внутри оказалась не просто репрайсером,
+            а связкой репрайсера, NRP-аналитики, финансовых отчетов, стратегий, safeguards и прав доступа. Рабочий v1 replacement
+            стоит оценивать как 5-7 production-недель при условии, что Sprint A закрывает source mapping, доступы, price apply/status
+            и финансовые формулы. Полная parity с INDEEPA — отдельный change request, а не обещание v1.
+          </div>
+
+          <div class="split">
+            <div class="box">
+              <h3>Не обещать в текущем v1</h3>
+              <ul>
+                <li>Полную копию INDEEPA.</li>
+                <li>Custom rule-engine.</li>
+                <li>Ozon/cross-marketplace.</li>
+                <li>Competitor following.</li>
+                <li>Black box `Indeepa.Index`.</li>
+                <li>Полную NRP parity без отдельного согласования.</li>
+                <li>Campaign detail parity и автоматическое управление рекламой.</li>
+              </ul>
+            </div>
+            <div class="box">
+              <h3>Обещать в v1</h3>
+              <ul>
+                <li>Понятный рабочий репрайсер.</li>
+                <li>Безопасную отправку цен.</li>
+                <li>17 настроек Марии с правами, audit и guard-логикой.</li>
+                <li>Typed strategies 4599, 4600 и night после подтверждения правил.</li>
+                <li>ABC / P&amp;L / РнП / план-факт / рейтинг в Vella-логике.</li>
+                <li>Точность через WB reports/import.</li>
+                <li>Audit, права и предупреждения по данным.</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="callout">
+            4445 не считать готовой v1-стратегией. До подтверждения правил СПП + оборачиваемости у Марии ее статус:
+            disabled / discovery_required. В production drafts ее нельзя включать автоматически.
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script>
+    document.querySelectorAll('.shot img').forEach((img) => {
+      if (img.closest('a')) return;
+      const link = document.createElement('a');
+      link.href = img.getAttribute('src');
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.title = 'Открыть скрин в полном размере';
+      img.parentNode.insertBefore(link, img);
+      link.appendChild(img);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/api/v1/(.*)", "destination": "https://api.elfprint-system.ru/api/v1/$1" },
+    { "source": "/api/wb/(.*)", "destination": "https://api.elfprint-system.ru/api/wb/$1" },
+    { "source": "/api/1c/(.*)", "destination": "https://api.elfprint-system.ru/api/1c/$1" },
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/internal/(.*)", "destination": "/index.html" },
+    { "source": "/notifications", "destination": "/index.html" },
+    { "source": "/orders", "destination": "/index.html" },
+    { "source": "/orders/(.*)", "destination": "/index.html" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

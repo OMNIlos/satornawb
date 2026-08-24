@@ -1,0 +1,501 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Unbounded:wght@700;800&family=JetBrains+Mono:wght@500;600&display=swap');
+
+.vella-html-runtime {
+  --sidebar-bg: #0F172A; --sidebar-text: rgba(255,255,255,0.65);
+  --sidebar-muted: rgba(255,255,255,0.28); --sidebar-hover: rgba(255,255,255,0.06);
+  --sidebar-active: rgba(255,255,255,0.10); --sidebar-active-text: rgba(255,255,255,0.95);
+  --brand: #2563EB; --brand-light: #EFF6FF; --brand-dark: #1D4ED8; --brand-50: #F5F8FF;
+  --bg: #F8FAFC; --white: #FFFFFF;
+  --gray-50: #F9FAFB; --gray-100: #F3F4F6; --gray-150: #ECEEF1; --gray-200: #E5E7EB; --gray-300: #D1D5DB;
+  --gray-400: #6B7280; --gray-500: #4B5563; --gray-600: #374151; --gray-700: #1F2937; --gray-800: #111827; --gray-900: #030712;
+  --gray-soft: #9CA3AF;
+  --green-bg: #F0FDF4; --green-tx: #166534; --green-dot: #22C55E; --green-mid: #059669;
+  --red-bg: #FEF2F2; --red-tx: #991B1B; --red-mid: #DC2626;
+  --amber-bg: #FFFBEB; --amber-tx: #92400E; --amber-mid: #F59E0B;
+  --orange-bg: #FFF7ED; --orange-tx: #C2410C; --orange-mid: #F97316;
+  --purple-bg: #F5F3FF; --purple-tx: #5B21B6;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.06);
+  --shadow-lg: 0 2px 18px rgba(15,23,42,0.12);
+  --shadow-xl: 0 12px 36px rgba(0,0,0,0.16);
+  background: var(--sidebar-bg);
+  color: var(--gray-900);
+  display: flex;
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: normal;
+  height: 100vh;
+  overflow: hidden;
+  width: 100%;
+}
+
+.vella-html-runtime *,
+.vella-html-runtime *::before,
+.vella-html-runtime *::after {
+  box-sizing: border-box;
+  letter-spacing: 0;
+}
+
+.vella-html-runtime button,
+.vella-html-runtime input {
+  font: inherit;
+}
+
+.vella-html-runtime .sidebar {
+  width: 232px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: visible;
+  padding-bottom: 22px;
+  transition: width 0.18s ease;
+  position: relative;
+  z-index: 2;
+}
+
+.vella-html-runtime .sidebar::-webkit-scrollbar { width: 0; }
+
+.vella-html-runtime .logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  margin-bottom: 8px;
+  min-height: 54px;
+}
+
+.vella-html-runtime .logo-full { display: block; width: 136px; height: auto; opacity: .88; }
+.vella-html-runtime .logo-icon-only { display: none; width: 30px; height: 30px; }
+
+.vella-html-runtime .nav-section {
+  padding: 12px 14px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--sidebar-muted);
+}
+
+.vella-html-runtime .nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  margin: 2px 6px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--sidebar-text);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, transform 0.12s ease;
+  user-select: none;
+}
+
+.vella-html-runtime .nav-item:hover { background: var(--sidebar-hover); color: rgba(255,255,255,0.85); transform: translateX(1px); }
+.vella-html-runtime .nav-item.active { background: var(--sidebar-active); color: var(--sidebar-active-text); font-weight: 500; }
+.vella-html-runtime .nav-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vella-html-runtime .nav-badge { font-size: 11px; font-weight: 500; color: var(--sidebar-muted); }
+.vella-html-runtime .nav-badge.soon { font-style: italic; font-size: 10.5px; }
+.vella-html-runtime .nav-badge.alert { color: #F87171; font-weight: 600; font-style: normal; }
+.vella-html-runtime .nav-badge.warn { color: #FCD34D; font-weight: 600; }
+.vella-html-runtime .chevron { width: 14px; height: 14px; opacity: 0.3; flex-shrink: 0; transition: transform 0.18s; }
+.vella-html-runtime .chevron.open { transform: rotate(90deg); opacity: 0.45; }
+.vella-html-runtime .vh-icon { width: 17px; height: 17px; display: inline-flex; align-items: center; justify-content: center; opacity: .7; font-size: 13px; flex-shrink: 0; }
+
+.vella-html-runtime .nav-sub {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: max-height 0.24s cubic-bezier(0.2,0,0,1), opacity 0.16s ease, transform 0.18s ease, margin 0.18s ease, padding 0.18s ease;
+  margin: 0 8px;
+  border-radius: 10px;
+}
+
+.vella-html-runtime .nav-sub.nav-sub-open {
+  max-height: 340px;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  margin: 4px 8px 11px 8px;
+  padding: 7px 6px;
+  background: rgba(255,255,255,0.045);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.035);
+}
+
+.vella-html-runtime .nav-sub .nav-item { padding: 7px 10px; margin: 1px 0; font-size: 13px; }
+.vella-html-runtime .nav-sub .nav-item.nav-sub-active { background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.94); }
+
+.vella-html-runtime .main-area {
+  flex: 1;
+  background: var(--bg);
+  border-radius: 16px 0 0 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.vella-html-runtime .topbar {
+  background: var(--white);
+  border-bottom: 1px solid var(--gray-200);
+  padding: 0 20px;
+  height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.vella-html-runtime .nav-btns { display: flex; gap: 1px; }
+.vella-html-runtime .nav-btn { width: 26px; height: 26px; border-radius: 7px; background: transparent; border: none; color: var(--gray-400); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.vella-html-runtime .nav-btn:hover { background: var(--gray-100); color: var(--gray-600); }
+.vella-html-runtime .breadcrumb { display: flex; align-items: center; gap: 5px; font-size: 13px; color: var(--gray-400); }
+.vella-html-runtime .breadcrumb .current { color: var(--gray-900); font-weight: 600; }
+.vella-html-runtime .breadcrumb .sep { font-size: 11px; opacity: .4; }
+.vella-html-runtime .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 7px; }
+
+.vella-html-runtime .report-period,
+.vella-html-runtime .report-date {
+  height: 34px;
+  padding: 0 13px;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  background: var(--white);
+  color: var(--gray-700);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.vella-html-runtime .report-period.selected { background: var(--brand); border-color: var(--brand); color: var(--white); }
+.vella-html-runtime .report-date { min-width: 148px; display: inline-flex; align-items: center; justify-content: space-between; gap: 12px; }
+.vella-html-runtime .icon-btn { width: 32px; height: 32px; border-radius: 8px; border: none; background: transparent; color: var(--gray-500); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; position: relative; }
+.vella-html-runtime .icon-btn:hover { background: var(--gray-100); color: var(--gray-700); }
+.vella-html-runtime .icon-btn .dot-alert { position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; background: var(--red-mid); border-radius: 50%; border: 2px solid var(--white); }
+.vella-html-runtime .user-chip { display: flex; align-items: center; gap: 8px; padding: 4px 10px 4px 4px; border-radius: 20px; cursor: pointer; }
+.vella-html-runtime .user-chip:hover { background: var(--gray-100); }
+.vella-html-runtime .user-av { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #6366F1, #8B5CF6); color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; }
+.vella-html-runtime .user-name { font-size: 13px; font-weight: 500; color: var(--gray-700); }
+
+.vella-html-runtime .btn { display: inline-flex; align-items: center; gap: 5px; padding: 6px 13px; font-size: 13px; font-weight: 500; border-radius: 8px; border: none; cursor: pointer; white-space: nowrap; transition: background 0.12s, border-color 0.12s; font-family: inherit; }
+.vella-html-runtime .btn-primary { background: var(--brand); color: white; }
+.vella-html-runtime .btn-primary:hover { background: var(--brand-dark); }
+.vella-html-runtime .btn-default { background: var(--white); color: var(--gray-700); border: 1px solid var(--gray-200); }
+.vella-html-runtime .btn-default:hover { background: var(--gray-50); border-color: var(--gray-300); }
+
+.vella-html-runtime .subtabs {
+  background: var(--white);
+  border-bottom: 1px solid var(--gray-200);
+  padding: 0 20px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.vella-html-runtime .subtabs::-webkit-scrollbar { height: 0; }
+.vella-html-runtime .subtab { display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; height: 40px; font-size: 13px; font-weight: 500; color: var(--gray-500); cursor: pointer; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: transparent; white-space: nowrap; }
+.vella-html-runtime .subtab:hover { color: var(--gray-800); }
+.vella-html-runtime .subtab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+.vella-html-runtime .subtab-count { font-size: 11px; padding: 1px 6px; border-radius: 10px; background: var(--gray-100); color: var(--gray-500); font-weight: 500; }
+.vella-html-runtime .subtab.active .subtab-count { background: var(--brand-light); color: var(--brand); }
+.vella-html-runtime .subtab-count.danger { color: #DC2626; background: #FEE2E2; }
+.vella-html-runtime .subtab-count.warn { color: #92400E; background: #FEF3C7; }
+.vella-html-runtime .subtab-divider { width: 1px; height: 18px; background: var(--gray-200); margin: 0 6px; }
+
+.vella-html-runtime .tab-content { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+.vella-html-runtime .tab-content.active { display: flex; }
+.vella-html-runtime .stats { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--white); border-bottom: 1px solid var(--gray-100); flex-shrink: 0; }
+.vella-html-runtime .stats.repricer-kpis { grid-template-columns: repeat(7, minmax(136px, 1fr)); overflow-x: auto; }
+.vella-html-runtime .stat { padding: 13px 18px; border-right: 1px solid var(--gray-100); position: relative; }
+.vella-html-runtime .stat:last-child { border-right: none; }
+.vella-html-runtime .stat-label { font-size: 11px; color: var(--gray-400); font-weight: 500; margin-bottom: 4px; display: flex; align-items: center; gap: 5px; }
+.vella-html-runtime .stat-tip { width: 12px; height: 12px; border-radius: 50%; background: var(--gray-200); color: var(--gray-500); font-size: 8px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; cursor: help; }
+.vella-html-runtime .stat-val { font-size: 21px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+.vella-html-runtime .stat-delta { margin-top: 4px; font-size: 11.5px; font-weight: 500; display: flex; align-items: center; gap: 4px; }
+.vella-html-runtime .up { color: #059669; }
+.vella-html-runtime .down { color: #DC2626; }
+.vella-html-runtime .neutral { color: var(--gray-400); }
+
+.vella-html-runtime .toolbar { display: flex; align-items: center; gap: 7px; padding: 10px 20px; flex-shrink: 0; border-bottom: 1px solid transparent; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--gray-300) transparent; }
+.vella-html-runtime .toolbar::-webkit-scrollbar { height: 6px; }
+.vella-html-runtime .toolbar::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 999px; }
+.vella-html-runtime .search { display: flex; align-items: center; gap: 7px; background: var(--white); border: 1px solid var(--gray-200); border-radius: 8px; padding: 6px 11px; color: var(--gray-400); font-size: 13px; min-width: 230px; flex-shrink: 0; transition: border-color 0.12s; }
+.vella-html-runtime .search:focus-within { border-color: var(--brand); }
+.vella-html-runtime .search input { border: none; background: transparent; outline: none; flex: 1; font-family: inherit; font-size: 13px; color: var(--gray-800); width: 100%; }
+.vella-html-runtime .chips { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; min-width: max-content; overflow: visible; }
+.vella-html-runtime .chips[data-vella-island="products-filter-chips"] { flex: 1 1 auto; min-width: 220px; max-width: 100%; overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; scrollbar-width: thin; scrollbar-color: var(--gray-300) transparent; }
+.vella-html-runtime .chips[data-vella-island="products-filter-chips"]::-webkit-scrollbar { height: 6px; }
+.vella-html-runtime .chips[data-vella-island="products-filter-chips"]::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 999px; }
+.vella-html-runtime .chips[data-vella-island="products-filter-chips"] .chip,
+.vella-html-runtime .chips[data-vella-island="products-filter-chips"] .help-btn,
+.vella-html-runtime .chips[data-vella-island="products-filter-chips"] .chips-divider { flex: 0 0 auto; }
+.vella-html-runtime .chip { padding: 5px 11px; font-size: 12.5px; font-weight: 500; border-radius: 40px; cursor: pointer; white-space: nowrap; background: var(--white); color: var(--gray-500); border: 1px solid var(--gray-200); transition: all 0.1s; display: inline-flex; align-items: center; gap: 5px; }
+.vella-html-runtime .chip:hover { background: var(--gray-50); color: var(--gray-700); border-color: var(--gray-300); }
+.vella-html-runtime .chip.active { background: var(--gray-900); color: white; border-color: var(--gray-900); }
+.vella-html-runtime .chip-count { font-size: 11px; opacity: 0.7; }
+.vella-html-runtime .toolbar-right { display: flex; align-items: center; gap: 7px; flex-shrink: 0; margin-left: auto; }
+.vella-html-runtime .row-count { font-size: 12px; color: var(--gray-400); white-space: nowrap; }
+.vella-html-runtime .view-btn { width: 30px; height: 30px; border-radius: 7px; border: 1px solid var(--gray-200); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--gray-500); transition: all 0.1s; }
+.vella-html-runtime .view-btn:hover { border-color: var(--gray-300); color: var(--gray-700); }
+
+.vella-html-runtime .dd { position: relative; }
+.vella-html-runtime .manager-btn { min-width: 178px; justify-content: space-between; }
+.vella-html-runtime .dd-menu { position: absolute; top: calc(100% + 4px); right: 0; background: var(--white); border: 1px solid var(--gray-200); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 4px; min-width: 200px; z-index: 60; opacity: 0; pointer-events: none; transform: translateY(-4px); transition: all 0.15s; }
+.vella-html-runtime .dd.open .dd-menu { opacity: 1; pointer-events: all; transform: translateY(0); }
+.vella-html-runtime .dd-item { width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 13px; color: var(--gray-700); border-radius: 6px; cursor: pointer; transition: background 0.1s, color 0.1s; border: 0; background: transparent; text-align: left; }
+.vella-html-runtime .dd-item:hover { background: var(--gray-100); color: var(--gray-900); }
+.vella-html-runtime .dd-item span:first-child { width: 14px; }
+
+.vella-html-runtime .saved-views-panel { display: flex; align-items: center; gap: 12px; padding: 10px 20px 4px; background: var(--bg); flex-shrink: 0; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--gray-300) transparent; }
+.vella-html-runtime .saved-views-panel::-webkit-scrollbar { height: 6px; }
+.vella-html-runtime .saved-views-panel::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 999px; }
+.vella-html-runtime .saved-views-left { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; min-width: max-content; overflow: visible; }
+.vella-html-runtime .saved-view-btn { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; height: 30px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--gray-200); background: var(--white); color: var(--gray-600); font-size: 12px; font-weight: 650; cursor: pointer; white-space: nowrap; transition: background .12s, border-color .12s, color .12s, box-shadow .12s; }
+.vella-html-runtime .saved-view-btn:hover { border-color: var(--gray-300); color: var(--gray-900); }
+.vella-html-runtime .saved-view-btn.active { background: var(--gray-900); border-color: var(--gray-900); color: var(--white); box-shadow: 0 8px 18px rgba(15,23,42,.12); }
+.vella-html-runtime .saved-view-count { font-size: 10.5px; opacity: .68; font-feature-settings: "tnum"; }
+.vella-html-runtime .saved-views-side { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-start; gap: 10px; min-width: max-content; }
+.vella-html-runtime .saved-views-meta { min-width: 0; white-space: nowrap; text-align: left; font-size: 11.5px; color: var(--gray-500); line-height: 1.35; }
+.vella-html-runtime .saved-views-meta b { color: var(--gray-800); font-weight: 700; }
+.vella-html-runtime .density-toggle { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--gray-200); background: var(--white); border-radius: 9px; }
+.vella-html-runtime .density-btn { height: 24px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--gray-500); font-size: 11.5px; font-weight: 650; cursor: pointer; font-family: inherit; }
+.vella-html-runtime .density-btn.active { background: var(--gray-900); color: var(--white); }
+.vella-html-runtime.density-compact .toolbar { padding: 5px 12px; gap: 4px; }
+.vella-html-runtime.density-compact .search { min-width: 176px; padding: 3px 8px; font-size: 12px; border-radius: 7px; }
+.vella-html-runtime.density-compact .search input { font-size: 12px; }
+.vella-html-runtime.density-compact .chip { padding: 2px 7px; font-size: 11px; gap: 3px; }
+.vella-html-runtime.density-compact .saved-views-panel { padding: 7px 16px 3px; gap: 8px; }
+.vella-html-runtime.density-compact .saved-view-btn { height: 25px; padding: 0 8px; font-size: 11px; gap: 5px; }
+.vella-html-runtime.density-compact .saved-views-meta { min-width: 180px; font-size: 10.5px; line-height: 1.2; }
+.vella-html-runtime.density-compact .filter-line { padding: 5px 12px 6px; gap: 4px; font-size: 11.5px; overflow-x: auto; }
+.vella-html-runtime.density-compact .filter-line button { height: 21px; padding: 0 7px; font-size: 11px; }
+.vella-html-runtime.density-compact .table-wrap { padding: 0 8px 6px; }
+.vella-html-runtime.density-compact table { min-width: 1320px; font-size: 11.5px; border-radius: 8px; }
+.vella-html-runtime.density-compact th { padding: 5px 6px; font-size: 9px; letter-spacing: 0.025em; }
+.vella-html-runtime.density-compact td { padding: 3px 6px; line-height: 1.14; }
+.vella-html-runtime.density-compact th:first-child,
+.vella-html-runtime.density-compact td:first-child { width: 30px; padding-left: 9px; }
+.vella-html-runtime.density-compact #mainTable th:nth-child(2),
+.vella-html-runtime.density-compact #mainTable td:nth-child(2) { left: 30px; }
+.vella-html-runtime.density-compact .cb { width: 13px; height: 13px; border-radius: 3px; font-size: 7px; }
+.vella-html-runtime.density-compact .sku-wrap { gap: 6px; }
+.vella-html-runtime.density-compact .thumb { width: 24px; height: 30px; border-radius: 5px; }
+.vella-html-runtime.density-compact .shirt-shape { width: 16px; height: 21px; border-width: 1.3px; border-radius: 6px 6px 3px 3px; }
+.vella-html-runtime.density-compact .sku-row { gap: 2px; }
+.vella-html-runtime.density-compact .sku { font-size: 10px; }
+.vella-html-runtime.density-compact .sku-wb { width: 13px; height: 13px; font-size: 8px; border-radius: 3px; opacity: .65; }
+.vella-html-runtime.density-compact .sku-size,
+.vella-html-runtime.density-compact .metric-sub,
+.vella-html-runtime.density-compact .price-cell span { font-size: 9.8px; margin-top: 1px; }
+.vella-html-runtime.density-compact .status { gap: 3px; padding: 1px 5px; font-size: 10px; }
+.vella-html-runtime.density-compact .abc { min-width: 22px; height: 16px; padding: 0 5px; border-radius: 5px; font-size: 9.5px; }
+.vella-html-runtime.density-compact .price-cell b { font-size: 12.5px; }
+.vella-html-runtime.density-compact .bars { width: 16px; height: 11px; margin-left: 3px; }
+.vella-html-runtime.density-compact .act { width: 21px; height: 21px; border-radius: 4px; }
+.vella-html-runtime.density-compact .pagination { padding: 7px 16px; gap: 6px; font-size: 11.5px; }
+.vella-html-runtime.density-compact .page-btn { min-width: 24px; height: 24px; padding: 0 6px; font-size: 11px; }
+
+.vella-html-runtime .filter-line { display: flex; align-items: center; gap: 7px; padding: 12px 20px 13px; color: var(--gray-600); border-bottom: 1px solid var(--gray-100); }
+.vella-html-runtime .filter-line button { height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--gray-200); background: var(--brand-light); color: var(--brand); cursor: pointer; }
+.vella-html-runtime .filter-line .filter-reset { background: transparent; color: var(--gray-600); border-color: transparent; }
+
+.vella-html-runtime .table-wrap { flex: 1; overflow: auto; padding: 0 20px 12px; }
+.vella-html-runtime .table-wrap::-webkit-scrollbar { width: 7px; height: 7px; }
+.vella-html-runtime .table-wrap::-webkit-scrollbar-thumb { background: var(--gray-200); border-radius: 10px; }
+.vella-html-runtime table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--white); border-radius: 10px; overflow: hidden; border: 1px solid var(--gray-200); font-size: 13px; min-width: 1680px; }
+.vella-html-runtime thead { position: sticky; top: 0; z-index: 5; }
+.vella-html-runtime thead tr { background: var(--gray-50); }
+.vella-html-runtime th { padding: 10px 10px; font-size: 10.5px; font-weight: 600; color: var(--gray-500); letter-spacing: 0.05em; text-transform: uppercase; white-space: nowrap; text-align: left; border-bottom: 1px solid var(--gray-200); position: relative; cursor: pointer; user-select: none; }
+.vella-html-runtime th:hover { background: var(--gray-100); color: var(--gray-700); }
+.vella-html-runtime th.num,
+.vella-html-runtime td.num { text-align: right; }
+.vella-html-runtime .sort-rank { display: inline-flex; align-items: center; justify-content: center; min-width: 15px; height: 15px; margin-left: 4px; border-radius: 999px; background: var(--brand); color: var(--white); font-size: 9px; font-weight: 800; vertical-align: middle; }
+.vella-html-runtime th:first-child { width: 36px; padding-left: 12px; }
+.vella-html-runtime #mainTable th .tip-i { margin-left: 4px; vertical-align: middle; }
+.vella-html-runtime #mainTable th:nth-child(3),
+.vella-html-runtime #mainTable td:nth-child(3) { min-width: 82px; }
+.vella-html-runtime #mainTable th:nth-child(4),
+.vella-html-runtime #mainTable td:nth-child(4) { min-width: 126px; }
+.vella-html-runtime #mainTable th:nth-child(5),
+.vella-html-runtime #mainTable td:nth-child(5) { min-width: 66px; }
+.vella-html-runtime #mainTable th:nth-child(6),
+.vella-html-runtime #mainTable td:nth-child(6) { min-width: 76px; }
+.vella-html-runtime.density-compact #mainTable th:nth-child(3),
+.vella-html-runtime.density-compact #mainTable td:nth-child(3) { min-width: 72px; }
+.vella-html-runtime.density-compact #mainTable th:nth-child(4),
+.vella-html-runtime.density-compact #mainTable td:nth-child(4) { min-width: 98px; }
+.vella-html-runtime.density-compact #mainTable th:nth-child(5),
+.vella-html-runtime.density-compact #mainTable td:nth-child(5) { min-width: 54px; }
+.vella-html-runtime.density-compact #mainTable th:nth-child(6),
+.vella-html-runtime.density-compact #mainTable td:nth-child(6) { min-width: 62px; }
+.vella-html-runtime #mainTable th:nth-child(1),
+.vella-html-runtime #mainTable td:nth-child(1) { position: sticky; left: 0; z-index: 4; background: inherit; }
+.vella-html-runtime #mainTable th:nth-child(2),
+.vella-html-runtime #mainTable td:nth-child(2) { position: sticky; left: 36px; z-index: 4; background: inherit; }
+.vella-html-runtime #mainTable th:nth-child(1),
+.vella-html-runtime #mainTable th:nth-child(2) { z-index: 7; background: var(--gray-50); }
+.vella-html-runtime #mainTable tbody tr td:nth-child(1),
+.vella-html-runtime #mainTable tbody tr td:nth-child(2) { background: var(--white); }
+.vella-html-runtime #mainTable tbody tr.sel td:nth-child(1),
+.vella-html-runtime #mainTable tbody tr.sel td:nth-child(2) { background: var(--brand-light); }
+.vella-html-runtime tbody tr { border-bottom: 1px solid var(--gray-100); transition: background 0.07s; }
+.vella-html-runtime tbody tr:hover { background: var(--gray-50); }
+.vella-html-runtime tbody tr.sel { background: var(--brand-light); }
+.vella-html-runtime tbody tr.sel:hover { background: #DBEAFE; }
+.vella-html-runtime tbody tr td { border-bottom: 1px solid var(--gray-100); }
+.vella-html-runtime td { padding: 9px 10px; vertical-align: middle; }
+.vella-html-runtime td:first-child { padding-left: 12px; }
+.vella-html-runtime .cb { width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--gray-300); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; transition: all 0.1s; background: var(--white); color: var(--white); font-size: 8px; font-weight: 800; padding: 0; }
+.vella-html-runtime .cb:hover { border-color: var(--brand); }
+.vella-html-runtime .cb.on,
+.vella-html-runtime .cb.indet { background: var(--brand); border-color: var(--brand); color: white; }
+.vella-html-runtime .cb.indet::after { content: ''; width: 7px; height: 1.5px; background: white; }
+.vella-html-runtime .sku-wrap { display: flex; align-items: center; gap: 9px; }
+.vella-html-runtime .thumb { width: 44px; height: 56px; border-radius: 6px; flex-shrink: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; position: relative; }
+.vella-html-runtime .thumb-w { background: #F0F2F5; }
+.vella-html-runtime .thumb-b { background: #1B2333; }
+.vella-html-runtime .shirt-shape { width: 28px; height: 34px; border: 2px solid #D8DEE8; border-radius: 9px 9px 4px 4px; background: rgba(255,255,255,.65); display: block; }
+.vella-html-runtime .thumb-b .shirt-shape { background: #263144; border-color: #334155; }
+.vella-html-runtime .sku-row { display: flex; align-items: center; gap: 4px; }
+.vella-html-runtime .sku { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; font-weight: 600; line-height: normal; color: var(--brand); cursor: pointer; border: 0; background: transparent; padding: 0; text-decoration: none; }
+.vella-html-runtime .sku:hover { text-decoration: underline; }
+.vella-html-runtime .sku-wb { width: 16px; height: 16px; border-radius: 4px; background: #CB11AB; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; opacity: 0; transition: opacity 0.1s; cursor: pointer; text-decoration: none; color: white; font-size: 10px; }
+.vella-html-runtime tr:hover .sku-wb { opacity: 1; }
+.vella-html-runtime .sku-size { font-size: 11px; color: var(--gray-400); margin-top: 1px; font-family: 'JetBrains Mono', monospace; font-weight: 500; }
+.vella-html-runtime .wb-link { font-size: 13px; }
+.vella-html-runtime .status { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 500; padding: 3px 9px; border-radius: 40px; white-space: nowrap; }
+.vella-html-runtime .status .dot,
+.vella-html-runtime .promo::first-letter { color: currentColor; }
+.vella-html-runtime .s-loko { background: #D1FAE5; color: #065F46; }
+.vella-html-runtime .s-manual { background: var(--gray-100); color: var(--gray-500); }
+.vella-html-runtime .s-new { background: #EEF2FF; color: #3730A3; }
+.vella-html-runtime .abc { display: inline-flex; align-items: center; justify-content: center; min-width: 29px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 11.5px; font-weight: 700; }
+.vella-html-runtime .abc.ba,
+.vella-html-runtime .abc.aa { background: #DCFCE7; color: #166534; }
+.vella-html-runtime .abc.cc { background: #FEF3C7; color: #92400E; }
+.vella-html-runtime .promo { font-weight: 650; color: var(--gray-900); }
+.vella-html-runtime .promo.no { color: var(--gray-700); }
+.vella-html-runtime .promo.yes { color: #B45309; }
+.vella-html-runtime .price-cell { border: 0; background: transparent; text-align: right; cursor: pointer; color: var(--gray-900); padding: 0; }
+.vella-html-runtime .price-cell b { display: block; font-size: 14px; }
+.vella-html-runtime .price-cell span,
+.vella-html-runtime .metric-sub { display: block; font-size: 11px; color: var(--gray-400); margin-top: 2px; }
+.vella-html-runtime .bars { display: inline-block; width: 20px; height: 14px; margin-left: 5px; vertical-align: middle; background: repeating-linear-gradient(90deg, currentColor 0 3px, transparent 3px 6px); border-radius: 2px; }
+.vella-html-runtime .bars.blue { color: var(--brand); }
+.vella-html-runtime .bars.yellow { color: #FCD34D; }
+.vella-html-runtime .warn-tx { color: #D97706; }
+.vella-html-runtime .act { width: 24px; height: 24px; border-radius: 5px; border: 1px solid var(--gray-200); background: var(--white); display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--gray-400); transition: all 0.1s; }
+.vella-html-runtime .act:hover { background: var(--gray-50); color: var(--gray-700); border-color: var(--gray-300); }
+
+.vella-html-runtime .tip-i { width: 13px; height: 13px; border-radius: 50%; background: var(--gray-200); color: var(--gray-500); font-size: 8px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; line-height: 1; }
+
+.vella-html-runtime .pagination { display: flex; align-items: center; gap: 8px; padding: 10px 20px; background: var(--white); border-top: 1px solid var(--gray-150); flex-shrink: 0; font-size: 12.5px; color: var(--gray-500); }
+.vella-html-runtime .page-info b { color: var(--gray-800); font-weight: 600; }
+.vella-html-runtime .spacer { flex: 1; }
+.vella-html-runtime .page-jump { display: flex; gap: 3px; }
+.vella-html-runtime .page-btn { min-width: 28px; height: 28px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--gray-200); background: var(--white); color: var(--gray-700); cursor: pointer; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; justify-content: center; font-family: inherit; }
+.vella-html-runtime .page-btn:hover { background: var(--gray-50); border-color: var(--gray-300); }
+.vella-html-runtime .page-btn.active { background: var(--gray-900); color: white; border-color: var(--gray-900); }
+.vella-html-runtime .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.vella-html-runtime .bulk-bar,
+.bulk-bar {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--gray-900);
+  color: white;
+  border-radius: 12px;
+  padding: 8px 8px 8px 14px;
+  box-shadow: var(--shadow-xl);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+  z-index: 200;
+  white-space: nowrap;
+  width: max-content;
+  max-width: calc(100vw - 40px);
+}
+.bulk-bar.show { opacity: 1; pointer-events: all; transform: translateX(-50%) translateY(0); }
+.bulk-count { font-size: 13px; font-weight: 500; padding-right: 6px; border-right: 1px solid rgba(255,255,255,0.18); margin-right: 4px; }
+.bulk-count b { font-weight: 700; margin-right: 3px; }
+.bulk-btn { padding: 6px 10px; font-size: 12.5px; font-weight: 500; border-radius: 7px; border: none; background: transparent; color: white; cursor: pointer; transition: background 0.1s; display: inline-flex; align-items: center; gap: 5px; font-family: inherit; white-space: nowrap; flex-shrink: 0; }
+.bulk-btn:hover { background: rgba(255,255,255,0.12); }
+.bulk-btn.danger:hover { background: rgba(239,68,68,0.30); }
+.bulk-close { width: 28px; height: 28px; background: rgba(255,255,255,0.10); border-radius: 7px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: white; border: none; margin-left: 4px; }
+.bulk-close:hover { background: rgba(255,255,255,0.18); }
+
+.vella-html-runtime .drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 420px;
+  height: 100vh;
+  background: var(--white);
+  border-left: 1px solid var(--gray-200);
+  box-shadow: var(--shadow-xl);
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+}
+.vella-html-runtime .drawer-head { padding: 16px 18px; display: flex; align-items: flex-start; justify-content: space-between; border-bottom: 1px solid var(--gray-200); }
+.vella-html-runtime .drawer-head h2 { margin: 3px 0 0; font-size: 18px; }
+.vella-html-runtime .drawer-sku { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--brand); font-weight: 600; }
+.vella-html-runtime .drawer-tabs { display: flex; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--gray-100); overflow-x: auto; }
+.vella-html-runtime .drawer-tabs button { border: 0; background: transparent; color: var(--gray-500); padding: 7px 9px; border-radius: 7px; font-weight: 600; cursor: pointer; }
+.vella-html-runtime .drawer-tabs button.active { background: var(--gray-900); color: white; }
+.vella-html-runtime .drawer-body { padding: 14px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.vella-html-runtime .d-card { border: 1px solid var(--gray-200); border-radius: 12px; padding: 12px; background: var(--white); }
+.vella-html-runtime .d-card h3 { margin: 0 0 8px; font-size: 13px; color: var(--gray-900); }
+.vella-html-runtime .d-card p { margin: 6px 0; color: var(--gray-600); font-size: 12.5px; line-height: 1.45; }
+.vella-html-runtime .d-price-meta { color: var(--gray-500); font-size: 12px; }
+.vella-html-runtime .d-price-meta b { color: var(--gray-900); font-weight: 600; font-family: 'JetBrains Mono', monospace; margin-left: 4px; }
+.vella-html-runtime .d-price-edit { margin-top: 10px; padding: 6px 11px; font-size: 12px; background: var(--white); border: 1px solid var(--gray-200); border-radius: 7px; cursor: pointer; color: var(--gray-700); font-family: inherit; font-weight: 500; }
+.vella-html-runtime .audit-diff { display: inline-flex; align-items: center; gap: 5px; margin-top: 7px; padding: 3px 7px; border-radius: 6px; background: var(--gray-50); color: var(--gray-600); font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+
+.vella-html-runtime .modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15,23,42,.36);
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.vella-html-runtime .modal { width: min(680px, calc(100vw - 40px)); background: white; border-radius: 14px; box-shadow: var(--shadow-xl); border: 1px solid var(--gray-200); overflow: hidden; }
+.vella-html-runtime .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--gray-200); }
+.vella-html-runtime .modal-head h2 { font-size: 16px; margin: 0; }
+.vella-html-runtime .modal-body { padding: 16px; color: var(--gray-600); }
+.vella-html-runtime .modal-field { display: flex; flex-direction: column; gap: 7px; font-weight: 650; color: var(--gray-700); }
+.vella-html-runtime .modal-field input { height: 36px; border: 1.5px solid var(--brand); border-radius: 8px; padding: 0 10px; outline: 0; }
+.vella-html-runtime .preview-table { min-width: 0; margin-top: 12px; }
+.vella-html-runtime .preview-table th,
+.vella-html-runtime .preview-table td { padding: 8px 10px; }
+.vella-html-runtime .modal-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--gray-100); }
+.vh-toast { position: fixed; right: 28px; bottom: 32px; background: var(--gray-900); color: white; border-radius: 10px; box-shadow: var(--shadow-xl); padding: 12px 16px; z-index: 500; animation: vhToast 3.2s ease both; }
+@keyframes vhToast {
+  0% { opacity: 0; transform: translateY(8px); }
+  8%, 88% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(8px); }
+}
+
+@media (max-width: 900px) {
+  .vella-html-runtime .sidebar { width: 64px; }
+  .vella-html-runtime .sidebar .logo-full,
+  .vella-html-runtime .sidebar .nav-label,
+  .vella-html-runtime .sidebar .nav-badge,
+  .vella-html-runtime .sidebar .chevron,
+  .vella-html-runtime .sidebar .nav-sub { display: none !important; }
+  .vella-html-runtime .sidebar .logo-icon-only { display: block; }
+  .vella-html-runtime .topbar-actions { overflow-x: auto; }
+}

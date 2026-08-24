@@ -1,0 +1,1477 @@
+openapi: 3.1.0
+info:
+  title: Vella WB API contracts
+  version: 0.19.05-runtime-boundary
+  description: Frontend-first OpenAPI artifact for 19.05 WB contract delta. Draft
+    until backend review confirms WB source availability.
+servers:
+  - url: /
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+          required:
+            - code
+            - message
+      required:
+        - error
+    PnlReportResponse:
+      type: object
+      properties:
+        sourceStatus:
+          type: string
+          enum: &a1
+            - fresh
+            - partial
+            - stale
+            - blocked
+            - unknown
+        confidence:
+          type: string
+          enum: &a2
+            - high
+            - medium
+            - low
+            - blocked
+        blockerIds:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        sourceEvidence:
+          type: array
+          items:
+            type: object
+            properties:
+              sourceId:
+                type: string
+                minLength: 1
+              sourceType:
+                type: string
+                enum: &a3
+                  - wb_api
+                  - wb_excel
+                  - manual
+                  - derived
+                  - mock
+              sourceName:
+                type: string
+                minLength: 1
+              lastSyncedAt:
+                type:
+                  - string
+                  - "null"
+                format: date-time
+              freshnessTtlMinutes:
+                type:
+                  - integer
+                  - "null"
+                exclusiveMinimum: 0
+              fieldsUsed:
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+            required:
+              - sourceId
+              - sourceType
+              - sourceName
+              - lastSyncedAt
+              - freshnessTtlMinutes
+              - fieldsUsed
+        calculatedAt:
+          type: string
+          format: date-time
+        period:
+          type: object
+          properties:
+            dateFrom:
+              type: string
+              format: date
+            dateTo:
+              type: string
+              format: date
+          required:
+            - dateFrom
+            - dateTo
+        reportState:
+          type: string
+          enum:
+            - operative
+            - preliminary
+            - final
+            - blocked
+        groupBy:
+          type: string
+          enum: &a4
+            - sku
+            - brand
+            - manager
+            - category
+            - status
+            - warehouse
+            - campaign
+        totals:
+          type: object
+          properties:
+            revenueKopecks:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+            netProfitKopecks:
+              type:
+                - integer
+                - "null"
+            marginPct:
+              type:
+                - number
+                - "null"
+            sourceStatus:
+              type: string
+              enum: *a1
+            confidence:
+              type: string
+              enum: *a2
+          required:
+            - revenueKopecks
+            - netProfitKopecks
+            - marginPct
+            - sourceStatus
+            - confidence
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              rowId:
+                type: string
+                minLength: 1
+              label:
+                type: string
+                minLength: 1
+              brandId:
+                type:
+                  - string
+                  - "null"
+              managerId:
+                type:
+                  - string
+                  - "null"
+              skuId:
+                type:
+                  - string
+                  - "null"
+              revenueKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              cogsKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              commissionKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              logisticsKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              storageKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              adSpendKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              taxKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              overheadKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              netProfitKopecks:
+                type:
+                  - integer
+                  - "null"
+              marginPct:
+                type:
+                  - number
+                  - "null"
+              sourceStatus:
+                type: string
+                enum: *a1
+              confidence:
+                type: string
+                enum: *a2
+            required:
+              - rowId
+              - label
+              - brandId
+              - managerId
+              - skuId
+              - revenueKopecks
+              - cogsKopecks
+              - commissionKopecks
+              - logisticsKopecks
+              - storageKopecks
+              - adSpendKopecks
+              - taxKopecks
+              - overheadKopecks
+              - netProfitKopecks
+              - marginPct
+              - sourceStatus
+              - confidence
+        fieldMapping:
+          type: array
+          items:
+            type: object
+            properties:
+              metricId:
+                type: string
+                minLength: 1
+              metricLabel:
+                type: string
+                minLength: 1
+              sourceId:
+                type: string
+                minLength: 1
+              sourceField:
+                type:
+                  - string
+                  - "null"
+                minLength: 1
+              formula:
+                type: string
+                minLength: 1
+              fallback:
+                type:
+                  - string
+                  - "null"
+                minLength: 1
+              blockerIds:
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+            required:
+              - metricId
+              - metricLabel
+              - sourceId
+              - sourceField
+              - formula
+              - fallback
+              - blockerIds
+        manualCosts:
+          type: array
+          items:
+            type: object
+            properties:
+              costId:
+                type: string
+                minLength: 1
+              label:
+                type: string
+                minLength: 1
+              amountKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              allocationBase:
+                type: string
+                enum:
+                  - sku
+                  - brand
+                  - manager
+                  - marketplace
+                  - manual
+                  - unknown
+              sourceStatus:
+                type: string
+                enum: *a1
+              blockerIds:
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+            required:
+              - costId
+              - label
+              - amountKopecks
+              - allocationBase
+              - sourceStatus
+              - blockerIds
+        dayAllocation:
+          type: object
+          properties:
+            allocationDateField:
+              type:
+                - string
+                - "null"
+              minLength: 1
+            expenseDateField:
+              type:
+                - string
+                - "null"
+              minLength: 1
+            rule:
+              type: string
+              minLength: 1
+            sourceStatus:
+              type: string
+              enum: *a1
+            blockerIds:
+              type: array
+              items:
+                type: string
+                minLength: 1
+          required:
+            - allocationDateField
+            - expenseDateField
+            - rule
+            - sourceStatus
+            - blockerIds
+      required:
+        - sourceStatus
+        - confidence
+        - blockerIds
+        - sourceEvidence
+        - calculatedAt
+        - period
+        - reportState
+        - groupBy
+        - totals
+        - rows
+        - fieldMapping
+        - manualCosts
+        - dayAllocation
+    AdsPerformanceResponse:
+      type: object
+      properties:
+        sourceStatus:
+          type: string
+          enum: *a1
+        confidence:
+          type: string
+          enum: *a2
+        blockerIds:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        sourceEvidence:
+          type: array
+          items:
+            type: object
+            properties:
+              sourceId:
+                type: string
+                minLength: 1
+              sourceType:
+                type: string
+                enum: *a3
+              sourceName:
+                type: string
+                minLength: 1
+              lastSyncedAt:
+                type:
+                  - string
+                  - "null"
+                format: date-time
+              freshnessTtlMinutes:
+                type:
+                  - integer
+                  - "null"
+                exclusiveMinimum: 0
+              fieldsUsed:
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+            required:
+              - sourceId
+              - sourceType
+              - sourceName
+              - lastSyncedAt
+              - freshnessTtlMinutes
+              - fieldsUsed
+        calculatedAt:
+          type: string
+          format: date-time
+        period:
+          type: object
+          properties:
+            dateFrom:
+              type: string
+              format: date
+            dateTo:
+              type: string
+              format: date
+          required:
+            - dateFrom
+            - dateTo
+        groupBy:
+          type: string
+          enum: *a4
+        totals:
+          type: object
+          properties:
+            adSpendKopecks:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+            impressions:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+            clicks:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+            cartAdds:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+            ordersCount:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+            ordersKopecks:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+            drrPct:
+              type:
+                - number
+                - "null"
+            romiPct:
+              type:
+                - number
+                - "null"
+            roiPct:
+              type:
+                - number
+                - "null"
+          required:
+            - adSpendKopecks
+            - impressions
+            - clicks
+            - cartAdds
+            - ordersCount
+            - ordersKopecks
+            - drrPct
+            - romiPct
+            - roiPct
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              rowId:
+                type: string
+                minLength: 1
+              campaignId:
+                type:
+                  - string
+                  - "null"
+              skuId:
+                type:
+                  - string
+                  - "null"
+              brandId:
+                type:
+                  - string
+                  - "null"
+              managerId:
+                type:
+                  - string
+                  - "null"
+              adSpendKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              impressions:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              clicks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              cartAdds:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              ordersCount:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              ordersKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              drrPct:
+                type:
+                  - number
+                  - "null"
+              romiPct:
+                type:
+                  - number
+                  - "null"
+              roiPct:
+                type:
+                  - number
+                  - "null"
+              attributionLevel:
+                type: string
+                enum: &a5
+                  - exact_sku
+                  - campaign_sku
+                  - campaign_only
+                  - unknown
+              confidence:
+                type: string
+                enum: *a2
+            required:
+              - rowId
+              - campaignId
+              - skuId
+              - brandId
+              - managerId
+              - adSpendKopecks
+              - impressions
+              - clicks
+              - cartAdds
+              - ordersCount
+              - ordersKopecks
+              - drrPct
+              - romiPct
+              - roiPct
+              - attributionLevel
+              - confidence
+        attributionPolicy:
+          type: object
+          properties:
+            allowedSkuLevels:
+              type: array
+              items:
+                type: string
+                enum: *a5
+            campaignOnlyCanAllocateToSkuPnl:
+              type: boolean
+            notes:
+              type: array
+              items:
+                type: string
+                minLength: 1
+          required:
+            - allowedSkuLevels
+            - campaignOnlyCanAllocateToSkuPnl
+            - notes
+      required:
+        - sourceStatus
+        - confidence
+        - blockerIds
+        - sourceEvidence
+        - calculatedAt
+        - period
+        - groupBy
+        - totals
+        - rows
+        - attributionPolicy
+    RnpReportResponse:
+      type: object
+      properties:
+        sourceStatus:
+          type: string
+          enum: *a1
+        confidence:
+          type: string
+          enum: *a2
+        blockerIds:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        sourceEvidence:
+          type: array
+          items:
+            type: object
+            properties:
+              sourceId:
+                type: string
+                minLength: 1
+              sourceType:
+                type: string
+                enum: *a3
+              sourceName:
+                type: string
+                minLength: 1
+              lastSyncedAt:
+                type:
+                  - string
+                  - "null"
+                format: date-time
+              freshnessTtlMinutes:
+                type:
+                  - integer
+                  - "null"
+                exclusiveMinimum: 0
+              fieldsUsed:
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+            required:
+              - sourceId
+              - sourceType
+              - sourceName
+              - lastSyncedAt
+              - freshnessTtlMinutes
+              - fieldsUsed
+        calculatedAt:
+          type: string
+          format: date-time
+        period:
+          type: object
+          properties:
+            dateFrom:
+              type: string
+              format: date
+            dateTo:
+              type: string
+              format: date
+          required:
+            - dateFrom
+            - dateTo
+        groupBy:
+          type: string
+          enum: *a4
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              rowId:
+                type: string
+                minLength: 1
+              label:
+                type: string
+                minLength: 1
+              skuId:
+                type:
+                  - string
+                  - "null"
+              brandId:
+                type:
+                  - string
+                  - "null"
+              managerId:
+                type:
+                  - string
+                  - "null"
+              adSpendKopecks:
+                type:
+                  - integer
+                  - "null"
+                minimum: 0
+              drrPct:
+                type:
+                  - number
+                  - "null"
+              roiPct:
+                type:
+                  - number
+                  - "null"
+              marginPct:
+                type:
+                  - number
+                  - "null"
+              sourceStatus:
+                type: string
+                enum: *a1
+              confidence:
+                type: string
+                enum: *a2
+            required:
+              - rowId
+              - label
+              - skuId
+              - brandId
+              - managerId
+              - adSpendKopecks
+              - drrPct
+              - roiPct
+              - marginPct
+              - sourceStatus
+              - confidence
+        adSpendKopecks:
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        drrPct:
+          type:
+            - number
+            - "null"
+        formulaNotes:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        adsSourceStatus:
+          type: string
+          enum: *a1
+      required:
+        - sourceStatus
+        - confidence
+        - blockerIds
+        - sourceEvidence
+        - calculatedAt
+        - period
+        - groupBy
+        - rows
+        - adSpendKopecks
+        - drrPct
+        - formulaNotes
+        - adsSourceStatus
+    AbcReportResponse:
+      type: object
+      properties:
+        sourceStatus:
+          type: string
+          enum: *a1
+        confidence:
+          type: string
+          enum: *a2
+        blockerIds:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        sourceEvidence:
+          type: array
+          items:
+            type: object
+            properties:
+              sourceId:
+                type: string
+                minLength: 1
+              sourceType:
+                type: string
+                enum: *a3
+              sourceName:
+                type: string
+                minLength: 1
+              lastSyncedAt:
+                type:
+                  - string
+                  - "null"
+                format: date-time
+              freshnessTtlMinutes:
+                type:
+                  - integer
+                  - "null"
+                exclusiveMinimum: 0
+              fieldsUsed:
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+            required:
+              - sourceId
+              - sourceType
+              - sourceName
+              - lastSyncedAt
+              - freshnessTtlMinutes
+              - fieldsUsed
+        calculatedAt:
+          type: string
+          format: date-time
+        period:
+          type: object
+          properties:
+            dateFrom:
+              type: string
+              format: date
+            dateTo:
+              type: string
+              format: date
+          required:
+            - dateFrom
+            - dateTo
+        filteredSummary:
+          type: object
+          properties:
+            filterHash:
+              type: string
+              minLength: 1
+            skuCount:
+              type: integer
+              minimum: 0
+            locomotiveCount:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+            ordersCount:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+            ordersKopecks:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+            profitKopecks:
+              type:
+                - integer
+                - "null"
+            marginPct:
+              type:
+                - number
+                - "null"
+            adSpendKopecks:
+              type:
+                - integer
+                - "null"
+              minimum: 0
+            sourceStatus:
+              type: string
+              enum: *a1
+            confidence:
+              type: string
+              enum: *a2
+          required:
+            - filterHash
+            - skuCount
+            - locomotiveCount
+            - ordersCount
+            - ordersKopecks
+            - profitKopecks
+            - marginPct
+            - adSpendKopecks
+            - sourceStatus
+            - confidence
+        rows:
+          type: array
+          items: {}
+      required:
+        - sourceStatus
+        - confidence
+        - blockerIds
+        - sourceEvidence
+        - calculatedAt
+        - period
+        - filteredSummary
+        - rows
+    PriceGuardResponse:
+      type: object
+      properties:
+        articleId:
+          type: string
+          minLength: 1
+        currentPriceKopecks:
+          type:
+            - integer
+            - "null"
+          exclusiveMinimum: 0
+        buyerPriceKopecks:
+          type:
+            - integer
+            - "null"
+          exclusiveMinimum: 0
+        sppSnapshot:
+          type:
+            - object
+            - "null"
+          properties:
+            sourceStatus:
+              type: string
+              enum: *a1
+            sppPct:
+              type:
+                - number
+                - "null"
+              minimum: 0
+              maximum: 100
+            buyerPriceKopecks:
+              type:
+                - integer
+                - "null"
+              exclusiveMinimum: 0
+            capturedAt:
+              type:
+                - string
+                - "null"
+              format: date-time
+            blockerIds:
+              type: array
+              items:
+                type: string
+                minLength: 1
+          required:
+            - sourceStatus
+            - sppPct
+            - buyerPriceKopecks
+            - capturedAt
+            - blockerIds
+        recommendedSellerPriceKopecks:
+          type:
+            - integer
+            - "null"
+          exclusiveMinimum: 0
+        lastKnownGoodPriceKopecks:
+          type:
+            - integer
+            - "null"
+          exclusiveMinimum: 0
+        canApply:
+          type: boolean
+        blockedReason:
+          type:
+            - string
+            - "null"
+        freezeState:
+          type: string
+          enum:
+            - none
+            - frozen
+            - requires_review
+            - source_blocked
+        guardTriggers:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum:
+                  - stock_jump
+                  - spp_jump
+                  - cogs_jump
+                  - seller_price_jump
+                  - source_stale
+              severity:
+                type: string
+                enum:
+                  - info
+                  - warning
+                  - blocker
+              observedValue:
+                anyOf:
+                  - type: number
+                  - type: string
+                  - type: "null"
+              previousValue:
+                anyOf:
+                  - type: number
+                  - type: string
+                  - type: "null"
+              threshold:
+                anyOf:
+                  - type: number
+                  - type: string
+                  - type: "null"
+              message:
+                type: string
+                minLength: 1
+            required:
+              - type
+              - severity
+              - observedValue
+              - previousValue
+              - threshold
+              - message
+        sourceEvidence:
+          type: array
+          items:
+            type: object
+            properties:
+              sourceId:
+                type: string
+                minLength: 1
+              sourceType:
+                type: string
+                enum: *a3
+              sourceName:
+                type: string
+                minLength: 1
+              lastSyncedAt:
+                type:
+                  - string
+                  - "null"
+                format: date-time
+              freshnessTtlMinutes:
+                type:
+                  - integer
+                  - "null"
+                exclusiveMinimum: 0
+              fieldsUsed:
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+            required:
+              - sourceId
+              - sourceType
+              - sourceName
+              - lastSyncedAt
+              - freshnessTtlMinutes
+              - fieldsUsed
+        blockerIds:
+          type: array
+          items:
+            type: string
+            minLength: 1
+      required:
+        - articleId
+        - currentPriceKopecks
+        - buyerPriceKopecks
+        - sppSnapshot
+        - recommendedSellerPriceKopecks
+        - lastKnownGoodPriceKopecks
+        - canApply
+        - blockedReason
+        - freezeState
+        - guardTriggers
+        - sourceEvidence
+        - blockerIds
+    AiReviewApproval:
+      type: object
+      properties:
+        reviewId:
+          type: string
+          minLength: 1
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        draftId:
+          type:
+            - string
+            - "null"
+        approvalState:
+          type: string
+          enum:
+            - not_required
+            - required
+            - approved
+            - rejected
+            - expired
+        approvalActorId:
+          type:
+            - string
+            - "null"
+          minLength: 1
+        approvedAt:
+          type:
+            - string
+            - "null"
+          format: date-time
+        externalSendAllowed:
+          type: boolean
+        sendState:
+          type: string
+          enum:
+            - draft_only
+            - ready_to_send
+            - sent
+            - blocked
+        brandVoiceId:
+          type:
+            - string
+            - "null"
+        promptTraceId:
+          type:
+            - string
+            - "null"
+        cacheMetrics:
+          type:
+            - object
+            - "null"
+          properties:
+            cachedTokens:
+              type: integer
+              minimum: 0
+            hitRatePct:
+              type: number
+              minimum: 0
+              maximum: 100
+          required:
+            - cachedTokens
+            - hitRatePct
+        auditEvidence:
+          type: array
+          items:
+            type: object
+            properties:
+              sourceId:
+                type: string
+                minLength: 1
+              sourceType:
+                type: string
+                enum: *a3
+              sourceName:
+                type: string
+                minLength: 1
+              lastSyncedAt:
+                type:
+                  - string
+                  - "null"
+                format: date-time
+              freshnessTtlMinutes:
+                type:
+                  - integer
+                  - "null"
+                exclusiveMinimum: 0
+              fieldsUsed:
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+            required:
+              - sourceId
+              - sourceType
+              - sourceName
+              - lastSyncedAt
+              - freshnessTtlMinutes
+              - fieldsUsed
+      required:
+        - reviewId
+        - rating
+        - draftId
+        - approvalState
+        - approvalActorId
+        - approvedAt
+        - externalSendAllowed
+        - sendState
+        - brandVoiceId
+        - promptTraceId
+        - cacheMetrics
+        - auditEvidence
+  parameters: {}
+paths:
+  /api/v1/wb-reports/pnl:
+    get:
+      operationId: wbReportsGetPnl
+      summary: Get WB P&L report
+      description: "19.05 contract: P&L can be operative/preliminary/blocked; final
+        state is forbidden while source blockers remain."
+      parameters:
+        - schema:
+            type: string
+            format: date
+          required: false
+          name: dateFrom
+          in: query
+        - schema:
+            type: string
+            format: date
+          required: false
+          name: dateTo
+          in: query
+        - schema:
+            type: string
+            enum:
+              - operational
+              - financial
+          required: false
+          name: source
+          in: query
+        - schema:
+            type: string
+            enum:
+              - sku
+              - brand
+              - manager
+              - category
+              - status
+          required: false
+          name: groupBy
+          in: query
+      responses:
+        "200":
+          description: P&L report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PnlReportResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/wb-reports/ads/performance:
+    get:
+      operationId: wbReportsGetAdsPerformance
+      summary: Get WB Ads performance report
+      description: "19.05 contract: campaign-only spend stays campaign-level and must
+        not be presented as exact SKU P&L."
+      parameters:
+        - schema:
+            type: string
+            format: date
+          required: false
+          name: dateFrom
+          in: query
+        - schema:
+            type: string
+            format: date
+          required: false
+          name: dateTo
+          in: query
+        - schema:
+            type: string
+            enum: &a6
+              - sku
+              - brand
+              - manager
+              - category
+              - status
+              - warehouse
+              - campaign
+          required: false
+          name: groupBy
+          in: query
+      responses:
+        "200":
+          description: Ads performance report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdsPerformanceResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/wb-reports/rnp:
+    get:
+      operationId: wbReportsGetRnp
+      summary: Get WB RNP report
+      description: "19.05 contract: DRR/formula and ads source blockers remain visible
+        until WB-02/WB-11 are closed."
+      parameters:
+        - schema:
+            type: string
+            format: date
+          required: false
+          name: dateFrom
+          in: query
+        - schema:
+            type: string
+            format: date
+          required: false
+          name: dateTo
+          in: query
+        - schema:
+            type: string
+            enum: *a6
+          required: false
+          name: groupBy
+          in: query
+      responses:
+        "200":
+          description: RNP report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RnpReportResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/wb-reports/abc:
+    get:
+      operationId: wbReportsGetAbc
+      summary: Get WB ABC report
+      description: "19.05 contract: response includes filteredSummary for the current
+        filter/group set."
+      parameters:
+        - schema:
+            type: string
+            format: date
+          required: false
+          name: dateFrom
+          in: query
+        - schema:
+            type: string
+            format: date
+          required: false
+          name: dateTo
+          in: query
+        - schema:
+            type: string
+            enum: *a6
+          required: false
+          name: groupBy
+          in: query
+      responses:
+        "200":
+          description: ABC report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AbcReportResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/wb-repricer/sku/{articleId}/price-guard:
+    get:
+      operationId: wbRepricerGetPriceGuard
+      summary: Get WB repricer price guard state
+      description: "19.05 contract: frontend displays backend guard state;
+        canApply=true is incompatible with unresolved SPP/source blockers."
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: articleId
+          in: path
+      responses:
+        "200":
+          description: Price guard state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PriceGuardResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+webhooks: {}

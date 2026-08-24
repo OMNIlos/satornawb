@@ -1,0 +1,122 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Unbounded:wght@700;800&family=JetBrains+Mono:wght@500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 30 10% 99%;             /* #FAFAF9 off-white как Attio */
+    --foreground: 30 5% 10%;              /* #1A1A18 near-black */
+
+    --card: 30 10% 99%;
+    --card-foreground: 30 5% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 30 5% 10%;
+
+    --primary: 236 74% 62%;              /* #5B6EE8 Attio purple-blue */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 30 10% 95%;
+    --secondary-foreground: 30 5% 10%;
+
+    --muted: 30 10% 96%;                 /* тёплый muted */
+    --muted-foreground: 30 5% 42%;       /* #6C6C6A warm gray */
+
+    --accent: 30 10% 95%;
+    --accent-foreground: 30 5% 10%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 30 7% 92%;                 /* #EBEBEA warm subtle border */
+    --input: 30 7% 92%;
+    --ring: 236 74% 62%;
+
+    --radius: 0.375rem;                  /* 6px — тighter, как Attio */
+
+    /* Production Vella sidebar: dark navigation in both themes */
+    --sidebar-background: 222 47% 11%; /* #0F172A, matches canonical WB shell */
+    --sidebar-foreground: 218 22% 74%;
+    --sidebar-primary: 226 87% 66%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 219 28% 17%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 220 34% 13%;
+    --sidebar-ring: 236 74% 62%;
+  }
+
+  .dark {
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 8%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 8%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 239 84% 67%;                /* indigo-500 ярче в dark */
+    --primary-foreground: 222 47% 11%;
+
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 25% 72%;     /* ~6.3:1 на dark bg, WCAG AA */
+
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 63% 50%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217 33% 17%;
+    --input: 217 33% 17%;
+    --ring: 239 84% 67%;
+
+    --sidebar-background: 222 47% 11%;      /* #0F172A, matches canonical WB shell */
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 239 84% 67%;
+    --sidebar-primary-foreground: 222 47% 11%;
+    --sidebar-accent: 217 33% 17%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 217 33% 17%;
+    --sidebar-ring: 239 84% 67%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    font-variant-numeric: tabular-nums;
+  }
+
+  button, a {
+    transition-property: color, background-color, border-color, opacity, box-shadow;
+    transition-duration: 150ms;
+    transition-timing-function: ease;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+from typing import Literal
+
+
+PermissionProfile = Literal["viewer", "settings_editor", "price_sender", "finance_viewer", "admin", "custom"]
+
+LEGACY_PROFILE_ALIASES: dict[str, PermissionProfile] = {
+    "admin": "admin",
+    "owner": "admin",
+    "sales": "price_sender",
+    "production": "settings_editor",
+    "viewer": "viewer",
+    "settings_editor": "settings_editor",
+    "price_sender": "price_sender",
+    "finance_viewer": "finance_viewer",
+    "custom": "custom",
+}
+
+PROFILE_PERMISSIONS: dict[PermissionProfile, frozenset[str]] = {
+    "viewer": frozenset(
+        {
+            "settings:read",
+            "audit:read",
+            "sync:read",
+            "reviews:read",
+            "cabinet:read",
+            "team:read",
+            "sessions:read",
+            "integrations:read",
+            "preferences:read",
+        }
+    ),
+    "settings_editor": frozenset(
+        {
+            "settings:read",
+            "settings:write",
+            "settings:submit",
+            "audit:read",
+            "sync:read",
+            "reviews:read",
+            "reviews:write",
+            "reviews:approve",
+            "cabinet:read",
+            "team:read",
+            "sessions:read",
+            "integrations:read",
+            "preferences:read",
+            "preferences:write",
+        }
+    ),
+    "price_sender": frozenset(
+        {
+            "settings:read",
+            "audit:read",
+            "sync:read",
+            "price:send",
+            "reviews:read",
+            "cabinet:read",
+            "team:read",
+            "sessions:read",
+            "integrations:read",
+            "preferences:read",
+            "preferences:write",
+        }
+    ),
+    "finance_viewer": frozenset(
+        {
+            "settings:read",
+            "audit:read",
+            "sync:read",
+            "finance:read",
+            "reviews:read",
+            "cabinet:read",
+            "team:read",
+            "sessions:read",
+            "integrations:read",
+            "preferences:read",
+        }
+    ),
+    "admin": frozenset(
+        {
+            "settings:read",
+            "settings:write",
+            "settings:submit",
+            "settings:activate",
+            "audit:read",
+            "audit:write",
+            "sync:read",
+            "sync:write",
+            "sync:run",
+            "price:send",
+            "finance:read",
+            "reviews:read",
+            "reviews:write",
+            "reviews:approve",
+            "reviews:send",
+            "cabinet:read",
+            "team:read",
+            "team:write",
+            "sessions:read",
+            "sessions:write",
+            "integrations:read",
+            "integrations:write",
+            "preferences:read",
+            "preferences:write",
+        }
+    ),
+    "custom": frozenset(),
+}
+
+
+def normalize_permission_profile(raw_profile: str) -> PermissionProfile:
+    profile = LEGACY_PROFILE_ALIASES.get(raw_profile.strip().lower())
+    if not profile:
+        raise ValueError(f"INVALID_PERMISSION_PROFILE:{raw_profile}")
+    return profile
+
+
+def permissions_from_profile(profile: str) -> frozenset[str]:
+    canonical = normalize_permission_profile(profile)
+    return PROFILE_PERMISSIONS[canonical]

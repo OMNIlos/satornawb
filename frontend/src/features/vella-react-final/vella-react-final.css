@@ -1,0 +1,947 @@
+.vella-final-root {
+  font-variant-numeric: tabular-nums;
+}
+
+.vella-final-root .vella-main {
+  background: var(--vella-bg);
+}
+
+.vella-final-root .vella-content {
+  background: var(--vella-bg);
+}
+
+.vella-final-root .vella-nav-button {
+  justify-content: flex-start;
+}
+
+.vella-final-root .vella-nav-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  color: #94a3b8;
+}
+
+.vella-final-root .vella-nav-count {
+  margin-left: auto;
+  min-width: 22px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .12);
+  display: inline-grid;
+  place-items: center;
+  font-size: 11px;
+}
+
+.vella-final-desktop {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.vella-final-mobile-fallback {
+  display: none;
+}
+
+.vella-final-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 0;
+  overflow: hidden;
+  border: 1px solid var(--vella-border);
+  border-radius: 8px;
+  background: var(--vella-panel);
+}
+
+.vella-final-root .stat {
+  min-width: 0;
+  padding: 13px 18px;
+  border-right: 1px solid var(--vella-border);
+}
+
+.vella-final-root .stat:last-child {
+  border-right: 0;
+}
+
+.vella-final-root .stat-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 5px;
+  color: var(--vella-muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.vella-final-root .stat-tip {
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: var(--vella-soft);
+  color: var(--vella-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: help;
+}
+
+.vella-final-root .stat-val {
+  color: var(--vella-text);
+  font-size: 21px;
+  font-weight: 750;
+  line-height: 1.05;
+  letter-spacing: 0;
+}
+
+.vella-final-root .stat-delta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  color: var(--vella-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.vella-final-root .stat-delta.up {
+  color: var(--green-tx);
+}
+
+.vella-final-root .stat-delta.down {
+  color: var(--red-tx);
+}
+
+.vella-final-root .stat-delta.neutral {
+  color: var(--vella-muted);
+}
+
+.vella-final-search {
+  min-width: 300px;
+}
+
+.vella-final-root .toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.vella-final-root .search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 300px;
+  flex: 0 0 300px;
+  padding: 6px 11px;
+  border: 1px solid var(--vella-border);
+  border-radius: 8px;
+  background: var(--vella-panel);
+  color: var(--vella-muted);
+  font-size: 13px;
+}
+
+.vella-final-root .search:focus-within {
+  border-color: var(--vella-brand);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .08);
+}
+
+.vella-final-root .search svg {
+  flex: 0 0 13px;
+}
+
+.vella-final-root .search input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--vella-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.vella-final-root .chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.vella-final-root .chips::-webkit-scrollbar {
+  display: none;
+}
+
+.vella-final-root .chip,
+.vella-final-root .btn {
+  border: 1px solid var(--vella-border);
+  background: var(--vella-panel);
+  color: var(--vella-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.vella-final-root .chip {
+  min-height: 30px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.vella-final-root .chip:hover,
+.vella-final-root .btn:hover {
+  border-color: #cbd5e1;
+  background: var(--vella-soft);
+  color: var(--vella-text);
+}
+
+.vella-final-root .chip.active,
+.vella-final-root .chip[aria-pressed="true"] {
+  border-color: #111827;
+  background: #111827;
+  color: #ffffff;
+}
+
+.vella-final-root .btn {
+  min-height: 32px;
+  padding: 6px 13px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.vella-final-root .btn-sm {
+  min-height: 28px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.vella-final-root .btn-ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+.vella-final-root .toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.vella-final-root .vella-final-period-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--vella-border);
+  border-radius: 9px;
+  background: var(--vella-soft);
+}
+
+.vella-final-root .vella-final-period-control button {
+  height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--vella-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.vella-final-root .vella-final-period-control button.active {
+  background: var(--vella-brand);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .12);
+}
+
+.vella-final-root .report-source-strip {
+  display: block;
+}
+
+.vella-final-root .source-state-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid var(--vella-border);
+  border-radius: 8px;
+  background: var(--vella-panel);
+}
+
+.vella-final-root .source-state-card.partial,
+.vella-final-root .source-state-card.warn {
+  border-color: rgba(245, 158, 11, .36);
+  background: #fffbeb;
+}
+
+.vella-final-root .source-state-card.fresh {
+  border-color: rgba(16, 185, 129, .28);
+  background: #f0fdf4;
+}
+
+.vella-final-root .source-state-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--vella-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+
+.vella-final-root .source-state-chip {
+  border: 1px solid var(--vella-border);
+  border-radius: 999px;
+  background: var(--vella-panel);
+  padding: 1px 7px;
+  text-transform: none;
+}
+
+.vella-final-root .source-state-title {
+  margin-top: 7px;
+  color: var(--vella-text);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.vella-final-root .source-state-meta {
+  margin-top: 4px;
+  color: var(--vella-muted);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.vella-final-root .vella-final-expense-control {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(245, 158, 11, .36);
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.vella-final-root .vella-final-control-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--vella-text);
+}
+
+.vella-final-root .vella-final-control-head b {
+  display: block;
+  margin-top: 3px;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.vella-final-root .vella-final-control-kicker {
+  color: var(--amber-tx);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: .02em;
+}
+
+.vella-final-root .vella-final-control-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.vella-final-root .vella-final-control-grid > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, .22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .72);
+}
+
+.vella-final-root .vella-final-control-grid span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--amber-tx);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.vella-final-root .vella-final-control-grid b {
+  color: var(--vella-text);
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.vella-final-root .report-filter-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--vella-border);
+  border-radius: 8px;
+  background: var(--vella-panel);
+  color: var(--vella-muted);
+  font-size: 12px;
+}
+
+.vella-final-root .report-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--vella-border);
+  border-radius: 8px;
+  background: var(--vella-panel);
+}
+
+.vella-final-root .report-table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+
+.vella-final-root .report-mid {
+  width: 100%;
+  min-width: 1320px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.vella-final-root .report-mid th,
+.vella-final-root .report-mid td {
+  height: 48px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--vella-border);
+  text-align: left;
+  vertical-align: middle;
+  font-size: 13px;
+}
+
+.vella-final-root .report-mid th {
+  background: var(--vella-soft);
+  color: var(--vella-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.vella-final-root .report-mid .num {
+  text-align: right;
+}
+
+.vella-final-root .report-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--vella-panel);
+  box-shadow: 1px 0 0 var(--vella-border);
+}
+
+.vella-final-root th.report-sticky {
+  background: var(--vella-soft);
+  z-index: 5;
+}
+
+.vella-final-root .sub,
+.vella-final-root .subline,
+.vella-final-root .review-muted {
+  display: block;
+  margin-top: 3px;
+  color: var(--vella-muted);
+  font-size: 11.5px;
+  line-height: 1.25;
+}
+
+.vella-final-root .report-tag.neutral {
+  background: var(--gray-100);
+  color: var(--gray-600);
+}
+
+.vella-final-root .vella-product-mini {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+}
+
+.vella-final-root .vella-product-mini img,
+.vella-final-root .vella-product-placeholder {
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  background: var(--gray-100);
+  object-fit: cover;
+}
+
+.vella-final-root .vella-manager {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.vella-final-root .vella-manager::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--vella-brand);
+}
+
+.vella-final-root .vella-final-badge-list,
+.vella-final-root .vella-final-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.vella-final-root .vella-final-badge-list .report-tag {
+  border: 1px solid var(--vella-border);
+}
+
+.vella-final-root .vella-final-chip-list .chip {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.vella-final-root .vella-delta {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.vella-final-root .vella-delta.up {
+  color: var(--green-tx);
+}
+
+.vella-final-root .vella-delta.down {
+  color: var(--red-tx);
+}
+
+.vella-final-root .vella-delta.flat,
+.vella-final-root .vella-delta.unknown {
+  color: var(--vella-muted);
+}
+
+.vella-final-root .drawer,
+.vella-final-root .drawer-overlay {
+  display: none;
+}
+
+.vella-final-root .drawer.open,
+.vella-final-root .drawer-overlay.open {
+  display: block;
+}
+
+.vella-final-root .drawer-overlay.open {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, .32);
+  z-index: 40;
+}
+
+.vella-final-root .drawer.open {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100vw);
+  height: 100vh;
+  background: var(--vella-panel);
+  box-shadow: -16px 0 40px rgba(15, 23, 42, .16);
+}
+
+.vella-final-root .drawer-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  flex-shrink: 0;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--vella-border);
+}
+
+.vella-final-root .drawer-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.vella-final-root .drawer-title {
+  color: var(--vella-text);
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.vella-final-root .drawer-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--vella-muted);
+  font-size: 12px;
+}
+
+.vella-final-root .drawer-sku {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vella-final-root .drawer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border: 1px solid var(--vella-border);
+  border-radius: 8px;
+  background: var(--vella-soft);
+  color: var(--vella-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+}
+
+.vella-final-root .drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px 96px;
+}
+
+.vella-final-root .finance-drawer-actions {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--vella-border);
+  background: var(--vella-panel);
+}
+
+.vella-final-root .vella-final-drawer-grid,
+.vella-final-root .vella-final-settings-row {
+  display: grid;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--vella-border);
+}
+
+.vella-final-root .vella-final-drawer-grid {
+  grid-template-columns: 120px minmax(0, 1fr);
+}
+
+.vella-final-root .vella-final-settings-row span,
+.vella-final-root .vella-final-drawer-grid span {
+  color: var(--vella-muted);
+  line-height: 1.35;
+}
+
+.vella-final-root .vella-final-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px 0;
+}
+
+.vella-final-root .vella-final-form-grid label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--vella-muted);
+  font-size: 11.5px;
+  font-weight: 750;
+}
+
+.vella-final-root .vella-final-form-grid label.wide {
+  grid-column: 1 / -1;
+}
+
+.vella-final-root .vella-final-form-grid input,
+.vella-final-root .vella-final-form-grid select,
+.vella-final-root .vella-final-form-grid textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--vella-border);
+  border-radius: 8px;
+  background: var(--vella-panel);
+  color: var(--vella-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.vella-final-root .vella-final-form-grid input,
+.vella-final-root .vella-final-form-grid select {
+  height: 38px;
+  padding: 0 10px;
+}
+
+.vella-final-root .vella-final-form-grid textarea {
+  min-height: 84px;
+  resize: vertical;
+  padding: 10px;
+}
+
+.vella-final-root .vella-final-draft-note {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(16, 185, 129, .24);
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.vella-final-root .vella-final-expenses-table {
+  min-width: 1780px;
+}
+
+.vella-final-root .vella-final-sources-table {
+  min-width: 1500px;
+}
+
+.vella-final-root .vella-final-sources-table-wrap {
+  max-height: calc(100vh - 328px);
+}
+
+.vella-final-root .vella-final-repricer-table {
+  min-width: 1680px;
+}
+
+.vella-final-root .vella-final-avito-reviews-table {
+  min-width: 1480px;
+}
+
+/* Current Vella reports shell, matched to the approved P&L screen. */
+.vella-final-root .vella-shell {
+  grid-template-columns: 276px minmax(0, 1fr);
+}
+
+.vella-final-root .vella-brand {
+  height: 72px;
+  padding: 17px 16px;
+}
+
+.vella-final-root .vella-brand-logo {
+  width: 158px;
+  height: 28px;
+}
+
+.vella-final-root .vella-topbar {
+  height: 58px;
+  padding: 0 24px;
+}
+
+.vella-final-root .vella-content {
+  padding: 14px 24px 28px;
+}
+
+.vella-final-root .vella-nav-label {
+  padding: 18px 16px 8px;
+  color: rgba(148, 163, 184, .55);
+  font-size: 12px;
+  letter-spacing: .12em;
+}
+
+.vella-final-root .vella-nav-button {
+  width: calc(100% - 16px);
+  height: 46px;
+  margin: 0 8px;
+  padding: 0 16px;
+  border-radius: 10px;
+  font-size: 15px;
+  color: rgba(255, 255, 255, .62);
+}
+
+.vella-final-root .vella-nav-icon {
+  width: 18px;
+  height: 18px;
+  color: rgba(255, 255, 255, .48);
+}
+
+.vella-final-root .vella-nav-button.active .vella-nav-icon,
+.vella-final-root .vella-nav-button:hover .vella-nav-icon {
+  color: rgba(255, 255, 255, .92);
+}
+
+.vella-final-root .vella-nav-count {
+  min-width: auto;
+  height: 20px;
+  background: transparent;
+  color: #facc15;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.vella-final-root .vella-nav-count.alert {
+  color: #f87171;
+}
+
+.vella-final-root .vella-nav-count.warn {
+  color: #facc15;
+}
+
+.vella-final-root .vella-final-chevron {
+  margin-left: auto;
+  color: rgba(255,255,255,.34);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.vella-final-root .vella-final-chevron.open {
+  font-size: 18px;
+}
+
+.vella-final-root .vella-final-nav-sub {
+  width: calc(100% - 16px);
+  margin: 4px 8px 14px;
+  padding: 10px 8px;
+  border: 1px solid rgba(148, 163, 184, .10);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .035);
+}
+
+.vella-final-root .vella-final-nav-sub .vella-nav-button {
+  width: 100%;
+  height: 42px;
+  margin: 0;
+  border-radius: 9px;
+  font-size: 14.5px;
+}
+
+.vella-final-root .vella-final-nav-sub .vella-nav-count {
+  font-size: 12px;
+}
+
+.vella-final-root .vella-final-icon-text {
+  display: inline-flex;
+  width: 16px;
+  justify-content: center;
+  font-weight: 800;
+}
+
+.vella-final-subtabs {
+  min-height: 54px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--vella-border);
+  background: var(--vella-panel);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.vella-final-subtabs::-webkit-scrollbar {
+  display: none;
+}
+
+.vella-final-subtab {
+  height: 54px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--vella-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.vella-final-subtab:hover {
+  color: var(--vella-text);
+}
+
+.vella-final-subtab.active {
+  color: var(--vella-brand);
+  border-bottom-color: var(--vella-brand);
+}
+
+.vella-final-subtab .subtab-count {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--vella-brand-soft);
+  color: var(--vella-brand);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.vella-final-subtab .subtab-count.warn {
+  background: var(--amber-bg);
+  color: var(--amber-tx);
+}
+
+.vella-final-page-note {
+  display: none;
+}
+
+.vella-final-root .report-table-wrap {
+  min-height: 0;
+}
+
+.vella-final-root .report-table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+
+.vella-final-root th.report-sticky {
+  z-index: 5;
+}
+
+.vella-final-root .vella-final-sources-table-wrap,
+.vella-final-root .vella-final-repricer-table-wrap {
+  max-height: calc(100vh - 326px);
+}
+
+@media (max-width: 760px) {
+  .vella-final-root .vella-sidebar,
+  .vella-final-root .vella-topbar,
+  .vella-final-root .vella-final-desktop {
+    display: none;
+  }
+
+  .vella-final-root .vella-shell {
+    display: block;
+    min-height: 100vh;
+  }
+
+  .vella-final-root .vella-main {
+    min-height: 100vh;
+    background: var(--vella-bg);
+  }
+
+  .vella-final-root .vella-content {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 18px;
+  }
+
+  .vella-final-mobile-fallback {
+    display: block;
+  }
+}

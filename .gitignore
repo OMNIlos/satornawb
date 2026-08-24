@@ -1,0 +1,22 @@
+# secrets — never commit
+.env
+.env.*
+!.env.example
+secrets.txt
+*.pem
+*.key
+
+# deps / builds
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+.vercel/
+output/
+.playwright-cli/
+
+# runtime
+var/
+*.log
+.DS_Store

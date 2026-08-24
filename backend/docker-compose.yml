@@ -1,0 +1,223 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vella-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${VELLA_POSTGRES_DB:-vella_backend}
+      POSTGRES_USER: ${VELLA_POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${VELLA_POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${VELLA_POSTGRES_BIND:-127.0.0.1}:${VELLA_POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    container_name: vella-redis
+    restart: unless-stopped
+    ports:
+      - "${VELLA_REDIS_BIND:-127.0.0.1}:${VELLA_REDIS_HOST_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vella-api
+    restart: unless-stopped
+    environment:
+      VELLA_ENV: ${VELLA_ENV:-local}
+      VELLA_DATABASE_URL: ${VELLA_DATABASE_URL:-postgresql+psycopg://${VELLA_POSTGRES_USER:-postgres}:${VELLA_POSTGRES_PASSWORD:-postgres}@postgres:5432/${VELLA_POSTGRES_DB:-vella_backend}}
+      VELLA_REDIS_URL: redis://redis:6379/0
+      VELLA_CELERY_BROKER_URL: redis://redis:6379/0
+      VELLA_CELERY_RESULT_BACKEND: redis://redis:6379/1
+      VELLA_REAL_PRICE_APPLY_ENABLED: ${VELLA_REAL_PRICE_APPLY_ENABLED:-false}
+      VELLA_REPRICER_LOCAL_PRICE_APPLY_ENABLED: ${VELLA_REPRICER_LOCAL_PRICE_APPLY_ENABLED:-true}
+      VELLA_REPRICER_PRESERVE_LOCAL_PRICE_OVERRIDES: ${VELLA_REPRICER_PRESERVE_LOCAL_PRICE_OVERRIDES:-true}
+      VELLA_REPRICER_SCHEDULER_ENABLED: ${VELLA_REPRICER_SCHEDULER_ENABLED:-false}
+      VELLA_REPRICER_EXECUTE_INTERVAL_MINUTES: ${VELLA_REPRICER_EXECUTE_INTERVAL_MINUTES:-60}
+      VELLA_REPRICER_WB_SYNC_ENABLED: ${VELLA_REPRICER_WB_SYNC_ENABLED:-true}
+      VELLA_REPRICER_WB_SYNC_INTERVAL_MINUTES: ${VELLA_REPRICER_WB_SYNC_INTERVAL_MINUTES:-40}
+      VELLA_REPRICER_WB_SYNC_PERIOD_DAYS: ${VELLA_REPRICER_WB_SYNC_PERIOD_DAYS:-30}
+      VELLA_AVITO_REPRICER_PRICE_APPLY_ENABLED: ${VELLA_AVITO_REPRICER_PRICE_APPLY_ENABLED:-false}
+      VELLA_SPP_API_BASE_URL: ${VELLA_SPP_API_BASE_URL:-https://41-spp.wbcon.su}
+      VELLA_SPP_API_TOKEN: ${VELLA_SPP_API_TOKEN:-}
+      VELLA_SPP_API_TIMEOUT_SECONDS: ${VELLA_SPP_API_TIMEOUT_SECONDS:-20}
+      VELLA_SPP_API_VERIFY_SSL: ${VELLA_SPP_API_VERIFY_SSL:-true}
+      VELLA_CORS_ALLOWED_ORIGINS: ${VELLA_CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174}
+      VELLA_1C_ENABLED: ${VELLA_1C_ENABLED:-false}
+      VELLA_1C_CASH_FLOW_TOKEN: ${VELLA_1C_CASH_FLOW_TOKEN:-change-me}
+      VELLA_API_DOCS_ENABLED: ${VELLA_API_DOCS_ENABLED:-false}
+      VELLA_AUTH_SECRET: ${VELLA_AUTH_SECRET:-change-this-secret}
+      VELLA_AUTH_ACCESS_TTL_SECONDS: ${VELLA_AUTH_ACCESS_TTL_SECONDS:-900}
+      VELLA_AUTH_REFRESH_TTL_SECONDS: ${VELLA_AUTH_REFRESH_TTL_SECONDS:-2592000}
+      VELLA_AUTH_REFRESH_ROTATION_GRACE_SECONDS: ${VELLA_AUTH_REFRESH_ROTATION_GRACE_SECONDS:-30}
+      VELLA_WB_API_MODE: ${VELLA_WB_API_MODE:-fake}
+      VELLA_WB_API_BASE_URL: ${VELLA_WB_API_BASE_URL:-https://discounts-prices-api.wildberries.ru}
+      VELLA_WB_API_TOKEN: ${VELLA_WB_API_TOKEN:-}
+      VELLA_WB_CONTENT_API_BASE_URL: ${VELLA_WB_CONTENT_API_BASE_URL:-https://content-api.wildberries.ru}
+      VELLA_WB_CONTENT_API_TOKEN: ${VELLA_WB_CONTENT_API_TOKEN:-}
+      VELLA_WB_PROMOTIONS_API_BASE_URL: ${VELLA_WB_PROMOTIONS_API_BASE_URL:-https://dp-calendar-api.wildberries.ru}
+      VELLA_WB_PROMOTIONS_API_TOKEN: ${VELLA_WB_PROMOTIONS_API_TOKEN:-}
+      VELLA_WB_ADS_API_BASE_URL: ${VELLA_WB_ADS_API_BASE_URL:-https://advert-api.wildberries.ru}
+      VELLA_WB_ADS_API_TOKEN: ${VELLA_WB_ADS_API_TOKEN:-}
+      VELLA_WB_STATISTICS_API_BASE_URL: ${VELLA_WB_STATISTICS_API_BASE_URL:-https://statistics-api.wildberries.ru}
+      VELLA_WB_STATISTICS_API_TOKEN: ${VELLA_WB_STATISTICS_API_TOKEN:-}
+      VELLA_WB_ANALYTICS_API_BASE_URL: ${VELLA_WB_ANALYTICS_API_BASE_URL:-https://seller-analytics-api.wildberries.ru}
+      VELLA_WB_ANALYTICS_API_TOKEN: ${VELLA_WB_ANALYTICS_API_TOKEN:-}
+      VELLA_WB_FINANCE_API_BASE_URL: ${VELLA_WB_FINANCE_API_BASE_URL:-https://finance-api.wildberries.ru}
+      VELLA_WB_FINANCE_API_TOKEN: ${VELLA_WB_FINANCE_API_TOKEN:-}
+      VELLA_WB_COMMON_API_BASE_URL: ${VELLA_WB_COMMON_API_BASE_URL:-https://common-api.wildberries.ru}
+      VELLA_WB_COMMON_API_TOKEN: ${VELLA_WB_COMMON_API_TOKEN:-}
+      VELLA_WB_FEEDBACKS_API_BASE_URL: ${VELLA_WB_FEEDBACKS_API_BASE_URL:-https://feedbacks-api.wildberries.ru}
+      VELLA_WB_FEEDBACKS_API_TOKEN: ${VELLA_WB_FEEDBACKS_API_TOKEN:-}
+      VELLA_WB_FEEDBACKS_SEND_ENABLED: ${VELLA_WB_FEEDBACKS_SEND_ENABLED:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      VELLA_OPENAI_API_KEY: ${VELLA_OPENAI_API_KEY:-}
+      VELLA_OPENAI_API_BASE_URL: ${VELLA_OPENAI_API_BASE_URL:-https://api.openai.com/v1}
+      VELLA_OPENAI_REVIEW_MODEL: ${VELLA_OPENAI_REVIEW_MODEL:-gpt-4o-mini}
+      VELLA_OPENAI_REVIEW_TIMEOUT_SECONDS: ${VELLA_OPENAI_REVIEW_TIMEOUT_SECONDS:-20}
+    command: >
+      sh -c "python -m alembic upgrade head &&
+      python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "${VELLA_API_HOST_PORT:-8001}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vella-worker
+    restart: unless-stopped
+    environment:
+      VELLA_DATABASE_URL: ${VELLA_DATABASE_URL:-postgresql+psycopg://${VELLA_POSTGRES_USER:-postgres}:${VELLA_POSTGRES_PASSWORD:-postgres}@postgres:5432/${VELLA_POSTGRES_DB:-vella_backend}}
+      VELLA_REDIS_URL: redis://redis:6379/0
+      VELLA_CELERY_BROKER_URL: redis://redis:6379/0
+      VELLA_CELERY_RESULT_BACKEND: redis://redis:6379/1
+      VELLA_REAL_PRICE_APPLY_ENABLED: ${VELLA_REAL_PRICE_APPLY_ENABLED:-false}
+      VELLA_REPRICER_LOCAL_PRICE_APPLY_ENABLED: ${VELLA_REPRICER_LOCAL_PRICE_APPLY_ENABLED:-true}
+      VELLA_REPRICER_PRESERVE_LOCAL_PRICE_OVERRIDES: ${VELLA_REPRICER_PRESERVE_LOCAL_PRICE_OVERRIDES:-true}
+      VELLA_REPRICER_SCHEDULER_ENABLED: ${VELLA_REPRICER_SCHEDULER_ENABLED:-false}
+      VELLA_REPRICER_EXECUTE_INTERVAL_MINUTES: ${VELLA_REPRICER_EXECUTE_INTERVAL_MINUTES:-60}
+      VELLA_REPRICER_WB_SYNC_ENABLED: ${VELLA_REPRICER_WB_SYNC_ENABLED:-true}
+      VELLA_REPRICER_WB_SYNC_INTERVAL_MINUTES: ${VELLA_REPRICER_WB_SYNC_INTERVAL_MINUTES:-40}
+      VELLA_REPRICER_WB_SYNC_PERIOD_DAYS: ${VELLA_REPRICER_WB_SYNC_PERIOD_DAYS:-30}
+      VELLA_AVITO_REPRICER_PRICE_APPLY_ENABLED: ${VELLA_AVITO_REPRICER_PRICE_APPLY_ENABLED:-false}
+      VELLA_SPP_API_BASE_URL: ${VELLA_SPP_API_BASE_URL:-https://41-spp.wbcon.su}
+      VELLA_SPP_API_TOKEN: ${VELLA_SPP_API_TOKEN:-}
+      VELLA_SPP_API_TIMEOUT_SECONDS: ${VELLA_SPP_API_TIMEOUT_SECONDS:-20}
+      VELLA_SPP_API_VERIFY_SSL: ${VELLA_SPP_API_VERIFY_SSL:-true}
+      VELLA_WB_API_MODE: ${VELLA_WB_API_MODE:-fake}
+      VELLA_WB_API_BASE_URL: ${VELLA_WB_API_BASE_URL:-https://discounts-prices-api.wildberries.ru}
+      VELLA_WB_API_TOKEN: ${VELLA_WB_API_TOKEN:-}
+      VELLA_WB_CONTENT_API_BASE_URL: ${VELLA_WB_CONTENT_API_BASE_URL:-https://content-api.wildberries.ru}
+      VELLA_WB_CONTENT_API_TOKEN: ${VELLA_WB_CONTENT_API_TOKEN:-}
+      VELLA_WB_PROMOTIONS_API_BASE_URL: ${VELLA_WB_PROMOTIONS_API_BASE_URL:-https://dp-calendar-api.wildberries.ru}
+      VELLA_WB_PROMOTIONS_API_TOKEN: ${VELLA_WB_PROMOTIONS_API_TOKEN:-}
+      VELLA_WB_ADS_API_BASE_URL: ${VELLA_WB_ADS_API_BASE_URL:-https://advert-api.wildberries.ru}
+      VELLA_WB_ADS_API_TOKEN: ${VELLA_WB_ADS_API_TOKEN:-}
+      VELLA_WB_STATISTICS_API_BASE_URL: ${VELLA_WB_STATISTICS_API_BASE_URL:-https://statistics-api.wildberries.ru}
+      VELLA_WB_STATISTICS_API_TOKEN: ${VELLA_WB_STATISTICS_API_TOKEN:-}
+      VELLA_WB_ANALYTICS_API_BASE_URL: ${VELLA_WB_ANALYTICS_API_BASE_URL:-https://seller-analytics-api.wildberries.ru}
+      VELLA_WB_ANALYTICS_API_TOKEN: ${VELLA_WB_ANALYTICS_API_TOKEN:-}
+      VELLA_WB_FINANCE_API_BASE_URL: ${VELLA_WB_FINANCE_API_BASE_URL:-https://finance-api.wildberries.ru}
+      VELLA_WB_FINANCE_API_TOKEN: ${VELLA_WB_FINANCE_API_TOKEN:-}
+      VELLA_WB_COMMON_API_BASE_URL: ${VELLA_WB_COMMON_API_BASE_URL:-https://common-api.wildberries.ru}
+      VELLA_WB_COMMON_API_TOKEN: ${VELLA_WB_COMMON_API_TOKEN:-}
+      VELLA_WB_FEEDBACKS_API_BASE_URL: ${VELLA_WB_FEEDBACKS_API_BASE_URL:-https://feedbacks-api.wildberries.ru}
+      VELLA_WB_FEEDBACKS_API_TOKEN: ${VELLA_WB_FEEDBACKS_API_TOKEN:-}
+      VELLA_WB_FEEDBACKS_SEND_ENABLED: ${VELLA_WB_FEEDBACKS_SEND_ENABLED:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      VELLA_OPENAI_API_KEY: ${VELLA_OPENAI_API_KEY:-}
+      VELLA_OPENAI_API_BASE_URL: ${VELLA_OPENAI_API_BASE_URL:-https://api.openai.com/v1}
+      VELLA_OPENAI_REVIEW_MODEL: ${VELLA_OPENAI_REVIEW_MODEL:-gpt-4o-mini}
+      VELLA_OPENAI_REVIEW_TIMEOUT_SECONDS: ${VELLA_OPENAI_REVIEW_TIMEOUT_SECONDS:-20}
+    command: python -m celery -A app.infra.celery_app:celery_app worker --loglevel=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vella-beat
+    restart: unless-stopped
+    environment:
+      VELLA_DATABASE_URL: ${VELLA_DATABASE_URL:-postgresql+psycopg://${VELLA_POSTGRES_USER:-postgres}:${VELLA_POSTGRES_PASSWORD:-postgres}@postgres:5432/${VELLA_POSTGRES_DB:-vella_backend}}
+      VELLA_REDIS_URL: redis://redis:6379/0
+      VELLA_CELERY_BROKER_URL: redis://redis:6379/0
+      VELLA_CELERY_RESULT_BACKEND: redis://redis:6379/1
+      VELLA_REAL_PRICE_APPLY_ENABLED: ${VELLA_REAL_PRICE_APPLY_ENABLED:-false}
+      VELLA_REPRICER_LOCAL_PRICE_APPLY_ENABLED: ${VELLA_REPRICER_LOCAL_PRICE_APPLY_ENABLED:-true}
+      VELLA_REPRICER_PRESERVE_LOCAL_PRICE_OVERRIDES: ${VELLA_REPRICER_PRESERVE_LOCAL_PRICE_OVERRIDES:-true}
+      VELLA_REPRICER_SCHEDULER_ENABLED: ${VELLA_REPRICER_SCHEDULER_ENABLED:-false}
+      VELLA_REPRICER_EXECUTE_INTERVAL_MINUTES: ${VELLA_REPRICER_EXECUTE_INTERVAL_MINUTES:-60}
+      VELLA_REPRICER_WB_SYNC_ENABLED: ${VELLA_REPRICER_WB_SYNC_ENABLED:-true}
+      VELLA_REPRICER_WB_SYNC_INTERVAL_MINUTES: ${VELLA_REPRICER_WB_SYNC_INTERVAL_MINUTES:-40}
+      VELLA_REPRICER_WB_SYNC_PERIOD_DAYS: ${VELLA_REPRICER_WB_SYNC_PERIOD_DAYS:-30}
+      VELLA_AVITO_REPRICER_PRICE_APPLY_ENABLED: ${VELLA_AVITO_REPRICER_PRICE_APPLY_ENABLED:-false}
+      VELLA_SPP_API_BASE_URL: ${VELLA_SPP_API_BASE_URL:-https://41-spp.wbcon.su}
+      VELLA_SPP_API_TOKEN: ${VELLA_SPP_API_TOKEN:-}
+      VELLA_SPP_API_TIMEOUT_SECONDS: ${VELLA_SPP_API_TIMEOUT_SECONDS:-20}
+      VELLA_SPP_API_VERIFY_SSL: ${VELLA_SPP_API_VERIFY_SSL:-true}
+      VELLA_WB_API_MODE: ${VELLA_WB_API_MODE:-fake}
+      VELLA_WB_API_BASE_URL: ${VELLA_WB_API_BASE_URL:-https://discounts-prices-api.wildberries.ru}
+      VELLA_WB_API_TOKEN: ${VELLA_WB_API_TOKEN:-}
+      VELLA_WB_CONTENT_API_BASE_URL: ${VELLA_WB_CONTENT_API_BASE_URL:-https://content-api.wildberries.ru}
+      VELLA_WB_CONTENT_API_TOKEN: ${VELLA_WB_CONTENT_API_TOKEN:-}
+      VELLA_WB_PROMOTIONS_API_BASE_URL: ${VELLA_WB_PROMOTIONS_API_BASE_URL:-https://dp-calendar-api.wildberries.ru}
+      VELLA_WB_PROMOTIONS_API_TOKEN: ${VELLA_WB_PROMOTIONS_API_TOKEN:-}
+      VELLA_WB_ADS_API_BASE_URL: ${VELLA_WB_ADS_API_BASE_URL:-https://advert-api.wildberries.ru}
+      VELLA_WB_ADS_API_TOKEN: ${VELLA_WB_ADS_API_TOKEN:-}
+      VELLA_WB_STATISTICS_API_BASE_URL: ${VELLA_WB_STATISTICS_API_BASE_URL:-https://statistics-api.wildberries.ru}
+      VELLA_WB_STATISTICS_API_TOKEN: ${VELLA_WB_STATISTICS_API_TOKEN:-}
+      VELLA_WB_ANALYTICS_API_BASE_URL: ${VELLA_WB_ANALYTICS_API_BASE_URL:-https://seller-analytics-api.wildberries.ru}
+      VELLA_WB_ANALYTICS_API_TOKEN: ${VELLA_WB_ANALYTICS_API_TOKEN:-}
+      VELLA_WB_FINANCE_API_BASE_URL: ${VELLA_WB_FINANCE_API_BASE_URL:-https://finance-api.wildberries.ru}
+      VELLA_WB_FINANCE_API_TOKEN: ${VELLA_WB_FINANCE_API_TOKEN:-}
+      VELLA_WB_COMMON_API_BASE_URL: ${VELLA_WB_COMMON_API_BASE_URL:-https://common-api.wildberries.ru}
+      VELLA_WB_COMMON_API_TOKEN: ${VELLA_WB_COMMON_API_TOKEN:-}
+      VELLA_WB_FEEDBACKS_API_BASE_URL: ${VELLA_WB_FEEDBACKS_API_BASE_URL:-https://feedbacks-api.wildberries.ru}
+      VELLA_WB_FEEDBACKS_API_TOKEN: ${VELLA_WB_FEEDBACKS_API_TOKEN:-}
+      VELLA_WB_FEEDBACKS_SEND_ENABLED: ${VELLA_WB_FEEDBACKS_SEND_ENABLED:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      VELLA_OPENAI_API_KEY: ${VELLA_OPENAI_API_KEY:-}
+      VELLA_OPENAI_API_BASE_URL: ${VELLA_OPENAI_API_BASE_URL:-https://api.openai.com/v1}
+      VELLA_OPENAI_REVIEW_MODEL: ${VELLA_OPENAI_REVIEW_MODEL:-gpt-4o-mini}
+      VELLA_OPENAI_REVIEW_TIMEOUT_SECONDS: ${VELLA_OPENAI_REVIEW_TIMEOUT_SECONDS:-20}
+    command: python -m celery -A app.infra.celery_app:celery_app beat --loglevel=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

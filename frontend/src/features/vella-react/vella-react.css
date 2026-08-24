@@ -1,0 +1,711 @@
+.vella-system .vr-popover-list {
+  display: grid;
+  gap: 4px;
+  width: 320px;
+  max-width: calc(100vw - 40px);
+}
+
+.vella-system .vr-popover-row,
+.vella-system .vr-notification-title,
+.vella-system .vr-sku-cell,
+.vella-system .vr-price-btn {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.vella-system .vr-popover-row {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border-radius: 8px;
+}
+
+.vella-system .vr-popover-row:hover {
+  background: var(--gray-50);
+}
+
+.vella-system .vr-popover-row b,
+.vella-system .vr-notification-title b {
+  color: var(--gray-900);
+  font-weight: 800;
+}
+
+.vella-system .vr-popover-row span,
+.vella-system .vr-notification-title span,
+.vella-system .vr-price-btn span {
+  color: var(--gray-400);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.vella-system .vr-modal-copy {
+  color: var(--gray-600);
+  line-height: 1.45;
+}
+
+.vella-system .vr-modal-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.vella-system .vr-preview-note {
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--brand-50);
+  color: var(--gray-600);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.vella-system .vr-preview-table-wrap {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+}
+
+.vella-system .vr-preview-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+}
+
+.vella-system .vr-preview-table th,
+.vella-system .vr-preview-table td {
+  height: 38px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--gray-100);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.vella-system .vr-preview-table th {
+  background: var(--gray-50);
+  color: var(--gray-500);
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 800;
+}
+
+.vella-system .vr-shortcut-grid {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.vella-system .vr-shortcut-grid kbd {
+  justify-self: start;
+  padding: 3px 7px;
+  border: 1px solid var(--gray-200);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--gray-50);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--gray-700);
+}
+
+.vella-system .vr-shortcut-grid span {
+  color: var(--gray-600);
+  font-size: 12.5px;
+}
+
+.vella-system .vr-saved-views-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 10px 0 4px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gray-300) transparent;
+}
+
+.vella-system .vr-saved-views-panel::-webkit-scrollbar {
+  height: 6px;
+}
+
+.vella-system .vr-saved-views-panel::-webkit-scrollbar-thumb {
+  background: var(--gray-300);
+  border-radius: 999px;
+}
+
+.vella-system .vr-saved-views-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  min-width: max-content;
+  overflow: visible;
+}
+
+.vella-system .vr-saved-views-left button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--gray-200);
+  background: var(--white);
+  color: var(--gray-600);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.vella-system .vr-saved-views-left button.active {
+  background: var(--gray-900);
+  border-color: var(--gray-900);
+  color: var(--white);
+  box-shadow: 0 8px 18px rgba(15,23,42,.12);
+}
+
+.vella-system .vr-saved-view-count {
+  font-size: 10.5px;
+  opacity: .68;
+}
+
+.vella-system .vr-saved-views-side {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  min-width: max-content;
+  color: var(--gray-500);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.vella-system .vr-saved-views-side b {
+  color: var(--gray-800);
+}
+
+.vella-system .vr-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(280px, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.vella-system .vr-card,
+.vella-system .vr-list-card,
+.vella-system .vr-notification-detail {
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+}
+
+.vella-system .vr-card {
+  min-height: 150px;
+  padding: 18px;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.vella-system .vr-card h3,
+.vella-system .vr-notification-detail h3 {
+  margin: 0;
+  color: var(--gray-900);
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 800;
+}
+
+.vella-system .vr-card p,
+.vella-system .vr-notification-detail p {
+  margin: 0;
+  color: var(--gray-500);
+  line-height: 1.42;
+}
+
+.vella-system .vr-list-card {
+  overflow: hidden;
+}
+
+.vella-system .vr-history-row {
+  min-height: 54px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.vella-system .vr-history-row:last-child {
+  border-bottom: 0;
+}
+
+.vella-system .vr-history-row b {
+  width: 54px;
+  color: var(--brand);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
+.vella-system .vr-history-row span {
+  color: var(--gray-700);
+}
+
+.vella-system .vr-advanced-filter {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--gray-200);
+  color: var(--gray-500);
+  font-size: 13px;
+}
+
+.vella-system .vr-density-toggle {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--gray-200);
+  border-radius: 9px;
+  background: var(--white);
+}
+
+.vella-system .vr-density-toggle button {
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--gray-500);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.vella-system .vr-density-toggle button.active {
+  background: var(--gray-900);
+  color: var(--white);
+}
+
+.vella-system .vr-table-density.compact .vs-table td {
+  height: 28px;
+  padding: 3px 6px;
+  font-size: 11.5px;
+  line-height: 1.12;
+}
+
+.vella-system .vr-table-density.compact .vs-table {
+  min-width: 920px;
+  font-size: 11.5px;
+}
+
+.vella-system .vr-table-density.compact .vs-table th {
+  height: 25px;
+  padding: 0 6px;
+  font-size: 8.8px;
+  letter-spacing: 0.01em;
+}
+
+.vella-system .vr-table-density.compact .vs-checkbox {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  font-size: 9px;
+}
+
+.vella-system .vr-table-density.compact .vs-sku {
+  font-size: 9.8px;
+}
+
+.vella-system .vr-table-density.compact .vr-sku-cell {
+  gap: 2px;
+}
+
+.vella-system .vr-table-density.compact .vs-badge {
+  padding: 1px 5px;
+  min-height: 17px;
+  font-size: 10px;
+}
+
+.vella-system .vr-table-density.compact .vr-price-btn {
+  gap: 1px;
+  font-size: 11px;
+}
+
+.vella-system .vr-table-density.compact .vs-badge,
+.vella-system .vr-table-density.compact .vs-chip {
+  min-height: 20px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  line-height: 1.15;
+}
+
+.vella-system .vr-table-density.compact .vr-sku-cell {
+  min-width: 168px;
+  gap: 1px;
+}
+
+.vella-system .vr-table-density.compact .vr-sku-cell span:last-child {
+  max-width: 168px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+}
+
+.vella-system .vr-table-density.compact .vr-price-btn {
+  gap: 0;
+}
+
+.vella-system .vr-table-density.compact .vr-price-btn b {
+  font-size: 12.5px;
+}
+
+.vella-system .vr-table-density.compact .vr-price-btn span {
+  font-size: 10px;
+}
+
+.vella-system .vr-worklist {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  background: var(--white);
+  box-shadow: var(--shadow-sm);
+}
+
+.vella-system .vr-worklist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.vella-system .vr-worklist-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vella-system .vr-worklist-filters button {
+  padding: 5px 10px;
+  border: 1px solid var(--gray-200);
+  border-radius: 999px;
+  background: var(--white);
+  color: var(--gray-600);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.vella-system .vr-worklist-filters button.active {
+  background: var(--gray-900);
+  border-color: var(--gray-900);
+  color: var(--white);
+}
+
+.vella-system .vr-worklist-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(190px, 1fr));
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.vella-system .vr-worklist-card {
+  min-height: 118px;
+  border: 1px solid var(--gray-200);
+  border-radius: 9px;
+  background: var(--gray-50);
+  padding: 10px;
+  display: grid;
+  gap: 5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vella-system .vr-worklist-card b {
+  color: var(--gray-900);
+}
+
+.vella-system .vr-worklist-card span {
+  color: var(--gray-500);
+  font-size: 12px;
+}
+
+.vella-system .vr-worklist-card em {
+  color: var(--brand);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.vella-system .vr-sku-cell {
+  display: grid;
+  gap: 4px;
+  min-width: 210px;
+}
+
+.vella-system .vr-sku-cell span:last-child {
+  color: var(--gray-500);
+  white-space: normal;
+}
+
+.vella-system .vr-price-btn {
+  display: inline-grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.vella-system .vr-price-btn b {
+  color: var(--gray-900);
+  font-size: 14px;
+}
+
+.vella-system .vr-good {
+  color: var(--green-mid);
+  font-weight: 800;
+}
+
+.vella-system .vr-bad {
+  color: var(--red-mid);
+  font-weight: 800;
+}
+
+.vella-system .vr-drawer-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.vella-system .vr-explanation-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.vella-system .vr-explanation-grid div {
+  padding: 12px;
+  border: 1px solid var(--gray-200);
+  border-radius: 9px;
+  background: var(--white);
+  display: grid;
+  gap: 5px;
+}
+
+.vella-system .vr-explanation-grid b {
+  color: var(--gray-900);
+}
+
+.vella-system .vr-explanation-grid span {
+  color: var(--gray-600);
+  line-height: 1.38;
+}
+
+.vella-system .vr-audit-row {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--gray-100);
+  display: grid;
+  gap: 6px;
+}
+
+.vella-system .vr-audit-row:last-child {
+  border-bottom: 0;
+}
+
+.vella-system .vr-audit-row div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.vella-system .vr-audit-row b {
+  color: var(--gray-900);
+}
+
+.vella-system .vr-audit-row p {
+  margin: 0;
+  color: var(--gray-600);
+}
+
+.vella-system .audit-diff,
+.vella-system .audit-scope {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--gray-50);
+  color: var(--gray-600);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.vella-system .audit-scope {
+  background: var(--brand-50);
+  color: var(--brand);
+}
+
+.vella-system .vr-drawer-stack .vs-kpi-strip {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 0;
+}
+
+.vella-system .vr-report-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.vella-system .vr-bars {
+  display: grid;
+  gap: 10px;
+}
+
+.vella-system .vr-bars::before,
+.vella-system .vr-bars span {
+  height: 10px;
+  border-radius: 999px;
+}
+
+.vella-system .vr-bars::before {
+  content: '';
+  display: block;
+  background: var(--gray-200);
+}
+
+.vella-system .vr-bars span {
+  display: block;
+  background: var(--brand);
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,0.08);
+}
+
+.vella-system .vr-notifications {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 14px;
+  align-items: start;
+}
+
+.vella-system .vr-notifications .vs-table-wrap {
+  margin-top: 0;
+}
+
+.vella-system .vr-notification-title {
+  display: grid;
+  gap: 4px;
+  min-width: 300px;
+}
+
+.vella-system .vr-notification-detail {
+  position: sticky;
+  top: 12px;
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.vella-system .vr-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.vella-system .vr-kv span {
+  color: var(--gray-400);
+}
+
+.vella-system .vr-report-file {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--brand);
+  border-radius: 10px;
+  background: var(--brand-50);
+}
+
+.vella-system .vr-report-file span {
+  color: var(--gray-500);
+  font-size: 12px;
+}
+
+.vella-system .vr-row-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vella-system .vr-subtabs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin: 0 -22px 18px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--gray-200);
+  background: var(--white);
+}
+
+.vella-system .vr-subtabs-scroll {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.vella-system .vr-subtabs-scroll .vs-subtabs {
+  margin: 0;
+  padding: 0;
+  border-bottom: 0;
+  min-width: max-content;
+}
+
+.vella-system .vr-subtabs-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 1200px) {
+  .vella-system .vr-card-grid {
+    grid-template-columns: repeat(2, minmax(240px, 1fr));
+  }
+
+  .vella-system .vr-notifications {
+    grid-template-columns: 1fr;
+  }
+
+  .vella-system .vr-notification-detail {
+    position: static;
+  }
+
+  .vella-system .vr-saved-views-panel {
+    gap: 8px;
+  }
+
+  .vella-system .vr-saved-views-side {
+    justify-content: flex-start;
+    min-width: max-content;
+  }
+}
+
+@media (max-width: 760px) {
+  .vella-system .vr-card-grid,
+  .vella-system .vr-report-grid {
+    grid-template-columns: 1fr;
+  }
+}

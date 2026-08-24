@@ -1,0 +1,255 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+
+def _parse_csv_env(value: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
+    if value is None:
+        return default
+    items = tuple(item.strip().rstrip("/") for item in value.split(",") if item.strip())
+    return items or default
+
+
+def _parse_int_csv_env(value: str | None, default: tuple[int, ...] = ()) -> tuple[int, ...]:
+    if value is None:
+        return default
+    result: list[int] = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            result.append(int(item))
+        except ValueError:
+            continue
+    return tuple(result) or default
+
+
+def _default_auth_cookie_secure(environment: str) -> bool:
+    return environment.lower() not in {"local", "dev", "development", "test"}
+
+
+def _is_non_production(environment: str) -> bool:
+    return environment.lower() in {"local", "dev", "development", "test"}
+
+
+def _parse_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() == "true"
+
+
+@dataclass(frozen=True)
+class Settings:
+    app_name: str = "Vella WB Backend"
+    environment: str = "local"
+    api_prefix: str = "/api/v1"
+    contract_version: str = "0.19.05-runtime-boundary"
+    real_price_apply_enabled: bool = False
+    repricer_local_price_apply_enabled: bool = True
+    repricer_preserve_local_price_overrides: bool = True
+    repricer_scheduler_enabled: bool = True
+    repricer_execute_interval_minutes: int = 60
+    repricer_wb_sync_enabled: bool = True
+    repricer_wb_sync_interval_minutes: int = 40
+    repricer_wb_sync_period_days: int = 30
+    avito_repricer_worker_enabled: bool = True
+    avito_repricer_price_apply_enabled: bool = False
+    avito_repricer_execute_interval_minutes: int = 60
+    avito_repricer_period_days: int = 30
+    avito_returns_sync_enabled: bool = True
+    avito_returns_sync_interval_minutes: int = 15
+    avito_returns_period_days: int = 30
+    spp_api_base_url: str = "https://41-spp.wbcon.su"
+    spp_api_token: str | None = None
+    spp_api_timeout_seconds: float = 20.0
+    spp_api_verify_ssl: bool = True
+    database_url: str = "postgresql+psycopg://postgres:postgres@127.0.0.1:5433/vella_backend"
+    redis_url: str = "redis://localhost:6379/0"
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/1"
+    wb_api_mode: str = "fake"
+    wb_api_base_url: str = "https://discounts-prices-api.wildberries.ru"
+    wb_api_token: str | None = None
+    wb_api_client_secret: str | None = None
+    wb_api_timeout_seconds: float = 20.0
+    wb_statistics_api_base_url: str = "https://statistics-api.wildberries.ru"
+    wb_statistics_api_token: str | None = None
+    wb_statistics_api_timeout_seconds: float = 20.0
+    wb_finance_api_base_url: str = "https://finance-api.wildberries.ru"
+    wb_finance_api_token: str | None = None
+    wb_finance_api_timeout_seconds: float = 20.0
+    wb_common_api_base_url: str = "https://common-api.wildberries.ru"
+    wb_common_api_token: str | None = None
+    wb_common_api_timeout_seconds: float = 20.0
+    wb_marketplace_api_base_url: str = "https://marketplace-api.wildberries.ru"
+    wb_marketplace_api_token: str | None = None
+    wb_marketplace_api_timeout_seconds: float = 20.0
+    wb_supplies_api_base_url: str = "https://supplies-api.wildberries.ru"
+    wb_supplies_api_token: str | None = None
+    wb_supplies_api_timeout_seconds: float = 20.0
+    wb_seller_stock_warehouse_ids: tuple[int, ...] = ()
+    wb_analytics_api_base_url: str = "https://seller-analytics-api.wildberries.ru"
+    wb_analytics_api_token: str | None = None
+    wb_analytics_api_timeout_seconds: float = 20.0
+    wb_content_api_base_url: str = "https://content-api.wildberries.ru"
+    wb_content_api_token: str | None = None
+    wb_content_api_timeout_seconds: float = 20.0
+    wb_promotions_api_base_url: str = "https://dp-calendar-api.wildberries.ru"
+    wb_promotions_api_token: str | None = None
+    wb_promotions_api_timeout_seconds: float = 20.0
+    wb_ads_api_base_url: str = "https://advert-api.wildberries.ru"
+    wb_ads_api_token: str | None = None
+    wb_ads_api_timeout_seconds: float = 20.0
+    wb_feedbacks_api_base_url: str = "https://feedbacks-api.wildberries.ru"
+    wb_feedbacks_api_token: str | None = None
+    wb_feedbacks_api_timeout_seconds: float = 20.0
+    wb_feedbacks_send_enabled: bool = False
+    avito_api_mode: str = "fake"
+    avito_api_base_url: str = "https://api.avito.ru"
+    avito_api_access_token: str | None = None
+    avito_api_timeout_seconds: float = 20.0
+    openai_api_key: str | None = None
+    openai_api_base_url: str = "https://api.openai.com/v1"
+    openai_review_model: str = "gpt-4o-mini"
+    openai_review_timeout_seconds: float = 20.0
+    one_c_cash_flow_token: str = "change-me"
+    one_c_enabled: bool = True
+    api_docs_enabled: bool = True
+    auth_secret: str = "change-this-secret"
+    auth_access_ttl_seconds: int = 900
+    auth_refresh_ttl_seconds: int = 2592000
+    auth_refresh_rotation_grace_seconds: int = 30
+    auth_refresh_cookie_name: str = "vella_refresh_token"
+    auth_cookie_secure: bool = True
+    auth_cookie_samesite: str = "none"
+    auth_cookie_domain: str | None = None
+    cors_allowed_origins: tuple[str, ...] = (
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    )
+
+
+def get_settings() -> Settings:
+    redis_url = os.getenv("VELLA_REDIS_URL", "redis://localhost:6379/0")
+    environment = os.getenv("VELLA_ENV", "local")
+    auth_cookie_secure_raw = os.getenv("VELLA_AUTH_COOKIE_SECURE")
+    return Settings(
+        app_name=os.getenv("VELLA_APP_NAME", "Vella WB Backend"),
+        environment=environment,
+        api_prefix=os.getenv("VELLA_API_PREFIX", "/api/v1"),
+        contract_version=os.getenv("VELLA_CONTRACT_VERSION", "0.19.05-runtime-boundary"),
+        real_price_apply_enabled=os.getenv("VELLA_REAL_PRICE_APPLY_ENABLED", "false").lower() == "true",
+        repricer_local_price_apply_enabled=os.getenv("VELLA_REPRICER_LOCAL_PRICE_APPLY_ENABLED", "true").lower() == "true",
+        repricer_preserve_local_price_overrides=os.getenv("VELLA_REPRICER_PRESERVE_LOCAL_PRICE_OVERRIDES", "true").lower() == "true",
+        repricer_scheduler_enabled=os.getenv("VELLA_REPRICER_SCHEDULER_ENABLED", "true").lower() == "true",
+        repricer_execute_interval_minutes=int(os.getenv("VELLA_REPRICER_EXECUTE_INTERVAL_MINUTES", "60")),
+        repricer_wb_sync_enabled=os.getenv("VELLA_REPRICER_WB_SYNC_ENABLED", "true").lower() == "true",
+        repricer_wb_sync_interval_minutes=int(os.getenv("VELLA_REPRICER_WB_SYNC_INTERVAL_MINUTES", "40")),
+        repricer_wb_sync_period_days=int(os.getenv("VELLA_REPRICER_WB_SYNC_PERIOD_DAYS", "30")),
+        avito_repricer_worker_enabled=os.getenv("VELLA_AVITO_REPRICER_WORKER_ENABLED", "true").lower() == "true",
+        avito_repricer_price_apply_enabled=os.getenv("VELLA_AVITO_REPRICER_PRICE_APPLY_ENABLED", "false").lower() == "true",
+        avito_repricer_execute_interval_minutes=int(os.getenv("VELLA_AVITO_REPRICER_EXECUTE_INTERVAL_MINUTES", "60")),
+        avito_repricer_period_days=int(os.getenv("VELLA_AVITO_REPRICER_PERIOD_DAYS", "30")),
+        avito_returns_sync_enabled=os.getenv("VELLA_AVITO_RETURNS_SYNC_ENABLED", "true").lower() == "true",
+        avito_returns_sync_interval_minutes=int(os.getenv("VELLA_AVITO_RETURNS_SYNC_INTERVAL_MINUTES", "15")),
+        avito_returns_period_days=int(os.getenv("VELLA_AVITO_RETURNS_PERIOD_DAYS", "30")),
+        spp_api_base_url=os.getenv("VELLA_SPP_API_BASE_URL", "https://41-spp.wbcon.su").rstrip("/"),
+        spp_api_token=os.getenv("VELLA_SPP_API_TOKEN"),
+        spp_api_timeout_seconds=float(os.getenv("VELLA_SPP_API_TIMEOUT_SECONDS", "20")),
+        spp_api_verify_ssl=os.getenv("VELLA_SPP_API_VERIFY_SSL", "true").lower() == "true",
+        database_url=os.getenv(
+            "VELLA_DATABASE_URL",
+            "postgresql+psycopg://postgres:postgres@127.0.0.1:5433/vella_backend",
+        ),
+        redis_url=redis_url,
+        celery_broker_url=os.getenv("VELLA_CELERY_BROKER_URL", redis_url),
+        celery_result_backend=os.getenv("VELLA_CELERY_RESULT_BACKEND", "redis://localhost:6379/1"),
+        wb_api_mode=os.getenv("VELLA_WB_API_MODE", "fake").lower(),
+        wb_api_base_url=os.getenv("VELLA_WB_API_BASE_URL", "https://discounts-prices-api.wildberries.ru").rstrip("/"),
+        wb_api_token=os.getenv("VELLA_WB_API_TOKEN"),
+        wb_api_client_secret=os.getenv("VELLA_WB_API_CLIENT_SECRET"),
+        wb_api_timeout_seconds=float(os.getenv("VELLA_WB_API_TIMEOUT_SECONDS", "20")),
+        wb_statistics_api_base_url=os.getenv("VELLA_WB_STATISTICS_API_BASE_URL", "https://statistics-api.wildberries.ru").rstrip("/"),
+        wb_statistics_api_token=os.getenv("VELLA_WB_STATISTICS_API_TOKEN"),
+        wb_statistics_api_timeout_seconds=float(os.getenv("VELLA_WB_STATISTICS_API_TIMEOUT_SECONDS", "20")),
+        wb_finance_api_base_url=os.getenv("VELLA_WB_FINANCE_API_BASE_URL", "https://finance-api.wildberries.ru").rstrip("/"),
+        wb_finance_api_token=os.getenv("VELLA_WB_FINANCE_API_TOKEN"),
+        wb_finance_api_timeout_seconds=float(os.getenv("VELLA_WB_FINANCE_API_TIMEOUT_SECONDS", "20")),
+        wb_common_api_base_url=os.getenv("VELLA_WB_COMMON_API_BASE_URL", "https://common-api.wildberries.ru").rstrip("/"),
+        wb_common_api_token=os.getenv("VELLA_WB_COMMON_API_TOKEN") or os.getenv("VELLA_WB_API_TOKEN"),
+        wb_common_api_timeout_seconds=float(os.getenv("VELLA_WB_COMMON_API_TIMEOUT_SECONDS", "20")),
+        wb_marketplace_api_base_url=os.getenv("VELLA_WB_MARKETPLACE_API_BASE_URL", "https://marketplace-api.wildberries.ru").rstrip("/"),
+        wb_marketplace_api_token=os.getenv("VELLA_WB_MARKETPLACE_API_TOKEN") or os.getenv("VELLA_WB_API_TOKEN"),
+        wb_marketplace_api_timeout_seconds=float(os.getenv("VELLA_WB_MARKETPLACE_API_TIMEOUT_SECONDS", "20")),
+        wb_supplies_api_base_url=os.getenv("VELLA_WB_SUPPLIES_API_BASE_URL", "https://supplies-api.wildberries.ru").rstrip("/"),
+        wb_supplies_api_token=os.getenv("VELLA_WB_SUPPLIES_API_TOKEN") or os.getenv("VELLA_WB_API_TOKEN"),
+        wb_supplies_api_timeout_seconds=float(os.getenv("VELLA_WB_SUPPLIES_API_TIMEOUT_SECONDS", "20")),
+        wb_seller_stock_warehouse_ids=_parse_int_csv_env(os.getenv("VELLA_WB_SELLER_STOCK_WAREHOUSE_IDS")),
+        wb_analytics_api_base_url=os.getenv("VELLA_WB_ANALYTICS_API_BASE_URL", "https://seller-analytics-api.wildberries.ru").rstrip("/"),
+        wb_analytics_api_token=os.getenv("VELLA_WB_ANALYTICS_API_TOKEN"),
+        wb_analytics_api_timeout_seconds=float(os.getenv("VELLA_WB_ANALYTICS_API_TIMEOUT_SECONDS", "20")),
+        wb_content_api_base_url=os.getenv("VELLA_WB_CONTENT_API_BASE_URL", "https://content-api.wildberries.ru").rstrip("/"),
+        wb_content_api_token=os.getenv("VELLA_WB_CONTENT_API_TOKEN"),
+        wb_content_api_timeout_seconds=float(os.getenv("VELLA_WB_CONTENT_API_TIMEOUT_SECONDS", "20")),
+        wb_promotions_api_base_url=os.getenv("VELLA_WB_PROMOTIONS_API_BASE_URL", "https://dp-calendar-api.wildberries.ru").rstrip("/"),
+        wb_promotions_api_token=os.getenv("VELLA_WB_PROMOTIONS_API_TOKEN"),
+        wb_promotions_api_timeout_seconds=float(os.getenv("VELLA_WB_PROMOTIONS_API_TIMEOUT_SECONDS", "20")),
+        wb_ads_api_base_url=os.getenv("VELLA_WB_ADS_API_BASE_URL", "https://advert-api.wildberries.ru").rstrip("/"),
+        wb_ads_api_token=os.getenv("VELLA_WB_ADS_API_TOKEN"),
+        wb_ads_api_timeout_seconds=float(os.getenv("VELLA_WB_ADS_API_TIMEOUT_SECONDS", "20")),
+        wb_feedbacks_api_base_url=os.getenv("VELLA_WB_FEEDBACKS_API_BASE_URL", "https://feedbacks-api.wildberries.ru").rstrip("/"),
+        wb_feedbacks_api_token=os.getenv("VELLA_WB_FEEDBACKS_API_TOKEN"),
+        wb_feedbacks_api_timeout_seconds=float(os.getenv("VELLA_WB_FEEDBACKS_API_TIMEOUT_SECONDS", "20")),
+        wb_feedbacks_send_enabled=os.getenv("VELLA_WB_FEEDBACKS_SEND_ENABLED", "false").lower() == "true",
+        avito_api_mode=os.getenv("VELLA_AVITO_API_MODE", "fake").lower(),
+        avito_api_base_url=os.getenv("VELLA_AVITO_API_BASE_URL", "https://api.avito.ru").rstrip("/"),
+        avito_api_access_token=os.getenv("VELLA_AVITO_API_ACCESS_TOKEN"),
+        avito_api_timeout_seconds=float(os.getenv("VELLA_AVITO_API_TIMEOUT_SECONDS", "20")),
+        openai_api_key=os.getenv("OPENAI_API_KEY") or os.getenv("VELLA_OPENAI_API_KEY"),
+        openai_api_base_url=os.getenv("VELLA_OPENAI_API_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+        openai_review_model=os.getenv("VELLA_OPENAI_REVIEW_MODEL", "gpt-4o-mini"),
+        openai_review_timeout_seconds=float(os.getenv("VELLA_OPENAI_REVIEW_TIMEOUT_SECONDS", "20")),
+        one_c_cash_flow_token=os.getenv("VELLA_1C_CASH_FLOW_TOKEN", "change-me"),
+        one_c_enabled=_parse_bool_env("VELLA_1C_ENABLED", _is_non_production(environment)),
+        api_docs_enabled=_parse_bool_env("VELLA_API_DOCS_ENABLED", _is_non_production(environment)),
+        auth_secret=os.getenv("VELLA_AUTH_SECRET", "change-this-secret"),
+        auth_access_ttl_seconds=int(os.getenv("VELLA_AUTH_ACCESS_TTL_SECONDS", "900")),
+        auth_refresh_ttl_seconds=int(os.getenv("VELLA_AUTH_REFRESH_TTL_SECONDS", "2592000")),
+        auth_refresh_rotation_grace_seconds=int(os.getenv("VELLA_AUTH_REFRESH_ROTATION_GRACE_SECONDS", "30")),
+        auth_refresh_cookie_name=os.getenv("VELLA_AUTH_REFRESH_COOKIE_NAME", "vella_refresh_token"),
+        auth_cookie_secure=(
+            auth_cookie_secure_raw.lower() == "true"
+            if auth_cookie_secure_raw is not None
+            else _default_auth_cookie_secure(environment)
+        ),
+        auth_cookie_samesite=os.getenv(
+            "VELLA_AUTH_COOKIE_SAMESITE",
+            "lax" if environment.lower() in {"local", "dev", "development", "test"} else "none",
+        ).lower(),
+        auth_cookie_domain=os.getenv("VELLA_AUTH_COOKIE_DOMAIN"),
+        cors_allowed_origins=_parse_csv_env(
+            os.getenv("VELLA_CORS_ALLOWED_ORIGINS"),
+            (
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://localhost:5174",
+                "http://127.0.0.1:5174",
+            ),
+        ),
+    )
+
+
+def validate_security_settings(settings: Settings) -> None:
+    if _is_non_production(settings.environment):
+        return
+    if len(settings.auth_secret) < 32 or settings.auth_secret == "change-this-secret":
+        raise RuntimeError("VELLA_AUTH_SECRET must be a random value of at least 32 characters in production")
+    if settings.one_c_enabled and (
+        len(settings.one_c_cash_flow_token) < 32 or settings.one_c_cash_flow_token == "change-me"
+    ):
+        raise RuntimeError("VELLA_1C_CASH_FLOW_TOKEN must be random when the legacy 1C bridge is enabled")
