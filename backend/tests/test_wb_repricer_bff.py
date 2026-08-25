@@ -2922,6 +2922,36 @@ def test_baskets_daily_detail_request_total_is_days_times_sku_batches(monkeypatc
     assert len([item for item in progress if item["phase"] == "completed"]) == 6
 
 
+def test_baskets_daily_detail_paginates_when_all_products_are_requested(monkeypatch):
+    offsets: list[int] = []
+
+    def request(_client, wb_request, **_kwargs):
+        offset = wb_request.jsonBody["offset"]
+        offsets.append(offset)
+        count = 1000 if offset == 0 else 1
+        return {
+            "data": {
+                "products": [
+                    {"product": {"nmId": offset + index + 1}, "statistic": {"selected": {"cartCount": 1}}}
+                    for index in range(count)
+                ]
+            }
+        }
+
+    monkeypatch.setattr(repricer_bff_module, "_request_or_raise_sales_funnel_products", request)
+
+    payload = repricer_bff_module.fetch_baskets_daily_detail(
+        "complete",
+        wb_token="token",
+        date_from=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        date_to=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        nm_ids=[],
+    )
+
+    assert offsets == [0, 1000]
+    assert len(payload["dailyAggregates"]["2026-06-01"]) == 1001
+
+
 def test_baskets_daily_detail_reports_sales_funnel_waits(monkeypatch):
     class AnalyticsClient:
         def request(self, request: WbApiRequest) -> WbApiResponseEnvelope:
@@ -4437,6 +4467,7 @@ def test_regular_wb_sync_defers_daily_baskets_detail(monkeypatch):
     result = refresh_wb_data_sources(organization_id=1, wb_token="token", period_days=7, sources=["baskets"], execute_lock=False, _progress_callback=observed.append)
 
     assert calls[0]["include_daily"] is False
+    assert calls[0]["nm_ids"] == []
     assert saved["baskets_7"]["dailyDetailStatus"] == "deferred"
     assert not any(item.get("source") == "baskets" and item.get("phase") == "daily-detail" for item in observed)
     assert any(item.get("source") == "baskets" and item.get("progressCurrent") == 1000 for item in observed)
@@ -4520,7 +4551,7 @@ def test_wb_sync_can_opt_into_daily_baskets_detail(monkeypatch):
 
     def fetch_detail(*_args, **kwargs):
         detail_calls.append(kwargs)
-        kwargs["progress_callback"]({"phase": "completed", "dayIndex": 1, "daysTotal": 7, "batch": 1, "batchesTotal": 2, "requestsCompleted": 1, "requestsTotal": 14})
+        kwargs["progress_callback"]({"phase": "daily-detail", "dayIndex": 1, "daysTotal": 7, "batch": 1, "batchesTotal": 2, "requestsCompleted": 1, "requestsTotal": 14})
         return {"dailyAggregates": {}, "requestsCompleted": 14, "requestsTotal": 14}
 
     monkeypatch.setattr("app.repricer_sync.fetch_baskets_daily_detail", fetch_detail)
@@ -4536,6 +4567,7 @@ def test_wb_sync_can_opt_into_daily_baskets_detail(monkeypatch):
     )
 
     assert len(detail_calls) == 1
+    assert detail_calls[0]["nm_ids"] == []
     assert any(item.get("source") == "baskets" and item.get("phase") == "daily-detail" for item in observed)
     assert result["state"] == "completed"
 

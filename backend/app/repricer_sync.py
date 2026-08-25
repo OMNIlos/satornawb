@@ -1516,7 +1516,7 @@ def refresh_wb_data_sources(
                         period_days=resolved_period_days,
                         date_from=range_start,
                         date_to=range_end,
-                        nm_ids=nm_ids,
+                        nm_ids=[],
                         include_daily=False,
                         progress_callback=report_baskets_progress,
                     )
@@ -1624,7 +1624,7 @@ def refresh_wb_data_sources(
                                 wb_token=wb_token,
                                 date_from=range_start,
                                 date_to=range_end,
-                                nm_ids=nm_ids,
+                                nm_ids=[],
                                 progress_callback=report_baskets_detail_progress,
                                 existing_daily_aggregates=previous_daily_aggregates,
                                 existing_chunks=previous_chunks,

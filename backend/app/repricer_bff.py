@@ -3283,21 +3283,29 @@ def fetch_baskets_daily_detail(
                 continue
             if progress_callback:
                 progress_callback({**base_progress, "phase": "requesting"})
-            request = WbApiRequest(method="POST", path="/api/analytics/v3/sales-funnel/products", jsonBody={
-                "selectedPeriod": {"start": day.isoformat(), "end": day.isoformat()},
-                "pastPeriod": {"start": day_past.isoformat(), "end": day_past.isoformat()},
-                "nmIds": batch, "skipDeletedNm": False, "limit": limit, "offset": 0,
-            })
             try:
-                payload = _request_or_raise_sales_funnel_products(
-                    client,
-                    request,
-                    progress_callback=(
-                        (lambda event, base_progress=base_progress: progress_callback({**base_progress, **event}))
-                        if progress_callback
-                        else None
-                    ),
-                )
+                offset = 0
+                while True:
+                    request = WbApiRequest(method="POST", path="/api/analytics/v3/sales-funnel/products", jsonBody={
+                        "selectedPeriod": {"start": day.isoformat(), "end": day.isoformat()},
+                        "pastPeriod": {"start": day_past.isoformat(), "end": day_past.isoformat()},
+                        "nmIds": batch, "skipDeletedNm": False, "limit": limit, "offset": offset,
+                    })
+                    payload = _request_or_raise_sales_funnel_products(
+                        client,
+                        request,
+                        progress_callback=(
+                            (lambda event, base_progress=base_progress: progress_callback({**base_progress, **event}))
+                            if progress_callback
+                            else None
+                        ),
+                    )
+                    data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else (payload if isinstance(payload, dict) else {})
+                    products = data.get("products", []) if isinstance(data, dict) else []
+                    _merge_sales_funnel_products(day_rows, products)
+                    if batch or len(products) < limit:
+                        break
+                    offset += limit
             except WbSalesFunnelDeferred:
                 raise
             except HTTPException as exc:
@@ -3331,8 +3339,6 @@ def fetch_baskets_daily_detail(
                 if progress_callback:
                     progress_callback(failed_progress)
                 raise
-            data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else (payload if isinstance(payload, dict) else {})
-            _merge_sales_funnel_products(day_rows, data.get("products", []) if isinstance(data, dict) else [])
             requests_completed += 1
             completed_progress = {**base_progress, "phase": "completed", "requestsCompleted": requests_completed}
             chunks = [
