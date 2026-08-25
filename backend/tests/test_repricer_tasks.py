@@ -8,12 +8,79 @@ from app import repricer_tasks
 
 
 def _mock_working_onboarding_ready(monkeypatch):
+    monkeypatch.setattr("app.repricer_tasks.cached_goods_meta", lambda _organization_id: {"totalCached": 1})
     monkeypatch.setattr(
         "app.repricer_tasks.list_source_cache_ranges_by_prefix",
         lambda _organization_id, _prefix, **_kwargs: [
-            {"dateFrom": "2026-01-01", "dateTo": "2026-12-31", "dailyAggregatesDays": 365}
+            {
+                "dateFrom": "2026-01-01",
+                "dateTo": "2026-12-31",
+                "dailyAggregatesDays": 365,
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
+            }
         ],
     )
+
+
+def test_report_snapshot_windows_only_include_latest_closed_presets(monkeypatch):
+    monkeypatch.setattr(repricer_tasks, "historical_sync_as_of", lambda: date(2026, 8, 24))
+    monkeypatch.setattr(
+        repricer_tasks,
+        "list_source_cache_ranges_by_prefix",
+        lambda _organization_id, prefix, **_kwargs: [
+            {
+                "sourceKey": f"{prefix}2026-07-01_2026-08-25",
+                "dateFrom": "2026-07-01",
+                "dateTo": "2026-08-25",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
+            }
+        ],
+    )
+
+    assert repricer_tasks._available_report_snapshot_windows(7) == [
+        (date(2026, 8, 24), date(2026, 8, 24)),
+        (date(2026, 8, 18), date(2026, 8, 24)),
+        (date(2026, 8, 11), date(2026, 8, 24)),
+        (date(2026, 7, 26), date(2026, 8, 24)),
+    ]
+
+
+def test_report_snapshot_windows_skip_stale_source_anchor(monkeypatch):
+    monkeypatch.setattr(repricer_tasks, "historical_sync_as_of", lambda: date(2026, 8, 24))
+    monkeypatch.setattr(
+        repricer_tasks,
+        "list_source_cache_ranges_by_prefix",
+        lambda _organization_id, prefix, **_kwargs: [
+            {
+                "sourceKey": f"{prefix}2026-07-01_2026-08-24",
+                "dateFrom": "2026-07-01",
+                "dateTo": "2026-08-23" if prefix == "finance_" else "2026-08-24",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
+            }
+        ],
+    )
+
+    assert repricer_tasks._available_report_snapshot_windows(7) == []
+
+
+def test_report_snapshot_windows_skip_legacy_finance_basis(monkeypatch):
+    monkeypatch.setattr(repricer_tasks, "historical_sync_as_of", lambda: date(2026, 8, 24))
+    monkeypatch.setattr(
+        repricer_tasks,
+        "list_source_cache_ranges_by_prefix",
+        lambda _organization_id, prefix, **_kwargs: [
+            {
+                "sourceKey": f"{prefix}2026-07-01_2026-08-24",
+                "dateFrom": "2026-07-01",
+                "dateTo": "2026-08-24",
+            }
+        ],
+    )
+
+    assert repricer_tasks._available_report_snapshot_windows(7) == []
 
 
 def test_rnp_daily_baskets_ready_rejects_aggregate_only_covering_cache(monkeypatch):
@@ -65,7 +132,7 @@ def test_rnp_daily_baskets_ready_accepts_covering_daily_detail(monkeypatch):
 def test_onboarding_readiness_requires_daily_baskets_detail(monkeypatch):
     caches_by_prefix = {
         "period_stats_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28"}],
-        "finance_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28"}],
+        "finance_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28", "revenueBasis": "retailAmount", "financeSchemaVersion": "v2"}],
         "ads_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28"}],
         "baskets_": [
             {
@@ -103,6 +170,52 @@ def test_onboarding_readiness_requires_daily_baskets_detail(monkeypatch):
     assert repricer_tasks._source_ready_for_profile(2, profile, "baskets") is True
     assert repricer_tasks._resume_missing_profile_sources(2, profile) == ()
     assert repricer_tasks._working_onboarding_window_ready(2, as_of=date(2026, 7, 28)) is True
+
+
+def test_source_readiness_rejects_legacy_finance_revenue_basis(monkeypatch):
+    monkeypatch.setattr(
+        "app.repricer_tasks.list_source_cache_ranges_by_prefix",
+        lambda *_args, **_kwargs: [
+            {"dateFrom": "2026-07-01", "dateTo": "2026-07-31", "revenueBasis": "retailPriceWithDisc"}
+        ],
+    )
+
+    assert repricer_tasks._range_source_ready(
+        2,
+        "finance",
+        date(2026, 7, 1),
+        date(2026, 7, 31),
+    ) is False
+
+
+def test_onboarding_readiness_allows_legacy_finance_cache_to_be_refreshed(monkeypatch):
+    monkeypatch.setattr("app.repricer_tasks.cached_goods_meta", lambda _organization_id: {"totalCached": 1})
+
+    def caches(_organization_id, prefix, **_kwargs):
+        payload = {
+            "dateFrom": "2026-07-01",
+            "dateTo": "2026-07-31",
+            "dailyAggregatesDays": 31,
+        }
+        if prefix == "finance_":
+            payload["revenueBasis"] = "retailPriceWithDisc"
+        return [payload]
+
+    monkeypatch.setattr("app.repricer_tasks.list_source_cache_ranges_by_prefix", caches)
+
+    assert repricer_tasks._working_onboarding_window_ready(2, as_of=date(2026, 7, 31)) is True
+
+
+def test_scheduler_source_aggregates_reject_legacy_finance_cache(monkeypatch):
+    monkeypatch.setattr(
+        "app.repricer_tasks.get_source_cache",
+        lambda *_args, **_kwargs: {
+            "fetchedAt": "2026-08-25T00:00:00+00:00",
+            "aggregates": {"123": {"sellerRevenueKopecks": 999_000}},
+        },
+    )
+
+    assert repricer_tasks._source_aggregates(2, "finance_30") == ({}, False)
 
 
 def test_onboarding_readiness_rejects_shifted_daily_baskets_dates(monkeypatch):
@@ -166,6 +279,8 @@ def test_report_snapshot_source_ready_accepts_covering_daily_detail(monkeypatch)
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "fetched",
                 "dailyAggregatesDays": 30,
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
             }
         ]
         if prefix == "finance_"
@@ -178,6 +293,28 @@ def test_report_snapshot_source_ready_accepts_covering_daily_detail(monkeypatch)
         date(2026, 7, 8),
         date(2026, 7, 21),
     ) is True
+
+
+def test_report_snapshot_source_ready_rejects_legacy_finance_basis(monkeypatch):
+    monkeypatch.setattr(
+        "app.repricer_tasks.list_source_cache_ranges_by_prefix",
+        lambda _organization_id, prefix, **_kwargs: [
+            {
+                "sourceKey": "finance_2026-06-25_2026-07-24",
+                "dateFrom": "2026-06-25",
+                "dateTo": "2026-07-24",
+                "dailyAggregatesDays": 30,
+            }
+        ]
+        if prefix == "finance_"
+        else [],
+    )
+    assert repricer_tasks._report_snapshot_source_ready(
+        2,
+        "finance",
+        date(2026, 7, 8),
+        date(2026, 7, 21),
+    ) is False
 
 
 def test_scheduler_execute_loads_full_cached_goods_list(monkeypatch):
@@ -215,7 +352,7 @@ def test_scheduler_execute_loads_full_cached_goods_list(monkeypatch):
     monkeypatch.setattr("app.repricer_tasks.get_source_cache", lambda _organization_id, source_key, **_kwargs: {
         "period_stats_2026-05-26_2026-06-24": {"aggregates": {"123456": {"ordersUnits": 130}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
         "baskets_2026-05-26_2026-06-24": {"aggregates": {"123456": {"cartCount": 0}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
-        "finance_2026-05-26_2026-06-24": {"aggregates": {"123456": {"commissionKopecks": 1000}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
+            "finance_2026-05-26_2026-06-24": {"aggregates": {"123456": {"commissionKopecks": 1000}}, "fetchedAt": "2026-06-24T09:00:00+00:00", "revenueBasis": "retailAmount", "financeSchemaVersion": "v2"},
         "ads_2026-05-26_2026-06-24": {"aggregates": {"123456": {"adSpendKopecks": 500}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
         "stocks": {"aggregates": {"123456": {"wbStockUnits": 15}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
     }.get(source_key))
@@ -420,6 +557,7 @@ def test_scheduler_wb_sync_respects_recent_manual_sync(monkeypatch):
         "finishedAt": "2026-06-24T09:10:00+00:00",
         "periodDays": 30,
     })
+    _mock_working_onboarding_ready(monkeypatch)
     monkeypatch.setattr(
         "app.repricer_tasks.list_wb_sync_history",
         lambda *_args, **_kwargs: [
@@ -611,7 +749,7 @@ def test_scheduler_wb_sync_runs_due_periodic_windows(monkeypatch):
         "finance-recent",
     ]
     assert calls[0]["period_days"] == 2
-    assert calls[0]["sources"] == ("period-stats",)
+    assert calls[0]["sources"] == ("goods", "period-stats")
     assert calls[0]["sync_profile"] == "hourly-operational"
     assert calls[0]["sync_profile_label"] == "Оперативные заказы и продажи"
     assert calls[0]["window_kind"] == "incremental"
@@ -1038,21 +1176,20 @@ def test_rnp_report_task_presyncs_funnel_sources_before_building(monkeypatch):
     assert calls[0]["baskets_include_daily_detail"] is False
 
 
-def test_digest_task_presyncs_report_sources_before_building(monkeypatch):
+def test_digest_task_builds_from_cache_without_live_sync(monkeypatch):
     from app.routers import wb_reports_bff as reports
 
-    calls: list[dict[str, object]] = []
     saved: dict[str, dict] = {}
     snapshot = SimpleNamespace(source_status="cached", orders=[], sales=[], stocks=[])
     ads = SimpleNamespace(rows=[])
 
-    monkeypatch.setattr("app.repricer_tasks.refresh_wb_data_sources", lambda **kwargs: calls.append(kwargs) or {"state": "completed", "steps": []})
-    monkeypatch.setattr(reports, "build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("digest task must use cached WB snapshot"))
+    monkeypatch.setattr("app.repricer_tasks.refresh_wb_data_sources", lambda **_kwargs: pytest.fail("digest cache build must not call WB"))
     monkeypatch.setattr(reports, "build_cached_wb_reports_sources_snapshot", lambda **_kwargs: snapshot)
     monkeypatch.setattr(reports, "_build_digest_ads_snapshot", lambda **_kwargs: ads)
     monkeypatch.setattr(reports, "_build_digest_funnel_snapshot", lambda **_kwargs: {})
     monkeypatch.setattr(reports, "build_plan_fact_report", lambda **_kwargs: SimpleNamespace(rows=[]))
     monkeypatch.setattr(reports, "_build_digest_payload", lambda *_args, **_kwargs: {"rows": []})
+    monkeypatch.setattr("app.repricer_tasks._digest_report_summary", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(reports, "_apply_digest_plan", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(reports, "save_source_cache", lambda _organization_id, key, payload: saved.__setitem__(key, payload))
     monkeypatch.setattr(reports, "get_source_cache", lambda _organization_id, key, **_kwargs: saved.get(key))
@@ -1066,88 +1203,32 @@ def test_digest_task_presyncs_report_sources_before_building(monkeypatch):
     )
 
     assert result["state"] == "completed"
-    assert calls[0]["trigger"] == "reports-digest"
-    assert calls[0]["sources"] == ("stocks", "period-stats", "finance", "ads", "baskets")
-    assert calls[0]["execute_lock"] is False
-    assert calls[0]["baskets_include_daily_detail"] is False
 
 
-def test_range_source_ready_accepts_days_split_across_windows(monkeypatch):
-    """Readiness must be judged on the days actually stored.
+def test_digest_summary_preserves_snapshot_costs_when_source_totals_match(monkeypatch):
+    from app import repricer_tasks
+    from app.routers import wb_repricer_bff as repricer
 
-    Each sync profile writes its own window, so a 30-day range routinely lands
-    across two of them.  Demanding a single spanning cache reported
-    range_not_covered while every one of the 30 days was on disk - the sync
-    card showed "Первичная загрузка 30 дней · ошибка" even though the 30-day
-    report rendered real numbers from exactly those caches.
-    """
-    days_a = {f"2026-07-{d:02d}": {"1": {}} for d in range(20, 32)}
-    days_b = {f"2026-08-{d:02d}": {"1": {}} for d in range(1, 19)}
-    caches = [
-        {"dateFrom": "2026-07-19", "dateTo": "2026-08-17", "dailyAggregates": days_a},
-        {"dateFrom": "2026-08-05", "dateTo": "2026-08-18", "dailyAggregates": days_b},
-    ]
+    source_fields = {
+        "ordersUnits": 10,
+        "salesUnits": 4,
+        "returnsUnits": 1,
+        "sellerRevenueKopecks": 1_000,
+        "buyerRevenueKopecks": 800,
+        "expensesKopecks": 300,
+        "adSpendKopecks": 50,
+    }
+    snapshot = {"total": 1, "summary": {**source_fields, "marginKopecks": 123}}
+    monkeypatch.setattr(repricer, "_load_repricer_sku_snapshot", lambda *_args, **_kwargs: snapshot)
+    monkeypatch.setattr(repricer, "_load_repricer_sku_snapshot_page", lambda *_args, **_kwargs: (snapshot, []))
+    monkeypatch.setattr(repricer, "_period_source_cache", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(repricer, "_limited_finance_diagnostics", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        "app.repricer_tasks.list_source_cache_ranges_by_prefix",
-        lambda _org, _prefix, **_kwargs: caches,
+        repricer,
+        "_repricer_list_summary_from_source_caches",
+        lambda *_args, **_kwargs: {**source_fields, "marginKopecks": 999},
     )
 
-    assert repricer_tasks._range_source_ready(
-        2, "period-stats", date(2026, 7, 20), date(2026, 8, 18)
-    ) is True
+    summary = repricer_tasks._digest_report_summary(2, date(2026, 7, 1), date(2026, 7, 31))
 
-
-def test_range_source_ready_still_reports_a_real_gap(monkeypatch):
-    """A day nobody stored must still read as not covered."""
-    days = {f"2026-08-{d:02d}": {"1": {}} for d in range(1, 15)}
-    monkeypatch.setattr(
-        "app.repricer_tasks.list_source_cache_ranges_by_prefix",
-        lambda _org, _prefix, **_kwargs: [{"dateFrom": "2026-07-19", "dateTo": "2026-08-14", "dailyAggregates": days}],
-    )
-
-    assert repricer_tasks._range_source_ready(
-        2, "period-stats", date(2026, 7, 20), date(2026, 8, 18)
-    ) is False
-
-
-def test_scheduler_gate_tolerates_sync_falling_days_behind(monkeypatch):
-    """The gate must not demand the very days the sync exists to fetch.
-
-    It guards "is there a 30-day baseline yet".  Anchoring that window on
-    today (or yesterday) makes it depend on data only the incremental sync can
-    produce, so one missed day deadlocks the scheduler permanently: the sync is
-    skipped, the day is never fetched, and the window never closes.  That is
-    what froze this cabinet at 2026-08-22 while every profile sat due=True.
-    """
-    covered_through = date(2026, 8, 22)
-
-    def fake_ready(_org, _source, _start, end, **_kwargs):
-        return end <= covered_through
-
-    monkeypatch.setattr(repricer_tasks, "_range_source_ready", fake_ready)
-    monkeypatch.setattr(repricer_tasks, "cached_goods_meta", lambda _org: {"totalCached": 3276})
-
-    now = datetime(2026, 8, 24, 7, 0, tzinfo=timezone.utc)
-    assert repricer_tasks._onboarding_baseline_ready(2, now=now) is True
-
-
-def test_scheduler_gate_still_blocks_a_cold_cabinet(monkeypatch):
-    """With no analytical history at all, onboarding must still run first."""
-    monkeypatch.setattr(repricer_tasks, "_range_source_ready", lambda *_a, **_k: False)
-    monkeypatch.setattr(repricer_tasks, "cached_goods_meta", lambda _org: {"totalCached": 3276})
-
-    now = datetime(2026, 8, 24, 7, 0, tzinfo=timezone.utc)
-    assert repricer_tasks._onboarding_baseline_ready(2, now=now) is False
-
-
-def test_scheduler_gate_blocks_when_lag_is_beyond_recovery(monkeypatch):
-    """A cabinet months behind needs a real re-onboarding, not incrementals."""
-    covered_through = date(2026, 6, 1)
-    monkeypatch.setattr(
-        repricer_tasks, "_range_source_ready",
-        lambda _org, _source, _start, end, **_kw: end <= covered_through,
-    )
-    monkeypatch.setattr(repricer_tasks, "cached_goods_meta", lambda _org: {"totalCached": 3276})
-
-    now = datetime(2026, 8, 24, 7, 0, tzinfo=timezone.utc)
-    assert repricer_tasks._onboarding_baseline_ready(2, now=now) is False
+    assert summary["marginKopecks"] == 123

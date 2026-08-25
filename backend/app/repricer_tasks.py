@@ -16,7 +16,14 @@ from app.avito.price_apply import LiveAvitoPriceClient
 from app.cabinet.store import get_organization_avito_credentials_secret, get_organization_wb_token_secret, get_user_wb_token_secret
 from app.config import get_settings
 from app.infra.celery_app import REPRICER_SCHEDULER_POLL_MINUTES, celery_app
-from app.repricer_cache.store import cached_goods_meta, get_source_cache, list_cached_goods, list_source_cache_ranges_by_prefix, save_source_cache
+from app.repricer_cache.store import (
+    cached_goods_meta,
+    finance_cache_uses_current_revenue_basis,
+    get_source_cache,
+    list_cached_goods,
+    list_source_cache_ranges_by_prefix,
+    save_source_cache,
+)
 from app.repricer_execution import StrategyExecuteOptions, execute_all_assigned_skus
 from app.repricer_persistence.store import (
     append_execution_run,
@@ -41,7 +48,7 @@ from app.wb_sync_plan import WbSyncProfile, historical_sync_as_of, nightly_baske
 
 REPORT_SOURCE_REFRESH_PLANS: dict[str, dict[str, Any]] = {
     "digest": {"sources": ("period-stats", "finance", "ads", "baskets"), "baskets_include_daily_detail": True},
-    "abc": {"sources": ("period-stats", "finance", "ads", "baskets"), "baskets_include_daily_detail": True},
+    "abc": {"sources": ("finance", "ads", "baskets"), "baskets_include_daily_detail": True},
     "rnp": {"sources": ("baskets", "ads"), "baskets_include_daily_detail": True},
     "pnl": {"sources": ("finance", "ads"), "baskets_include_daily_detail": False},
     "ads": {"sources": ("ads",), "baskets_include_daily_detail": False},
@@ -933,6 +940,7 @@ def _working_onboarding_window_ready(organization_id: int, *, as_of) -> bool:
             start,
             as_of,
             require_baskets_daily_detail=True,
+            require_current_finance_basis=False,
         ):
             return False
     return True
@@ -947,7 +955,7 @@ RANGED_SYNC_SOURCE_PREFIXES: dict[str, str] = {
 
 
 REPORT_DAILY_SOURCES_BY_ID: dict[str, tuple[str, ...]] = {
-    "abc": ("period-stats", "finance", "ads", "baskets"),
+    "abc": ("finance", "ads", "baskets"),
     "rnp": ("baskets", "ads"),
     "ads": ("ads",),
     "stock": ("period-stats", "finance"),
@@ -981,6 +989,7 @@ def _range_source_ready(
     date_to: Any,
     *,
     require_baskets_daily_detail: bool = False,
+    require_current_finance_basis: bool = True,
 ) -> bool:
     prefix = RANGED_SYNC_SOURCE_PREFIXES.get(source)
     if not prefix:
@@ -992,6 +1001,8 @@ def _range_source_ready(
         cache_from = _parse_profile_cache_date(cache.get("dateFrom"))
         cache_to = _parse_profile_cache_date(cache.get("dateTo"))
         if not cache_from or not cache_to or cache_from > date_from or cache_to < date_to:
+            continue
+        if source == "finance" and require_current_finance_basis and not finance_cache_uses_current_revenue_basis(cache):
             continue
         if source == "baskets" and require_baskets_daily_detail and not _baskets_cache_has_daily_detail(cache, date_from, date_to):
             continue
@@ -1041,6 +1052,8 @@ def _report_snapshot_source_ready(organization_id: int, source: str, date_from: 
         cache_from = _parse_profile_cache_date(cache.get("dateFrom"))
         cache_to = _parse_profile_cache_date(cache.get("dateTo"))
         if not cache_from or not cache_to or cache_from > date_from or cache_to < date_to:
+            continue
+        if source == "finance" and not finance_cache_uses_current_revenue_basis(cache):
             continue
         if source == "baskets":
             if _baskets_cache_has_daily_detail(cache, date_from, date_to):
@@ -1554,40 +1567,33 @@ def _cache_range_window(cache: dict[str, Any]) -> tuple[Any, Any] | None:
     return date_from, date_to
 
 
-def _available_report_snapshot_windows(organization_id: int) -> list[tuple[Any, Any]]:
-    exact_windows: set[tuple[Any, Any]] = set()
-    generated_windows: set[tuple[Any, Any]] = set()
-    min_day = None
-    max_day = None
+def _available_report_snapshot_windows(organization_id: int) -> list[tuple[date, date]]:
+    source_bounds: list[tuple[date, date]] = []
     for prefix in ("period_stats_", "finance_", "ads_", "baskets_"):
+        source_from = None
+        source_to = None
         for cache in list_source_cache_ranges_by_prefix(organization_id, prefix, limit=500):
+            if prefix == "finance_" and not finance_cache_uses_current_revenue_basis(cache):
+                continue
             parsed = _cache_range_window(cache)
             if not parsed:
                 continue
             date_from, date_to = parsed
-            if (date_to - date_from).days < 31:
-                exact_windows.add((date_from, date_to))
-            min_day = date_from if min_day is None or date_from < min_day else min_day
-            max_day = date_to if max_day is None or date_to > max_day else max_day
-    if not min_day or not max_day:
+            source_from = date_from if source_from is None or date_from < source_from else source_from
+            source_to = date_to if source_to is None or date_to > source_to else source_to
+        if source_from is None or source_to is None:
+            return []
+        source_bounds.append((source_from, source_to))
+
+    coverage_from = max(item[0] for item in source_bounds)
+    anchor = historical_sync_as_of()
+    if any(source_to < anchor for _, source_to in source_bounds):
         return []
-    min_day = max(min_day, max_day - timedelta(days=179))
-
-    current = min_day
-    while current <= max_day:
-        generated_windows.add((current, current))
-        current += timedelta(days=1)
-
-    for days in (7, 14, 30):
-        current_to = min_day + timedelta(days=days - 1)
-        while current_to <= max_day:
-            generated_windows.add((current_to - timedelta(days=days - 1), current_to))
-            current_to += timedelta(days=1)
-
-    generated_windows.difference_update(exact_windows)
-    prioritized = sorted(exact_windows, key=lambda item: (-(item[1] - item[0]).days, item[0], item[1]))
-    generated = sorted(generated_windows, key=lambda item: ((item[1] - item[0]).days, item[0], item[1]))
-    return prioritized + generated
+    return [
+        (anchor - timedelta(days=days - 1), anchor)
+        for days in (1, 7, 14, 30)
+        if anchor - timedelta(days=days - 1) >= coverage_from
+    ]
 
 
 def _save_report_snapshots_status(organization_id: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1855,6 +1861,8 @@ def _persist_scheduler_skip(
 
 def _source_aggregates(organization_id: int, source_key: str) -> tuple[dict[str, dict[str, Any]], bool]:
     cache = get_source_cache(organization_id, source_key, slim=False) or {}
+    if source_key.startswith("finance_") and not finance_cache_uses_current_revenue_basis(cache):
+        return {}, False
     aggregates = cache.get("aggregates") if isinstance(cache.get("aggregates"), dict) else {}
     return aggregates, bool(cache.get("fetchedAt") or cache.get("simulatedAt"))
 

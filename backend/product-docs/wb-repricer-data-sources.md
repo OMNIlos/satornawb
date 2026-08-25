@@ -35,12 +35,12 @@
 
 | KPI в UI | API поле | Источник | Формула |
 |---|---|---|---|
-| Выручка за период | `summary.revenueKopecks` | `finance_{periodDays}` или `period_stats_{periodDays}` | Сумма `analytics.sellerRevenueKopecks` / `analytics.revenueKopecks`: база продавца `retailPriceWithDisc * quantity` из WB Finance. Для старого кэша fallback = `sellerDiscountedPriceKopecks * salesUnits`. `buyerRevenueKopecks` хранится отдельно как `retailAmount`. |
+| Выручка за период | `summary.revenueKopecks` | `finance_{periodDays}` или `period_stats_{periodDays}` | Знаковая сумма `retailAmount` из WB Finance: продажи плюс, возвраты минус. Поле уже содержит сумму строки и не умножается на `quantity`. |
 | Средняя маржа % | `summary.avgMarginPct` | finance/period + расчет SKU | Если есть выручка: `marginKopecks / revenueKopecks * 100`. Иначе среднее по доступным `analytics.marginPct`. |
 | Маржа ₽ | `summary.marginKopecks` | finance или расчет unit margin | Если есть `analytics.netProfitKopecks`, берется он. Иначе `analytics.marginKopecks * ordersUnits`. |
 | Продажи по себестоимости | `summary.cogsKopecks` | Excel/настройки себестоимости + finance/period sales | `settings.cogsKopecks * salesUnits`. |
-| Расходы ₽ | `summary.expensesKopecks` | finance + ads + настройки расходов | `commission + logistics + storage + acceptance + penalty + deduction + acquiring + ads + otherExpenses - additionalPayment`. `penalty` и `deduction` сохраняют знак WB: отрицательные компенсации уменьшают расходы. Налог хранится отдельно и не входит в расходы/маржу репрайсера. |
-| Реклама ₽ | `summary.adSpendKopecks` | `ads_{periodDays}` | Сумма расходов WB Ads fullstats за выбранный период. |
+| Расходы ₽ | `summary.expensesKopecks` | finance + ads + настройки расходов | `commission + logistics + storage + acceptance + penalty + deduction + loyaltyCost + acquiring + ads + otherExpenses - additionalPayment`. `additionalPayment = paymentSchedule - raw additionalPayment`; отрицательные `penalty`/`deduction` и положительный результат нормализации уменьшают расходы. Налог показывается отдельно, но вычитается из чистой прибыли. |
+| Реклама ₽ | `summary.adSpendKopecks` | finance, fallback `ads_{periodDays}` | Удержание «WB Продвижение» из финального отчёта; WB Ads fullstats используется, только если такого удержания ещё нет. |
 | Заказы, шт | `summary.ordersUnits` | `period_stats_{periodDays}` | Количество неотмененных заказов из `/api/v1/supplier/orders`, отфильтрованных по `date` внутри периода. Отмены по `isCancel/cancelDate` не входят в KPI и отдельно доступны в `summary.cancelledOrdersUnits`. Дедуп: `srid`, затем `odid/rid`; `orderUid/gNumber` используются только в композитном ключе с `nmId`, размером/баркодом, датой и ценой. |
 | Продажи, шт | `summary.salesUnits` | `finance_{periodDays}` или `period_stats_{periodDays}` | Количество продаж gross из finance detailed; возвраты показываются отдельно. |
 | Возвраты, шт | `summary.returnsUnits` | `finance_{periodDays}` или `period_stats_{periodDays}` | Количество возвратов из finance detailed / supplier sales. |
@@ -62,13 +62,13 @@
 | Акция | `promoActive`, `promoState` | `analytics.promotionStatus`, `promotionStatusText` | WB promotions + promotion Excel | `yes`, если SKU/nmId найден в активных акциях или загруженных порогах акции. |
 | Ответственный | `managerId`, `managerName` | `meta.managerId`, `meta.managerName`, `assignmentSource` | локальное состояние репрайсера / назначения | Меняется через `PATCH /api/v1/wb-repricer/sku/{articleId}/manager`, причина обязательна. |
 | Цена до СПП | `price` | `meta.currentPriceKopecks` | WB goods или локальный override | Берется `discountedPrice`, если есть, иначе `price`. Если включен preserve local override и есть `SKU_META_OVERRIDES.currentPriceKopecks`, показывается override. |
-| Средняя с СПП | `avgPriceSpp` | `analytics.buyerPriceNoWalletKopecks` / `avgPriceWithSppKopecks` / `accountedBuyerPriceKopecks` | WB goods, period stats, finance | При `spp_plus_wallet` берется `accountedBuyerPriceKopecks`; иначе buyer price без кошелька или средняя цена из period stats. |
-| % СПП | `spp` | `analytics.sppPct` | `supplier.orders.spp`, finance spp или live buyer price | Приоритет: `period_stats.sppPct`, затем `finance.sppPct`, затем расчет `(sellerDiscounted - buyerPriceNoWallet) / sellerDiscounted * 100`. |
+| Средняя с СПП | `avgPriceSpp` | `analytics.avgPriceWithSppKopecks` | WB Sales Funnel | Только `orderSumKopecks / orderCount` за выбранный период. Текущая buyer price хранится отдельно в `buyerPriceNoWalletKopecks`. |
+| % СПП | `spp` | `analytics.sppPct` | WB goods buyer price | Для текущей цены: `(sellerDiscounted - buyerPriceNoWallet) / sellerDiscounted * 100`; исторические проценты периода хранятся отдельно. |
 | Маржа | `mg`, `mgRub` | `analytics.marginPct`, `analytics.marginKopecks` | настройки себестоимости + комиссии + логистика | Unit margin = `sellerDiscountedPrice - sellerDiscountedPrice * commissionPct - sellerDiscountedPrice * acquiringPct - deliveryToClient * buyoutPct - deliveryFromClient * buyoutPct - otherExpenses - cogs`. Margin % в backend = `unitNet / sellerDiscountedPrice * 100`. |
 | Комиссия | `commissionPct`, `commissionRub` | `analytics.commissionDisplayPct`, `commissionKopecks` | тарифы WB + acquiring + finance | Базовая комиссия берется из тарифов по subject, fallback из настроек; effective = `baseCommissionPct + acquiringPct`. `commissionRub` из finance, если доступен. |
-| Корректировки WB | `penaltyChargedKopecks`, `penaltyReturnedKopecks`, `deductionChargedKopecks`, `deductionCompensationKopecks`, `additionalPaymentKopecks` | Finance detailed `penalty`, `deduction`, `additionalPayment`, `sellerOperName`, `bonusTypeName`, `rrdId` | `penaltyKopecks` и `deductionKopecks` — net-суммы со знаком. Отдельно доступны начисленные штрафы, возвраты штрафов, начисленные удержания, компенсации удержаний и доплаты WB. |
+| Корректировки WB | `penaltyChargedKopecks`, `penaltyReturnedKopecks`, `deductionChargedKopecks`, `deductionCompensationKopecks`, `rewardAdjustmentKopecks`, `paymentScheduleKopecks`, `additionalPaymentKopecks` | Finance detailed `penalty`, `deduction`, `additionalPayment`, `paymentSchedule`, `sellerOperName`, `bonusTypeName`, `rrdId` | Штрафы и удержания сохраняют знак. `rewardAdjustmentKopecks` — исходная корректировка вознаграждения, `paymentScheduleKopecks` — разовое изменение перечисления, `additionalPaymentKopecks` — их net-кредит для формулы прибыли. |
 | Корзины | `bsk` | `analytics.baskets` | `baskets_{periodDays}` | `cartCount` из `/api/analytics/v3/sales-funnel/products`; если кэш не загружен, `no_data`, в demo fallback `meta.basketsLast7d`. |
-| Заказы | `ordersPeriod` | `analytics.ordersUnits` | `period_stats_{periodDays}` | Количество неотмененных заказов из `/api/v1/supplier/orders` по полю `date` внутри выбранного периода. `lastChangeDate` используется только как запасной вариант, если `date` отсутствует; отмены доступны отдельным полем `cancelledOrdersUnits`. |
+| Заказы | `ordersPeriod` | `analytics.ordersUnits` | WB Sales Funnel | `orderCount` из `/api/analytics/v3/sales-funnel/products` за выбранный период; supplier orders используется только при недоступной воронке. |
 | Выкуп | `buyout` | `analytics.buyoutPct` | `period_stats_{periodDays}` / baskets analytics | В period stats: `salesUnits / ordersUnits * 100`. В baskets analytics может прийти `buyoutPercent`. |
 | Остаток WB | `stock` | `analytics.wbStockUnits` | `stocks` | Сумма `quantity` по складам из `/api/analytics/v1/stocks-report/wb-warehouses`. |
 | Стратегия | `tpl`, `strategyName` | `strategy.id`, `strategy.name`, `strategy.assignmentSource` | локальные назначения + вывод по статусу | В таблице показывается только явное назначение `manual`/`xlsx`; derived strategy скрывается как `— нет —`. |
@@ -87,7 +87,8 @@ Drawer открывается кликом по названию товара. �
 | Заголовок | `name`, `sku`, `size/subject`, `nmId`, `brand`, `abcCode`, `manager` | Те же `meta.*`, `analytics.abcCode`, `managerId/managerName`. |
 | Текущая цена | `dPrice`, `dPriceHint` | `price` и `prevPrice`. Hint = разница текущей и предыдущей цены, если отличается. |
 | P_min / P_max | `pmin`, `pmax`, `rrp` | `settings.pMinKopecks`, `settings.pMaxKopecks`, `settings.rrpKopecks`; если P_min не задан, считается формулой ниже. |
-| Цена после СПП | `priceAfterSpp`, `avgPriceSpp`, `spp` | `price * (1 - spp/100)` и backend buyer price / avg price. |
+| Цена после СПП | `priceAfterSpp`, `priceWithSpp`, `spp` | Только текущая `buyerPriceNoWalletKopecks` из WB goods; без live buyer price показывается `—`. |
+| Средняя цена за период с СПП | `avgPriceSpp` | `orderSumKopecks / orderCount` из WB Sales Funnel за выбранный период. |
 | Себестоимость | `cogs` | `settings.cogsKopecks`: из Excel импорта, ручных настроек или default по типу товара. |
 | Маржа %/₽ | `mg`, `mgRub` | `analytics.marginPct`, `analytics.marginKopecks`; если `financeState == no_data`, UI показывает `нет данных` для маржи и затрат. |
 | Комиссия | `commissionPct`, `commissionRub` | `analytics.commissionDisplayPct` и `commissionKopecks`; fallback = `price * commissionPct / 100`. |
@@ -134,11 +135,12 @@ marginPct = unitNet / sellerDiscountedPriceKopecks * 100
 Если есть `finance_{periodDays}`:
 
 ```text
-sellerRevenue = retailPriceWithDisc * quantity for sales - returns
+sellerRevenue = retailAmount for sales - returns
 buyerRevenue = retailAmount for sales - returns
 
-commissionExpense = sellerRevenue * commissionPercent
-                    или sellerRevenue * categoryCommissionPct
+commissionExpense = sellerRevenue - forPay - acquiring
+                    или ppvzSalesCommission
+                    или sellerRevenue * commissionPercent
 
 netProfit = sellerRevenue
             - commission
@@ -147,11 +149,13 @@ netProfit = sellerRevenue
             - acceptance
             - penalty
             - deduction
+            - loyaltyCost
             - acquiring
             - ads
             - otherExpenses
+            + additionalPayment
             - taxes
-            - cogs * gross salesUnits
+            - cogs * max(salesUnits - returnsUnits, 0)
 ```
 
 Это значение идет в `analytics.netProfitKopecks` и в KPI `Маржа ₽`.
@@ -160,19 +164,17 @@ netProfit = sellerRevenue
 
 Приоритет:
 
-1. `finance.sellerRevenueKopecks` / `retailPriceWithDisc * quantity`;
+1. `finance.sellerRevenueKopecks` / signed `retailAmount`;
 2. `period_stats.revenueKopecks`;
 3. fallback KPI для старого finance-кэша: `sellerDiscountedPriceKopecks * salesUnits`.
 
-`analytics.buyerRevenueKopecks` отдельно показывает `retailAmount`, то есть сумму покупателя после WB-скидок/СПП. `analytics.platformDiscountKopecks` показывает разницу между seller- и buyer-базой.
+`analytics.buyerRevenueKopecks` сохраняется как совместимый алиас той же расчетной базы `retailAmount`; для текущей финансовой базы `analytics.platformDiscountKopecks` равен нулю.
 
 ### СПП
 
-Приоритет:
-
-1. `period_stats.sppPct` из `supplier.orders.spp`;
-2. `finance.sppPct` из finance detailed;
-3. расчет live: `(sellerDiscountedPrice - buyerPriceNoWallet) / sellerDiscountedPrice * 100`.
+Текущий `analytics.sppPct` рассчитывается только по live buyer price:
+`(sellerDiscountedPrice - buyerPriceNoWallet) / sellerDiscountedPrice * 100`.
+Исторические `periodSppPct` и `financeSppPct` не подменяют текущую цену и используются только в плановых расчетах.
 
 Если режим `sppAccountingMode = spp_plus_wallet`, для расчета цены покупателя дополнительно учитывается `wbWalletType` как процент кошелька WB.
 

@@ -126,8 +126,10 @@ def evaluate_metrics(metrics: dict[str, Any], profile: ReportRuleProfileView) ->
         add("oos", mapping.oos, "Остаток или покрытие ниже OOS-порога")
     if bands["drrPct"] == "bad" and values["roiPct"] is not None and values["roiPct"] < b.roiPct.warnBelow:
         add("highDrr", mapping.highDrr, "ДРР выше warn-порога, ROI ниже warn-порога")
-    if bands["crPct"] == "bad" and (values["impressions"] or 0) >= 500:
-        add("badCr", mapping.badCr, "CR ниже порога при достаточном числе показов")
+    if (
+        bands["crPct"] == "bad" or bands["cartToOrderPct"] == "bad"
+    ) and (values["impressions"] or 0) >= 500:
+        add("badCr", mapping.badCr, "Конверсия ниже порога при достаточном числе показов")
     abc_code = str(metrics.get("abcCode") or "")
     if abc_code == "AA" and margin is not None and margin >= b.marginPct.goodMin:
         add("aaGood", mapping.aaGood, "AA и маржа выше good-порога")

@@ -1,29 +1,23 @@
 import { describe, expect, it } from 'vitest'
+
 import { lastClosedWbDay, resolvePresetPeriodRange } from './presetPeriodAnchor'
 
-describe('preset period anchoring', () => {
-  it('ends the window on the last closed WB day, not today', () => {
-    // WB closes analytical windows at the end of the previous day.  Asking for
-    // a range ending today returns an empty period, which is why every preset
-    // button rendered zeros while an explicit range showed real numbers.
-    const now = new Date('2026-08-24T07:00:00Z')
-    expect(lastClosedWbDay(now)).toBe('2026-08-23')
+describe('WB report period anchoring', () => {
+  it('uses the previous Moscow day after local midnight', () => {
+    expect(lastClosedWbDay(new Date('2026-08-23T21:30:00Z'))).toBe('2026-08-23')
   })
 
-  it('keeps the requested number of days', () => {
-    const now = new Date('2026-08-24T07:00:00Z')
-    expect(resolvePresetPeriodRange(7, now)).toEqual({ dateFrom: '2026-08-17', dateTo: '2026-08-23' })
-    expect(resolvePresetPeriodRange(1, now)).toEqual({ dateFrom: '2026-08-23', dateTo: '2026-08-23' })
-    expect(resolvePresetPeriodRange(30, now)).toEqual({ dateFrom: '2026-07-25', dateTo: '2026-08-23' })
+  it.each([
+    [1, { dateFrom: '2026-08-24', dateTo: '2026-08-24' }],
+    [7, { dateFrom: '2026-08-18', dateTo: '2026-08-24' }],
+    [14, { dateFrom: '2026-08-11', dateTo: '2026-08-24' }],
+    [30, { dateFrom: '2026-07-26', dateTo: '2026-08-24' }],
+  ])('keeps an inclusive %i-day range', (days, expected) => {
+    expect(resolvePresetPeriodRange(days, new Date('2026-08-25T09:00:00Z'))).toEqual(expected)
   })
 
-  it('crosses month and year boundaries correctly', () => {
+  it('crosses year boundaries without changing the day count', () => {
     expect(resolvePresetPeriodRange(7, new Date('2026-01-03T05:00:00Z')))
       .toEqual({ dateFrom: '2025-12-27', dateTo: '2026-01-02' })
-  })
-
-  it('uses UTC so the window matches the backend cache keys', () => {
-    // 00:30 Moscow on the 24th is still the 23rd in UTC.
-    expect(lastClosedWbDay(new Date('2026-08-23T21:30:00Z'))).toBe('2026-08-22')
   })
 })

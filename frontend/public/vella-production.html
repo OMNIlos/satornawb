@@ -12965,7 +12965,8 @@ function promoHTML(p){
   return promoStateHTML(Boolean(p.promoActive), p.promoActive ? 'Участвует в акции, цена акции ' + fmt(p.promoPrice) + ' ₽' : 'Не участвует в акции');
 }
 function avgPriceHTML(p){
-  return '<div class="metric-stack"><span class="metric-main">' + fmt(p.avgPriceSpp) + ' ₽</span><span class="metric-sub">с СПП</span></div>';
+  const value = p.avgPriceSpp == null ? '—' : fmt(p.avgPriceSpp) + ' ₽';
+  return '<div class="metric-stack"><span class="metric-main">' + value + '</span><span class="metric-sub">с СПП</span></div>';
 }
 function walletPriceHTML(p){
   const value = p.priceWithWallet ?? p.accountedBuyerPrice ?? (p.wbWallet != null ? p.priceFinal : null);

@@ -5,12 +5,30 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.wb_reports_sprint_d import build_abc_report, build_pnl_report
+from app.wb_reports_sprint_d import (
+    _abc_financial_components,
+    _abc_group_rows,
+    _empty_pnl_report_from_cache_miss,
+    _period_cache,
+    _rollup_daily_aggregates,
+    build_abc_report,
+    build_pnl_report,
+)
 from tests.auth_helpers import auth_headers
 
 
 def client() -> TestClient:
     return TestClient(create_app())
+
+
+def test_daily_rollup_preserves_finance_source_markers():
+    rolled = _rollup_daily_aggregates(
+        {"2026-08-01": {"1": {"adSpendKopecks": 100, "financeAdSpendAuthoritative": True}}},
+        date(2026, 8, 1),
+        date(2026, 8, 1),
+    )
+
+    assert rolled["1"]["financeAdSpendAuthoritative"] is True
 
 
 def test_pnl_finance_viewer_gets_financial_fields_and_preliminary_state():
@@ -45,6 +63,19 @@ def test_pnl_supports_operative_and_final_states():
     final_payload = final.json()
     assert final_payload["reportState"] == "final"
     assert final_payload["blockerIds"] == []
+
+
+def test_pnl_cache_miss_downgrades_final_state_to_blocked():
+    report = _empty_pnl_report_from_cache_miss(
+        date_from=date(2026, 8, 24),
+        date_to=date(2026, 8, 24),
+        group_by="sku",
+        requested_state="final",
+        finance_allowed=True,
+    )
+
+    assert report.reportState == "blocked"
+    assert report.blockerIds == ["WB_PNL_FINANCE_CACHE_MISSING"]
 
 
 def test_ads_weak_attribution_stays_campaign_level_and_not_sku_level():
@@ -167,19 +198,26 @@ def test_pnl_uses_repricer_finance_cache_before_legacy_runtime(monkeypatch):
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "dateFrom": "2026-06-01",
                 "dateTo": "2026-06-30",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
                 "aggregates": {
                     "123456": {
                         "salesUnits": 2,
+                        "returnsUnits": 1,
                         "sellerRevenueKopecks": 200_000,
                         "buyerRevenueKopecks": 190_000,
                         "commissionFormulaKopecks": 20_000,
                         "commissionKopecks": 18_000,
+                        "reportedCommissionRows": 1,
                         "logisticsKopecks": 7_000,
                         "storageKopecks": 1_000,
                         "acceptanceKopecks": 500,
                         "penaltyKopecks": -300,
                         "deductionKopecks": 200,
                         "additionalPaymentKopecks": 100,
+                        "loyaltyCostKopecks": 1_000,
+                        "adSpendKopecks": 4_000,
+                        "financeAdSpendAuthoritative": True,
                         "acquiringKopecks": 3_000,
                     }
                 },
@@ -189,7 +227,7 @@ def test_pnl_uses_repricer_finance_cache_before_legacy_runtime(monkeypatch):
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "dateFrom": "2026-06-01",
                 "dateTo": "2026-06-30",
-                "aggregates": {"123456": {"adSpendKopecks": 4_000}},
+                "aggregates": {"123456": {"adSpendKopecks": 9_000}},
             }
         return None
 
@@ -221,14 +259,14 @@ def test_pnl_uses_repricer_finance_cache_before_legacy_runtime(monkeypatch):
 
     row = payload.rows[0]
     assert row.rowId == "nm-123456"
-    assert row.cogsKopecks == 90_000
-    assert row.commissionKopecks == 20_000
+    assert row.cogsKopecks == 45_000
+    assert row.commissionKopecks == 18_000
     assert row.logisticsKopecks == 7_000
-    assert row.storageKopecks == 1_700
+    assert row.storageKopecks == 2_700
     assert row.adSpendKopecks == 4_000
     assert row.taxKopecks == 12_000
     assert row.overheadKopecks == 10_000
-    assert row.netProfitKopecks == 52_700
+    assert row.netProfitKopecks == 98_700
     assert payload.reportState == "final"
     assert payload.sourceEvidence[0].sourceId == "wb-finance-sales-reports-detailed-cache"
     assert all(mapping.sourceId != "wb-statistics-realization-details" for mapping in payload.fieldMapping)
@@ -239,6 +277,8 @@ def test_pnl_finance_cache_does_not_require_live_ads_token(monkeypatch):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
                 "aggregates": {
                     "123456": {
                         "salesUnits": 1,
@@ -250,11 +290,7 @@ def test_pnl_finance_cache_does_not_require_live_ads_token(monkeypatch):
             }
         return None
 
-    def fail_live_ads_call(*_args, **_kwargs):
-        raise RuntimeError("VELLA_WB_ADS_API_TOKEN is required when VELLA_WB_API_MODE=real")
-
     monkeypatch.setattr("app.wb_reports_sprint_d.get_source_cache", fake_get_source_cache)
-    monkeypatch.setattr("app.wb_reports_sprint_d.build_ads_attribution_snapshot", fail_live_ads_call)
     monkeypatch.setattr("app.wb_reports_sprint_d.list_cached_goods", lambda _organization_id: [{"nmID": 123456, "vendorCode": "FBBT_42"}])
     monkeypatch.setattr("app.wb_reports_sprint_d.load_runtime_state", lambda _organization_id: {})
     monkeypatch.setattr("app.wb_reports_sprint_d.load_algorithm_settings", lambda _organization_id: {"taxPct": 0})
@@ -281,6 +317,8 @@ def test_pnl_uses_repricing_period_cache_when_exact_range_cache_is_missing(monke
         if source_key == "finance_30":
             return {
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
                 "aggregates": {
                     "123456": {
                         "salesUnits": 2,
@@ -318,6 +356,8 @@ def test_pnl_finance_cache_normalizes_negative_revenue_rows(monkeypatch):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
                 "aggregates": {
                     "123456": {
                         "salesUnits": -1,
@@ -368,6 +408,8 @@ def test_pnl_report_response_is_cached_for_two_hours(monkeypatch):
             finance_reads["count"] += 1
             return {
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
                 "aggregates": {
                     "123456": {
                         "salesUnits": 1,
@@ -445,6 +487,8 @@ def test_abc_report_uses_repricer_period_cache_without_own_report_cache(monkeypa
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "dateFrom": "2026-06-01",
                 "dateTo": "2026-06-30",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
                 "aggregates": {
                     "111": {
                         "salesUnits": 10,
@@ -488,6 +532,13 @@ def test_abc_report_uses_repricer_period_cache_without_own_report_cache(monkeypa
                 "aggregates": {
                     "111": {"ordersUnits": 12, "ordersKopecks": 1_200_000, "baskets": 30, "buyoutPct": 80},
                     "222": {"ordersUnits": 2, "ordersKopecks": 200_000, "baskets": 3, "buyoutPct": 40},
+                }
+            }
+        if source_key == "baskets_2026-06-01_2026-06-30":
+            return {
+                "aggregates": {
+                    "111": {"orderCount": 12, "orderSumKopecks": 1_200_000, "cartCount": 30},
+                    "222": {"orderCount": 2, "orderSumKopecks": 200_000, "cartCount": 3},
                 }
             }
         return None
@@ -556,26 +607,50 @@ def test_abc_report_uses_repricer_period_cache_without_own_report_cache(monkeypa
     assert second.rows[0]["abcCode"] == first.rows[0]["abcCode"]
 
 
-def test_abc_report_prefers_sales_funnel_orders_and_buyouts_for_portal_metrics(monkeypatch):
+def test_abc_report_uses_funnel_demand_and_finance_sales_for_portal_metrics(monkeypatch):
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
         if source_key.startswith("abc_report_"):
             return None
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
                 "aggregates": {
                     "111": {
                         "salesUnits": 10,
+                        "returnsUnits": 2,
+                        "netSalesUnits": 8,
                         "sellerRevenueKopecks": 1_000_000,
                         "buyerRevenueKopecks": 1_100_000,
                         "commissionFormulaKopecks": 100_000,
-                    }
+                    },
+                    "222": {"salesUnits": 7, "sellerRevenueKopecks": 700_000},
+                    "333": {"vendorCode": "FINANCE_333", "salesUnits": 1, "sellerRevenueKopecks": 300_000},
+                    "555": {
+                        "salesUnits": 2,
+                        "sellerRevenueRows": 1,
+                        "sellerRevenueMissingRows": 1,
+                        "revenueGrossKopecks": 500_000,
+                    },
                 },
             }
         if source_key == "period_stats_2026-06-01_2026-06-30":
-            return {"aggregates": {"111": {"ordersUnits": 12, "ordersKopecks": 1_200_000, "salesUnits": 10, "revenueKopecks": 1_000_000}}}
+            return {
+                "aggregates": {
+                    "111": {"ordersUnits": 12, "ordersKopecks": 1_200_000, "salesUnits": 10, "revenueKopecks": 1_000_000},
+                    "222": {"ordersUnits": 9, "ordersKopecks": 900_000, "salesUnits": 7, "revenueKopecks": 700_000, "baskets": 11, "buyoutPct": 77.8},
+                    "444": {"ordersUnits": 2, "ordersKopecks": 200_000, "salesUnits": 2, "revenueKopecks": 200_000},
+                    "666": {"ordersUnits": 3, "ordersKopecks": 300_000, "salesUnits": 3, "revenueKopecks": 300_000},
+                }
+            }
         if source_key == "ads_2026-06-01_2026-06-30":
-            return {"aggregates": {"111": {"adImpressions": 10, "adClicks": 2, "adSpendKopecks": 50_000}}}
+            return {
+                "aggregates": {
+                    "111": {"adImpressions": 10, "adClicks": 2, "adSpendKopecks": 50_000},
+                    "777": {"adImpressions": 100, "adClicks": 10, "adSpendKopecks": 25_000},
+                }
+            }
         if source_key == "baskets_2026-06-01_2026-06-30":
             return {
                 "aggregates": {
@@ -588,7 +663,23 @@ def test_abc_report_prefers_sales_funnel_orders_and_buyouts_for_portal_metrics(m
                         "buyoutCount": 25,
                         "buyoutSumKopecks": 2_500_000,
                         "buyoutPct": 62.5,
-                    }
+                        "cartCountDeltaPct": 30,
+                        "cartToOrderPct": 1,
+                        "orderCountDeltaPct": 25,
+                        "buyoutCountDeltaPct": -10,
+                        "localizationPct": 46,
+                    },
+                    "222": {
+                        "openCount": 0,
+                        "cartCount": 0,
+                        "orderCount": 0,
+                        "orderSumKopecks": 0,
+                        "buyoutCount": 0,
+                        "buyoutSumKopecks": 0,
+                        "buyoutPct": None,
+                    },
+                    "444": {"cartCount": 4, "orderCount": 2, "orderSumKopecks": 200_000},
+                    "555": {"cartCount": 2, "orderCount": 1, "orderSumKopecks": 500_000},
                 }
             }
         return None
@@ -596,7 +687,23 @@ def test_abc_report_prefers_sales_funnel_orders_and_buyouts_for_portal_metrics(m
     monkeypatch.setattr("app.wb_reports_sprint_d.get_source_cache", fake_get_source_cache)
     monkeypatch.setattr("app.wb_reports_sprint_d.save_source_cache", lambda _organization_id, _source_key, payload: payload)
     monkeypatch.setattr("app.wb_reports_sprint_d.list_source_cache_ranges_by_prefix", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr("app.wb_reports_sprint_d.list_cached_goods", lambda _organization_id: [{"nmID": 111, "vendorCode": "FBBT_11"}])
+    monkeypatch.setattr(
+        "app.wb_reports_sprint_d.list_cached_goods",
+        lambda _organization_id: [
+            {
+                "nmID": 111,
+                "vendorCode": "FBBT_11",
+                "title": "Футболка",
+                "sizes": [
+                    {
+                        "discountedPrice": 1_300,
+                        "buyerPriceNoWalletKopecks": 110_000,
+                    }
+                ],
+            },
+            {"nmID": 222, "vendorCode": "ZERO_222", "title": "Без заказов"},
+        ],
+    )
     monkeypatch.setattr("app.wb_reports_sprint_d.load_runtime_state", lambda _organization_id: {"skuSettingsOverrides": {}, "skuMetaOverrides": {}})
     monkeypatch.setattr("app.wb_reports_sprint_d.load_algorithm_settings", lambda _organization_id: {"taxPct": 0, "otherExpensePricePct": 0, "otherExpensePerSaleRub": 0})
 
@@ -609,37 +716,179 @@ def test_abc_report_prefers_sales_funnel_orders_and_buyouts_for_portal_metrics(m
         organization_id=77,
     )
 
-    row = report.rows[0]
+    row = next(row for row in report.rows if row["nmId"] == 111)
     assert row["impressions"] == 1_000
     assert row["clicks"] == 200
     assert row["ctrPct"] == 20
     assert row["baskets"] == 90
-    assert row["cartCrPct"] == 45
+    assert row["basketsDeltaPct"] == 30
+    assert row["cartCrPct"] == 44.44
     assert row["ordersComposite"]["units"] == 40
     assert row["ordersComposite"]["kopecks"] == 4_000_000
-    assert row["salesComposite"]["units"] == 25
-    assert row["salesComposite"]["kopecks"] == 2_500_000
+    assert row["ordersComposite"]["deltaPct"] == 25
+    assert row["salesComposite"]["units"] == 8
+    assert row["salesComposite"]["kopecks"] == 1_000_000
+    assert row["salesComposite"]["deltaPct"] is None
     assert row["buyoutPct"] == 62.5
-    assert report.filteredSummary.ordersCount == 40
-    assert report.filteredSummary.ordersKopecks == 4_000_000
+    assert row["productName"] == "Футболка"
+    assert row["priceBeforeSppKopecks"] == 130_000
+    assert row["priceWithSppKopecks"] == 110_000
+    assert row["cogsPerUnitKopecks"] > 0
+    assert row["localizationPct"] == 46
+    zero_row = next(row for row in report.rows if row["nmId"] == 222)
+    assert zero_row["baskets"] == 0
+    assert zero_row["cartCrPct"] == 0
+    assert zero_row["ordersComposite"]["units"] == 0
+    assert zero_row["ordersComposite"]["kopecks"] == 0
+    assert zero_row["salesComposite"]["units"] == 7
+    assert zero_row["salesComposite"]["kopecks"] == 700_000
+    assert zero_row["buyoutPct"] == 0
+    finance_only = next(row for row in report.rows if row["nmId"] == 333)
+    assert finance_only["sku"] == "FINANCE_333"
+    assert finance_only["salesComposite"]["kopecks"] == 300_000
+    assert finance_only["ordersComposite"]["units"] == 0
+    funnel_only = next(row for row in report.rows if row["nmId"] == 444)
+    assert funnel_only["ordersComposite"]["units"] == 2
+    assert funnel_only["salesComposite"]["units"] == 0
+    assert funnel_only["salesComposite"]["kopecks"] == 0
+    assert next(row for row in report.rows if row["nmId"] == 555)["salesComposite"]["kopecks"] == 0
+    assert {row["nmId"] for row in report.rows} == {111, 222, 333, 444, 555}
+    assert "WB_ABC_RETAIL_AMOUNT_MISSING" in report.blockerIds
+    assert report.sourceStatus == "partial"
+    assert report.filteredSummary.ordersCount == 43
+    assert report.filteredSummary.ordersKopecks == 4_700_000
+
+
+def test_abc_report_ignores_legacy_finance_basis_but_keeps_funnel_rows(monkeypatch):
+    def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
+        if source_key == "finance_2026-06-01_2026-06-30":
+            return {"aggregates": {"111": {"salesUnits": 1, "sellerRevenueKopecks": 999_000}}}
+        if source_key == "baskets_2026-06-01_2026-06-30":
+            return {"aggregates": {"111": {"cartCount": 10, "orderCount": 2, "orderSumKopecks": 200_000}}}
+        return {"aggregates": {}} if source_key in {
+            "ads_2026-06-01_2026-06-30",
+            "stocks_2026-06-01_2026-06-30",
+        } else None
+
+    monkeypatch.setattr("app.wb_reports_sprint_d.get_source_cache", fake_get_source_cache)
+    monkeypatch.setattr("app.wb_reports_sprint_d.list_source_cache_ranges_by_prefix", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("app.wb_reports_sprint_d.list_cached_goods", lambda _organization_id: [{"nmID": 111, "vendorCode": "SKU_111"}])
+    monkeypatch.setattr("app.wb_reports_sprint_d.load_runtime_state", lambda _organization_id: {"skuSettingsOverrides": {}, "skuMetaOverrides": {}})
+    monkeypatch.setattr("app.wb_reports_sprint_d.load_algorithm_settings", lambda _organization_id: {"taxPct": 0, "otherExpensePricePct": 0, "otherExpensePerSaleRub": 0})
+
+    report = build_abc_report(
+        date_from=date(2026, 6, 1),
+        date_to=date(2026, 6, 30),
+        group_by="sku",
+        filters="",
+        finance_allowed=True,
+        organization_id=77,
+    )
+
+    assert report.rows[0]["ordersComposite"]["units"] == 2
+    assert report.rows[0]["salesComposite"]["kopecks"] == 0
+    assert "WB_ABC_FINANCE_CACHE_MISSING" in report.blockerIds
+
+
+def test_period_cache_skips_legacy_exact_finance_for_compatible_covering_cache(monkeypatch):
+    def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
+        if source_key == "finance_2026-06-01_2026-06-30":
+            return {"aggregates": {"111": {"sellerRevenueKopecks": 999_000}}}
+        if source_key == "finance_2026-05-01_2026-06-30":
+            return {
+                "dateFrom": "2026-05-01",
+                "dateTo": "2026-06-30",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
+                "dailyAggregates": {
+                    "2026-06-01": {"111": {"salesUnits": 1, "sellerRevenueKopecks": 100_000}},
+                },
+            }
+        return None
+
+    monkeypatch.setattr("app.wb_reports_sprint_d.get_source_cache", fake_get_source_cache)
+    monkeypatch.setattr(
+        "app.wb_reports_sprint_d.list_source_cache_ranges_by_prefix",
+        lambda *_args, **_kwargs: [
+            {
+                "sourceKey": "finance_2026-05-01_2026-06-30",
+                "dateFrom": "2026-05-01",
+                "dateTo": "2026-06-30",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
+            }
+        ],
+    )
+
+    cache = _period_cache(
+        77,
+        "finance",
+        date(2026, 6, 1),
+        date(2026, 6, 30),
+        require_current_finance_basis=True,
+    )
+
+    assert cache["revenueBasis"] == "retailAmount"
+    assert cache["aggregates"]["111"]["sellerRevenueKopecks"] == 100_000
+
+
+def test_abc_finance_falls_back_only_when_actual_commission_is_unavailable():
+    fallback = _abc_financial_components(
+        finance={"commissionKopecks": 0, "commissionFormulaKopecks": 10_000, "reportedCommissionRows": 0},
+        settings={},
+        ads={},
+        revenue_kopecks=100_000,
+        sales_units=1,
+    )
+    actual_zero = _abc_financial_components(
+        finance={
+            "commissionKopecks": 0,
+            "commissionFormulaKopecks": 10_000,
+            "reportedCommissionRows": 1,
+            "adSpendKopecks": 700,
+            "financeAdSpendAuthoritative": True,
+        },
+        settings={},
+        ads={"adSpendKopecks": 9_000},
+        revenue_kopecks=100_000,
+        sales_units=1,
+    )
+
+    assert fallback["commissionKopecks"] == 10_000
+    assert actual_zero["commissionKopecks"] == 0
+    assert actual_zero["adSpendKopecks"] == 700
+
+
+def test_abc_group_conversion_is_orders_divided_by_baskets():
+    grouped = _abc_group_rows(
+        [{"brand": "Brand", "ordersUnits": 25, "baskets": 100, "clicks": 200, "impressions": 1_000}],
+        "brand",
+    )
+
+    assert grouped[0]["cartCrPct"] == 25
 
 
 def test_abc_report_net_profit_uses_full_finance_formula(monkeypatch):
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
                 "aggregates": {
                     "111": {
-                        "salesUnits": 2,
+                        "salesUnits": 3,
+                        "returnsUnits": 1,
+                        "netSalesUnits": 2,
                         "sellerRevenueKopecks": 1_000_000,
+                        "commissionKopecks": 60_000,
                         "commissionFormulaKopecks": 100_000,
                         "logisticsKopecks": 50_000,
                         "storageKopecks": 10_000,
                         "acceptanceKopecks": 5_000,
-                        "penaltyKopecks": 3_000,
+                        "penaltyKopecks": -3_000,
                         "deductionKopecks": 2_000,
                         "additionalPaymentKopecks": 4_000,
-                        "acquiringKopecks": 20_000,
+                        "acquiringKopecks": -20_000,
                     }
                 }
             }
@@ -658,7 +907,7 @@ def test_abc_report_net_profit_uses_full_finance_formula(monkeypatch):
         "app.wb_reports_sprint_d.load_runtime_state",
         lambda _organization_id: {"skuSettingsOverrides": {"FBBT_11": {"cogsKopecks": 200_000}}, "skuMetaOverrides": {}},
     )
-    monkeypatch.setattr("app.wb_reports_sprint_d.load_algorithm_settings", lambda _organization_id: {"taxPct": 6, "otherExpensePricePct": 1, "otherExpensePerSaleKopecks": 1_000})
+    monkeypatch.setattr("app.wb_reports_sprint_d.load_algorithm_settings", lambda _organization_id: {"taxPct": 6, "otherExpensePricePct": 1, "otherExpensePerSaleRub": 0})
 
     report = build_abc_report(
         date_from=date(2026, 6, 1),
@@ -670,17 +919,26 @@ def test_abc_report_net_profit_uses_full_finance_formula(monkeypatch):
     )
 
     row = report.rows[0]
-    assert row["netTotalKopecks"] == 314_000
-    assert row["acquiringKopecks"] == 20_000
+    assert row["salesComposite"]["units"] == 2
+    assert row["salesComposite"]["kopecks"] == 1_000_000
+    assert row["cogsKopecks"] == 400_000
+    assert row["commissionCostPct"] == 6
+    assert row["netTotalKopecks"] == 400_000
+    assert row["acquiringKopecks"] == -20_000
     assert row["acceptanceKopecks"] == 5_000
     assert row["additionalPaymentKopecks"] == 4_000
-    assert report.filteredSummary.profitKopecks == 314_000
+    assert row["financeCreditsKopecks"] == 7_000
+    assert report.filteredSummary.profitKopecks == 400_000
 
 
 def test_abc_report_totals_include_baskets_only_snapshot_rows(monkeypatch):
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
         if source_key == "finance_2026-06-01_2026-06-30":
-            return {"aggregates": {"111": {"salesUnits": 1, "sellerRevenueKopecks": 100_000}}}
+            return {
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
+                "aggregates": {"111": {"salesUnits": 1, "sellerRevenueKopecks": 100_000}},
+            }
         if source_key == "baskets_2026-06-01_2026-06-30":
             return {
                 "aggregates": {
@@ -715,6 +973,8 @@ def test_abc_report_keeps_funnel_opens_separate_when_impressions_missing(monkeyp
             return None
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
                 "aggregates": {
                     "111": {
                         "salesUnits": 10,
@@ -756,7 +1016,9 @@ def test_abc_report_keeps_funnel_opens_separate_when_impressions_missing(monkeyp
     row = report.rows[0]
     assert row["impressions"] == 0
     assert row["clicks"] == 38_417
-    assert row["ctrPct"] == 0
+    assert row["ctrPct"] is None
+    assert row["priceBeforeSppKopecks"] is None
+    assert row["priceWithSppKopecks"] is None
     assert row["baskets"] == 4_267
     assert row["ordersComposite"]["units"] == 1_495
 
@@ -781,6 +1043,8 @@ def test_abc_report_uses_covering_repricer_daily_cache(monkeypatch):
                 "dateTo": "2026-07-08",
                 "periodDays": 38,
                 "periodCacheSuffix": "2026-06-01_2026-07-08",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v2",
                 "dailyAggregates": {
                     "2026-06-01": {
                         "111": {"salesUnits": 99, "sellerRevenueKopecks": 9_900_000},
@@ -814,6 +1078,15 @@ def test_abc_report_uses_covering_repricer_daily_cache(monkeypatch):
                 "dailyAggregates": {
                     "2026-06-02": {"111": {"ordersUnits": 4, "ordersKopecks": 400_000, "baskets": 7}},
                     "2026-07-08": {"111": {"ordersUnits": 3, "ordersKopecks": 300_000, "baskets": 5}},
+                },
+            }
+        if source_key == "baskets_2026-06-01_2026-07-08":
+            return {
+                "dateFrom": "2026-06-01",
+                "dateTo": "2026-07-08",
+                "dailyAggregates": {
+                    "2026-06-02": {"111": {"orderCount": 4, "orderSumKopecks": 400_000, "cartCount": 7}},
+                    "2026-07-08": {"111": {"orderCount": 3, "orderSumKopecks": 300_000, "cartCount": 5}},
                 },
             }
         return source_cache.get(source_key)
@@ -903,6 +1176,7 @@ def test_bff_abc_returns_sku_rows_not_summary_only(monkeypatch):
         return type(report).model_validate(payload)
 
     monkeypatch.setattr("app.routers.wb_reports_bff.build_abc_report", fake_build_abc_report)
+    monkeypatch.setattr("app.routers.wb_reports_bff._report_daily_sources_ready", lambda *_args, **_kwargs: (True, []))
 
     api = client()
     response = api.get("/api/wb/reports/abc", headers=auth_headers(api, "viewer"))
@@ -927,6 +1201,7 @@ def test_bff_abc_uses_repricer_rows_when_report_cache_is_empty(monkeypatch):
         )
 
     monkeypatch.setattr("app.routers.wb_reports_bff.build_abc_report", fake_build_abc_report)
+    monkeypatch.setattr("app.routers.wb_reports_bff._report_daily_sources_ready", lambda *_args, **_kwargs: (True, []))
     monkeypatch.setattr(
         "app.routers.wb_reports_bff._repricer_rows_for_abc_report",
         lambda **_kwargs: [

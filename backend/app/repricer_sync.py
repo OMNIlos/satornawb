@@ -99,7 +99,7 @@ def _good_seller_price_kopecks(good: dict[str, Any]) -> int | None:
 
 
 def _good_buyer_price_no_wallet_kopecks(good: dict[str, Any]) -> int | None:
-    return _first_good_price_kopecks(
+    buyer_price = _first_good_price_kopecks(
         good,
         "buyerPriceNoWalletKopecks",
         "buyerPriceNoWallet",
@@ -107,6 +107,8 @@ def _good_buyer_price_no_wallet_kopecks(good: dict[str, Any]) -> int | None:
         "buyerPrice",
         "clientPrice",
     )
+    seller_price = _good_seller_price_kopecks(good)
+    return buyer_price if not buyer_price or not seller_price or buyer_price <= seller_price else None
 
 
 def _goods_by_identity(goods: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -290,6 +292,9 @@ def _apply_external_spp_prices_to_goods(goods: list[dict[str, Any]], prices_by_n
             continue
         target_sizes = good.get("sizes") if isinstance(good.get("sizes"), list) else []
         target_size = dict(target_sizes[0]) if target_sizes and isinstance(target_sizes[0], dict) else {}
+        seller_price_kopecks = _good_seller_price_kopecks(good)
+        if seller_price_kopecks and buyer_price_kopecks > seller_price_kopecks:
+            continue
         buyer_price_rubles = kopecks_to_wb_price_rubles(buyer_price_kopecks)
         target_size["buyerPriceNoWalletKopecks"] = buyer_price_kopecks
         target_size["buyerPriceNoWallet"] = buyer_price_rubles

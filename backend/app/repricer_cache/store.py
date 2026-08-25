@@ -16,6 +16,15 @@ from app.repricer_cache.orm import WbRepricerGoodsCacheRow, WbRepricerSourceCach
 
 _REDIS_CACHE_TTL_SECONDS = 45
 _REDIS_DISABLED_UNTIL = 0.0
+FINANCE_REVENUE_BASIS = "retailAmount"
+FINANCE_SCHEMA_VERSION = "v2"
+
+
+def finance_cache_uses_current_revenue_basis(payload: dict[str, Any]) -> bool:
+    return (
+        payload.get("revenueBasis") == FINANCE_REVENUE_BASIS
+        and payload.get("financeSchemaVersion") == FINANCE_SCHEMA_VERSION
+    )
 
 
 def _optional_date(value: Any) -> date | None:
@@ -51,6 +60,8 @@ def _source_cache_metadata(source_key: str, payload: dict[str, Any]) -> dict[str
     return {
         "range_date_from": _optional_date(payload.get("dateFrom")) or key_date_from,
         "range_date_to": _optional_date(payload.get("dateTo")) or key_date_to,
+        "revenue_basis": str(payload["revenueBasis"]) if payload.get("revenueBasis") is not None else None,
+        "finance_schema_version": str(payload["financeSchemaVersion"]) if payload.get("financeSchemaVersion") is not None else None,
         "daily_detail_status": str(payload["dailyDetailStatus"]) if payload.get("dailyDetailStatus") is not None else None,
         "daily_detail_error": str(payload["dailyDetailError"]) if payload.get("dailyDetailError") is not None else None,
         "daily_detail_deferred_at": payload.get("dailyDetailDeferredAt"),
@@ -555,6 +566,8 @@ def list_source_cache_ranges_by_prefix(
                     daily_detail_requests_completed,
                     daily_detail_requests_total,
                     daily_aggregate_dates,
+                    revenue_basis,
+                    finance_schema_version,
                     fetched_at
                 FROM wb_repricer_source_cache
                 WHERE organization_id = :organization_id
@@ -593,6 +606,8 @@ def list_source_cache_ranges_by_prefix(
                     "dailyDetailRequestsTotal": row["daily_detail_requests_total"],
                     "dailyAggregatesDays": len(daily_dates) if daily_dates else None,
                     "dailyAggregateDates": daily_dates,
+                    "revenueBasis": row["revenue_basis"],
+                    "financeSchemaVersion": row["finance_schema_version"],
                     "fetchedAt": row["fetched_at"].isoformat() if row["fetched_at"] else None,
                 }
             )

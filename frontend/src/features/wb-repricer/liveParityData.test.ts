@@ -22,7 +22,7 @@ describe('basket detail background job API', () => {
     expect(result.runId).toBe('run-1')
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/v1/wb-repricer/baskets/detail/start'), expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ dateFrom: '2026-06-12', dateTo: '2026-07-12', scenario: 'complete' }),
+      body: JSON.stringify({ dateFrom: '2026-06-12', dateTo: '2026-07-12', scenario: 'complete', force: false }),
     }))
   })
 
@@ -147,12 +147,38 @@ describe('mapLiveRepricerRowToParityProduct', () => {
       },
     } as any, 0)
 
-    expect(product.avgPriceSpp).toBe(1425)
+    expect(product.avgPriceSpp).toBe(1500)
     expect(product.buyerPriceNoWallet).toBe(1425)
     expect(product.priceWithSpp).toBe(1425)
     expect(product.priceFinal).toBe(1425)
     expect(product.priceWithWallet).toBe(1650)
     expect(product.spp).toBe(35.23)
+  })
+
+  test('does not use period average as current SPP price', () => {
+    const product = mapLiveRepricerRowToParityProduct({
+      meta: {
+        articleId: 'SKU-AVG-ONLY',
+        nmId: 124,
+        name: 'Average only',
+        status: 'auto',
+        currentPriceKopecks: 220000,
+        basketsLast7d: 1,
+        basketNorm: 1,
+      },
+      strategy: { id: 'auto', name: 'Auto' },
+      settings: { cogsKopecks: 50000, logisticsKopecks: 5000, minMarginPct: 15, wbCommissionPct: 15 },
+      analytics: {
+        buyerPriceNoWalletKopecks: null,
+        avgPriceWithSppKopecks: 150000,
+        basketsState: 'ok',
+        periodStatsState: 'ok',
+        stockState: 'ok',
+      },
+    } as any, 0)
+
+    expect(product.priceWithSpp).toBeNull()
+    expect(product.avgPriceSpp).toBe(1500)
   })
 
   test('recomputes invalid SPP percent from seller and buyer prices', () => {

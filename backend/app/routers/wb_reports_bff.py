@@ -27,7 +27,15 @@ from app.report_rules.service import (
     verify_preview_token,
 )
 from app.report_rules.store import ProfileVersionConflict, activate_profile, list_profile_history, load_active_profile
-from app.repricer_cache.store import get_covering_source_cache, get_source_cache, list_cached_goods, list_source_cache_by_prefix, list_source_cache_ranges_by_prefix, save_source_cache
+from app.repricer_cache.store import (
+    finance_cache_uses_current_revenue_basis,
+    get_covering_source_cache,
+    get_source_cache,
+    list_cached_goods,
+    list_source_cache_by_prefix,
+    list_source_cache_ranges_by_prefix,
+    save_source_cache,
+)
 from app.repricer_bff import _extract_wb_media_url
 from app.wb_ads_cache.store import get_ads_report_cache, save_ads_history_snapshots, save_ads_report_cache
 from app.wb_api.ads_runtime import AdsAttributionRow, AdsAttributionSnapshot
@@ -54,11 +62,12 @@ from app.wb_reports_sprint_d import (
     build_plan_fact_report,
     build_rnp_report,
 )
+from app.wb_sync_plan import historical_sync_as_of
 
 
 router = APIRouter(tags=["wb-reports-bff"])
 
-DIGEST_REPORT_PAYLOAD_VERSION = "v11"
+DIGEST_REPORT_PAYLOAD_VERSION = "v12"
 
 ReportId = Literal["digest", "abc", "rnp", "pnl", "expenses", "ads", "stock", "week-over-week"]
 ReportGroupBy = Literal["sku", "manager", "brand", "category", "status", "warehouse", "campaign"]
@@ -102,24 +111,30 @@ def _rules_profile_payload(profile: Any) -> dict[str, Any]:
     return profile.model_dump(mode="json")
 
 
-def _range_from_preset(preset: str, from_raw: str | None, to_raw: str | None) -> tuple[date, date, dict[str, str]]:
-    today = date.today()
-    if preset == "custom" and from_raw and to_raw:
-        date_from = date.fromisoformat(from_raw)
-        date_to = date.fromisoformat(to_raw)
-    elif preset == "1d":
-        date_from = today
-        date_to = today
-    elif preset == "14d":
-        date_from = today - timedelta(days=13)
-        date_to = today
-    elif preset == "30d":
-        date_from = today - timedelta(days=29)
-        date_to = today
+def _range_from_preset(
+    preset: str,
+    from_raw: str | None,
+    to_raw: str | None,
+    *,
+    as_of: date | None = None,
+) -> tuple[date, date, dict[str, str]]:
+    anchor = as_of or historical_sync_as_of()
+    if preset == "custom":
+        if not from_raw or not to_raw:
+            raise HTTPException(status_code=422, detail="REPORT_PERIOD_DATES_REQUIRED")
+        try:
+            date_from = date.fromisoformat(from_raw)
+            date_to = date.fromisoformat(to_raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="REPORT_PERIOD_INVALID") from exc
+        if date_from > date_to or date_to > anchor or (date_to - date_from).days >= 90:
+            raise HTTPException(status_code=422, detail="REPORT_PERIOD_INVALID")
     else:
-        preset = "7d"
-        date_from = today - timedelta(days=6)
-        date_to = today
+        days_by_preset = {"1d": 1, "7d": 7, "14d": 14, "30d": 30}
+        if preset not in days_by_preset:
+            preset = "7d"
+        date_to = anchor
+        date_from = date_to - timedelta(days=days_by_preset[preset] - 1)
     return date_from, date_to, {"preset": preset, "from": date_from.isoformat(), "to": date_to.isoformat()}
 
 
@@ -174,7 +189,7 @@ REPORT_DAILY_SOURCE_PREFIXES: dict[str, str] = {
 
 REPORT_DAILY_SOURCES_BY_ID: dict[str, tuple[str, ...]] = {
     "digest": ("period-stats", "finance", "ads", "baskets"),
-    "abc": ("period-stats", "finance", "ads", "baskets"),
+    "abc": ("finance", "ads", "baskets"),
     "rnp": ("baskets", "ads"),
     "ads": ("ads",),
     "stock": ("period-stats", "finance"),
@@ -199,6 +214,8 @@ def _report_daily_source_ready(
         cache_from = _parse_cache_date(cache.get("dateFrom"))
         cache_to = _parse_cache_date(cache.get("dateTo"))
         if not cache_from or not cache_to or cache_from > date_from or cache_to < date_to:
+            continue
+        if source == "finance" and not finance_cache_uses_current_revenue_basis(cache):
             continue
         if _int_value(cache.get("dailyAggregatesDays")) >= required_days:
             return True
@@ -819,6 +836,8 @@ def _merged_daily_aggregates(
         if not wanted - merged.keys():
             break
         cache = get_source_cache(organization_id, source_key, slim=False) or {}
+        if prefix == "finance_" and not finance_cache_uses_current_revenue_basis(cache):
+            continue
         raw_daily = cache.get("dailyAggregates")
         if not isinstance(raw_daily, dict):
             continue
@@ -907,10 +926,6 @@ def _build_digest_funnel_snapshot(
     cache = _period_cache(organization_id, "baskets", date_from, date_to)
     graph_from = max(date_from, date_to - timedelta(days=13))
     rows = _cached_funnel_rows_from_baskets_cache(cache)
-    # Merging the days we need out of the overlapping caches costs about a
-    # second; the covering-cache query costs half a minute because it parses
-    # every multi-megabyte payload in the table.  Only fall back to it when the
-    # merge came up empty.
     daily = _merged_funnel_daily_rows(organization_id, graph_from, date_to)
     if not daily:
         graph_cache = get_covering_source_cache(
@@ -929,7 +944,9 @@ def _build_digest_funnel_snapshot(
             date_from=graph_from,
             date_to=date_to,
             slim=False,
-        ) or _period_cache(organization_id, "finance", date_from, date_to)
+        ) or {}
+        if not finance_cache_uses_current_revenue_basis(finance_cache):
+            finance_cache = _period_cache(organization_id, "finance", date_from, date_to)
         raw_finance = finance_cache.get("dailyAggregates")
         finance_daily = raw_finance if isinstance(raw_finance, dict) else {}
     errors = [] if rows else ["WB_FUNNEL_CACHE_EMPTY"]
@@ -2619,10 +2636,10 @@ def _repricer_row_to_abc_row(row: dict[str, Any]) -> dict[str, Any]:
         "brand": meta.get("brand"),
         "category": meta.get("subject") or meta.get("category"),
         "abcCode": analytics.get("abcCode") or "CC",
-        "priceWithSppKopecks": _int_value(
-            analytics.get("avgPriceWithSppKopecks")
-            or analytics.get("accountedBuyerPriceKopecks")
-            or analytics.get("buyerPriceWithWalletKopecks")
+        "priceWithSppKopecks": (
+            _int_value(analytics.get("buyerPriceNoWalletKopecks"))
+            if analytics.get("buyerPriceNoWalletKopecks") is not None
+            else None
         ),
         "ordersComposite": {"units": orders_units, "kopecks": orders_kopecks, "deltaPct": None},
         "salesComposite": {"units": sales_units, "kopecks": sales_kopecks, "deltaPct": None},
@@ -2764,6 +2781,7 @@ def _map_abc_to_report_response(payload: Any, date_range: dict[str, str]) -> dic
 def _map_pnl_to_report_response(payload: Any, date_range: dict[str, str], cash_flow: dict[str, Any] | None = None) -> dict[str, Any]:
     financial_confirmation_status = "confirmed" if "WB-03" not in payload.blockerIds else "pending"
     return {
+        "cacheVersion": PNL_REPORT_PAYLOAD_VERSION,
         "meta": _meta("pnl", "P&L", "Unit P&L report.", "financial", payload.sourceStatus),
         "headline": "Финансовые поля показываются с учетом finance_viewer policy.",
         "warning": None,
@@ -3270,7 +3288,8 @@ BACKGROUND_REPORT_JOB_STALE_AFTER = timedelta(minutes=15)
 BACKGROUND_REPORT_QUEUED_STALE_AFTER = timedelta(seconds=30)
 DIGEST_CACHE_TTL = timedelta(hours=24)
 REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
-ABC_REPORT_PAYLOAD_VERSION = "v9"
+ABC_REPORT_PAYLOAD_VERSION = "v14"
+PNL_REPORT_PAYLOAD_VERSION = "v1"
 RNP_REPORT_PAYLOAD_VERSION = "v3"
 STOCK_REPORT_PAYLOAD_VERSION = "v5"
 WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v2"
@@ -3388,6 +3407,10 @@ def _report_payload_cache_is_usable(report_id: str, cache: dict[str, Any]) -> bo
     if report_id == "abc":
         report = cache.get("report") if isinstance(cache.get("report"), dict) else {}
         if report.get("cacheVersion") != ABC_REPORT_PAYLOAD_VERSION:
+            return False
+    if report_id == "pnl":
+        report = cache.get("report") if isinstance(cache.get("report"), dict) else {}
+        if report.get("cacheVersion") != PNL_REPORT_PAYLOAD_VERSION:
             return False
     if report_id == "week-over-week":
         report = cache.get("report") if isinstance(cache.get("report"), dict) else {}
@@ -3544,6 +3567,7 @@ def _latest_report_payload_cache(
         ) or {}
         if _report_payload_cache_is_usable(report_id, exact):
             return exact, requested_from, requested_to
+        return None
     for cache in list_source_cache_by_prefix(organization_id, f"reports_payload_{report_id}_", limit=50, slim=False):
         source_key = str(cache.get("sourceKey") or "")
         fallback_from, fallback_to, cached_group_by, cached_source = _parse_report_payload_cache_key(source_key, report_id)
@@ -3577,8 +3601,8 @@ def _rule_metrics_from_row(row: dict[str, Any]) -> dict[str, Any]:
     metrics: dict[str, Any] = {
         "abcCode": row.get("abcCode"),
         "ctrPct": _rule_metric_value(row, "ctrPct"),
-        "crPct": _rule_metric_value(row, "crPct", "cartCrPct"),
-        "cartToOrderPct": _rule_metric_value(row, "cartToOrderPct"),
+        "crPct": _rule_metric_value(row, "crPct"),
+        "cartToOrderPct": _rule_metric_value(row, "cartToOrderPct", "cartCrPct"),
         "buyoutPct": _rule_metric_value(row, "buyoutPct"),
         "marginPct": _rule_metric_value(row, "marginPct"),
         "drrPct": _rule_metric_value(row, "drrPct", "drrSalesPct", "drrOrdersPct"),
@@ -3589,10 +3613,8 @@ def _rule_metrics_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "impressions": _rule_metric_value(row, "impressions", "views"),
     }
     if metrics["cartToOrderPct"] is None:
-        orders = row.get("orders")
-        baskets = row.get("baskets") or row.get("cartCount") or row.get("cartAdds") or row.get("adCartAdds")
-        orders_units = _rule_metric_value({"value": orders}, "value")
-        baskets_units = _rule_metric_value({"value": baskets}, "value")
+        orders_units = _rule_metric_value(row, "ordersUnits", "orders", "ordersComposite")
+        baskets_units = _rule_metric_value(row, "baskets", "cartCount", "cartAdds", "adCartAdds")
         if orders_units is not None and baskets_units and baskets_units > 0:
             metrics["cartToOrderPct"] = orders_units / baskets_units * 100
     return metrics
@@ -3604,12 +3626,15 @@ def _apply_report_rules_to_payload(payload: dict[str, Any], organization_id: int
     rows = result.get("rows") if isinstance(result.get("rows"), list) else []
     decorated: list[Any] = []
     oos_count = 0
+    attention_count = 0
     for raw in rows:
         if not isinstance(raw, dict):
             decorated.append(raw)
             continue
         row = dict(raw)
         evaluation = evaluate_metrics(_rule_metrics_from_row(row), profile).model_dump(mode="json")
+        if evaluation["status"] == "risk":
+            attention_count += 1
         row["ruleEvaluation"] = evaluation
         row["ruleStatus"] = {"unknown": "Недостаточно данных", "risk": "Риск", "opportunity": "Возможность", "normal": "Норма"}.get(evaluation["status"], evaluation["status"])
         row["ruleReasons"] = " · ".join(evaluation.get("statusReasons") or []) or "Пороговых рекомендаций нет"
@@ -3633,6 +3658,9 @@ def _apply_report_rules_to_payload(payload: dict[str, Any], organization_id: int
     result["rows"] = decorated
     result["rulesProfileVersion"] = profile.version
     result["rulesProfile"] = {"name": profile.name, "preset": profile.preset}
+    filtered_summary = result.get("filteredSummary")
+    if isinstance(filtered_summary, dict):
+        result["filteredSummary"] = {**filtered_summary, "attentionCount": attention_count}
     meta = result.get("meta")
     if isinstance(meta, dict):
         result["meta"] = {**meta, "rulesProfileVersion": profile.version}
@@ -4240,7 +4268,7 @@ def get_reports_latest_cache(
         raise HTTPException(status_code=404, detail="REPORT_LATEST_CACHE_MISSING")
     date_range = {"preset": "custom", "from": date_from.isoformat(), "to": date_to.isoformat()}
     job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {}
-    payload = dict(report)
+    payload = _apply_report_rules_to_payload(report, actor.organization_id) if report_id == "abc" else dict(report)
     payload["cache"] = _report_payload_cache_meta(cache, date_range, "latest")
     payload["reportJob"] = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cache, job)
     return payload
@@ -4502,6 +4530,8 @@ def get_reports_by_id(
             "state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy,
         }
         if report is not None:
+            if not _report_payload_cache_is_usable(report_id, cached):
+                return _empty_background_report(report_id, date_range, groupBy, _report_job_for_response(job))
             job = _report_job_for_response(job)
             if _report_payload_cache_is_usable(report_id, cached):
                 job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)

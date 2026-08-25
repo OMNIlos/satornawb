@@ -41,6 +41,8 @@ class WbRepricerSourceCacheRow(Base):
     organization_id: Mapped[int] = mapped_column(ForeignKey("lk_organizations.organization_id"), nullable=False)
     source_key: Mapped[str] = mapped_column(String(255), nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    revenue_basis: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    finance_schema_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     range_date_from: Mapped[date | None] = mapped_column(Date, nullable=True)
     range_date_to: Mapped[date | None] = mapped_column(Date, nullable=True)
     daily_detail_status: Mapped[str | None] = mapped_column(String(32), nullable=True)

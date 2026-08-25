@@ -33,6 +33,7 @@ import {
   type ReportRulesProfile,
   type ReportRulesReadResponse,
 } from '@/features/wb-reports/reportRulesApi'
+import { lastClosedWbDay, resolvePresetPeriodRange } from '@/features/wb-repricer/presetPeriodAnchor'
 import {
   describePnlReportJob,
   type PnlReportJobPayload,
@@ -269,27 +270,19 @@ function clampProductsPeriodDays(value: number) {
   return Math.max(1, Math.min(PRODUCTS_PERIOD_MAX_DAYS, Math.round(value)))
 }
 
-/**
- * Last day WB has closed its analytical window for.
- *
- * WB reports settle at the end of the previous day and every sync profile
- * writes its caches anchored there, so a preset that reaches "today" asks for a
- * window the backend can never have data for - which is what left the whole KPI
- * strip on zeros.
- */
 function productsPeriodAnchorIso() {
-  return toLocalIsoDate(addLocalDays(new Date(), -1))
+  return lastClosedWbDay()
 }
 
 function productsPeriodStartIso(days: number) {
-  return toLocalIsoDate(addLocalDays(fromLocalIsoDate(productsPeriodAnchorIso()) ?? new Date(), -(clampProductsPeriodDays(days) - 1)))
+  return resolvePresetPeriodRange(clampProductsPeriodDays(days)).dateFrom
 }
 
-function productsPeriodDaysFromRange(fromIso: string, toIso = toLocalIsoDate(new Date())) {
-  const today = startOfLocalDay(new Date())
-  const earliest = addLocalDays(today, -(PRODUCTS_PERIOD_MAX_DAYS - 1))
-  const parsedTo = fromLocalIsoDate(toIso) ?? today
-  const boundedTo = parsedTo > today ? today : parsedTo
+function productsPeriodDaysFromRange(fromIso: string, toIso = productsPeriodAnchorIso()) {
+  const anchor = fromLocalIsoDate(productsPeriodAnchorIso()) ?? startOfLocalDay(new Date())
+  const earliest = addLocalDays(anchor, -(PRODUCTS_PERIOD_MAX_DAYS - 1))
+  const parsedTo = fromLocalIsoDate(toIso) ?? anchor
+  const boundedTo = parsedTo > anchor ? anchor : parsedTo
   const minForTo = addLocalDays(boundedTo, -(PRODUCTS_PERIOD_MAX_DAYS - 1))
   const parsedFrom = fromLocalIsoDate(fromIso) ?? boundedTo
   const lowerBound = minForTo < earliest ? earliest : minForTo
@@ -306,11 +299,11 @@ function formatProductsPeriodDate(fromIso: string) {
 
 function makeProductsPeriodLabel(days: number, fromIso: string, toIso: string) {
   const normalizedDays = clampProductsPeriodDays(days)
-  const todayIso = toLocalIsoDate(new Date())
+  const anchorIso = productsPeriodAnchorIso()
   const fromLabel = formatProductsPeriodDate(fromIso)
-  const toLabel = toIso === todayIso ? 'сегодня' : formatProductsPeriodDate(toIso)
+  const toLabel = toIso === anchorIso ? 'вчера' : formatProductsPeriodDate(toIso)
   return normalizedDays === 1
-    ? (toIso === todayIso ? 'сегодня' : fromLabel)
+    ? (toIso === anchorIso ? 'вчера' : fromLabel)
     : `с ${fromLabel} по ${toLabel} · ${normalizedDays} дн`
 }
 
@@ -470,7 +463,7 @@ function applyReportPeriodFromPayload(reportKey: ReportPeriodKey, payload: unkno
   const next = dateRangeToReportPeriod(reportPayload?.filters?.dateRange) ?? dateRangeToReportPeriod(reportPayload?.cache?.requestedRange)
   if (!next) return null
   const current = readReportPeriodState(reportKey)
-  if (current.fromIso !== next.fromIso || current.toIso !== next.toIso || current.mode !== next.mode) {
+  if (current.fromIso !== next.fromIso || current.toIso !== next.toIso) {
     applyReportPeriodState(reportKey, next, { silent: true })
   }
   return next
@@ -4326,14 +4319,19 @@ type AbcBackendRow = {
   brand?: string | null
   category?: string | null
   priceKopecks?: number | null
+  priceBeforeSppKopecks?: number | null
   priceWithSppKopecks?: number | null
+  cogsPerUnitKopecks?: number | null
   cogsKopecks?: number | null
   marginPct?: number | null
   marginKopecks?: number | null
+  marginDeltaPct?: number | null
   impressions?: number | null
   clicks?: number | null
+  clicksDeltaPct?: number | null
   ctrPct?: number | null
   baskets?: number | null
+  basketsDeltaPct?: number | null
   cartCrPct?: number | null
   ordersComposite?: AbcBackendComposite | null
   salesComposite?: AbcBackendComposite | null
@@ -4349,8 +4347,13 @@ type AbcBackendRow = {
   netTotalKopecks?: number | null
   netPerUnitKopecks?: number | null
   logisticsCostPct?: number | null
+  logisticsDeltaPct?: number | null
   commissionCostPct?: number | null
+  commissionDeltaPct?: number | null
   storageCostPct?: number | null
+  storageDeltaPct?: number | null
+  ktrIndex?: number | null
+  localizationPct?: number | null
   wbStockUnits?: number | null
   wbStockKopecks?: number | null
   promotionStatus?: string | null
@@ -4360,6 +4363,9 @@ type AbcBackendRow = {
   promotionType?: string | null
   abcCode?: string | null
   buyoutPct?: number | null
+  ruleEvaluation?: {
+    status?: 'unknown' | 'risk' | 'opportunity' | 'normal' | null
+  } | null
 }
 type AbcBackendReport = {
   rows?: AbcBackendRow[] | null
@@ -4380,15 +4386,11 @@ type AbcLiveState = {
   authExpired: boolean
 }
 type AbcTextLookup = (key: string, fallback?: string) => string
-type AbcThresholdMetrics = { daysToOos?: number }
 type AbcRowRenderContext = {
   row: AbcReportRow
   text: AbcTextLookup
-  warehouseMetrics: Record<string, unknown>
-  warehouseTag: string
   costParts: string[]
-  baseCogs: number
-  thresholdMetrics: AbcThresholdMetrics | null
+  costDeltaParts: string[]
   sku: string
   promo: string
   baskets: string
@@ -4651,7 +4653,7 @@ function ReportHeaderCell({ label, tip, className }: { label: string; tip: strin
   )
 }
 
-const ABC_TABLE_COLUMNS: AbcTableColumn[] = [
+export const ABC_TABLE_COLUMNS: AbcTableColumn[] = [
   { label: 'Товар', sortKey: 'sku', column: 'position', className: 'report-sticky', help: 'Название, артикул и карточка товара Wildberries.' },
   { label: 'Артикул WB', sortKey: 'wb', column: 'wb', help: 'Артикул товара на Wildberries. Ссылка ведет в карточку.' },
   { label: 'Статус', sortKey: 'status', column: 'status', help: 'Рабочий статус товара: локомотив, новинка, неликвид и другие группы для управления ассортиментом.' },
@@ -4662,11 +4664,12 @@ const ABC_TABLE_COLUMNS: AbcTableColumn[] = [
   { label: 'Цена до СПП', sortKey: 'price', column: 'price', className: 'num', help: 'Цена продавца до скидки постоянного покупателя. Берется из WB price source.' },
   { label: 'Себестоимость', sortKey: 'cogs', column: 'cogs', className: 'num', help: 'Себестоимость товара: закупка/печать/упаковка по настройкам SKU. Нужна для маржи и чистой прибыли.' },
   { label: 'Маржа ₽/%', sortKey: 'margin', column: 'margin', className: 'num', help: 'Маржа = цена продажи минус себестоимость и доступные удержания WB. Процент = маржа / цена продажи * 100%.' },
-  { label: 'Переходы WB', sortKey: 'clicks', column: 'clicks', className: 'num', help: 'Сколько раз покупатели открыли карточку товара по данным WB Sales Funnel.' },
+  { label: 'Показы', sortKey: 'views', column: 'impressions', className: 'num', help: 'Показы карточки по данным WB. Если WB API не отдал показатель, отображается прочерк.' },
+  { label: 'Переходы / CTR', sortKey: 'clicks', column: 'clicks', className: 'num', help: 'Переходы в карточку и CTR по данным WB Sales Funnel.' },
   { label: 'Корзины', sortKey: 'baskets', column: 'baskets', className: 'num', help: 'Сколько раз товар добавили в корзину за период.' },
   { label: 'Конверсия', sortKey: 'cr', column: 'cr', className: 'num', help: 'Конверсия корзины в заказ. Формула: заказы / корзины * 100%.' },
   { label: 'Заказы', sortKey: 'orders', column: 'orders', className: 'num', help: 'Оформленные заказы WB: штуки и сумма. Это еще не выкуп.' },
-  { label: 'Продажи', sortKey: 'sales', column: 'sales', className: 'num', help: 'Выкупленные продажи WB: штуки и сумма, которые покупатель реально забрал.' },
+  { label: 'Продажи', sortKey: 'sales', column: 'sales', className: 'num', help: 'Продажи по финансовому отчету WB: retailAmount, включая возвраты со знаком.' },
   { label: 'Реклама / ДРР', sortKey: 'ads', column: 'ads', className: 'num', help: 'Расход рекламы и ДРР. ДРР = расход рекламы / сумму продаж или заказов * 100%, в зависимости от доступного WB источника.' },
   { label: 'Чистая прибыль', sortKey: 'net', column: 'net', className: 'num', help: 'Предварительная чистая прибыль после себестоимости, рекламы и доступных удержаний Wildberries.' },
   { label: 'Логистика', sortKey: 'logistics', column: 'logistics', className: 'num', help: 'Доля логистики WB в экономике SKU. Используется при расчете чистой прибыли.' },
@@ -5270,7 +5273,8 @@ function installDigestLiveDataBridge(accessToken: string | null) {
     window.__vellaDigestLiveAbortController = controller
     window.__vellaDigestLiveLoading = true
     window.__vellaDigestLiveRequestKey = requestKey
-    window.__vellaDigestLiveReport = null
+    // Keep the previous report rendered while the new one loads; wiping it here
+    // blanked the chart on every reload, which read as flicker.
     window.__vellaDigestLiveError = undefined
     emitDigestLiveStateUpdated()
     try {
@@ -5377,8 +5381,9 @@ function installDigestLiveDataBridge(accessToken: string | null) {
   }
 
   if (accessToken !== digestReportMemoryToken) {
-    digestReportMemoryCache.clear()
-    digestPrefetchAnchor = ''
+    // The access token rotates on a timer, but the cached reports belong to the
+    // organisation, not to one token.  Dropping them on every rotation refired
+    // the four preset prefetches and reloaded the visible report each time.
     digestReportMemoryToken = accessToken
   }
   if (accessToken && resolveParityRouteTarget(window.location.pathname, window.location.search).tab === 'digest') {
@@ -5545,9 +5550,19 @@ function formatAbcKopecks(value: unknown) {
   return kopecks === null ? '—' : formatAbcRub(kopecks / 100)
 }
 
+function formatAbcDeltaPct(value: unknown, suffix = '%') {
+  const number = asAbcNumber(value)
+  if (number === null) return '—'
+  const sign = number > 0 ? '+' : number < 0 ? '−' : ''
+  return `${sign}${(Math.round(Math.abs(number) * 10) / 10).toLocaleString('ru-RU')}${suffix}`
+}
+
 function formatAbcMetricPair(metric?: AbcBackendComposite | null) {
   const units = asAbcNumber(metric?.units) ?? 0
-  return `${Math.round(units).toLocaleString('ru-RU')} / ${formatAbcKopecks(metric?.kopecks)}`
+  const delta = asAbcNumber(metric?.deltaPct)
+  return [Math.round(units).toLocaleString('ru-RU'), formatAbcKopecks(metric?.kopecks), delta === null ? null : formatAbcDeltaPct(delta)]
+    .filter(Boolean)
+    .join(' / ')
 }
 
 function statusLabelFromBackend(status?: string | null) {
@@ -5573,11 +5588,8 @@ function statusClassFromLabel(label: string) {
 }
 
 function actionFromBackendAbc(row: AbcBackendRow) {
-  const net = asAbcNumber(row.netTotalKopecks) ?? 0
-  const margin = asAbcNumber(row.marginPct) ?? 0
-  const abc = String(row.abcCode ?? 'CC').toUpperCase()
-  if (net < 0 || margin < 0 || abc.includes('C')) return { action: 'аудит', actionCls: 'audit' }
-  if (abc.startsWith('A')) return { action: 'рост цены', actionCls: 'raise' }
+  if (row.ruleEvaluation?.status === 'risk') return { action: 'аудит', actionCls: 'audit' }
+  if (row.ruleEvaluation?.status === 'opportunity') return { action: 'рост цены', actionCls: 'raise' }
   return { action: 'наблюдать', actionCls: 'neutral' }
 }
 
@@ -5604,16 +5616,24 @@ function abcPromotionLabelFromBackend(row: AbcBackendRow) {
   return label || 'В акции'
 }
 
-function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
+export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
   const status = statusLabelFromBackend(row.productStatus)
   const promo = abcPromotionLabelFromBackend(row)
   const action = actionFromBackendAbc(row)
   const managerName = row.manager || '—'
-  const price = row.priceWithSppKopecks ?? row.priceKopecks
+  const price = row.priceBeforeSppKopecks ?? row.priceKopecks
+  const priceWithSpp = row.priceWithSppKopecks
   const marginPct = asAbcNumber(row.marginPct)
+  const salesUnits = asAbcNumber(row.salesComposite?.units) ?? 0
+  const cogsPerUnit = asAbcNumber(row.cogsPerUnitKopecks)
+  const impressions = asAbcNumber(row.impressions)
+  const clicks = asAbcNumber(row.clicks)
+  const ctrPct = asAbcNumber(row.ctrPct)
+  const clicksDelta = asAbcNumber(row.clicksDeltaPct)
+  const ktrIndex = asAbcNumber(row.ktrIndex)
   const netPerUnit = row.netPerUnitKopecks ?? (
-    (asAbcNumber(row.salesComposite?.units) ?? 0) > 0
-      ? Math.round((asAbcNumber(row.netTotalKopecks) ?? 0) / (asAbcNumber(row.salesComposite?.units) ?? 1))
+    salesUnits > 0
+      ? Math.round((asAbcNumber(row.netTotalKopecks) ?? 0) / salesUnits)
       : null
   )
 
@@ -5632,24 +5652,29 @@ function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
     managerName,
     managerId: row.managerId || '',
     price: formatAbcKopecks(price),
-    spp: row.priceWithSppKopecks && row.priceKopecks && row.priceWithSppKopecks !== row.priceKopecks
-      ? `до СПП ${formatAbcKopecks(row.priceKopecks)}`
-      : 'цена WB',
+    spp: `с СПП ${formatAbcKopecks(priceWithSpp)}`,
+    cogs: formatAbcKopecks(cogsPerUnit),
     type: abcSkuTypeFromBackend(row),
-    margin: marginPct === null ? '—' : formatAbcPct(marginPct),
+    margin: `${formatAbcKopecks(row.marginKopecks)} / ${marginPct === null ? '—' : formatAbcPct(marginPct)}`,
     marginCls: marginPct !== null && marginPct < 0 ? 'metric-down' : 'metric-up',
-    delta: '0 пп',
-    clicks: (asAbcNumber(row.clicks) ?? 0).toLocaleString('ru-RU'),
+    delta: formatAbcDeltaPct(row.marginDeltaPct, ' пп'),
+    views: impressions === null ? '—' : Math.round(impressions).toLocaleString('ru-RU'),
+    clicks: clicks === null ? '—' : Math.round(clicks).toLocaleString('ru-RU'),
+    clicksSub: `CTR ${ctrPct === null ? '—' : formatAbcPct(ctrPct)}${clicksDelta === null ? '' : ` · ${formatAbcDeltaPct(clicksDelta)}`}`,
     baskets: (asAbcNumber(row.baskets) ?? 0).toLocaleString('ru-RU'),
-    basketDelta: '0%',
-    cr: formatAbcPct(asAbcNumber(row.cartCrPct) ?? 0),
+    basketDelta: formatAbcDeltaPct(row.basketsDeltaPct),
+    cr: formatAbcPct(asAbcNumber(row.cartCrPct) ?? Number.NaN),
     orders: formatAbcMetricPair(row.ordersComposite),
     sales: formatAbcMetricPair(row.salesComposite),
-    ads: `${formatAbcKopecks(row.adSpendKopecks)} / ${formatAbcPct(asAbcNumber(row.drrSalesPct) ?? 0)}`,
+    ads: `${formatAbcKopecks(row.adSpendKopecks)} / ${formatAbcPct(asAbcNumber(row.drrSalesPct) ?? Number.NaN)}`,
     net: formatAbcKopecks(row.netTotalKopecks),
     netCls: (asAbcNumber(row.netTotalKopecks) ?? 0) < 0 ? 'metric-down' : 'metric-up',
     netSub: netPerUnit === null ? 'на товар' : `${formatAbcKopecks(netPerUnit)}/шт`,
-    costs: `${formatAbcPct(asAbcNumber(row.logisticsCostPct) ?? 0)} / ${formatAbcPct(asAbcNumber(row.commissionCostPct) ?? 0)} / ${formatAbcPct(asAbcNumber(row.storageCostPct) ?? 0)}`,
+    costs: `${formatAbcPct(asAbcNumber(row.logisticsCostPct) ?? Number.NaN)} / ${formatAbcPct(asAbcNumber(row.commissionCostPct) ?? Number.NaN)} / ${formatAbcPct(asAbcNumber(row.storageCostPct) ?? Number.NaN)}`,
+    costDeltas: `${formatAbcDeltaPct(row.logisticsDeltaPct, ' пп')} / ${formatAbcDeltaPct(row.commissionDeltaPct, ' пп')} / ${formatAbcDeltaPct(row.storageDeltaPct, ' пп')}`,
+    warehouse: ktrIndex === null ? '—' : ktrIndex.toLocaleString('ru-RU'),
+    warehouseCls: ktrIndex === null ? '' : ktrIndex > 1.5 ? 'metric-down' : 'metric-up',
+    localization: formatAbcPct(asAbcNumber(row.localizationPct) ?? Number.NaN),
     stock: `${(asAbcNumber(row.wbStockUnits) ?? 0).toLocaleString('ru-RU')} шт`,
     stockRub: formatAbcKopecks(row.wbStockKopecks),
     filters: abcFiltersForBackendRow(row, status),
@@ -5736,7 +5761,27 @@ function abcLiveMeta(report: AbcBackendReport | null, hash: string) {
   return 'Данные обновлены по товарам, которые сейчас видны в таблице.'
 }
 
+const ABC_REPORT_MEMORY_TTL_MS = 5 * 60_000
+const abcReportMemoryCache = new Map<string, { report: AbcBackendReport; rows: AbcReportRow[]; cachedAt: number }>()
+let abcReportMemoryToken: string | null = null
+
+function cacheAbcReport(requestKey: string, report: AbcBackendReport, rows: AbcReportRow[]) {
+  const now = Date.now()
+  for (const [key, entry] of abcReportMemoryCache) {
+    if (now - entry.cachedAt >= ABC_REPORT_MEMORY_TTL_MS) abcReportMemoryCache.delete(key)
+  }
+  abcReportMemoryCache.set(requestKey, { report, rows, cachedAt: now })
+}
+
 export function installAbcLiveDataBridge(accessToken: string | null) {
+  if (abcReportMemoryToken !== accessToken) {
+    window.__vellaAbcLiveAbortController?.abort()
+    abcReportMemoryCache.clear()
+    abcReportMemoryToken = accessToken
+    window.__vellaAbcLiveRequestKey = undefined
+    window.__vellaAbcLiveRows = undefined
+    window.__vellaAbcLiveReport = undefined
+  }
   window.__vellaLoadLiveAbcReport = async () => {
     const activeTab = resolveParityRouteTarget(window.location.pathname, window.location.search).tab
     if (!shouldLoadPeriodSurface(activeTab, 'abc')) return null
@@ -5744,6 +5789,22 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
     const requestKey = `${period.fromIso}:${period.toIso}:sku`
     if (window.__vellaAbcLiveRequestKey === requestKey && Array.isArray(window.__vellaAbcLiveRows) && window.__vellaAbcLiveReport) {
       return window.__vellaAbcLiveRows
+    }
+    const memoryEntry = abcReportMemoryCache.get(requestKey)
+    if (memoryEntry && Date.now() - memoryEntry.cachedAt < ABC_REPORT_MEMORY_TTL_MS) {
+      if (window.__vellaAbcLiveLoading && window.__vellaAbcLiveRequestKey !== requestKey) {
+        window.__vellaAbcLiveAbortController?.abort()
+      }
+      window.__vellaAbcLiveLoading = false
+      window.__vellaAbcLiveError = undefined
+      window.__vellaAbcLiveAuthExpired = false
+      window.__vellaAbcLiveRows = memoryEntry.rows
+      window.__vellaAbcLiveReport = memoryEntry.report
+      window.__vellaAbcLiveRequestKey = requestKey
+      window.__vellaPublishAbcRowsSnapshot?.()
+      emitAbcLiveStateUpdated()
+      window.setTimeout(() => window.applyAbcFilter?.(), 0)
+      return memoryEntry.rows
     }
     if (window.__vellaAbcLiveLoading) {
       if (window.__vellaAbcLiveRequestKey === requestKey) return window.__vellaAbcLiveRows ?? null
@@ -5779,6 +5840,7 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
           const rows = Array.isArray(latest.rows)
             ? latest.rows.map(mapBackendAbcRowToParity)
             : []
+          cacheAbcReport(requestKey, latest, rows)
           window.__vellaAbcLiveRows = rows
           window.__vellaAbcLiveReport = latest
           window.__vellaAbcLiveRequestKey = requestKey
@@ -5824,10 +5886,6 @@ function shortAbcFilterHash(value: string) {
   return Math.abs(hash).toString(36).toUpperCase().padStart(5, '0').slice(0, 5)
 }
 
-function baseCogsForAbcType(type: string) {
-  return type === 'hc' || type === 'hb' ? 820 : type === 'lc' || type === 'lb' ? 540 : 467
-}
-
 function compareAbcSortValues(left: unknown, right: unknown, dir: string) {
   const result = typeof left === 'number' && typeof right === 'number'
     ? left - right
@@ -5836,7 +5894,7 @@ function compareAbcSortValues(left: unknown, right: unknown, dir: string) {
 }
 
 function abcSortValue(row: AbcReportRow, key: string, originalIndex: number) {
-  const warehouseMetrics = window.warehouseMetrics?.(row, originalIndex) ?? {}
+  void originalIndex
   const costParts = String(row.costs ?? '0% / 0% / 0%').split('/').map((part) => part.trim())
   const valueMap: Record<string, () => unknown> = {
     sku: () => row.sku,
@@ -5847,9 +5905,9 @@ function abcSortValue(row: AbcReportRow, key: string, originalIndex: number) {
     promo: () => row.promo,
     manager: () => row.manager,
     price: () => parseAbcNumber(row.price),
-    cogs: () => baseCogsForAbcType(String(row.type ?? '')),
+    cogs: () => parseAbcNumber(row.cogs),
     margin: () => parseAbcNumber(row.margin),
-    views: () => Number(row.views) || 0,
+    views: () => parseAbcNumber(row.views),
     clicks: () => parseAbcFirstNumber(row.clicks),
     baskets: () => parseAbcNumber(row.baskets),
     cr: () => parseAbcNumber(row.cr),
@@ -5860,7 +5918,7 @@ function abcSortValue(row: AbcReportRow, key: string, originalIndex: number) {
     logistics: () => parseAbcNumber(costParts[0]),
     commission: () => parseAbcNumber(costParts[1]),
     storage: () => parseAbcNumber(costParts[2]),
-    warehouse: () => Number(warehouseMetrics.ktr) || 0,
+    warehouse: () => parseAbcNumber(row.warehouse),
     stock: () => parseAbcNumber(row.stock),
     comment: () => row.sku,
   }
@@ -6004,10 +6062,10 @@ function renderAbcIdentityCells(ctx: AbcRowRenderContext) {
 }
 
 function renderAbcCommercialCells(ctx: AbcRowRenderContext) {
-  const { text, baseCogs } = ctx
+  const { text } = ctx
   return [
     abcRowCell('abc-price-cell', `<strong>${text('price')}</strong><span class="sub">${text('spp')}</span>`, 'class="num"'),
-    abcRowCell('abc-cogs-cell', `${baseCogs.toLocaleString('ru-RU')} ₽`, 'class="num"', 'data-tip="Себестоимость: бланк + DTF-печать + упаковка"'),
+    abcRowCell('abc-cogs-cell', text('cogs', '—'), 'class="num"', 'data-tip="Себестоимость за единицу из настроек SKU"'),
     abcRowCell('abc-margin-cell', `<span class="${text('marginCls')}" data-tip="Маржа после себестоимости, комиссии, логистики, хранения и рекламы">${text('margin')}</span><span class="sub">${text('delta')}</span>`, 'class="num"'),
   ].join('\n    ')
 }
@@ -6015,9 +6073,10 @@ function renderAbcCommercialCells(ctx: AbcRowRenderContext) {
 function renderAbcTrafficCells(ctx: AbcRowRenderContext) {
   const { text, baskets } = ctx
   return [
-    abcRowCell('abc-clicks-cell', text('clicks'), 'class="num"', 'data-tip="Переходы в карточку WB"'),
+    abcRowCell('abc-impressions-cell', text('views', '—'), 'class="num"', 'data-tip="Показы карточки WB; прочерк означает, что источник не отдал показатель"'),
+    abcRowCell('abc-clicks-cell', `<span>${text('clicks')}</span><span class="sub">${text('clicksSub')}</span>`, 'class="num"', 'data-tip="Переходы в карточку WB и CTR"'),
     abcRowCell('abc-baskets-cell', `<span class="${baskets.includes('↓') ? 'metric-down' : 'metric-up'}" data-tip="Корзины — главный сигнал спроса для репрайсера">${baskets}</span><span class="sub">${text('basketDelta')}</span>`, 'class="num"'),
-    abcRowCell('abc-cr-cell', text('cr'), 'class="num"', 'data-tip="Конверсия из клика/корзины в заказ"'),
+    abcRowCell('abc-cr-cell', text('cr'), 'class="num"', 'data-tip="Конверсия корзины в заказ"'),
   ].join('\n    ')
 }
 
@@ -6025,19 +6084,19 @@ function renderAbcFinancialCells(ctx: AbcRowRenderContext) {
   const { text } = ctx
   return [
     abcRowCell('abc-orders-cell', window.pairMetricCell?.(text('orders'), 'Заказы за выбранный период', 'сумма/динамика') ?? '', 'class="num"'),
-    abcRowCell('abc-sales-cell', window.pairMetricCell?.(text('sales'), 'Продажи за выбранный период', 'сумма/динамика') ?? '', 'class="num"', 'data-tip="Продажи после выкупа"'),
+    abcRowCell('abc-sales-cell', window.pairMetricCell?.(text('sales'), 'Продажи из финансового отчёта WB (retailAmount)', 'сумма/динамика') ?? '', 'class="num"', 'data-tip="Продажи из финансового отчёта WB (retailAmount, возвраты со знаком)"'),
     abcRowCell('abc-ads-cell', text('ads'), 'class="num"', 'data-tip="Расход рекламы и ДРР"'),
     abcRowCell('abc-net-cell', `<span class="${text('netCls')}" data-tip="Чистая прибыль товара">${text('net')}</span><span class="sub">${text('netSub')}</span>`, 'class="num"'),
   ].join('\n    ')
 }
 
 function renderAbcWarehouseCells(ctx: AbcRowRenderContext) {
-  const { text, promo, warehouseMetrics, warehouseTag, costParts, thresholdMetrics } = ctx
+  const { text, costParts, costDeltaParts } = ctx
   return [
-    abcRowCell('abc-logistics-cell', `<span>${costParts[0] || '0%'}</span><span class="sub">${(thresholdMetrics?.daysToOos ?? Infinity) <= 7 ? '+3.1 пп' : text('delta')}</span>`, 'class="num"', 'data-tip="Текущий процент логистики и динамика к периоду"'),
-    abcRowCell('abc-commission-cell', `<span>${costParts[1] || '0%'}</span><span class="sub">${promo === 'да' ? '+0.4 пп' : '0 пп'}</span>`, 'class="num"', 'data-tip="Текущий процент комиссии WB и динамика"'),
-    abcRowCell('abc-storage-cell', `<span>${costParts[2] || '0%'}</span><span class="sub">${warehouseTag === 'warn' ? '+0.8 пп' : '+0.1 пп'}</span>`, 'class="num"', 'data-tip="Текущий процент хранения и динамика"'),
-    abcRowCell('abc-warehouse-cell', `<span class="${warehouseTag === 'warn' ? 'metric-down' : 'metric-up'}">${String(warehouseMetrics.ktr ?? '')}</span><span class="sub">лок. ${String(warehouseMetrics.localization ?? '')}%</span>`, 'class="num"', 'data-tip="КТР и локализация: складские индексы WB, которые объясняют дорогую логистику"'),
+    abcRowCell('abc-logistics-cell', `<span>${costParts[0] || '—'}</span><span class="sub">${costDeltaParts[0] || '—'}</span>`, 'class="num"', 'data-tip="Текущий процент логистики и динамика к периоду"'),
+    abcRowCell('abc-commission-cell', `<span>${costParts[1] || '—'}</span><span class="sub">${costDeltaParts[1] || '—'}</span>`, 'class="num"', 'data-tip="Текущий процент комиссии WB и динамика"'),
+    abcRowCell('abc-storage-cell', `<span>${costParts[2] || '—'}</span><span class="sub">${costDeltaParts[2] || '—'}</span>`, 'class="num"', 'data-tip="Текущий процент хранения и динамика"'),
+    abcRowCell('abc-warehouse-cell', `<span class="${text('warehouseCls')}">${text('warehouse', '—')}</span><span class="sub">лок. ${text('localization', '—')}</span>`, 'class="num"', 'data-tip="КТР и локализация по данным WB; недоступный показатель отмечен прочерком"'),
     abcRowCell('abc-stock-cell', `${text('stock')}<span class="sub">${text('stockRub')}</span>`, 'class="num"', 'data-tip="Суммарный остаток WB. Детализация по складам — во вкладке Остатки"'),
   ].join('\n    ')
 }
@@ -6046,18 +6105,14 @@ function renderAbcCommentCell(ctx: AbcRowRenderContext) {
   return abcRowCell('abc-comment-cell', window.reportCommentCell?.(ctx.row, 'ABC') ?? '')
 }
 
-function renderAbcRowHtml(row: AbcReportRow, originalIndex: number) {
+export function renderAbcRowHtml(row: AbcReportRow, originalIndex: number) {
+  void originalIndex
   const text = (key: string, fallback = '') => String(row[key] ?? fallback)
   const filters = Array.isArray(row.filters) ? row.filters.map(String) : []
   const filter = ['Все товары'].concat(filters).join('|')
-  const warehouseMetrics = window.warehouseMetrics?.(row, originalIndex) ?? {}
-  const warehouseTag = String(warehouseMetrics.tag ?? '')
-  const costParts = text('costs', '0% / 0% / 0%').split('/').map((part) => part.trim())
+  const costParts = text('costs', '— / — / —').split('/').map((part) => part.trim())
+  const costDeltaParts = text('costDeltas', '— / — / —').split('/').map((part) => part.trim())
   const type = text('type')
-  const baseCogs = baseCogsForAbcType(type)
-  const thresholdMetrics = row.thresholdMetrics && typeof row.thresholdMetrics === 'object'
-    ? row.thresholdMetrics as { daysToOos?: number }
-    : null
   const sku = text('sku')
   const promo = text('promo')
   const baskets = text('baskets')
@@ -6069,11 +6124,8 @@ function renderAbcRowHtml(row: AbcReportRow, originalIndex: number) {
   const ctx: AbcRowRenderContext = {
     row,
     text,
-    warehouseMetrics,
-    warehouseTag,
     costParts,
-    baseCogs,
-    thresholdMetrics,
+    costDeltaParts,
     sku,
     promo,
     baskets,
@@ -6270,7 +6322,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
   const [calendarBoundary, setCalendarBoundary] = useState<'from' | 'to'>('from')
   const [calendarMonthIso, setCalendarMonthIso] = useState(() => monthStartIso(readActivePeriod().toIso))
   const calendarRef = useRef<HTMLDivElement | null>(null)
-  const todayIso = toLocalIsoDate(new Date())
+  const todayIso = productsPeriodAnchorIso()
   const minCustomIso = productsPeriodStartIso(PRODUCTS_PERIOD_MAX_DAYS)
   const coverageByDate = useMemo(() => {
     const map = new Map<string, LiveRepricerCacheCoverage['days'][number]>()
@@ -7739,7 +7791,7 @@ function AbcFilteredSummaryIsland({ replacementKey }: { replacementKey: string }
   return null
 }
 
-function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }) {
+export function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }) {
   const state = useAbcLiveState()
   if (state.authExpired || state.loading || !state.report || !abcHasReportRows(state)) return null
   const rawRows = abcRawRows(state.report)
@@ -7749,10 +7801,7 @@ function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }) {
   const baskets = rawRows.reduce((sum, row) => sum + (asAbcNumber(row.baskets) ?? 0), 0)
   const blockers = Array.isArray(state.report?.blockerIds) ? state.report.blockerIds : []
   const hasEmptyPeriodActivity = blockers.includes('WB_ABC_PERIOD_ACTIVITY_EMPTY')
-  const belowThreshold = rawRows.filter((row) => {
-    const abc = String(row.abcCode ?? '').toUpperCase()
-    return abc.includes('C') || (asAbcNumber(row.marginPct) ?? 0) < 0 || (asAbcNumber(row.netTotalKopecks) ?? 0) < 0
-  }).length
+  const attentionCount = abcBackendSummaryNumber(state.report, 'attentionCount')
   const statusText = state.error ? 'Не удалось загрузить отчет' : 'Данные загружены'
   const stats: AbcKpiStat[] = [
     {
@@ -7775,9 +7824,9 @@ function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }) {
     },
     {
       ...ABC_KPI_STATS[3],
-      value: belowThreshold.toLocaleString('ru-RU'),
-      delta: `${rawRows.filter((row) => String(row.abcCode ?? '').includes('C')).length} слабый класс · ${rawRows.filter((row) => (asAbcNumber(row.netTotalKopecks) ?? 0) < 0).length} в минусе`,
-      deltaClass: belowThreshold > 0 ? 'down' : 'up',
+      value: attentionCount.toLocaleString('ru-RU'),
+      delta: 'по активным правилам алгоритма',
+      deltaClass: attentionCount > 0 ? 'down' : 'up',
     },
   ]
 
@@ -13968,7 +14017,7 @@ type DrawerLiveProduct = {
   strategyDescription?: string
   strategyAssignmentSource?: string
   price?: number
-  avgPriceSpp?: number
+  avgPriceSpp?: number | null
   buyerPriceNoWallet?: number | null
   buyerPriceWithWallet?: number | null
   priceWithSpp?: number | null
@@ -14052,8 +14101,8 @@ function useDrawerLiveProduct() {
 }
 
 function drawerOverviewMarginRows(product: DrawerLiveProduct | null) {
-  const priceAfterSpp = drawerNumber(product?.buyerPriceNoWallet ?? product?.priceWithSpp ?? product?.avgPriceSpp)
-  const avgPriceSpp = drawerNumber(product?.avgPriceSpp ?? priceAfterSpp)
+  const priceAfterSpp = drawerNumber(product?.buyerPriceNoWallet ?? product?.priceWithSpp)
+  const avgPriceSpp = drawerNumber(product?.avgPriceSpp)
   const spp = drawerNumber(product?.spp ?? product?.pureSpp)
   const cogs = drawerNumber(product?.cogs)
   const marginPct = drawerNumber(product?.mg)
@@ -33548,7 +33597,7 @@ type DrawerParityProduct = {
   strategyDescription?: string
   strategyAssignmentSource?: string
   price?: number
-  avgPriceSpp?: number
+  avgPriceSpp?: number | null
   pmin?: number
   pmaxBeforeSpp?: number
   pminBeforeSpp?: number

@@ -93,7 +93,7 @@ def historical_sync_as_of(now: datetime | None = None) -> date:
     resolved_now = now or datetime.now(timezone.utc)
     if resolved_now.tzinfo is None:
         resolved_now = resolved_now.replace(tzinfo=timezone.utc)
-    return resolved_now.astimezone(timezone.utc).date() - timedelta(days=1)
+    return resolved_now.astimezone(ZoneInfo(NIGHTLY_SYNC_TIMEZONE)).date() - timedelta(days=1)
 
 
 def nightly_sync_window_state(now_utc: datetime | None = None) -> dict[str, object]:
@@ -175,7 +175,7 @@ def periodic_sync_profiles(*, as_of: date) -> tuple[WbSyncProfile, ...]:
             "incremental",
             as_of,
             2,
-            ("period-stats",),
+            ("goods", "period-stats"),
             cadence_minutes=60,
         ),
         _profile(

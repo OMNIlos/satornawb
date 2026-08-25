@@ -141,7 +141,7 @@ export type LiveRepricerSkuRow = {
     buyerPriceWithWalletKopecks?: number | null
     accountedBuyerPriceKopecks?: number | null
     marginBaseKopecks?: number | null
-    avgPriceWithSppKopecks?: number
+    avgPriceWithSppKopecks?: number | null
     marginPct?: number | null
     marginKopecks?: number | null
     wbCommissionPct?: number | null
@@ -772,11 +772,8 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
   const avgPriceWithSppKopecks = normalizeBuyerKopecks(row.analytics?.avgPriceWithSppKopecks, row.meta.currentPriceKopecks)
   const buyerPriceWithWalletKopecks = normalizeBuyerKopecks(row.analytics?.buyerPriceWithWalletKopecks, row.meta.currentPriceKopecks)
   const accountedBuyerPriceKopecks = normalizeBuyerKopecks(row.analytics?.accountedBuyerPriceKopecks, row.meta.currentPriceKopecks)
-  const priceWithSppKopecks = buyerPriceNoWalletKopecks
-    ?? avgPriceWithSppKopecks
-    ?? normalizeBuyerKopecks(row.meta.currentPriceKopecks, row.meta.currentPriceKopecks)
-    ?? row.meta.currentPriceKopecks
-  const avgPriceSpp = kopecksToRub(priceWithSppKopecks)
+  const priceWithSpp = buyerPriceNoWalletKopecks != null ? kopecksToRub(buyerPriceNoWalletKopecks) : null
+  const avgPriceSpp = avgPriceWithSppKopecks != null ? kopecksToRub(avgPriceWithSppKopecks) : null
   const accountedBuyerPriceRub = accountedBuyerPriceKopecks != null
     ? kopecksToRub(accountedBuyerPriceKopecks)
     : null
@@ -784,7 +781,7 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     ? kopecksToRub(buyerPriceWithWalletKopecks)
     : null
   const priceWithWallet = accountedBuyerPriceRub ?? buyerPriceWithWalletRub
-  const directSppPrice = buyerPriceNoWalletKopecks != null ? avgPriceSpp : null
+  const directSppPrice = priceWithSpp
   const financeState = row.analytics?.financeState ?? 'no_data'
   const hasFinance = financeState === 'ok' || financeState === 'fallback'
   const stock = stockState === 'no_data' ? 0 : row.analytics?.wbStockUnits ?? Math.max(0, baskets * 2)
@@ -803,7 +800,7 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     : null
   const commissionPct = commissionDisplayPct != null ? Number(commissionDisplayPct.toFixed(1)) : null
   const sppPct = normalizeSppPct(row.analytics?.sppPct)
-    ?? deriveSppPct(row.meta.currentPriceKopecks, buyerPriceNoWalletKopecks ?? avgPriceWithSppKopecks)
+    ?? deriveSppPct(row.meta.currentPriceKopecks, buyerPriceNoWalletKopecks)
   const commissionRub = hasFinance && row.analytics?.commissionKopecks != null
     ? kopecksToRub(row.analytics.commissionKopecks)
     : null
@@ -910,7 +907,7 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     promotionId: row.analytics?.promotionId ?? null,
     promoState: row.analytics?.promotionStatus === 'yes' ? (displayPromotionLabel || promotionLabel || 'да') : (noPromotionReason || 'нет'),
     avgPriceSpp,
-    priceWithSpp: avgPriceSpp,
+    priceWithSpp,
     priceWithWallet,
     spp: sppPct != null ? Number(sppPct.toFixed(2)) : null,
     pureSpp: sppPct != null ? Number(sppPct.toFixed(2)) : null,

@@ -27,6 +27,7 @@ from app.repricer_nomenclature_excel import (
 from app.repricer_cache.store import (
     cached_goods_meta,
     compact_heavy_source_cache_rows,
+    finance_cache_uses_current_revenue_basis,
     get_covering_source_cache,
     get_source_cache,
     get_source_cache_fetched_at,
@@ -771,7 +772,10 @@ def _merge_aggregate_row(target: dict[str, Any], source: dict[str, Any]) -> None
     for key, value in source.items():
         if key.startswith("_"):
             continue
-        if isinstance(value, bool) or value is None:
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            target[key] = bool(target.get(key)) or value
             continue
         if isinstance(value, (int, float)):
             if key.endswith("Pct") or key in {"sppPct", "commissionPct", "discountPct", "buyoutPct"}:
@@ -862,6 +866,10 @@ def _sync_status_covering_keys(organization_id: int, prefix: str, range_start: d
     return list(dict.fromkeys(keys))
 
 
+def _compatible_period_source_cache(prefix: str, cache: dict[str, Any]) -> dict[str, Any]:
+    return cache if prefix != "finance" or finance_cache_uses_current_revenue_basis(cache) else {}
+
+
 def _load_period_source_cache(
     organization_id: int,
     prefix: str,
@@ -877,15 +885,21 @@ def _load_period_source_cache(
     if require_full_sync_coverage and not _full_sync_covers_range(organization_id, range_start, range_end)[0]:
         return {}
     exact_key = f"{prefix}_{period_suffix}"
-    exact = get_source_cache(organization_id, exact_key, slim=slim) or {}
+    exact = _compatible_period_source_cache(
+        prefix,
+        get_source_cache(organization_id, exact_key, slim=slim) or {},
+    )
     if exact and prefer_freshest_covering:
-        covering = get_covering_source_cache(
-            organization_id,
-            f"{prefix}_",
-            date_from=range_start.date(),
-            date_to=range_end.date(),
-            slim=slim,
-        ) or {}
+        covering = _compatible_period_source_cache(
+            prefix,
+            get_covering_source_cache(
+                organization_id,
+                f"{prefix}_",
+                date_from=range_start.date(),
+                date_to=range_end.date(),
+                slim=slim,
+            ) or {},
+        )
         if str(covering.get("fetchedAt") or "") > str(exact.get("fetchedAt") or ""):
             rolled = _covered_cache_from_daily(
                 covering,
@@ -907,16 +921,22 @@ def _load_period_source_cache(
     day_key = f"{prefix}_{resolved_period_days}"
     if day_key == exact_key:
         return {}
-    fallback = get_source_cache(organization_id, day_key, slim=slim) or {}
+    fallback = _compatible_period_source_cache(
+        prefix,
+        get_source_cache(organization_id, day_key, slim=slim) or {},
+    )
     if fallback and _cache_matches_range(fallback, range_start, range_end):
         return fallback
-    covering = get_covering_source_cache(
-        organization_id,
-        f"{prefix}_",
-        date_from=range_start.date(),
-        date_to=range_end.date(),
-        slim=slim,
-    ) or {}
+    covering = _compatible_period_source_cache(
+        prefix,
+        get_covering_source_cache(
+            organization_id,
+            f"{prefix}_",
+            date_from=range_start.date(),
+            date_to=range_end.date(),
+            slim=slim,
+        ) or {},
+    )
     if covering:
         rolled = _covered_cache_from_daily(
             covering,
@@ -931,7 +951,10 @@ def _load_period_source_cache(
     for covering_key in _sync_status_covering_keys(organization_id, prefix, range_start, range_end):
         if covering_key in {exact_key, day_key}:
             continue
-        covering = get_source_cache(organization_id, covering_key, slim=slim) or {}
+        covering = _compatible_period_source_cache(
+            prefix,
+            get_source_cache(organization_id, covering_key, slim=slim) or {},
+        )
         rolled = _covered_cache_from_daily(
             covering,
             prefix=prefix,
@@ -1566,6 +1589,13 @@ def _margin_breakdown_from_rows(
                 note="Если amount отрицательный, это компенсация удержания и effect становится плюсом к марже.",
             ),
             _margin_component(
+                key="loyaltyCost",
+                label="Программа лояльности WB",
+                operation="- signed",
+                amount_kopecks=analytics.get("loyaltyCostKopecks"),
+                source="finance cashbackAmount + cashbackCommissionChange",
+            ),
+            _margin_component(
                 key="acquiring",
                 label="Эквайринг",
                 operation="-",
@@ -1577,7 +1607,7 @@ def _margin_breakdown_from_rows(
                 label="Реклама WB",
                 operation="-",
                 amount_kopecks=analytics.get("adSpendKopecks"),
-                source="ads fullstats sum",
+                source="finance WB Promotion deduction; ads fullstats fallback",
             ),
             _margin_component(
                 key="otherExpenses",
@@ -1592,10 +1622,10 @@ def _margin_breakdown_from_rows(
             ),
             _margin_component(
                 key="additionalPayment",
-                label="Доплаты WB",
+                label="Компенсации и корректировки WB net",
                 operation="+ credit",
                 amount_kopecks=analytics.get("additionalPaymentKopecks"),
-                source="finance additionalPayment, вычитается из expenses",
+                source="finance paymentSchedule - raw additionalPayment",
             ),
             _margin_component(
                 key="tax",
@@ -1657,7 +1687,7 @@ def _margin_breakdown_from_rows(
     return {
         "formula": (
             "netProfit = revenue + workReturn - cogs - commission - logistics - storage - acceptance "
-            "- signed(penalty) - signed(deduction) - acquiring - ads - otherExpenses "
+            "- signed(penalty) - signed(deduction) - loyaltyCost - acquiring - ads - otherExpenses "
             "+ additionalPayment - tax"
         ),
         "taxIncludedInExpenses": False,
@@ -1752,6 +1782,8 @@ def _repricer_list_cache_meta(
         require_full_sync_coverage=require_full_sync_coverage,
         memo=period_cache_memo,
     )
+    if not finance_cache:
+        finance_meta = {}
     cache["financeFetchedAt"] = finance_cache.get("fetchedAt") or finance_meta.get("fetchedAt")
     cache["financeCachedGoodsNmIds"] = finance_cache.get("cachedGoodsNmIds") or finance_meta.get("cachedGoodsNmIds")
     cache["financeMatchedNmIds"] = finance_cache.get("matchedCachedGoodsNmIds") or finance_meta.get("matchedCachedGoodsNmIds")
@@ -1916,7 +1948,7 @@ def _list_repricer_skus_from_cached_sources(
     )
 
 
-SKU_LIST_SNAPSHOT_VERSION = 5
+SKU_LIST_SNAPSHOT_VERSION = 6
 SKU_LIST_SNAPSHOT_CHUNK_SIZE = 150
 
 
@@ -2323,7 +2355,7 @@ def _repricer_list_summary(
     additional_payment_kopecks = 0
     finance_components = {
         key: 0
-        for key in ("commission", "logistics", "storage", "acceptance", "penalty", "deduction", "acquiring", "additionalPayment")
+        for key in ("commission", "logistics", "storage", "acceptance", "penalty", "deduction", "loyaltyCost", "acquiring", "additionalPayment")
     }
     buyer_revenue_kopecks = 0
     margin_pct_values: list[float] = []
@@ -2475,6 +2507,7 @@ def _repricer_list_summary(
         "logisticsKopecks": finance_components["logistics"],
         "penaltyKopecks": finance_components["penalty"],
         "deductionKopecks": finance_components["deduction"],
+        "loyaltyCostKopecks": finance_components["loyaltyCost"],
         "acquiringKopecks": finance_components["acquiring"],
         "penaltyChargedKopecks": penalty_charged_kopecks,
         "penaltyReturnedKopecks": penalty_returned_kopecks,
@@ -2616,8 +2649,13 @@ def _repricer_list_summary_from_source_caches(
         acceptance_kopecks = _int_or_zero(finance.get("acceptanceKopecks"))
         penalty_kopecks = _int_or_zero(finance.get("penaltyKopecks"))
         deduction_kopecks = _int_or_zero(finance.get("deductionKopecks"))
+        loyalty_cost_kopecks = _int_or_zero(finance.get("loyaltyCostKopecks"))
         acquiring_kopecks = _int_or_zero(finance.get("acquiringKopecks"))
-        ad_spend_kopecks = _int_or_zero(ads.get("adSpendKopecks") or finance.get("adSpendKopecks"))
+        ad_spend_kopecks = _int_or_zero(
+            finance.get("adSpendKopecks")
+            if finance.get("financeAdSpendAuthoritative")
+            else ads.get("adSpendKopecks") or finance.get("adSpendKopecks")
+        )
         other_expenses_kopecks = 0
         tax_kopecks = round(seller_revenue_kopecks * float(settings.get("taxPct") or 0) / 100)
         work_return_kopecks = _int_or_zero(settings.get("workReturnPerSaleKopecks")) * (sales_units - returns_units)
@@ -2631,6 +2669,7 @@ def _repricer_list_summary_from_source_caches(
                 + acceptance_kopecks
                 + penalty_kopecks
                 + deduction_kopecks
+                + loyalty_cost_kopecks
                 + acquiring_kopecks
                 + ad_spend_kopecks
                 + other_expenses_kopecks
@@ -2671,9 +2710,12 @@ def _repricer_list_summary_from_source_caches(
                 "deductionChargedKopecks": _int_or_zero(finance.get("deductionChargedKopecks")),
                 "deductionCompensationKopecks": _int_or_zero(finance.get("deductionCompensationKopecks")),
                 "additionalPaymentKopecks": additional_payment_kopecks,
+                "rewardAdjustmentKopecks": _int_or_zero(finance.get("rewardAdjustmentKopecks")),
+                "paymentScheduleKopecks": _int_or_zero(finance.get("paymentScheduleKopecks")),
+                "loyaltyCostKopecks": loyalty_cost_kopecks,
                 "acquiringKopecks": acquiring_kopecks,
                 "adSpendKopecks": ad_spend_kopecks,
-                "adDataAvailable": bool(ads),
+                "adDataAvailable": bool(ads) or bool(finance.get("financeAdSpendAuthoritative")),
                 "adImpressions": _int_or_zero(ads.get("adImpressions")),
                 "adClicks": _int_or_zero(ads.get("adClicks")),
                 "adCartAdds": _int_or_zero(ads.get("adCartAdds")),
@@ -3432,11 +3474,26 @@ def _ensure_repricer_stats_period_caches(
         else:
             missing_sources.append("period-stats")
 
-    finance_cache = get_source_cache(organization_id, stats_finance_key, slim=True) or {}
+    finance_cache = _compatible_period_source_cache(
+        "finance",
+        get_source_cache(organization_id, stats_finance_key, slim=True) or {},
+    )
     if finance_cache and not _cache_matches_range(finance_cache, range_start, range_end):
         finance_cache = {}
     if not finance_cache:
-        finance_payload = _period_source_cache(organization_id, "finance", period_suffix, resolved_period_days, range_start, range_end, slim=False, require_full_sync_coverage=False)
+        finance_payload = _compatible_period_source_cache(
+            "finance",
+            _period_source_cache(
+                organization_id,
+                "finance",
+                period_suffix,
+                resolved_period_days,
+                range_start,
+                range_end,
+                slim=False,
+                require_full_sync_coverage=False,
+            ),
+        )
         finance_aggregates = finance_payload.get("aggregates") if isinstance(finance_payload.get("aggregates"), dict) else {}
         if finance_aggregates:
             cached_goods_nm_ids = {str(nm_id) for nm_id in _nm_ids_from_goods(list_cached_goods(organization_id))}
@@ -3521,6 +3578,8 @@ def _repricer_stats_cache_aggregates(
     result: dict[str, dict[str, dict[str, Any]]] = {}
     for source, key in keys.items():
         cache = get_source_cache(organization_id, key, slim=True) or {}
+        if source == "finance":
+            cache = _compatible_period_source_cache(source, cache)
         aggregates = cache.get("aggregates") if isinstance(cache.get("aggregates"), dict) else {}
         result[source] = aggregates
     return result
@@ -3727,7 +3786,10 @@ def get_repricer_stats(
         require_full_sync_coverage=False,
     )
     period_meta = get_source_cache(organization_id, f"repricer_stats_period_stats_{_period_suffix}", slim=True) or {}
-    finance_meta = get_source_cache(organization_id, f"repricer_stats_finance_{_period_suffix}", slim=True) or {}
+    finance_meta = _compatible_period_source_cache(
+        "finance",
+        get_source_cache(organization_id, f"repricer_stats_finance_{_period_suffix}", slim=True) or {},
+    )
     ads_meta = get_source_cache(organization_id, f"repricer_stats_ads_{_period_suffix}", slim=True) or {}
     ads_totals = _ads_cache_totals(ads_meta)
     baskets_meta = get_source_cache(organization_id, f"repricer_stats_baskets_{_period_suffix}", slim=True) or {}

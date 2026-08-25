@@ -103,6 +103,10 @@ _FINANCE_DIAGNOSTIC_RAW_FIELDS = (
     "penalty",
     "deduction",
     "additionalPayment",
+    "paymentSchedule",
+    "cashbackAmount",
+    "cashbackDiscount",
+    "cashbackCommissionChange",
     "acquiringFee",
     "forPay",
     "rrDate",
@@ -209,8 +213,8 @@ def _finance_diagnostic_row(
             "deductionKopecks": deduction_kopecks,
             "deductionDirection": "compensation" if deduction_kopecks < 0 else ("charge" if deduction_kopecks > 0 else "zero"),
             "additionalPaymentKopecks": additional_payment_kopecks,
-            "additionalPaymentEffect": "subtract_from_expenses" if additional_payment_kopecks else "zero",
-            "expenseFormulaContributionKopecks": penalty_kopecks + deduction_kopecks - additional_payment_kopecks,
+            "additionalPaymentEffect": "signed_expense" if additional_payment_kopecks else "zero",
+            "expenseFormulaContributionKopecks": penalty_kopecks + deduction_kopecks + additional_payment_kopecks,
         },
     }
 
@@ -239,6 +243,9 @@ def _finance_expense_diagnostic(row: dict[str, Any]) -> dict[str, Any]:
         "deductionKopecks": _finance_int(row.get("deductionKopecks")),
         "acquiringKopecks": _finance_int(row.get("acquiringKopecks")),
         "additionalPaymentKopecks": additional_payment_kopecks,
+        "rewardAdjustmentKopecks": _finance_int(row.get("rewardAdjustmentKopecks")),
+        "paymentScheduleKopecks": _finance_int(row.get("paymentScheduleKopecks")),
+        "loyaltyCostKopecks": _finance_int(row.get("loyaltyCostKopecks")),
     }
     expenses_without_tax_kopecks = (
         components["commissionKopecks"]
@@ -248,6 +255,7 @@ def _finance_expense_diagnostic(row: dict[str, Any]) -> dict[str, Any]:
         + components["penaltyKopecks"]
         + components["deductionKopecks"]
         + components["acquiringKopecks"]
+        + components["loyaltyCostKopecks"]
         - additional_payment_kopecks
     )
     return {
@@ -357,6 +365,97 @@ def _finance_storage_acceptance_diagnostics(
     return payload
 
 
+def _finance_row_costs(item: dict[str, Any]) -> dict[str, int]:
+    deduction = _first_kopecks(item, "deduction", "deductionRub")
+    is_wb_promotion = "wb продвижение" in str(
+        item.get("bonusTypeName") or item.get("bonus_type_name") or ""
+    ).casefold()
+    cashback_amount = _first_kopecks(item, "cashback_amount", "cashbackAmount")
+    cashback_commission_change = _first_kopecks(
+        item, "cashback_commission_change", "cashbackCommissionChange"
+    )
+    reward_adjustment = _first_kopecks(item, "additional_payment", "additionalPayment")
+    payment_schedule = _first_kopecks(item, "payment_schedule", "paymentSchedule")
+    doc_type = str(item.get("docTypeName") or item.get("doc_type_name") or "").strip().casefold()
+    return {
+        "adSpendKopecks": deduction if is_wb_promotion else 0,
+        "logisticsKopecks": _finance_logistics_kopecks(item),
+        "storageKopecks": _first_kopecks(item, "storage_fee", "storageFee", "paidStorage"),
+        "acceptanceKopecks": _first_kopecks(item, "acceptance", "paidAcceptance"),
+        "penaltyKopecks": _first_kopecks(item, "penalty", "penaltyRub"),
+        "deductionKopecks": 0 if is_wb_promotion else deduction,
+        "rewardAdjustmentKopecks": reward_adjustment,
+        "paymentScheduleKopecks": payment_schedule,
+        "additionalPaymentKopecks": payment_schedule - reward_adjustment,
+        "cashbackAmountKopecks": cashback_amount,
+        "cashbackDiscountKopecks": _first_kopecks(item, "cashback_discount", "cashbackDiscount"),
+        "cashbackCommissionChangeKopecks": cashback_commission_change,
+        "loyaltyCostKopecks": cashback_amount + cashback_commission_change,
+        "acquiringKopecks": (-1 if doc_type == "возврат" else 1)
+        * _first_kopecks(item, "acquiring_fee", "acquiringFee"),
+    }
+
+
+def _allocate_signed_total(total: int, weights: dict[str, int]) -> dict[str, int]:
+    if not total or not weights:
+        return {key: 0 for key in weights}
+    weight_sum = sum(weights.values())
+    if weight_sum <= 0:
+        weights = {key: 1 for key in weights}
+        weight_sum = len(weights)
+    magnitude = abs(total)
+    shares = {key: magnitude * weight // weight_sum for key, weight in weights.items()}
+    remainder = magnitude - sum(shares.values())
+    order = sorted(weights, key=lambda key: (-(magnitude * weights[key] % weight_sum), key))
+    for key in order[:remainder]:
+        shares[key] += 1
+    sign = -1 if total < 0 else 1
+    return {key: sign * value for key, value in shares.items()}
+
+
+def _allocate_global_finance_costs(
+    aggregates: dict[str, dict[str, Any]],
+    global_rows: list[dict[str, Any]],
+    *,
+    fallback_aggregates: dict[str, dict[str, Any]] | None = None,
+) -> None:
+    if not global_rows:
+        return
+    weight_source = aggregates or fallback_aggregates or {}
+    weights = {
+        key: max(0, _finance_int(row.get("sellerRevenueKopecks")))
+        for key, row in weight_source.items()
+        if _finance_int(key) > 0 and isinstance(row, dict)
+    }
+    if not weights:
+        return
+    totals = {key: 0 for key in _finance_row_costs({})}
+    for item in global_rows:
+        for key, amount in _finance_row_costs(item).items():
+            totals[key] += amount
+    for key, total in totals.items():
+        if not total:
+            continue
+        for nm_id, amount in _allocate_signed_total(total, weights).items():
+            source = weight_source[nm_id]
+            row = aggregates.setdefault(
+                nm_id,
+                {
+                    "vendorCode": source.get("vendorCode"),
+                    "rowsCount": 0,
+                    "source": "finance_sales_reports_detailed",
+                },
+            )
+            row[key] = _finance_int(row.get(key)) + amount
+            if key == "penaltyKopecks":
+                breakdown_key = "penaltyChargedKopecks" if amount >= 0 else "penaltyReturnedKopecks"
+                row[breakdown_key] = _finance_int(row.get(breakdown_key)) + abs(amount)
+            elif key == "deductionKopecks":
+                breakdown_key = "deductionChargedKopecks" if amount >= 0 else "deductionCompensationKopecks"
+                row[breakdown_key] = _finance_int(row.get(breakdown_key)) + abs(amount)
+            row["globalCostAllocation"] = "sellerRevenue"
+
+
 def _finance_raw_expense_totals(raw_rows: list[dict[str, Any]]) -> dict[str, int]:
     totals = {
         "adSpendKopecks": 0,
@@ -366,24 +465,17 @@ def _finance_raw_expense_totals(raw_rows: list[dict[str, Any]]) -> dict[str, int
         "penaltyKopecks": 0,
         "deductionKopecks": 0,
         "additionalPaymentKopecks": 0,
+        "rewardAdjustmentKopecks": 0,
+        "paymentScheduleKopecks": 0,
+        "cashbackAmountKopecks": 0,
+        "cashbackDiscountKopecks": 0,
+        "cashbackCommissionChangeKopecks": 0,
+        "loyaltyCostKopecks": 0,
         "acquiringKopecks": 0,
     }
     for item in raw_rows:
-        doc_type = str(item.get("docTypeName") or item.get("doc_type_name") or "").strip().lower()
-        totals["logisticsKopecks"] += _finance_logistics_kopecks(item)
-        totals["storageKopecks"] += _first_kopecks(item, "storage_fee", "storageFee", "paidStorage")
-        totals["acceptanceKopecks"] += _first_kopecks(item, "acceptance", "paidAcceptance")
-        totals["penaltyKopecks"] += _first_kopecks(item, "penalty", "penaltyRub")
-        deduction_kopecks = _first_kopecks(item, "deduction", "deductionRub")
-        bonus_type = str(item.get("bonusTypeName") or item.get("bonus_type_name") or "").casefold()
-        if "wb продвижение" in bonus_type:
-            totals["adSpendKopecks"] += deduction_kopecks
-        else:
-            totals["deductionKopecks"] += deduction_kopecks
-        totals["additionalPaymentKopecks"] += _first_kopecks(item, "additional_payment", "additionalPayment")
-        totals["acquiringKopecks"] += (-1 if doc_type == "возврат" else 1) * _first_kopecks(
-            item, "acquiring_fee", "acquiringFee"
-        )
+        for key, amount in _finance_row_costs(item).items():
+            totals[key] += amount
     return totals
 
 
@@ -413,6 +505,12 @@ def build_finance_diagnostics_from_aggregates(
         "deductionChargedKopecks": 0,
         "deductionCompensationKopecks": 0,
         "additionalPaymentKopecks": 0,
+        "rewardAdjustmentKopecks": 0,
+        "paymentScheduleKopecks": 0,
+        "cashbackAmountKopecks": 0,
+        "cashbackDiscountKopecks": 0,
+        "cashbackCommissionChangeKopecks": 0,
+        "loyaltyCostKopecks": 0,
         "storageKopecks": 0,
         "acceptanceKopecks": 0,
         "acquiringKopecks": 0,
@@ -463,6 +561,12 @@ def build_finance_diagnostics_from_aggregates(
         totals["deductionChargedKopecks"] += _finance_int(row.get("deductionChargedKopecks"))
         totals["deductionCompensationKopecks"] += _finance_int(row.get("deductionCompensationKopecks"))
         totals["additionalPaymentKopecks"] += _finance_int(row.get("additionalPaymentKopecks"))
+        totals["rewardAdjustmentKopecks"] += _finance_int(row.get("rewardAdjustmentKopecks"))
+        totals["paymentScheduleKopecks"] += _finance_int(row.get("paymentScheduleKopecks"))
+        totals["cashbackAmountKopecks"] += _finance_int(row.get("cashbackAmountKopecks"))
+        totals["cashbackDiscountKopecks"] += _finance_int(row.get("cashbackDiscountKopecks"))
+        totals["cashbackCommissionChangeKopecks"] += _finance_int(row.get("cashbackCommissionChangeKopecks"))
+        totals["loyaltyCostKopecks"] += _finance_int(row.get("loyaltyCostKopecks"))
         totals["storageKopecks"] += _finance_int(row.get("storageKopecks"))
         totals["acceptanceKopecks"] += _finance_int(row.get("acceptanceKopecks"))
         totals["acquiringKopecks"] += _finance_int(row.get("acquiringKopecks"))
@@ -530,15 +634,16 @@ def build_finance_diagnostics_from_aggregates(
         },
         "formula": {
             "financeExpensesWithoutTax": (
-                "commission + logistics + storage + acceptance + penalty + deduction + acquiring - additionalPayment"
+                "commission + logistics + storage + acceptance + penalty + deduction + acquiring + loyaltyCost - additionalPayment"
             ),
             "pnlExpensesWithoutTax": (
-                "commission + logistics + storage + acceptance + penalty + deduction + acquiring + ads - additionalPayment"
+                "commission + logistics + storage + acceptance + penalty + deduction + acquiring + loyaltyCost + ads - additionalPayment"
             ),
             "netProfit": "buyerRevenue + workReturn - cogs - pnlExpensesWithoutTax - tax",
             "taxIncludedInExpenses": False,
             "signedFields": ["penalty", "deduction"],
             "subtractFields": ["additionalPayment"],
+            "additionalPaymentNormalization": "paymentSchedule - rewardAdjustment(additionalPayment raw)",
             "forbiddenNormalizers": [
                 "absolute value for penalty",
                 "absolute value for deduction",
@@ -1490,6 +1595,12 @@ def _resolve_spp_analytics(
             good.get("buyerPrice"),
             good.get("clientPrice"),
         )
+    buyer_price_invalid = (
+        buyer_price_no_wallet_kopecks is not None
+        and buyer_price_no_wallet_kopecks > discounted_price_kopecks
+    )
+    if buyer_price_invalid:
+        buyer_price_no_wallet_kopecks = None
     buyer_price_with_wallet_kopecks = _first_optional_explicit_kopecks(
         price_size.get("buyerPriceWithWalletKopecks"),
         good.get("buyerPriceWithWalletKopecks"),
@@ -1503,6 +1614,8 @@ def _resolve_spp_analytics(
         )
     if buyer_price_with_wallet_kopecks is None:
         buyer_price_with_wallet_kopecks = _derive_wallet_buyer_price_kopecks(buyer_price_no_wallet_kopecks, wallet_pct)
+    if buyer_price_invalid:
+        buyer_price_with_wallet_kopecks = None
     spp_pct = _seller_spp_pct(discounted_price_kopecks, buyer_price_no_wallet_kopecks)
     return buyer_price_no_wallet_kopecks, buyer_price_with_wallet_kopecks, spp_pct, wallet_pct
 
@@ -1556,26 +1669,27 @@ def _finance_logistics_kopecks(item: dict[str, Any]) -> int:
     return _first_kopecks(item, "delivery_service", "deliveryService", "delivery_rub", "deliveryRub")
 
 
-def _finance_seller_revenue_kopecks(item: dict[str, Any], quantity: int) -> int:
-    unit_price = _first_kopecks(
-        item,
-        "retailPriceWithDisc",
-        "retail_price_with_disc",
-        "retail_price_withdisc_rub",
-        "retailPriceWithDiscount",
+def _finance_loyalty_cost_kopecks(item: dict[str, Any]) -> int:
+    return _first_kopecks(item, "cashback_amount", "cashbackAmount") + _first_kopecks(
+        item, "cashback_commission_change", "cashbackCommissionChange"
     )
-    if unit_price > 0:
-        return unit_price * max(1, quantity)
-    return _first_kopecks(item, "retailAmount", "retail_amount")
+
+
+def _finance_seller_revenue_kopecks(item: dict[str, Any], _quantity: int) -> int:
+    raw_total = _finance_raw_first(item, "retailAmount", "retail_amount")
+    return _kopecks_from_rub(raw_total) if raw_total is not None else 0
 
 
 def _finalize_finance_commission(row: dict[str, Any]) -> None:
     reported_commission = int(row.get("commissionKopecks") or 0)
     row["reportedCommissionKopecks"] = reported_commission
+    reported_commission_rows = int(row.get("reportedCommissionRows") or 0)
     payable_rows = int(row.pop("_payableRows", 0) or 0)
     settlement_rows = int(row.pop("_settlementRows", 0) or 0)
     if settlement_rows <= 0 or payable_rows < settlement_rows:
-        row["commissionSource"] = "ppvzSalesCommission"
+        if not reported_commission_rows:
+            row["commissionKopecks"] = int(row.get("commissionFormulaKopecks") or 0)
+        row["commissionSource"] = "ppvzSalesCommission" if reported_commission_rows else "commissionPercent"
         return
     commission_with_acquiring = int(row.get("buyerRevenueKopecks") or 0) - int(
         row.get("payableKopecks") or 0
@@ -3296,6 +3410,10 @@ def fetch_finance_report_aggregates(
         "penalty",
         "deduction",
         "additionalPayment",
+        "paymentSchedule",
+        "cashbackAmount",
+        "cashbackDiscount",
+        "cashbackCommissionChange",
         "acquiringFee",
         "acquiringPercent",
         "forPay",
@@ -3335,10 +3453,12 @@ def fetch_finance_report_aggregates(
         rrd_id = next_rrd_id
 
     result: dict[str, dict[str, Any]] = {}
+    global_rows: list[dict[str, Any]] = []
 
     for item in rows:
         nm_id = int(item.get("nmId") or item.get("nmID") or item.get("nm_id") or 0)
         if nm_id <= 0:
+            global_rows.append(item)
             continue
 
         row = result.setdefault(
@@ -3352,6 +3472,8 @@ def fetch_finance_report_aggregates(
                 "revenueGrossKopecks": 0,
                 "buyerRevenueKopecks": 0,
                 "sellerRevenueKopecks": 0,
+                "sellerRevenueRows": 0,
+                "sellerRevenueMissingRows": 0,
                 "platformDiscountKopecks": 0,
                 "discountPctSum": 0.0,
                 "discountPctCount": 0,
@@ -3361,6 +3483,8 @@ def fetch_finance_report_aggregates(
                 "sppPctSum": 0.0,
                 "sppPctCount": 0,
                 "commissionKopecks": 0,
+                "reportedCommissionRows": 0,
+                "adSpendKopecks": 0,
                 "logisticsKopecks": 0,
                 "storageKopecks": 0,
                 "acceptanceKopecks": 0,
@@ -3371,6 +3495,12 @@ def fetch_finance_report_aggregates(
                 "deductionChargedKopecks": 0,
                 "deductionCompensationKopecks": 0,
                 "additionalPaymentKopecks": 0,
+                "rewardAdjustmentKopecks": 0,
+                "paymentScheduleKopecks": 0,
+                "cashbackAmountKopecks": 0,
+                "cashbackDiscountKopecks": 0,
+                "cashbackCommissionChangeKopecks": 0,
+                "loyaltyCostKopecks": 0,
                 "acquiringKopecks": 0,
                 "payableKopecks": 0,
                 "_payableRows": 0,
@@ -3386,6 +3516,14 @@ def fetch_finance_report_aggregates(
         quantity = int(_number_or_none(item.get("quantity") or item.get("saleQuantity") or 1) or 1)
         buyer_revenue_kopecks = _first_kopecks(item, "retailAmount", "retail_amount")
         seller_revenue_kopecks = _finance_seller_revenue_kopecks(item, quantity)
+        seller_revenue_available = (
+            _finance_raw_first(
+                item,
+                "retailAmount",
+                "retail_amount",
+            )
+            is not None
+        )
         doc_type_name = str(item.get("docTypeName") or item.get("doc_type_name") or "").strip().lower()
         unit_key = _finance_unit_key(item)
         commission_pct = _first_number(
@@ -3393,6 +3531,9 @@ def fetch_finance_report_aggregates(
             "commission_percent",
             "commissionPercent",
         )
+        if doc_type_name in {"продажа", "возврат"}:
+            row["sellerRevenueRows"] += int(seller_revenue_available)
+            row["sellerRevenueMissingRows"] += int(not seller_revenue_available)
         if doc_type_name == "продажа":
             if unit_key:
                 sale_unit_keys = row["_saleUnitKeys"]
@@ -3422,23 +3563,31 @@ def fetch_finance_report_aggregates(
         if doc_type_name in {"продажа", "возврат"} and (buyer_revenue_kopecks or seller_revenue_kopecks):
             row["_settlementRows"] += 1
         document_sign = -1 if doc_type_name == "возврат" else 1
-        row["commissionKopecks"] += document_sign * _first_kopecks(
+        reported_commission = _finance_raw_first(
             item,
             "ppvz_sales_commission",
             "ppvzSalesCommission",
             "commission",
             "commissionRub",
         )
+        if reported_commission is not None:
+            row["reportedCommissionRows"] += 1
+            row["commissionKopecks"] += document_sign * _kopecks_from_rub(reported_commission)
         payable = _finance_raw_first(item, "ppvz_for_pay", "forPay")
         if payable is not None:
             row["_payableRows"] += 1
             row["payableKopecks"] += document_sign * _kopecks_from_rub(payable)
-        row["logisticsKopecks"] += _finance_logistics_kopecks(item)
-        row["storageKopecks"] += _first_kopecks(item, "storage_fee", "storageFee", "paidStorage")
-        row["acceptanceKopecks"] += _first_kopecks(item, "acceptance", "paidAcceptance")
-        penalty_kopecks = _first_kopecks(item, "penalty", "penaltyRub")
-        deduction_kopecks = _first_kopecks(item, "deduction", "deductionRub")
-        additional_payment_kopecks = _first_kopecks(item, "additional_payment", "additionalPayment")
+        costs = _finance_row_costs(item)
+        row["adSpendKopecks"] += costs["adSpendKopecks"]
+        row["logisticsKopecks"] += costs["logisticsKopecks"]
+        row["storageKopecks"] += costs["storageKopecks"]
+        row["acceptanceKopecks"] += costs["acceptanceKopecks"]
+        penalty_kopecks = costs["penaltyKopecks"]
+        deduction_kopecks = costs["deductionKopecks"]
+        additional_payment_kopecks = costs["additionalPaymentKopecks"]
+        cashback_amount_kopecks = costs["cashbackAmountKopecks"]
+        cashback_discount_kopecks = costs["cashbackDiscountKopecks"]
+        cashback_commission_change_kopecks = costs["cashbackCommissionChangeKopecks"]
         row["penaltyKopecks"] += penalty_kopecks
         if penalty_kopecks >= 0:
             row["penaltyChargedKopecks"] += penalty_kopecks
@@ -3450,7 +3599,13 @@ def fetch_finance_report_aggregates(
         else:
             row["deductionCompensationKopecks"] += -deduction_kopecks
         row["additionalPaymentKopecks"] += additional_payment_kopecks
-        row["acquiringKopecks"] += document_sign * _first_kopecks(item, "acquiring_fee", "acquiringFee")
+        row["rewardAdjustmentKopecks"] += costs["rewardAdjustmentKopecks"]
+        row["paymentScheduleKopecks"] += costs["paymentScheduleKopecks"]
+        row["cashbackAmountKopecks"] += cashback_amount_kopecks
+        row["cashbackDiscountKopecks"] += cashback_discount_kopecks
+        row["cashbackCommissionChangeKopecks"] += cashback_commission_change_kopecks
+        row["loyaltyCostKopecks"] += cashback_amount_kopecks + cashback_commission_change_kopecks
+        row["acquiringKopecks"] += costs["acquiringKopecks"]
         seller_oper_name = str(item.get("sellerOperName") or item.get("seller_oper_name") or "").strip()
         bonus_type_name = str(item.get("bonusTypeName") or item.get("bonus_type_name") or "").strip()
         adjustment_text = f"{seller_oper_name} {bonus_type_name}".lower()
@@ -3482,7 +3637,11 @@ def fetch_finance_report_aggregates(
             row["sppPctSum"] += spp_pct
             row["sppPctCount"] += 1
 
+    _allocate_global_finance_costs(result, global_rows)
+    finance_ad_spend_authoritative = any(_finance_int(row.get("adSpendKopecks")) != 0 for row in result.values())
     for row in result.values():
+        if finance_ad_spend_authoritative:
+            row["financeAdSpendAuthoritative"] = True
         _finalize_finance_commission(row)
         row["commissionPct"] = (
             round(row["commissionPctSum"] / row["commissionPctCount"], 2)
@@ -3515,12 +3674,14 @@ def fetch_finance_report_aggregates(
         row["unitKeyedReturnsCount"] = len(row.pop("_returnUnitKeys", set()))
 
     daily_result: dict[str, dict[str, dict[str, Any]]] = {}
+    daily_global_rows: dict[str, list[dict[str, Any]]] = {}
     for item in rows:
         item_date = _date_from_any(item.get("saleDt") or item.get("rrDate") or item.get("date"))
         if item_date is None:
             continue
         nm_id = int(item.get("nmId") or item.get("nmID") or item.get("nm_id") or 0)
         if nm_id <= 0:
+            daily_global_rows.setdefault(item_date.isoformat(), []).append(item)
             continue
         row = daily_result.setdefault(item_date.isoformat(), {}).setdefault(
             str(nm_id),
@@ -3533,9 +3694,13 @@ def fetch_finance_report_aggregates(
                 "revenueGrossKopecks": 0,
                 "buyerRevenueKopecks": 0,
                 "sellerRevenueKopecks": 0,
+                "sellerRevenueRows": 0,
+                "sellerRevenueMissingRows": 0,
                 "platformDiscountKopecks": 0,
                 "commissionFormulaKopecks": 0,
                 "commissionKopecks": 0,
+                "reportedCommissionRows": 0,
+                "adSpendKopecks": 0,
                 "logisticsKopecks": 0,
                 "storageKopecks": 0,
                 "acceptanceKopecks": 0,
@@ -3546,6 +3711,12 @@ def fetch_finance_report_aggregates(
                 "deductionChargedKopecks": 0,
                 "deductionCompensationKopecks": 0,
                 "additionalPaymentKopecks": 0,
+                "rewardAdjustmentKopecks": 0,
+                "paymentScheduleKopecks": 0,
+                "cashbackAmountKopecks": 0,
+                "cashbackDiscountKopecks": 0,
+                "cashbackCommissionChangeKopecks": 0,
+                "loyaltyCostKopecks": 0,
                 "acquiringKopecks": 0,
                 "payableKopecks": 0,
                 "_payableRows": 0,
@@ -3559,8 +3730,19 @@ def fetch_finance_report_aggregates(
         quantity = int(_number_or_none(item.get("quantity") or item.get("saleQuantity") or 1) or 1)
         buyer_revenue_kopecks = _first_kopecks(item, "retailAmount", "retail_amount")
         seller_revenue_kopecks = _finance_seller_revenue_kopecks(item, quantity)
+        seller_revenue_available = (
+            _finance_raw_first(
+                item,
+                "retailAmount",
+                "retail_amount",
+            )
+            is not None
+        )
         doc_type_name = str(item.get("docTypeName") or item.get("doc_type_name") or "").strip().lower()
         commission_pct = _first_number(item, "commission_percent", "commissionPercent")
+        if doc_type_name in {"продажа", "возврат"}:
+            row["sellerRevenueRows"] += int(seller_revenue_available)
+            row["sellerRevenueMissingRows"] += int(not seller_revenue_available)
         if doc_type_name == "продажа":
             row["salesUnits"] += max(1, quantity)
             row["buyerRevenueKopecks"] += buyer_revenue_kopecks
@@ -3578,23 +3760,31 @@ def fetch_finance_report_aggregates(
         if doc_type_name in {"продажа", "возврат"} and (buyer_revenue_kopecks or seller_revenue_kopecks):
             row["_settlementRows"] += 1
         document_sign = -1 if doc_type_name == "возврат" else 1
-        row["commissionKopecks"] += document_sign * _first_kopecks(
+        reported_commission = _finance_raw_first(
             item,
             "ppvz_sales_commission",
             "ppvzSalesCommission",
             "commission",
             "commissionRub",
         )
+        if reported_commission is not None:
+            row["reportedCommissionRows"] += 1
+            row["commissionKopecks"] += document_sign * _kopecks_from_rub(reported_commission)
         payable = _finance_raw_first(item, "ppvz_for_pay", "forPay")
         if payable is not None:
             row["_payableRows"] += 1
             row["payableKopecks"] += document_sign * _kopecks_from_rub(payable)
-        row["logisticsKopecks"] += _finance_logistics_kopecks(item)
-        row["storageKopecks"] += _first_kopecks(item, "storage_fee", "storageFee", "paidStorage")
-        row["acceptanceKopecks"] += _first_kopecks(item, "acceptance", "paidAcceptance")
-        penalty_kopecks = _first_kopecks(item, "penalty", "penaltyRub")
-        deduction_kopecks = _first_kopecks(item, "deduction", "deductionRub")
-        additional_payment_kopecks = _first_kopecks(item, "additional_payment", "additionalPayment")
+        costs = _finance_row_costs(item)
+        row["adSpendKopecks"] += costs["adSpendKopecks"]
+        row["logisticsKopecks"] += costs["logisticsKopecks"]
+        row["storageKopecks"] += costs["storageKopecks"]
+        row["acceptanceKopecks"] += costs["acceptanceKopecks"]
+        penalty_kopecks = costs["penaltyKopecks"]
+        deduction_kopecks = costs["deductionKopecks"]
+        additional_payment_kopecks = costs["additionalPaymentKopecks"]
+        cashback_amount_kopecks = costs["cashbackAmountKopecks"]
+        cashback_discount_kopecks = costs["cashbackDiscountKopecks"]
+        cashback_commission_change_kopecks = costs["cashbackCommissionChangeKopecks"]
         row["penaltyKopecks"] += penalty_kopecks
         row["penaltyChargedKopecks"] += penalty_kopecks if penalty_kopecks >= 0 else 0
         row["penaltyReturnedKopecks"] += -penalty_kopecks if penalty_kopecks < 0 else 0
@@ -3602,9 +3792,26 @@ def fetch_finance_report_aggregates(
         row["deductionChargedKopecks"] += deduction_kopecks if deduction_kopecks >= 0 else 0
         row["deductionCompensationKopecks"] += -deduction_kopecks if deduction_kopecks < 0 else 0
         row["additionalPaymentKopecks"] += additional_payment_kopecks
-        row["acquiringKopecks"] += document_sign * _first_kopecks(item, "acquiring_fee", "acquiringFee")
+        row["rewardAdjustmentKopecks"] += costs["rewardAdjustmentKopecks"]
+        row["paymentScheduleKopecks"] += costs["paymentScheduleKopecks"]
+        row["cashbackAmountKopecks"] += cashback_amount_kopecks
+        row["cashbackDiscountKopecks"] += cashback_discount_kopecks
+        row["cashbackCommissionChangeKopecks"] += cashback_commission_change_kopecks
+        row["loyaltyCostKopecks"] += cashback_amount_kopecks + cashback_commission_change_kopecks
+        row["acquiringKopecks"] += costs["acquiringKopecks"]
+    for day_key, global_rows_for_day in daily_global_rows.items():
+        _allocate_global_finance_costs(
+            daily_result.setdefault(day_key, {}),
+            global_rows_for_day,
+            fallback_aggregates=result,
+        )
     for rows_by_nm in daily_result.values():
+        finance_ad_spend_authoritative = any(
+            _finance_int(row.get("adSpendKopecks")) != 0 for row in rows_by_nm.values()
+        )
         for row in rows_by_nm.values():
+            if finance_ad_spend_authoritative:
+                row["financeAdSpendAuthoritative"] = True
             _finalize_finance_commission(row)
             row["platformDiscountKopecks"] = max(
                 0,
@@ -3627,6 +3834,8 @@ def fetch_finance_report_aggregates(
         "rowsCount": len(rows),
         "pagesLoaded": pages_loaded,
         "requestedFields": fields,
+        "revenueBasis": "retailAmount",
+        "financeSchemaVersion": "v2",
         "dateFrom": date_from.date().isoformat(),
         "dateTo": date_to.date().isoformat(),
     }
@@ -4356,6 +4565,12 @@ def _build_sku_row(
     net_sales_units = sales_units - returns_units
     period_orders_units = int(period_aggregate.get("ordersUnits") or 0)
     baskets_order_count = int((baskets_aggregate or {}).get("orderCount") or 0)
+    baskets_order_sum_kopecks = int((baskets_aggregate or {}).get("orderSumKopecks") or 0)
+    funnel_avg_price_kopecks = (
+        round(baskets_order_sum_kopecks / baskets_order_count)
+        if baskets_order_sum_kopecks > 0 and baskets_order_count > 0
+        else None
+    )
     previous_baskets = (baskets_aggregate or {}).get("previous") if isinstance((baskets_aggregate or {}).get("previous"), dict) else {}
     previous_orders_units = int(previous_period_aggregate.get("ordersUnits") or previous_baskets.get("orderCount") or 0)
     finance_units_floor = max(0, sales_units + returns_units)
@@ -4434,24 +4649,19 @@ def _build_sku_row(
         if (finance_aggregate or {}).get("sppPct") is not None
         else None
     )
-    official_spp_pct = live_spp_pct
     spp_source = "live_buyer_price" if live_spp_pct is not None else None
     spp_observed_at = None
-    if official_spp_pct is None and period_spp_pct is not None:
-        official_spp_pct = period_spp_pct
-        spp_source = str(period_aggregate.get("sppSource") or "supplier.orders.spp")
-        spp_observed_at = period_aggregate.get("sppObservedAt")
-    if official_spp_pct is None and finance_spp_pct is not None:
-        official_spp_pct = finance_spp_pct
-        spp_source = str((finance_aggregate or {}).get("sppSource") or "finance_sales_reports_detailed.spp")
-    spp_pct = official_spp_pct
-    if live_spp_pct is None and official_spp_pct is not None:
-        buyer_price_kopecks = _buyer_price_from_spp_pct(price_kopecks, spp_pct)
-        buyer_price_with_wallet_kopecks = None
-    if buyer_price_kopecks is None:
-        buyer_price_kopecks = _buyer_price_from_spp_pct(price_kopecks, spp_pct)
     if buyer_price_with_wallet_kopecks is None:
         buyer_price_with_wallet_kopecks = _derive_wallet_buyer_price_kopecks(buyer_price_kopecks, wb_wallet_pct)
+    planning_spp_pct = (
+        live_spp_pct
+        if live_spp_pct is not None
+        else period_spp_pct if period_spp_pct is not None else finance_spp_pct
+    )
+    planning_buyer_price_kopecks = (
+        buyer_price_kopecks
+        or _buyer_price_from_spp_pct(price_kopecks, planning_spp_pct)
+    )
     spp_accounting_mode = _algorithm_spp_accounting_mode()
     configured_wallet_pct = _algorithm_wallet_pct()
     accounted_wb_wallet_pct = configured_wallet_pct if spp_accounting_mode == "spp_plus_wallet" else None
@@ -4460,16 +4670,25 @@ def _build_sku_row(
         if accounted_wb_wallet_pct is not None
         else buyer_price_kopecks
     )
-    accounted_platform_discount_pct = _combined_discount_pct(
-        spp_pct,
-        accounted_wb_wallet_pct if spp_accounting_mode == "spp_plus_wallet" else None,
+    planning_accounted_buyer_price_kopecks = (
+        _derive_wallet_buyer_price_kopecks(planning_buyer_price_kopecks, accounted_wb_wallet_pct)
+        if accounted_wb_wallet_pct is not None
+        else planning_buyer_price_kopecks
+    )
+    accounted_platform_discount_pct = (
+        _combined_discount_pct(
+            live_spp_pct,
+            accounted_wb_wallet_pct if spp_accounting_mode == "spp_plus_wallet" else None,
+        )
+        if live_spp_pct is not None
+        else None
     )
     total_wb_discount_pct = _discount_pct(price_kopecks, buyer_price_with_wallet_kopecks)
     unit_margin_kopecks: int | None = None
     margin_pct: float | None = None
     margin_sales_base_kopecks = (
-        accounted_buyer_price_kopecks
-        or buyer_price_kopecks
+        planning_accounted_buyer_price_kopecks
+        or planning_buyer_price_kopecks
         or meta["currentPriceKopecks"]
     )
     if price_kopecks > 0:
@@ -4521,11 +4740,21 @@ def _build_sku_row(
         deduction_charged_kopecks = int(finance_aggregate.get("deductionChargedKopecks") or 0)
         deduction_compensation_kopecks = int(finance_aggregate.get("deductionCompensationKopecks") or 0)
         additional_payment_kopecks = int(finance_aggregate.get("additionalPaymentKopecks") or 0)
+        reward_adjustment_kopecks = int(finance_aggregate.get("rewardAdjustmentKopecks") or 0)
+        payment_schedule_kopecks = int(finance_aggregate.get("paymentScheduleKopecks") or 0)
+        cashback_amount_kopecks = int(finance_aggregate.get("cashbackAmountKopecks") or 0)
+        cashback_discount_kopecks = int(finance_aggregate.get("cashbackDiscountKopecks") or 0)
+        cashback_commission_change_kopecks = int(finance_aggregate.get("cashbackCommissionChangeKopecks") or 0)
+        loyalty_cost_kopecks = int(finance_aggregate.get("loyaltyCostKopecks") or 0)
         finance_acquiring_kopecks = int(finance_aggregate.get("acquiringKopecks") or 0)
         acquiring_kopecks = finance_acquiring_kopecks
         payable_kopecks = int(finance_aggregate.get("payableKopecks") or 0)
         ads_row = ads_aggregate or {}
-        ad_spend_kopecks = int(ads_row.get("adSpendKopecks") or finance_aggregate.get("adSpendKopecks") or 0)
+        ad_spend_kopecks = int(
+            finance_aggregate.get("adSpendKopecks")
+            if finance_aggregate.get("financeAdSpendAuthoritative")
+            else ads_row.get("adSpendKopecks") or finance_aggregate.get("adSpendKopecks") or 0
+        )
         ad_impressions = int(ads_row.get("adImpressions") or 0)
         ad_clicks = int(ads_row.get("adClicks") or 0)
         ad_cart_adds = int(ads_row.get("adCartAdds") or 0)
@@ -4538,6 +4767,7 @@ def _build_sku_row(
             + acceptance_kopecks
             + penalty_kopecks
             + deduction_kopecks
+            + loyalty_cost_kopecks
             + acquiring_kopecks
             + ad_spend_kopecks
             + other_expenses_kopecks
@@ -4569,6 +4799,12 @@ def _build_sku_row(
         deduction_charged_kopecks = 0 if use_demo_data else None
         deduction_compensation_kopecks = 0 if use_demo_data else None
         additional_payment_kopecks = 0 if use_demo_data else None
+        reward_adjustment_kopecks = 0 if use_demo_data else None
+        payment_schedule_kopecks = 0 if use_demo_data else None
+        cashback_amount_kopecks = 0 if use_demo_data else None
+        cashback_discount_kopecks = 0 if use_demo_data else None
+        cashback_commission_change_kopecks = 0 if use_demo_data else None
+        loyalty_cost_kopecks = 0 if use_demo_data else None
         acquiring_kopecks = 0 if use_demo_data else None
         payable_kopecks = 0 if use_demo_data else None
         ad_spend_kopecks = 0 if use_demo_data else None
@@ -4585,6 +4821,7 @@ def _build_sku_row(
             + int(acceptance_kopecks or 0)
             + int(penalty_kopecks or 0)
             + int(deduction_kopecks or 0)
+            + int(loyalty_cost_kopecks or 0)
             + int(acquiring_kopecks or 0)
             + int(ad_spend_kopecks or 0)
             + int(other_expenses_kopecks or 0)
@@ -4709,9 +4946,9 @@ def _build_sku_row(
             "buyerPriceWithWalletKopecks": buyer_price_with_wallet_kopecks,
             "accountedBuyerPriceKopecks": accounted_buyer_price_kopecks,
             "marginBaseKopecks": margin_sales_base_kopecks,
-            "avgPriceWithSppKopecks": buyer_price_kopecks or period_aggregate.get("avgPriceWithSppKopecks") or meta["currentPriceKopecks"],
-            "sppPct": spp_pct,
-            "sppSource": spp_source if spp_pct is not None else None,
+            "avgPriceWithSppKopecks": funnel_avg_price_kopecks,
+            "sppPct": live_spp_pct,
+            "sppSource": spp_source,
             "sppObservedAt": spp_observed_at,
             "periodSppPct": period_spp_pct,
             "periodSppObservedAt": period_aggregate.get("sppObservedAt"),
@@ -4723,7 +4960,7 @@ def _build_sku_row(
             "walletPct": wb_wallet_pct,
             "totalWbDiscountPct": total_wb_discount_pct,
             "wbWalletPct": wb_wallet_pct,
-            "sppState": "ok" if spp_pct is not None else ("fallback" if use_demo_data else "no_buyer_price"),
+            "sppState": "ok" if live_spp_pct is not None else ("fallback" if use_demo_data else "no_buyer_price"),
             "marginPct": margin_pct,
             "marginKopecks": unit_margin_kopecks,
             "marginMode": "planned_indeepa",
@@ -4763,6 +5000,12 @@ def _build_sku_row(
             "deductionChargedKopecks": deduction_charged_kopecks,
             "deductionCompensationKopecks": deduction_compensation_kopecks,
             "additionalPaymentKopecks": additional_payment_kopecks,
+            "rewardAdjustmentKopecks": reward_adjustment_kopecks,
+            "paymentScheduleKopecks": payment_schedule_kopecks,
+            "cashbackAmountKopecks": cashback_amount_kopecks,
+            "cashbackDiscountKopecks": cashback_discount_kopecks,
+            "cashbackCommissionChangeKopecks": cashback_commission_change_kopecks,
+            "loyaltyCostKopecks": loyalty_cost_kopecks,
             "acquiringKopecks": acquiring_kopecks,
             "payableKopecks": payable_kopecks,
             "adSpendKopecks": ad_spend_kopecks,
