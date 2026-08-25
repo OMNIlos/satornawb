@@ -1,7 +1,7 @@
 """store finance revenue basis outside source cache payload
 
-Revision ID: 20260825_0025
-Revises: 20260810_0024
+Revision ID: 20260825_0035
+Revises: 20260820_0034
 Create Date: 2026-08-25 00:00:00.000000
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "20260825_0025"
-down_revision = "20260810_0024"
+revision = "20260825_0035"
+down_revision = "20260820_0034"
 branch_labels = None
 depends_on = None
 
