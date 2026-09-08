@@ -12,6 +12,10 @@ BEGIN
     INTO insecure_tables
     FROM (
         VALUES
+            ('review_sync_runs_v2'),
+            ('review_facts'),
+            ('review_observations'),
+            ('review_sync_run_items'),
             ('order_sync_runs'),
             ('marketplace_orders'),
             ('marketplace_order_items'),
@@ -102,6 +106,28 @@ WHERE c.relnamespace='public'::regnamespace AND c.relname IN (
     'order_sync_runs','marketplace_orders','marketplace_order_items','order_observations',
     'order_status_observations','order_lifecycle_events','order_deadlines','order_sync_coverage',
     'order_sync_memberships','order_read_snapshots','order_read_snapshot_rows')
+\gexec
+
+-- Review Facts overrides also follow all broad grants within this transaction.
+REVOKE ALL ON TABLE public.review_sync_runs_v2, public.review_facts,
+    public.review_observations, public.review_sync_run_items FROM :"runtime_role";
+-- Explicitly clear column rights before reinstating the INSERT allowlist.
+SELECT format('REVOKE ALL (%I) ON TABLE public.review_sync_runs_v2 FROM %I',
+    a.attname, :'runtime_role')
+FROM pg_attribute a WHERE a.attrelid='public.review_sync_runs_v2'::regclass
+    AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, UPDATE ON TABLE public.review_sync_runs_v2 TO :"runtime_role";
+GRANT INSERT (sync_run_id, organization_id, marketplace_account_id, marketplace,
+    source_run_id, request_checksum, status, completeness, started_at, completed_at,
+    observed_count, manifest_checksum, coverage, error_code)
+    ON public.review_sync_runs_v2 TO :"runtime_role";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.review_facts TO :"runtime_role";
+GRANT SELECT, INSERT ON TABLE public.review_observations, public.review_sync_run_items
+    TO :"runtime_role";
+SELECT format('REVOKE ALL ON SEQUENCE %s FROM %I; GRANT USAGE ON SEQUENCE %s TO %I',
+    pg_get_serial_sequence('public.review_sync_runs_v2','run_sequence'), :'runtime_role',
+    pg_get_serial_sequence('public.review_sync_runs_v2','run_sequence'), :'runtime_role')
 \gexec
 
 COMMIT;
