@@ -43,7 +43,7 @@ assert 'fk_orders_offer_product_account' in {x.name for x in MarketplaceOfferRow
 assert 'uq_orders_offer_product_account' in {x.name for x in MarketplaceOfferRow.__table__.constraints}
 ```
 
-For runtime privilege assertions execute actual psql script on disposable DB with random runtime_role, owner_role, runtime_database and synthetic runtime_password, not a hand-written approximation. Assert history SELECT/INSERT, current order/item and staging sync run UPDATE; deny DELETE/TRUNCATE/DDL/sequence UPDATE; deny no-context/wrong-org writes and reads of seeded rows. Separately deliberate broad grants exercise history triggers; restore least privileges or isolate tests.
+For runtime privilege assertions execute actual psql script on disposable DB with random runtime_role/runtime_database, exact authenticated migration owner_role and synthetic runtime_password, not a hand-written approximation. Owner default ACL changes are database-local to this disposable DB; never ALTER an existing owner or create a privileged test role. Assert history SELECT/INSERT, current order/item and staging sync run UPDATE; deny DELETE/TRUNCATE/DDL/sequence UPDATE; deny no-context/wrong-org writes and reads of seeded rows. Separately deliberate broad grants exercise history triggers; restore least privileges or isolate tests.
 
 - [ ] Step 2: Run focused RED before migration/ORM/grants changes; record expected missing head/anchor/privilege assertions. Prove authorized Unix-only connection before DB writes. Register cleanup before setup can partially create resources; exact random DB/role targets only. Fix inherited candidate fixture start-before-finally issue as part of safe harness, cover it with mocked failure tests. No SQLite substitution.
 
@@ -60,6 +60,18 @@ def downgrade():
 ```
 
 UPGRADE_SQL/DOWNGRADE_SQL contain exactly the candidate content (comment normalization allowed); no percent interpolation. Reflect its three named Catalog constraints verbatim in ORM. Append Orders-specific REVOKE ALL + explicit table and sequence grants after broad runtime script defaults. Do not silently widen unrelated ACLs or alter schema values.
+
+Expand-time amendment: after candidate DDL in the same migration transaction,
+normalize ACLs on only these 11 newly created tables and their identity sequences.
+Discover their actual non-owner ACL grantees (including PUBLIC); revoke grants and
+restore only the intersection of existing rights with SELECT/INSERT for history,
+SELECT/INSERT/UPDATE for marketplace_orders, marketplace_order_items and
+order_sync_runs, and USAGE for sequences. Do not restore grant options or widen a
+read-only grantee. Preserve owner authority; do not change global default ACLs,
+unrelated relations or guess deployed role names. Verify effective rights with
+preexisting broad owner defaults immediately after upgrade, before runtime script;
+add a selective-role no-widening regression. This is additive ACL hardening; the
+candidate structural DDL is unchanged.
 
 - [ ] Step 4: Adapt candidate tests from unregistered wrapper/standalone SQL to actual migration. Preserve all 39 original acceptance cases and cover actual active head from empty DB (no stamp), upgrade0061→0062 with populated synthetic Catalog, empty0062→0061→0062, nonempty+hidden-RLS downgrade refusal leaving version/schema/data intact, invalid preexisting Catalog pairing atomic upgrade failure, source/adapter/run and org/account FKs, immutable history, sealed snapshot payloads, two-session replay unique/CAS. Actual runtime role NOSUPERUSER/NOBYPASSRLS/NOINHERIT. Snapshot/provider semantics remain T3 obligations.
 
