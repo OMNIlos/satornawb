@@ -5,12 +5,14 @@ import logging
 import pickle
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 from uuid import UUID
 
 import pytest
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict
+from pydantic.errors import PydanticInvalidForJsonSchema
+from pydantic_core import PydanticSerializationError
 
 from app.security.marketplace_credentials import (
     CredentialCryptoError,
@@ -25,6 +27,7 @@ from app.security.marketplace_credentials import (
 
 CANARY = "synthetic-credential-canary-9f3a"
 NOW = datetime(2026, 9, 8, 12, 30, tzinfo=timezone.utc)
+ExceptionT = TypeVar("ExceptionT", bound=Exception)
 
 
 class _CredentialEnvelope(BaseModel):
@@ -182,10 +185,14 @@ def test_invalid_allowlist_schema_and_size_fail_closed(identity, payload) -> Non
     assert CANARY not in str(caught.value)
 
 
-def _assert_redacted_refusal(operation: Callable[[], Any]) -> Exception:
-    with pytest.raises(Exception) as caught:
+def _assert_redacted_refusal(
+    operation: Callable[[], Any],
+    error_type: type[ExceptionT],
+) -> ExceptionT:
+    with pytest.raises(error_type) as caught:
         operation()
 
+    assert type(caught.value) is error_type
     assert CANARY not in str(caught.value)
     assert CANARY not in repr(caught.value)
     return caught.value
@@ -216,23 +223,57 @@ def test_secret_types_and_errors_are_redacted(caplog) -> None:
     ],
 )
 def test_fastapi_jsonable_encoder_refuses_secret_wrapper_without_disclosure(value) -> None:
-    _assert_redacted_refusal(lambda: jsonable_encoder(value))
+    _assert_redacted_refusal(lambda: jsonable_encoder(value), ValueError)
 
 
 def test_pydantic_json_serialization_refuses_secret_wrapper_without_disclosure() -> None:
     envelope = _CredentialEnvelope(credential=DecryptedCredential({"token": CANARY}))
 
-    _assert_redacted_refusal(lambda: envelope.model_dump(mode="json"))
-    _assert_redacted_refusal(envelope.model_dump_json)
+    _assert_redacted_refusal(
+        lambda: envelope.model_dump(mode="json"),
+        PydanticSerializationError,
+    )
+    _assert_redacted_refusal(envelope.model_dump_json, PydanticSerializationError)
+
+
+def test_pydantic_json_schema_refuses_secret_wrapper_without_disclosure() -> None:
+    _assert_redacted_refusal(
+        _CredentialEnvelope.model_json_schema,
+        PydanticInvalidForJsonSchema,
+    )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(iter, id="iter"),
+        pytest.param(lambda value: value.__copy__(), id="copy-hook"),
+        pytest.param(lambda value: value.__deepcopy__({}), id="deepcopy-hook"),
+        pytest.param(lambda value: value.__reduce__(), id="reduce-hook"),
+        pytest.param(
+            lambda value: value.__reduce_ex__(pickle.HIGHEST_PROTOCOL),
+            id="reduce-ex-hook",
+        ),
+    ],
+)
+def test_domain_serialization_hooks_refuse_with_typed_safe_error(operation) -> None:
+    error = _assert_redacted_refusal(
+        lambda: operation(DecryptedCredential({"token": CANARY})),
+        CredentialCryptoError,
+    )
+
+    assert error.code == "credential_contract_invalid"
 
 
 @pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
 def test_pickle_protocols_refuse_secret_wrapper_without_disclosure(protocol) -> None:
     decrypted = DecryptedCredential({"token": CANARY})
 
-    error = _assert_redacted_refusal(lambda: pickle.dumps(decrypted, protocol=protocol))
+    error = _assert_redacted_refusal(
+        lambda: pickle.dumps(decrypted, protocol=protocol),
+        CredentialCryptoError,
+    )
 
-    assert isinstance(error, CredentialCryptoError)
     assert error.code == "credential_contract_invalid"
 
 
@@ -247,9 +288,11 @@ def test_pickle_protocols_refuse_secret_wrapper_without_disclosure(protocol) -> 
 def test_copy_paths_refuse_secret_wrapper_without_disclosure(operation) -> None:
     decrypted = DecryptedCredential({"token": CANARY})
 
-    error = _assert_redacted_refusal(lambda: operation(decrypted))
+    error = _assert_redacted_refusal(
+        lambda: operation(decrypted),
+        CredentialCryptoError,
+    )
 
-    assert isinstance(error, CredentialCryptoError)
     assert error.code == "credential_contract_invalid"
 
 
