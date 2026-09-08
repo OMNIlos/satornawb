@@ -53,6 +53,11 @@ Request payload v1 EXACT fields matching AssignmentCommand: work_item_id,
 expected_version,catalog_sku_id,idempotency_key,reason. No actor/org body field.
 Positive integer rules and exact nonempty text same as current pure command;
 do not invent narrower text limits in SQL than domain accepts.
+Amendment: pure AssignmentCommand now rejects embedded U+0000 and surrogate
+codepoints U+D800..U+DFFF in key/reason BEFORE checksum or persistence. Error is
+constant without input reflection. Valid Cyrillic/supplementary Unicode and
+combining sequences remain byte-for-byte; no normalization or length cap.
+TDD6 RED cases (no error previously) ->7 GREEN including valid Unicode case.
 Checksum: SHA256 of UTF8 JSON object
 `{"schema_version":1,"command":<five fields>}` sorted keys, ASCII escapes,
 compact separators, no NaN. Org/account bound by receipt key/FK, not request body.

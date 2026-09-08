@@ -25,6 +25,10 @@ class AssignmentCommand:
                 raise OrderContractValidationError(
                     "Exact command key and reason required"
                 )
+            if "\x00" in value or any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+                raise OrderContractValidationError(
+                    "Assignment text is not PostgreSQL compatible"
+                )
 
 
 class OrderCommandConflict(OrderContractValidationError):
