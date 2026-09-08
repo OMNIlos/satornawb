@@ -98,3 +98,54 @@ def test_empty_items_have_no_phantom_product_rows():
     assert root.find("x:dimension", NS).attrib["ref"] == "A1:I5"
     assert value(cells, "A4") == "Количество товаров: 0"
     assert "A6" not in cells
+
+
+@pytest.mark.parametrize(
+    "text", ["\t=1+1", "\n@SUM(1)", " synthetic ", "Синтетика\nстрока"]
+)
+def test_control_prefixes_and_whitespace_remain_literal(text):
+    root, cells = render([AvitoOrderItem(title=text, sellerArticle=text)])
+    assert value(cells, "D6") == text
+    assert value(cells, "G6") == text
+    assert not root.findall(".//x:f", NS)
+
+
+def test_all_provider_text_columns_are_inline_strings_without_external_links():
+    text = '=HYPERLINK("https://synthetic.invalid","synthetic")'
+    order = AvitoOrderRow(
+        orderId="synthetic-order",
+        marketplaceId=text,
+        accountName=text,
+        status="canceled",
+        trackNumber=text,
+        items=[
+            AvitoOrderItem(
+                itemId=text, title=text, size=text, color=text, sellerArticle=text
+            )
+        ],
+    )
+    content = build_avito_orders_picking_xlsx([order], date_from=date(2026, 9, 8))
+    with ZipFile(BytesIO(content)) as archive:
+        assert not any("externalLinks" in name for name in archive.namelist())
+        root = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+    cells = {cell.attrib["r"]: cell for cell in root.findall(".//x:c", NS)}
+    for column in "ACDEFGHI":
+        assert value(cells, f"{column}6") == text
+        assert cells[f"{column}6"].attrib["t"] == "inlineStr"
+    assert not root.findall(".//x:f", NS)
+    assert not root.findall(".//x:hyperlink", NS)
+
+
+def test_thousand_units_have_contiguous_rows_and_complete_text():
+    root, cells = render([AvitoOrderItem(title="Синтетический товар", quantity=1000)])
+    assert root.find("x:dimension", NS).attrib["ref"] == "A1:I1005"
+    assert value(cells, "A4") == "Количество товаров: 1000"
+    for row in range(6, 1006):
+        assert value(cells, f"D{row}") == "Синтетический товар"
+
+
+@pytest.mark.parametrize("text", ["synthetic\x00text", "synthetic\x0btext"])
+def test_legacy_renderer_emits_invalid_xml_for_forbidden_control_characters(text):
+    # Known legacy defect, not a canonical renderer acceptance criterion.
+    with pytest.raises(ET.ParseError):
+        render([AvitoOrderItem(title=text)])
