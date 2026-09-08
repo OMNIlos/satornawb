@@ -30,7 +30,7 @@ production rollout, real provider actions, or replacement of missing evidence.
 | Orders | T3/T1 | Actual schema/RLS, immutable observations, complete publication, revoke fencing, stable authorized snapshot pagination |
 | Fulfillment | T3 | Proven source identity/readiness/deadlines; Statistics observations do not establish fulfillment eligibility |
 | Production | T3/T1 | Work-item quantities, authenticated CAS/idempotency/audit, versioned grouping, immutable historical sheets |
-| Renderers/KIZ | T3 | Separate XLSX/A4/120×75/58×40 parity, frozen inputs, checksums, restart/concurrency, download without consumption |
+| Production renderers | T3 | Separate required XLSX/A4/sticker parity, frozen inputs, checksums, restart/concurrency and authorized downloads |
 | Reviews | T4/T1 | Persisted facts/policy/drafts/approvals, account isolation, atomic heads/audit, durable dispatch and ambiguous recovery |
 | Notifications | T4/T1 | Transactional events/outbox, membership receipts/preferences, read-only GET, verified external delivery contracts |
 | Frontend | T4 | Real typed API consumers, scoped queries, validation/error/409 UX, exclusive route ownership and feature gates |
@@ -60,3 +60,19 @@ production rollout, real provider actions, or replacement of missing evidence.
   Persistence/publication and HTTP renderer-error mapping remain separate work.
 
 No whole-architecture acceptance or GitHub publication is claimed here.
+
+## Scope correction and prerequisite verification
+
+T3 relayed a newer direct user instruction excluding KIZ and the standalone
+matcher from the requested product. Remove their isolated additions and exposed
+placeholders only after checking dependencies; preserve core WB/Avito workflows,
+Catalog resolution and Avito return matching. Historical evidence, backups and
+operational data are not cleanup targets. Production itself remains in scope.
+
+Orders schema `f9c7401d946063465e0576a689eb247c368eed73` independently passed
+101 tests on fresh disposable PostgreSQL databases with restricted runtime roles,
+including migration, RLS, contention, ACL and rollback checks (145.64 seconds,
+natural exit 0). Network was denied except the local Unix PostgreSQL socket.
+Independent DDL/ACL/Catalog review found no blocker. This releases the schema
+prerequisite to T3; application authorization/publication and actual repository
+and API acceptance are still required. Formatting-only lint followup is pending.
