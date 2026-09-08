@@ -120,3 +120,36 @@ worker denied. Guard implementation is T1-owned, still awaited for service wirin
 
 Production schema dependency separately committed `8a8722f`:3relations with CAS,
 successful receipt and immutable assignment audit; does not require renderer source.
+
+## Sealed snapshot repository
+
+`app/orders/snapshot_repository.py`: caller-transaction freeze/read over0062.
+Before INSERT header, freeze validates complete read model and binds each row to
+stored observation, account-qualified item identity, quantity, current version and
+resolution. Deterministic account/external-order/source-line order; projection SHARE
+locks held through caller commit. Header plus all payload rows inserted in same tx;
+existing deferred DDL seals positions/count. No commits or own sessions.
+
+Read fetches ONLY snapshot header/rows (no mutable Catalog/projection joins), checks
+exact query checksum/account scope, expiry when present, position bounds, payload
+versions and scoped row metadata. Returns frozen rows, high-water mark, published
+time, validated account coverage/aggregate and numeric next_position. Position is
+repository-only, NOT an authenticated/signed HTTP cursor or enduring permission.
+No default retention lifetime invented; service activation must decide cursor policy.
+Empty account scope is rejected for storage; service returns empty without header.
+
+TDD RED missing module and separate missing coverage result assertion; GREEN3
+snapshot PostgreSQL tests (historical read after current mutation, stale freeze,
+query/account mismatch). Combined evidence+snapshot8PASS14.18s, fresh disposable
+DBs/runtime roles; cleanup verified. Ruff/compileall exit0. Tests use T1 Unix-only
+sandbox profile and bounded fixtures. Full concurrent snapshot-vs-projection race,
+projection writer/CAS, authguard/DB08, API/cursor and retained-snapshot expiry gates
+remain incomplete. No claim that this is already GET/api/v2/orders.
+
+Guard design reviewed exact `1406686de74b52e1d7c92c3d9975d55b778c0cc6`:
+metadata locks/atomic credential binding/session lock/final commit validation agree
+with caller-owned repository transactions. Do not call a resolver with a separate
+session under these locks. Guard is still a design dependency, not installed here.
+Self-review retained coverage in read output and checks frozen payload against DB
+identity/version rather than trusting only JSONB object shape. Projection/observation
+source authority remains service responsibility; snapshot storage cannot prove it.
