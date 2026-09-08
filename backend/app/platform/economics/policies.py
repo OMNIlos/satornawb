@@ -177,7 +177,7 @@ def _legacy_values(settings: dict[str, Any]) -> tuple[int, int, int]:
 
 class EconomicsService:
     def __init__(self, session: Session, organization_id: int) -> None:
-        if organization_id < 1:
+        if type(organization_id) is not int or organization_id < 1:
             raise EconomicsValidationError("organization_id must be positive")
         self.session = session
         self.organization_id = organization_id
@@ -455,7 +455,7 @@ class EconomicsService:
         supersedes_catalog_economics_override_version_id: int | None = None,
         created_by_membership_id: int | None = None,
     ) -> CatalogEconomicsOverrideVersion:
-        if isinstance(catalog_sku_id, bool) or catalog_sku_id < 1:
+        if type(catalog_sku_id) is not int or catalog_sku_id < 1:
             raise EconomicsValidationError("catalog_sku_id must be positive")
         self._validate_values(
             tax_basis_points=tax_basis_points,
@@ -592,6 +592,9 @@ class EconomicsService:
     def get_policies_for_points(
         self, points: list[tuple[int, datetime]]
     ) -> dict[tuple[int, datetime], EconomicsPolicy]:
+        # Validate before set deduplication: True and 1.0 otherwise alias ID 1.
+        if any(type(sku_id) is not int or sku_id < 1 for sku_id, _ in points):
+            raise EconomicsValidationError("catalog_sku_id must be a positive internal integer")
         normalized = {
             instant: _aware_utc(instant)
             for instant in dict.fromkeys(instant for _, instant in points)
@@ -605,11 +608,6 @@ class EconomicsService:
         )
         if not requested:
             return {}
-        if any(
-            isinstance(catalog_sku_id, bool) or catalog_sku_id < 1
-            for catalog_sku_id, _ in requested
-        ):
-            raise EconomicsValidationError("catalog_sku_id must be positive")
         self._prepare()
         sku_ids = sorted({catalog_sku_id for catalog_sku_id, _ in requested})
         valid_sku_ids = set(
