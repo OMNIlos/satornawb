@@ -355,34 +355,19 @@ def start_postgres(
     return url, user
 
 
-def verify_legacy_bootstrap_column(
-    container: str, database: str, user: str, completed: list[str]
+def run_migration_roundtrip(
+    python: str, environment: dict[str, str], completed: list[str]
 ) -> None:
-    name = "legacy_0019_schema_guard"
-    print(f"[RUN] {name}", flush=True)
-    result = subprocess.run(
+    """Exercise the real empty-database chain; never stamp past broken DDL."""
+    run_steps(
         (
-            "docker",
-            "exec",
-            container,
-            "psql",
-            "-U",
-            user,
-            "-d",
-            database,
-            "-Atqc",
-            "SELECT count(*) FROM information_schema.columns "
-            "WHERE table_schema='public' AND table_name='rv_review_sync_settings' "
-            "AND column_name='ai_prompt'",
+            ("migration_upgrade_head", (python, "-m", "alembic", "upgrade", "head"), ROOT),
+            ("migration_downgrade_one", (python, "-m", "alembic", "downgrade", "-1"), ROOT),
+            ("migration_reupgrade_head", (python, "-m", "alembic", "upgrade", "head"), ROOT),
         ),
-        text=True,
-        capture_output=True,
+        executor(environment),
+        completed,
     )
-    if result.returncode or result.stdout.strip() != "1":
-        raise GateFailure(name, result.returncode or 1)
-    completed.append(name)
-    print("[PASS] legacy_0019_schema_guard ai_prompt=present", flush=True)
-    print("[LEGACY] stamping 20260717_0019: 0017 already created ai_prompt", flush=True)
 
 
 def run_gate(
@@ -437,49 +422,9 @@ def run_gate(
     check_single_head(python, environment, completed)
 
     prefix = f"satorna-gate-{int(time.time())}-{os.getpid()}-{secrets.token_hex(3)}"
-    database_url, database_user = start_postgres(prefix, temp, resources, completed)
+    database_url, _database_user = start_postgres(prefix, temp, resources, completed)
     migration_environment = dict(environment, VELLA_DATABASE_URL=database_url)
-    migrate = executor(migration_environment)
-    run_steps(
-        (
-            (
-                "migration_bootstrap_upgrade_0018",
-                (python, "-m", "alembic", "upgrade", "20260717_0018"),
-                ROOT,
-            ),
-        ),
-        migrate,
-        completed,
-    )
-    verify_legacy_bootstrap_column(
-        resources["container"], resources["database"], database_user, completed
-    )
-    run_steps(
-        (
-            (
-                "migration_bootstrap_stamp_0019",
-                (python, "-m", "alembic", "stamp", "20260717_0019"),
-                ROOT,
-            ),
-            (
-                "migration_upgrade_head",
-                (python, "-m", "alembic", "upgrade", "head"),
-                ROOT,
-            ),
-            (
-                "migration_downgrade_one",
-                (python, "-m", "alembic", "downgrade", "-1"),
-                ROOT,
-            ),
-            (
-                "migration_reupgrade_head",
-                (python, "-m", "alembic", "upgrade", "head"),
-                ROOT,
-            ),
-        ),
-        migrate,
-        completed,
-    )
+    run_migration_roundtrip(python, migration_environment, completed)
     run_steps(
         (
             (
