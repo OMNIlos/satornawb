@@ -1,0 +1,276 @@
+"""Integration gates for the active Orders migration, never application databases."""
+
+import ast
+from unittest.mock import MagicMock
+from uuid import uuid4
+
+import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import DBAPIError
+
+from tests import test_orders_schema_candidate as candidate
+from app.platform.catalog.orm import MarketplaceOfferRow, MarketplaceProductRow
+
+cluster = candidate.cluster
+db = candidate.db
+MUTABLE = {"order_sync_runs", "marketplace_orders", "marketplace_order_items"}
+
+
+def runtime_script(owner, role, *, fail_after_broad=False):
+    # Synthetic one-use value is passed over stdin, never command line or logs.
+    url = owner.url
+    script = f"\\set runtime_role {role}\n\\set owner_role {url.username}\n\\set runtime_database {url.database}\n\\set runtime_password {uuid4().hex}\n"
+    script += (candidate.ROOT / "ops/runtime-db-role.sql").read_text()
+    if fail_after_broad:
+        # Fault injection into the actual script, just after the broad grants.
+        script = script.replace("-- Orders overrides", "SELECT 1/0;\n-- Orders overrides", 1)
+    return candidate.subprocess.run(
+        ["psql", "-X", "-w", "-v", "ON_ERROR_STOP=1", "-h", url.query["host"],
+         "-p", str(url.query["port"]), "-U", url.username, "-d", url.database],
+        input=script, env=candidate.isolated_environment(), capture_output=True,
+        text=True, timeout=60, check=False,
+    )
+
+
+def assert_narrow_privileges(connection, role):
+    for table in candidate.TABLES:
+        for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
+            actual = connection.execute(text("SELECT has_table_privilege(:role,:table,:privilege)"),
+                                        dict(role=role, table=table, privilege=privilege)).scalar_one()
+            assert actual == (privilege in {"SELECT", "INSERT"} or (privilege == "UPDATE" and table in MUTABLE)), (table, privilege)
+        sequence = connection.execute(text("""SELECT pg_get_serial_sequence(:table, a.attname)
+            FROM pg_attribute a WHERE a.attrelid=to_regclass(:table) AND a.attidentity<>''"""),
+            {"table": table}).scalar_one()
+        assert connection.execute(text("SELECT has_sequence_privilege(:role,:sequence,'USAGE')"),
+                                  dict(role=role, sequence=sequence)).scalar_one()
+        assert not connection.execute(text("SELECT has_sequence_privilege(:role,:sequence,'UPDATE')"),
+                                      dict(role=role, sequence=sequence)).scalar_one()
+
+
+def test_runtime_script_limits_orders_privileges(db):
+    owner, runtime = db
+    result = runtime_script(owner, runtime.url.username)
+    assert result.returncode == 0, result.stderr
+    with owner.connect() as connection:
+        assert_narrow_privileges(connection, runtime.url.username)
+
+
+def test_failed_runtime_script_cannot_leave_intermediate_broad_grants(db):
+    owner, runtime = db
+    assert runtime_script(owner, runtime.url.username).returncode == 0
+    result = runtime_script(owner, runtime.url.username, fail_after_broad=True)
+    assert result.returncode != 0 and "division by zero" in result.stderr
+    with owner.connect() as c:
+        assert_narrow_privileges(c, runtime.url.username)
+
+
+def test_upgrade_narrows_inherited_defaults_without_widening_select_only_role(cluster):
+    broad, reader = "orders_broad_" + uuid4().hex, "orders_reader_" + uuid4().hex
+    with candidate.disposable_database(cluster, (broad, reader)) as database:
+        result = candidate.migrate(database.url, "upgrade", "20260908_0061")
+        assert result.returncode == 0, result.stderr
+        engine = create_engine(database.url)
+        try:
+            with engine.begin() as c:
+                c.exec_driver_sql(f"ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO {broad}")
+                c.exec_driver_sql(f"ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO {broad}")
+                c.exec_driver_sql(f"ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO {reader} WITH GRANT OPTION")
+                c.exec_driver_sql(f"ALTER DEFAULT PRIVILEGES GRANT SELECT ON SEQUENCES TO {reader}")
+                c.exec_driver_sql("ALTER DEFAULT PRIVILEGES GRANT SELECT ON SEQUENCES TO PUBLIC")
+                before = c.exec_driver_sql("SELECT defaclobjtype,defaclacl::text FROM pg_default_acl ORDER BY oid").all()
+                catalog_before = c.exec_driver_sql("SELECT relname,relacl::text FROM pg_class WHERE relname IN ('marketplace_products','marketplace_offers') ORDER BY relname").all()
+            result = candidate.migrate(database.url, "upgrade", "20260909_0062")
+            assert result.returncode == 0, result.stderr
+            with engine.connect() as c:
+                assert_narrow_privileges(c, broad)
+                for table in candidate.TABLES:
+                    for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "SELECT WITH GRANT OPTION"):
+                        assert not c.execute(text("SELECT has_table_privilege(:role,:table,:privilege)"), dict(role=reader, table=table, privilege=privilege)).scalar_one()
+                    assert c.execute(text("SELECT has_table_privilege(:role,:table,'SELECT')"), dict(role=reader, table=table)).scalar_one()
+                assert c.exec_driver_sql("SELECT defaclobjtype,defaclacl::text FROM pg_default_acl ORDER BY oid").all() == before
+                assert c.exec_driver_sql("SELECT relname,relacl::text FROM pg_class WHERE relname IN ('marketplace_products','marketplace_offers') ORDER BY relname").all() == catalog_before
+                assert c.execute(text("""SELECT count(*) FROM pg_class c, LATERAL aclexplode(c.relacl) a
+                    WHERE c.relkind='S' AND c.oid IN (
+                        SELECT d.objid FROM pg_depend d JOIN pg_class t ON t.oid=d.refobjid
+                        WHERE t.relname=ANY(:tables) AND d.deptype='i' AND d.classid='pg_class'::regclass)
+                    AND (a.grantee=0 OR a.grantee=(SELECT oid FROM pg_roles WHERE rolname=:reader))"""),
+                    dict(tables=list(candidate.TABLES), reader=reader)).scalar_one() == 0
+        finally:
+            engine.dispose()
+
+
+def test_actual_chain_has_one_head_containing_orders_revision():
+    config = Config(str(candidate.ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(candidate.ROOT / "alembic"))
+    scripts = ScriptDirectory.from_config(config)
+    heads = scripts.get_heads()
+    assert len(heads) == 1
+    assert scripts.get_revision("20260909_0062").down_revision == "20260908_0061"
+    assert "20260909_0062" in {revision.revision for revision in scripts.iterate_revisions(heads[0], "base")}
+
+
+def test_isolated_credential_fixture_pins_its_supported_revision():
+    # This is a target-selection regression, not execution of the native PG fixture.
+    tree = ast.parse((candidate.ROOT / "tests/test_marketplace_credential_rls.py").read_text())
+    fixture = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "disposable_postgres")
+    targets = [node.args[1].value for node in ast.walk(fixture)
+               if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+               and node.func.attr == "upgrade"]
+    assert targets == ["20260908_0061", "20260908_0061"]
+
+
+@pytest.mark.parametrize("model,name,columns", [
+    (MarketplaceProductRow, "uq_orders_product_account", ("organization_id", "marketplace_account_id", "marketplace_product_id")),
+    (MarketplaceOfferRow, "fk_orders_offer_product_account", ("organization_id", "marketplace_account_id", "marketplace_product_id")),
+    (MarketplaceOfferRow, "uq_orders_offer_product_account", ("organization_id", "marketplace_account_id", "marketplace_product_id", "marketplace_offer_id")),
+])
+def test_catalog_orm_has_exact_account_anchors(model, name, columns):
+    constraints = {constraint.name: constraint for constraint in model.__table__.constraints}
+    assert name in constraints
+    assert tuple(constraints[name].columns.keys()) == columns
+
+
+def test_failed_cluster_start_still_attempts_cleanup(monkeypatch, tmp_path_factory):
+    monkeypatch.delenv("ORDERS_TEST_USE_LOCAL_CLUSTER", raising=False)
+    monkeypatch.setattr(candidate.shutil, "which", lambda name: "/fake/" + name)
+    probe = MagicMock()
+    probe.__enter__.return_value.getsockname.return_value = ("127.0.0.1", 54321)
+    monkeypatch.setattr(candidate.socket, "socket", lambda: probe)
+    calls = []
+
+    def execute(args, **kwargs):
+        calls.append(args)
+        if args[-1] == "start":
+            raise RuntimeError("injected partial start failure")
+
+    monkeypatch.setattr(candidate.subprocess, "run", execute)
+    generator = candidate.cluster.__wrapped__(tmp_path_factory)
+    with pytest.raises(RuntimeError, match="injected partial start failure"):
+        next(generator)
+    assert any(args[-1] == "stop" for args in calls), "partial start leaked cluster"
+
+
+@pytest.mark.parametrize("fail_on", ["DATABASE", "ROLE", "body"])
+def test_partial_database_setup_always_removes_its_exact_resources(monkeypatch, fail_on):
+    # Inject an error *after* CREATE took effect: cleanup must cover uncertain setup.
+    databases, roles = set(), set()
+    state = {"closed": False}
+
+    class Maintenance:
+        def execute(self, query, parameters=None):
+            if not isinstance(query, str):
+                query = query.as_string()
+            result = None
+            if "inet_server_addr" in query:
+                result = (True,)
+            elif query.startswith("SELECT 1 FROM pg_database"):
+                result = (1,) if parameters[0] in databases else None
+            elif query.startswith("SELECT 1 FROM pg_roles"):
+                result = (1,) if parameters[0] in roles else None
+            elif query.startswith("CREATE"):
+                kind, name = query.split()[1], query.split('"')[1]
+                (databases if kind == "DATABASE" else roles).add(name)
+                if kind == fail_on:
+                    raise RuntimeError("injected setup failure")
+            elif query.startswith("DROP"):
+                kind, name = query.split()[1], query.split('"')[1]
+                (databases if kind == "DATABASE" else roles).discard(name)
+            else:
+                raise AssertionError(query)
+            return MagicMock(fetchone=lambda: result)
+
+        def close(self):
+            state["closed"] = True
+
+    monkeypatch.setattr(candidate.psycopg, "connect", lambda **kwargs: Maintenance())
+    with pytest.raises(RuntimeError, match="injected"):
+        with candidate.disposable_database(({}, None, 5432, "synthetic_owner"), ("orders_fixture_" + uuid4().hex,)):
+            raise RuntimeError("injected body failure")
+    assert databases == roles == set()
+    assert state["closed"]
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_populated_catalog_upgrade_is_atomic_and_preserves_pairing(cluster, invalid):
+    with candidate.disposable_database(cluster) as database:
+        result = candidate.migrate(database.url, "upgrade", "20260908_0061")
+        assert result.returncode == 0, result.stderr
+        engine = create_engine(database.url)
+        try:
+            with engine.begin() as c:
+                c.exec_driver_sql("INSERT INTO lk_organizations(organization_id,slug,name) VALUES (91001,'synthetic','Synthetic')")
+                c.exec_driver_sql("""INSERT INTO marketplace_accounts(marketplace_account_id,organization_id,marketplace,external_account_id,status)
+                    VALUES (91101,91001,'avito','synthetic-a','connected'),(91102,91001,'avito','synthetic-b','connected')""")
+                c.exec_driver_sql("INSERT INTO catalog_skus(catalog_sku_id,organization_id,code) VALUES (91301,91001,'synthetic-sku')")
+                c.exec_driver_sql("""INSERT INTO marketplace_products(marketplace_product_id,organization_id,marketplace_account_id,external_product_id)
+                    VALUES (91401,91001,91101,'synthetic-product')""")
+                c.execute(text("""INSERT INTO marketplace_offers(marketplace_offer_id,organization_id,marketplace_account_id,marketplace_product_id,external_offer_key,catalog_sku_id)
+                    VALUES (91501,91001,:account,91401,'synthetic-offer',91301)"""), {"account": 91102 if invalid else 91101})
+                before = c.exec_driver_sql("SELECT * FROM marketplace_offers").all()
+            result = candidate.migrate(database.url, "upgrade", "20260909_0062")
+            assert result.returncode == (1 if invalid else 0), result.stderr
+            if invalid:
+                assert "fk_orders_offer_product_account" in result.stderr
+            with engine.connect() as c:
+                assert c.exec_driver_sql("SELECT * FROM marketplace_offers").all() == before
+                assert c.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == ("20260908_0061" if invalid else "20260909_0062")
+                for table in candidate.TABLES:
+                    assert bool(c.execute(text("SELECT to_regclass(:table)"), {"table": table}).scalar_one()) == (not invalid)
+                if invalid:
+                    assert c.exec_driver_sql("SELECT to_regprocedure('orders_exact_text(text)')").scalar_one() is None
+                    assert c.exec_driver_sql("SELECT count(*) FROM pg_constraint WHERE conname IN ('uq_orders_product_account','fk_orders_offer_product_account','uq_orders_offer_product_account')").scalar_one() == 0
+        finally:
+            engine.dispose()
+
+
+def test_actual_runtime_dml_rls_and_ddl_denials(db):
+    owner, runtime = db
+    result = runtime_script(owner, runtime.url.username)
+    assert result.returncode == 0, result.stderr
+    with owner.connect() as c:
+        assert c.execute(text("SELECT rolsuper,rolbypassrls,rolinherit,rolcreatedb,rolcreaterole FROM pg_roles WHERE rolname=:role"), {"role": runtime.url.username}).one() == (False,False,False,False,False)
+        assert c.execute(text("SELECT count(*) FROM pg_class WHERE relname=ANY(:tables) AND relowner=(SELECT oid FROM pg_roles WHERE rolname=:role)"), {"tables": list(candidate.TABLES), "role": runtime.url.username}).scalar_one() == 0
+    with runtime.begin() as c:
+        candidate.scope(c)
+        oid, rid = candidate.order(c), candidate.run(c)
+        iid = candidate.item(c, oid)
+        obs = candidate.observation(c, oid, rid)
+        assert c.execute(text("SELECT observation_id FROM order_observations WHERE observation_id=:id"), {"id": obs}).scalar_one() == obs
+        assert c.execute(text("UPDATE marketplace_orders SET version=version+1 WHERE order_id=:id AND version=1"), {"id": oid}).rowcount == 1
+        assert c.execute(text("UPDATE marketplace_order_items SET version=version+1 WHERE order_item_id=:id AND version=1"), {"id": iid}).rowcount == 1
+        assert c.execute(text("UPDATE order_sync_runs SET page_count=page_count+1 WHERE sync_run_id=:id"), {"id": rid}).rowcount == 1
+    for org in (None, 91002):
+        with runtime.begin() as c:
+            if org:
+                candidate.scope(c, org)
+            assert c.execute(text("SELECT count(*) FROM marketplace_orders WHERE order_id=:id"), {"id": oid}).scalar_one() == 0
+            assert c.execute(text("UPDATE marketplace_orders SET version=version+1 WHERE order_id=:id"), {"id": oid}).rowcount == 0
+        with pytest.raises(DBAPIError, match="row-level security"), runtime.begin() as c:
+            if org:
+                candidate.scope(c, org)
+            candidate.order(c)
+    for statement in (
+        "UPDATE order_observations SET normalized_evidence='{}'",
+        "DELETE FROM marketplace_orders", "TRUNCATE marketplace_orders CASCADE",
+        "CREATE TABLE public.orders_forbidden(id int)",
+        "ALTER TABLE marketplace_orders ADD COLUMN forbidden int",
+        "SELECT setval(pg_get_serial_sequence('marketplace_orders','order_id'), 1)",
+    ):
+        with pytest.raises(DBAPIError, match="permission denied|must be owner"), runtime.begin() as c:
+            candidate.scope(c)
+            c.exec_driver_sql(statement)
+
+
+def test_runtime_script_refuses_orders_without_forced_rls(db):
+    owner, runtime = db
+    try:
+        with owner.begin() as c:
+            c.exec_driver_sql("ALTER TABLE order_observations NO FORCE ROW LEVEL SECURITY")
+        result = runtime_script(owner, runtime.url.username)
+        assert result.returncode != 0
+        assert "canonical tables without forced RLS: order_observations" in result.stderr
+    finally:
+        with owner.begin() as c:
+            c.exec_driver_sql("ALTER TABLE order_observations FORCE ROW LEVEL SECURITY")
