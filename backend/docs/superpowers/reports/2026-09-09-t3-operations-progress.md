@@ -3,6 +3,18 @@
 Branch `codex/arch-t3-operations`; исходная база `c88a474`.
 Общая очередь не активирована. Legacy writers/prototype сохранены.
 
+## Scope override пользователя, 2026-09-09
+
+КИЗ/Честный знак и отдельный recovered matcher исключены из продукта по прямому
+указанию пользователя. Isolated matcher harness/report удалены: runtime imports
+или consumers отсутствуют. PHP runtime tests не запускались. Исторические строки
+ниже про КИЗ/source recovery описывают прежний scope и больше не являются gates.
+Avito return matching, Catalog resolution, WB/Avito order identities, XLSX и
+обычная печать не относятся к удаляемому КИЗ subsystem и сохранены.
+Backend app scan не обнаружил kiz/chz/КИЗ/Честный знак runtime references.
+Frontend placeholders требуют отдельной правки владельца T4; координатор уведомлён.
+Backup/user data и исторические Git commits не удалялись.
+
 | Этап / requirement | Реализованные commits / проверки | Remaining / blocker |
 |---|---|---|
 | 1 Discovery / parity / schema request | `4323821` Stage1; `3a30b16` offline/XLSX; `f4d6d55` returns/XLSX edge characterization | Полного production prototype/matcher нет; доступны только частичные исходники, см. recovery reports |
