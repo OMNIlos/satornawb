@@ -1,10 +1,16 @@
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Barrier, Event
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.modules.orders import ExternalOrderItemIdentity, make_avito_source_line_key
+from app.modules.orders import (
+    ExternalOrderItemIdentity,
+    make_avito_source_line_key,
+    map_avito_status,
+)
 from app.orders.contracts import AccountCoverage, CatalogResolution, OrderReadRow
 from app.orders.evidence_repository import OrdersEvidenceRepository
 from app.orders.ingestion import ObservedOrderItem
@@ -32,9 +38,15 @@ def stored_rows(session):
         )
         for index in range(2)
     )
-    source = replace(source, items=items)
+    source = replace(source, items=items, status=map_avito_status("ready_to_ship"))
     record = OrdersEvidenceRepository(session, 91001, 91101).append(
         new_run(session, source), source
+    )
+    session.execute(
+        text("""UPDATE marketplace_orders SET raw_status='ready_to_ship',
+        canonical_status='ready_for_fulfillment',mapping_state='mapped',
+        mapping_version='avito-order-status-v1',version=version+1 WHERE order_id=:id"""),
+        {"id": record.order_id},
     )
     rows = []
     for item in items:
@@ -81,7 +93,11 @@ def test_snapshot_pages_are_frozen_after_current_item_changes(snapshot_db):
         scope(session)
         rows = stored_rows(session)
         snapshot = OrdersSnapshotRepository(session, 91001).freeze(
-            rows, coverage(), "synthetic-hwm", "a" * 64
+            rows,
+            coverage(),
+            "synthetic-hwm",
+            "a" * 64,
+            parent_versions={rows[0].observation.identity: 2},
         )
     with Session(runtime) as session, session.begin():
         scope(session)
@@ -117,6 +133,7 @@ def test_freeze_rejects_stale_version_before_creating_header(snapshot_db):
                 coverage(),
                 "synthetic-hwm",
                 "a" * 64,
+                parent_versions={rows[0].observation.identity: 2},
             )
 
 
@@ -125,10 +142,61 @@ def test_read_rejects_different_query_or_account_scope(snapshot_db):
     with Session(runtime) as session, session.begin():
         scope(session)
         repo = OrdersSnapshotRepository(session, 91001)
+        rows = stored_rows(session)
         snapshot = repo.freeze(
-            stored_rows(session), coverage(), "synthetic-hwm", "a" * 64
+            rows,
+            coverage(),
+            "synthetic-hwm",
+            "a" * 64,
+            parent_versions={rows[0].observation.identity: 2},
         )
         with pytest.raises(ValueError, match="scope"):
             repo.read(snapshot, (91102,), "a" * 64)
         with pytest.raises(ValueError, match="scope"):
             repo.read(snapshot, (91101,), "b" * 64)
+
+
+@pytest.mark.parametrize("new_status", ["canceled", "ready_to_ship"])
+def test_two_sessions_parent_only_cancellation_rejects_stale_ready_snapshot(
+    snapshot_db, new_status
+):
+    _, runtime = snapshot_db
+    with Session(runtime) as session, session.begin():
+        scope(session)
+        rows = stored_rows(session)
+    barrier, changed = Barrier(2), Event()
+
+    def freeze():
+        with Session(runtime) as session, session.begin():
+            scope(session)
+            pid = session.execute(text("SELECT pg_backend_pid()")).scalar_one()
+            barrier.wait(timeout=10)
+            assert changed.wait(timeout=10)
+            with pytest.raises(ValueError, match="parent"):
+                OrdersSnapshotRepository(session, 91001).freeze(
+                    rows,
+                    coverage(),
+                    "synthetic-hwm",
+                    "a" * 64,
+                    parent_versions={rows[0].observation.identity: 2},
+                )
+            return pid
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(freeze)
+        with Session(runtime) as session, session.begin():
+            scope(session)
+            pid = session.execute(text("SELECT pg_backend_pid()")).scalar_one()
+            barrier.wait(timeout=10)
+            session.execute(
+                text("""UPDATE marketplace_orders SET raw_status=:raw,
+                canonical_status=:canonical,version=version+1
+                WHERE external_order_id=:external"""),
+                {
+                    "external": rows[0].observation.identity.external_order_id,
+                    "raw": new_status,
+                    "canonical": map_avito_status(new_status).canonical_status,
+                },
+            )
+        changed.set()
+        assert future.result(timeout=10) != pid

@@ -153,3 +153,20 @@ session under these locks. Guard is still a design dependency, not installed her
 Self-review retained coverage in read output and checks frozen payload against DB
 identity/version rather than trusting only JSONB object shape. Projection/observation
 source authority remains service responsibility; snapshot storage cannot prove it.
+
+### Parent projection composition amendment
+
+Root requested parent-only status/version race. Actual two-session RED reproduced
+stale ready freeze after cancellation while item version stayed1. freeze now requires
+`parent_versions: dict[ExternalOrderIdentity,int]` for exactly its scoped orders;
+under existing parent SHARE lock compares version plus raw/canonical status and
+mapping state/version with selected evidence. No observed_at ordering or version
+guessing. Snapshot assembler must capture these parent versions alongside source
+selection; changed parent forces conflict/retry. Historic committed snapshots stay
+immutable; their read never compares against current parent.
+Two real connection PIDs, Barrier/Event, parent-only cancellation and version-only
+change both rejected. Combined snapshot/evidence10PASS8.89s, disposablecleanup
+verified. Ruff import-order corrected before commit. This closes the stale-parent
+storage gate, not yet authoritative source/high-watermark selection in service.
+Known0062 long-key B-tree defect remains separate T1 amendment prerequisite; no
+arbitrary cap or hash-as-identity introduced in domain.
