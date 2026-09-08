@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import copy
 import logging
-from dataclasses import replace
+import pickle
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
+from typing import Any, Callable
 from uuid import UUID
 
 import pytest
+from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel, ConfigDict
 
 from app.security.marketplace_credentials import (
     CredentialCryptoError,
@@ -20,6 +25,17 @@ from app.security.marketplace_credentials import (
 
 CANARY = "synthetic-credential-canary-9f3a"
 NOW = datetime(2026, 9, 8, 12, 30, tzinfo=timezone.utc)
+
+
+class _CredentialEnvelope(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    credential: DecryptedCredential
+
+
+@dataclass
+class _CredentialContainer:
+    credential: DecryptedCredential
 
 
 def _keyring(*, current: int = 7) -> CredentialKeyring:
@@ -166,13 +182,22 @@ def test_invalid_allowlist_schema_and_size_fail_closed(identity, payload) -> Non
     assert CANARY not in str(caught.value)
 
 
+def _assert_redacted_refusal(operation: Callable[[], Any]) -> Exception:
+    with pytest.raises(Exception) as caught:
+        operation()
+
+    assert CANARY not in str(caught.value)
+    assert CANARY not in repr(caught.value)
+    return caught.value
+
+
 def test_secret_types_and_errors_are_redacted(caplog) -> None:
     decrypted = DecryptedCredential({"token": CANARY})
     error = CredentialCryptoError("credential_auth_failed")
 
     assert CANARY not in repr(decrypted)
     assert CANARY not in str(decrypted)
-    assert decrypted.__dict__ == {"_payload": {"token": CANARY}}
+    assert not hasattr(decrypted, "__dict__")
     assert repr(decrypted) == "<DecryptedCredential redacted>"
     assert str(decrypted) == "<DecryptedCredential redacted>"
     assert str(error) == "credential_auth_failed"
@@ -181,6 +206,61 @@ def test_secret_types_and_errors_are_redacted(caplog) -> None:
     with caplog.at_level(logging.ERROR):
         logging.getLogger("credential-test").error("credential failure: %s", error)
     assert CANARY not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(DecryptedCredential({"token": CANARY}), id="direct"),
+        pytest.param({"credential": DecryptedCredential({"token": CANARY})}, id="nested"),
+    ],
+)
+def test_fastapi_jsonable_encoder_refuses_secret_wrapper_without_disclosure(value) -> None:
+    _assert_redacted_refusal(lambda: jsonable_encoder(value))
+
+
+def test_pydantic_json_serialization_refuses_secret_wrapper_without_disclosure() -> None:
+    envelope = _CredentialEnvelope(credential=DecryptedCredential({"token": CANARY}))
+
+    _assert_redacted_refusal(lambda: envelope.model_dump(mode="json"))
+    _assert_redacted_refusal(envelope.model_dump_json)
+
+
+@pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
+def test_pickle_protocols_refuse_secret_wrapper_without_disclosure(protocol) -> None:
+    decrypted = DecryptedCredential({"token": CANARY})
+
+    error = _assert_redacted_refusal(lambda: pickle.dumps(decrypted, protocol=protocol))
+
+    assert isinstance(error, CredentialCryptoError)
+    assert error.code == "credential_contract_invalid"
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(copy.copy, id="copy"),
+        pytest.param(copy.deepcopy, id="deepcopy"),
+        pytest.param(lambda value: asdict(_CredentialContainer(value)), id="dataclass-asdict"),
+    ],
+)
+def test_copy_paths_refuse_secret_wrapper_without_disclosure(operation) -> None:
+    decrypted = DecryptedCredential({"token": CANARY})
+
+    error = _assert_redacted_refusal(lambda: operation(decrypted))
+
+    assert isinstance(error, CredentialCryptoError)
+    assert error.code == "credential_contract_invalid"
+
+
+def test_reveal_returns_an_independent_payload() -> None:
+    decrypted = DecryptedCredential({"token": CANARY})
+
+    revealed = decrypted.reveal()
+    revealed["token"] = "mutated"
+    revealed["extra"] = "mutated"
+
+    assert decrypted.reveal() == {"token": CANARY}
 
 
 def test_keyring_rejects_bad_keys_without_disclosing_material() -> None:
