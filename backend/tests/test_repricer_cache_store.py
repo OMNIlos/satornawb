@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import date, datetime, timezone
+import pytest
 
 from app.repricer_cache.store import (
     _source_cache_metadata,
@@ -10,6 +11,15 @@ from app.repricer_cache.store import (
 )
 from app.repricer_cache.orm import WbRepricerSourceCacheRow
 from sqlalchemy.exc import IntegrityError
+
+
+@pytest.fixture(autouse=True)
+def isolated_cache_boundaries(monkeypatch):
+    """Unit tests never resolve configured PostgreSQL or Redis connections."""
+    monkeypatch.setattr("app.repricer_cache.store._run_db", lambda fn: None)
+    monkeypatch.setattr("app.repricer_cache.store._redis_get_json", lambda *a, **kw: None)
+    monkeypatch.setattr("app.repricer_cache.store._redis_set_json", lambda *a, **kw: None)
+    monkeypatch.setattr("app.repricer_cache.store._redis_delete", lambda *a, **kw: None)
 
 
 def test_source_cache_metadata_is_derived_without_mutating_payload():

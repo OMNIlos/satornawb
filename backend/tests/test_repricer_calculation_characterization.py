@@ -6,6 +6,7 @@ business formulas or invoke draft/apply, routes, workers, storage, or providers.
 
 from copy import deepcopy
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import socket
 from types import SimpleNamespace
 
@@ -25,6 +26,7 @@ def legacy(monkeypatch):
     from app.repricer_settings import RepricerGuardLimits
 
     monkeypatch.setattr(execution, "ALGORITHM_SETTINGS_STATE", {})
+    monkeypatch.setattr(execution, "LIQUIDATION_ACTIVE", {})
     monkeypatch.setattr(execution, "get_repricer_guard_limits", RepricerGuardLimits)
     monkeypatch.setattr(sprint, "get_repricer_guard_limits", RepricerGuardLimits)
     monkeypatch.setattr(sprint, "_daily_reference_price", lambda article, fallback: fallback)
@@ -201,3 +203,97 @@ def test_legacy_margin_characterization_does_not_add_tax_to_existing_formula(leg
     )
     assert sprint._predict_margin(80000, economics) == (18000, 22.5)
     assert sprint._predict_margin(None, economics) == (None, None)
+
+
+@pytest.mark.parametrize("hour,window,previous", [
+    (0, "2026-09-07", "2026-09-07"), (5, "2026-09-07", "2026-09-07"),
+    (6, "2026-09-08", "2026-09-07"), (22, "2026-09-08", "2026-09-07"),
+    (23, "2026-09-08", "2026-09-08"),
+])
+def test_night_window_boundaries_preserve_cross_midnight_keys(legacy, hour, window, previous):
+    execution, _ = legacy
+    now = datetime(2026, 9, 8, hour, tzinfo=timezone(timedelta(hours=3)))
+    assert execution._night_window_key(now) == window
+    assert execution._night_previous_window_key(now) == previous
+
+
+@pytest.mark.parametrize("mode,configured,want", [
+    ("conservative", 4, 3), ("aggressive", 4, 4),
+    ("conservative", 40, 20), ("aggressive", 40, 20),
+])
+def test_night_delta_mode_and_cap_are_characterized(legacy, mode, configured, want):
+    execution, _ = legacy
+    execution.ALGORITHM_SETTINGS_STATE.update({"nightMedianMode": mode, "nightMedianApplyDeltaPct": configured})
+    assert execution._night_target_delta_pct() == want
+
+
+@pytest.mark.parametrize("current,want", [(7, -3), (8, 3), (9, 3)])
+def test_night_median_direction_and_input_immutability(legacy, monkeypatch, current, want):
+    execution, _ = legacy
+    payload = {"windows": {"2026-09-07": {
+        "samples": {"synthetic": {"values": [{"baskets": 2}, {"baskets": 8}, {"baskets": 10}]}},
+        "applied": {},
+    }}}
+    original = deepcopy(payload)
+    monkeypatch.setattr(execution, "_night_median_cache", lambda org: payload)
+    monkeypatch.setattr(execution, "_night_previous_window_key", lambda: "2026-09-07")
+    monkeypatch.setattr(execution, "_night_median_collecting_now", lambda: False)
+    result = execution._night_median_apply_payload({"meta": {"articleId": "synthetic"}, "analytics": {"baskets": current}}, 7)
+    assert result == {"windowKey": "2026-09-07", "medianBaskets": 8.0,
+                      "currentBaskets": current, "samplesCount": 3, "deltaPct": want}
+    assert payload == original
+
+
+@pytest.mark.parametrize("case", ["already_applied", "collecting", "disabled", "missing_current", "empty_samples", "no_org"])
+def test_night_median_skip_conditions_do_not_create_an_apply_payload(legacy, monkeypatch, case):
+    execution, _ = legacy
+    window = {"samples": {"synthetic": {"values": [{"baskets": 8}]}}, "applied": {}}
+    row = {"meta": {"articleId": "synthetic"}, "analytics": {"baskets": 10}}
+    if case == "already_applied":
+        window["applied"]["synthetic"] = {"jobId": "existing"}
+    if case == "empty_samples":
+        window["samples"]["synthetic"]["values"] = []
+    if case == "missing_current":
+        row["analytics"] = {}
+    if case == "disabled":
+        execution.ALGORITHM_SETTINGS_STATE["nightMedianEnabled"] = False
+    monkeypatch.setattr(execution, "_night_median_cache", lambda org: {"windows": {"2026-09-07": window}})
+    monkeypatch.setattr(execution, "_night_previous_window_key", lambda: "2026-09-07")
+    monkeypatch.setattr(execution, "_night_median_collecting_now", lambda: case == "collecting")
+    assert execution._night_median_apply_payload(row, None if case == "no_org" else 7) is None
+
+
+@pytest.mark.parametrize("orders,target,want", [(0, 80000, 97000), (0, 98000, 98000), (1, 80000, 100000), (2, 80000, 103000)])
+def test_liquidation_demand_branches_preserve_target_floor(legacy, orders, target, want):
+    execution, _ = legacy
+    execution.LIQUIDATION_ACTIVE["synthetic"] = {"currentPriceKopecks": 100000,
+        "stepPct": 3, "holdOrdersTo": 1, "targetPriceKopecks": target}
+    row = {"meta": {"articleId": "synthetic", "currentPriceKopecks": 110000}, "analytics": {"ordersUnits": orders}}
+    original = deepcopy(execution.LIQUIDATION_ACTIVE)
+    result, _, blockers = execution._illiquid_recommended_price(row)
+    assert result == want
+    assert blockers == []
+    assert execution.LIQUIDATION_ACTIVE == original
+
+
+def test_liquidation_future_step_skips_without_changing_runtime(legacy, monkeypatch):
+    execution, _ = legacy
+    now = datetime(2026, 9, 8, tzinfo=timezone.utc)
+    execution.LIQUIDATION_ACTIVE["synthetic"] = {"nextStepAt": (now + timedelta(seconds=1)).isoformat()}
+    monkeypatch.setattr(execution, "_utc_now", lambda: now)
+    result, _, blockers = execution._illiquid_recommended_price({"meta": {"articleId": "synthetic"}})
+    assert result is None
+    assert blockers == ["liquidation_not_due"]
+
+
+@pytest.mark.parametrize("strategy,want", [
+    ("baskets_orders", ("baskets_orders", "baskets_orders_4599")),
+    ("metric_dynamics", ("metric_dynamics", "revenue_dynamics_4600")),
+    ("illiquid", ("illiquid", None)), ("unknown-strategy", (None, None)),
+])
+def test_explicit_strategy_resolution_does_not_read_global_default(legacy, monkeypatch, strategy, want):
+    execution, _ = legacy
+    def forbidden():
+        raise AssertionError("explicit strategy must not read persisted default")
+    monkeypatch.setattr(execution, "default_typed_strategy_for_mode", forbidden)
+    assert execution._resolve_strategy_id({"meta": {}, "strategy": {"id": strategy}}) == want

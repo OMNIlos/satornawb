@@ -6,6 +6,14 @@ from app.wb_api.client import RateLimitInfo, WbApiRequest, WbApiResponseEnvelope
 from app.wb_api.rnp_runtime import _fetch_sales_funnel_rows, _rnp_row_from_sources, build_rnp_snapshot
 
 
+def _install_cached_ads(monkeypatch, factory):
+    def cached_ads(**kwargs):
+        snapshot = factory(**kwargs)
+        return (snapshot.rows, snapshot.totals, snapshot.source_status,
+                snapshot.confidence, snapshot.blocker_ids, {})
+    monkeypatch.setattr("app.wb_api.rnp_runtime._cached_ads_rows", cached_ads)
+
+
 def test_build_rnp_snapshot_merges_cached_sales_funnel_with_ads(monkeypatch):
     saved_payloads: dict[str, dict] = {}
 
@@ -73,7 +81,10 @@ def test_build_rnp_snapshot_merges_cached_sales_funnel_with_ads(monkeypatch):
 
     monkeypatch.setattr("app.wb_api.rnp_runtime.get_source_cache", fake_get_source_cache)
     monkeypatch.setattr("app.wb_api.rnp_runtime.save_source_cache", fake_save_source_cache)
-    monkeypatch.setattr("app.wb_api.rnp_runtime.build_ads_attribution_snapshot", fake_ads_snapshot)
+    _install_cached_ads(monkeypatch, fake_ads_snapshot)
+    monkeypatch.setattr("app.wb_api.rnp_runtime._cached_funnel_rows", lambda **kwargs: (
+        fake_get_source_cache(7, "rnp_funnel_v2_2026-06-01_2026-06-07")["rows"], "hit", [],
+    ))
 
     snapshot = build_rnp_snapshot(
         date_from=date(2026, 6, 1),
@@ -93,7 +104,7 @@ def test_build_rnp_snapshot_merges_cached_sales_funnel_with_ads(monkeypatch):
     assert snapshot.rows[0].tacooPct == 1.0
     assert snapshot.rows[0].organicEstimate is True
     assert "estimated_organic" in snapshot.rows[0].reasons
-    assert "rnp_report_v4_2026-06-01_2026-06-07_sku" in saved_payloads
+    assert "rnp_report_v5_2026-06-01_2026-06-07_sku" in saved_payloads
 
 
 def test_build_rnp_snapshot_reads_ad_prefixed_metrics_from_period_cache(monkeypatch):
@@ -157,7 +168,7 @@ def test_build_rnp_snapshot_reads_report_cache_without_refetching_wb(monkeypatch
     ).model_dump(mode="json")
 
     def fake_get_source_cache(_organization_id: int, source_key: str, slim: bool = True):
-        if source_key == "rnp_report_v4_2026-06-01_2026-06-07_sku":
+        if source_key == "rnp_report_v5_2026-06-01_2026-06-07_sku":
             return {
                 "rows": [cached_row],
                 "sourceStatus": "partial",
@@ -322,8 +333,8 @@ def test_build_rnp_snapshot_does_not_create_ads_only_rows_when_funnel_is_blocked
     saved_payloads: dict[str, dict] = {}
 
     monkeypatch.setattr("app.wb_api.rnp_runtime.get_source_cache", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("app.wb_api.rnp_runtime._load_or_refresh_funnel_rows", fake_load_or_refresh_funnel_rows)
-    monkeypatch.setattr("app.wb_api.rnp_runtime.build_ads_attribution_snapshot", fake_ads_snapshot)
+    monkeypatch.setattr("app.wb_api.rnp_runtime._cached_funnel_rows", fake_load_or_refresh_funnel_rows)
+    _install_cached_ads(monkeypatch, fake_ads_snapshot)
     monkeypatch.setattr(
         "app.wb_api.rnp_runtime.save_source_cache",
         lambda _organization_id, source_key, payload: saved_payloads.setdefault(source_key, payload),
@@ -346,7 +357,7 @@ def test_build_rnp_snapshot_does_not_create_ads_only_rows_when_funnel_is_blocked
     assert snapshot.diagnostics["summary"]["adsOnlySkuCount"] == 0
     assert snapshot.diagnostics["sources"][0]["status"] == "blocked"
     assert "WB_SALES_FUNNEL_FAILED:429" in snapshot.diagnostics["sources"][0]["errors"][0]
-    payload = saved_payloads["rnp_report_v4_2026-06-01_2026-07-01_sku"]
+    payload = saved_payloads["rnp_report_v5_2026-06-01_2026-07-01_sku"]
     assert payload["rows"] == []
 
 
@@ -445,7 +456,10 @@ def test_build_rnp_snapshot_does_not_block_funnel_on_optional_warehouse_snapshot
 
     monkeypatch.setattr("app.wb_api.rnp_runtime.get_source_cache", fake_get_source_cache)
     monkeypatch.setattr("app.wb_api.rnp_runtime.save_source_cache", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr("app.wb_api.rnp_runtime.build_ads_attribution_snapshot", fake_ads_snapshot)
+    _install_cached_ads(monkeypatch, fake_ads_snapshot)
+    monkeypatch.setattr("app.wb_api.rnp_runtime._cached_funnel_rows", lambda **kwargs: (
+        fake_get_source_cache(7, "rnp_funnel_v2_2026-06-01_2026-06-07")["rows"], "hit", [],
+    ))
     snapshot = build_rnp_snapshot(
         date_from=date(2026, 6, 1),
         date_to=date(2026, 6, 7),
