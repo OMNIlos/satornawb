@@ -93,6 +93,8 @@ Use actual broad owner default grants before upgrading0062→0063 in own disposa
 
 Actual runtime script now requires0063 objects: give existing Orders integration tests a latest-head fixture for script tests while retaining registered0062 candidate tests/roundtrips. Do not weaken guard/assertions, copy old script or addskip. Test Orders assertions and Review ACLs together under actualscript.
 
+Review graph checks one actual head and registered0063 in its ancestry, not a frozenhead literal. Review feature upgrade→downgrade→upgrade targets0063 explicitly, including version-preservation assertions; actual runtime-script fixture alone follows head. This preserves the same bounded-feature/latest-script separation when later independent migrations arrive.
+
 - [ ] **Step 5: Run GREEN, compile, graph and diff checks; self-review.**
 
 ```sh
