@@ -75,4 +75,25 @@ including migration, RLS, contention, ACL and rollback checks (145.64 seconds,
 natural exit 0). Network was denied except the local Unix PostgreSQL socket.
 Independent DDL/ACL/Catalog review found no blocker. This releases the schema
 prerequisite to T3; application authorization/publication and actual repository
-and API acceptance are still required. Formatting-only lint followup is pending.
+and API acceptance are still required. Formatting-only followups through
+`1514425516d5f24b53e5956912e93da1e2682ede` passed scoped Ruff independently.
+
+## User-initiated Orders authorization decision
+
+This is a new local implementation decision within the requested architecture
+work, reviewed independently; it is not a claim about an earlier canonical
+policy or permission to activate production.
+
+- User-initiated synchronization/publication requires `sync:run`, following the
+  existing manual Avito return-sync and control-plane sync-run permission.
+  Orders service pins this requirement internally; HTTP input cannot choose it.
+- Preserve existing profile permissions plus explicit membership grants without
+  widening or silently narrowing profiles.
+- Publication and replay returns require fresh authorization in the same
+  transaction: user/session/membership, exact account scope and credential
+  identity/generation. Authorization at enqueue time alone is insufficient.
+- Persisted reads require `cabinet:read` and live user/session/membership/account
+  authorization, including cursor access. Reading historical snapshots alone
+  does not require decrypting or possessing an active marketplace credential.
+- Worker delegation is a separate contract; no fabricated admin principal or
+  implicit worker authorization is allowed.
