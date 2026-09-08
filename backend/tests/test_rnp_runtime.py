@@ -372,18 +372,15 @@ def test_build_rnp_snapshot_keeps_ads_metrics_unknown_when_ads_source_is_partial
         return payload
 
     def fake_ads_snapshot(**kwargs):
-        return AdsAttributionSnapshot(
-            source_status="partial",
-            confidence="low",
-            blocker_ids=["WB-02"],
-            source_evidence=[],
-            totals={},
-            rows=[],
-        )
+        return [], {}, "partial", "low", ["WB-02"], {}
 
     monkeypatch.setattr("app.wb_api.rnp_runtime.get_source_cache", fake_get_source_cache)
     monkeypatch.setattr("app.wb_api.rnp_runtime.save_source_cache", fake_save_source_cache)
-    monkeypatch.setattr("app.wb_api.rnp_runtime.build_ads_attribution_snapshot", fake_ads_snapshot)
+    monkeypatch.setattr("app.wb_api.rnp_runtime._cached_ads_rows", fake_ads_snapshot)
+    monkeypatch.setattr(
+        "app.wb_api.rnp_runtime._cached_funnel_rows",
+        lambda **kwargs: (fake_get_source_cache(7, "rnp_funnel_v2_2026-06-01_2026-06-07")["rows"], "hit", []),
+    )
 
     snapshot = build_rnp_snapshot(
         date_from=date(2026, 6, 1),
