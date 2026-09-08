@@ -13,6 +13,8 @@ BEGIN
             ('catalog_skus'),
             ('iam_memberships'),
             ('marketplace_accounts'),
+            ('marketplace_account_credentials'),
+            ('marketplace_account_ingestion_tokens'),
             ('marketplace_offers'),
             ('marketplace_products'),
             ('organization_economics_versions'),
