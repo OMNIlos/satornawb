@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { AuthContext, type AuthContextValue } from '@/features/auth/authContext'
+import { AbcKpiStripIsland, installAbcLiveDataBridge } from '@/features/vella-parity/VellaHtmlParityPage'
 
 import {
   adaptCanonicalAbcReport,
@@ -12,6 +16,126 @@ import {
   shouldUseCanonicalAbcPnl,
 } from './canonicalAbcPnl'
 import { ApiError } from '@/lib/api'
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+})
+
+function installBridgeWindow() {
+  vi.stubGlobal('window', Object.assign(new EventTarget(), {
+    location: { pathname: '/wb/reports/abc', search: '', origin: 'http://localhost' },
+    localStorage: { getItem: () => null, setItem: () => undefined },
+    setTimeout: (callback: () => void) => { callback(); return 0 },
+    __vellaReportPeriods: {
+      abc: { days: 7, fromIso: '2026-09-01', toIso: '2026-09-07', label: '7 дней', mode: 'custom' },
+    },
+    __vellaPublishAbcRowsSnapshot: () => undefined,
+  }))
+}
+
+function jsonResponse(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })
+}
+
+describe('canonical ABC bridge lifecycle', () => {
+  it.each(['session', 'account', 'period'] as const)('hides old ABC KPI on the first %s render before bridge effects', async (changed) => {
+    installBridgeWindow()
+    vi.stubEnv('VITE_CANONICAL_WB_ABC_PNL_ROLLOUT', '7:31,8:32')
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(page())))
+    const token = `render-test-${changed}`
+    installAbcLiveDataBridge(token, { organizationId: 7, marketplaceAccountId: 31 })
+    await window.__vellaLoadLiveAbcReport?.()
+    function render(accessToken: string, organizationId: number) {
+      // Only the read-only auth fields used by this island are needed for SSR.
+      const auth = { accessToken, cabinetMe: { organization: { organizationId } } } as AuthContextValue
+      return renderToStaticMarkup(createElement(AuthContext.Provider, { value: auth },
+        createElement(AbcKpiStripIsland, { replacementKey: 'scope-test' })))
+    }
+    const previous = render(token, 7)
+    expect(previous).toContain('1 208 ₽')
+    if (changed === 'period') window.__vellaReportPeriods!.abc!.fromIso = '2026-09-02'
+    const next = render(changed === 'session' ? 'new-session' : token, changed === 'account' ? 8 : 7)
+    expect(next).not.toContain('1 208 ₽')
+    expect(next).toBe('')
+  })
+
+  it('uses fresh cached data but refetches the same period after five minutes', async () => {
+    installBridgeWindow()
+    let now = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const request = vi.fn(async () => jsonResponse(page()))
+    vi.stubGlobal('fetch', request)
+    installAbcLiveDataBridge('ttl-test-token', { organizationId: 7, marketplaceAccountId: 31 })
+    await window.__vellaLoadLiveAbcReport?.()
+    now += 299_999
+    await window.__vellaLoadLiveAbcReport?.()
+    expect(request).toHaveBeenCalledTimes(1)
+    now += 1
+    await window.__vellaLoadLiveAbcReport?.()
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(window.__vellaAbcLiveError).toBeUndefined()
+  })
+
+  it.each([
+    ['401', () => jsonResponse({ detail: 'Unauthenticated' }, 401)],
+    ['403', () => jsonResponse({ detail: 'Forbidden' }, 403)],
+    ['429', () => jsonResponse({ detail: 'Rate limited' }, 429)],
+    ['503', () => jsonResponse({ detail: 'Unavailable' }, 503)],
+    ['HTML', () => new Response('<html>SPA shell</html>', { headers: { 'content-type': 'text/html' } })],
+    ['invalid JSON', () => new Response('{', { headers: { 'content-type': 'application/json' } })],
+    ['invalid contract', () => jsonResponse({ items: [] })],
+    ['network', () => { throw new TypeError('Failed to fetch') }],
+  ])('keeps %s failures explicit without legacy or demo fallback', async (label, response) => {
+    installBridgeWindow()
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const request = vi.fn(async (_input: RequestInfo | URL) => response())
+    vi.stubGlobal('fetch', request)
+    installAbcLiveDataBridge(`error-test-${label}`, { organizationId: 7, marketplaceAccountId: 31 })
+    await window.__vellaLoadLiveAbcReport?.()
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(String(request.mock.calls[0]?.[0])).toContain('/api/v2/wb/reports/abc-pnl?')
+    expect(window.__vellaAbcLiveRows).toEqual([])
+    expect(window.__vellaAbcLiveReport).toBeNull()
+    expect(window.__vellaAbcLiveLoading).toBe(false)
+    expect(window.__vellaAbcLiveError).toBeTruthy()
+    if (label === '401') expect(window.__vellaAbcLiveAuthExpired).toBe(true)
+    if (label === '403') expect(window.__vellaAbcLiveAccessDenied).toBe(true)
+  })
+
+  it.each(['account', 'period'] as const)('ignores a late %s response even when transport ignores abort', async (changed) => {
+    installBridgeWindow()
+    const resolvers: Array<(response: Response) => void> = []
+    const request = vi.fn(() => new Promise<Response>((resolve) => resolvers.push(resolve)))
+    vi.stubGlobal('fetch', request)
+    installAbcLiveDataBridge(`race-test-${changed}`, { organizationId: 7, marketplaceAccountId: 31 })
+    const oldLoad = window.__vellaLoadLiveAbcReport?.()
+    const next = page()
+    if (changed === 'account') {
+      next.meta.marketplaceAccountId = 32
+      installAbcLiveDataBridge(`race-test-${changed}`, { organizationId: 8, marketplaceAccountId: 32 })
+    } else {
+      window.__vellaReportPeriods!.abc!.fromIso = '2026-09-02'
+      next.meta.period.dateFrom = '2026-09-02'
+      next.meta.period.startAt = '2026-09-01T21:00:00Z'
+      next.meta.period.days = 6
+    }
+    const nextLoad = window.__vellaLoadLiveAbcReport?.()
+    expect(window.__vellaAbcLiveRows).toEqual([])
+    expect(window.__vellaAbcLiveLoading).toBe(true)
+    resolvers[1]!(jsonResponse(next))
+    await nextLoad
+    const currentReport = window.__vellaAbcLiveReport
+    expect(currentReport).not.toBeNull()
+    resolvers[0]!(jsonResponse(page()))
+    await oldLoad
+    expect(window.__vellaAbcLiveReport).toBe(currentReport)
+    expect(window.__vellaAbcLiveLoading).toBe(false)
+    expect(window.__vellaAbcLiveError).toBeUndefined()
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+})
 
 const row = {
   nmId: 453200669,
@@ -132,6 +256,9 @@ function page(state: 'ready' | 'partial' | 'future' | 'empty' | 'missing' = 'par
 }
 
 describe('canonical ABC/P&L rollout', () => {
+  it.each(['7:44,broken', 'broken,7:44', '7:44,7:45', '7:44,7:44', '7:4e1', '7:0x2c', '7:44,', '7:9007199254740993'])('fails closed for malformed or ambiguous rollout %s', (flag) => {
+    expect(resolveCanonicalAbcPnlRollout(7, flag)).toBeNull()
+  })
   it('is default-off and resolves an explicit organization/account mapping', () => {
     expect(resolveCanonicalAbcPnlRollout(7, '')).toBeNull()
     expect(resolveCanonicalAbcPnlRollout(7, ' 2:31, 7:44 ')).toEqual({ organizationId: 7, marketplaceAccountId: 44 })
@@ -168,6 +295,32 @@ describe('canonical ABC/P&L rollout', () => {
 })
 
 describe('canonical ABC/P&L contract', () => {
+  it.each([false, true])('rejects repeated financial identities across pages (changed row=%s)', async (changed) => {
+    const first = { ...page(), total: 2, limit: 1 }
+    const second = { ...first, offset: 1, items: [{ ...row, revenueKopecks: changed ? 0 : row.revenueKopecks }] }
+    await expect(fetchCanonicalAbcPnl({
+      accessToken: 'synthetic', marketplaceAccountId: 31,
+      period: { fromIso: '2026-09-01', toIso: '2026-09-07' }, pageSize: 1,
+      request: async (path) => path.includes('offset=0') ? first : second,
+    })).rejects.toMatchObject({ code: 'CANONICAL_PAGINATION_DRIFT' })
+  })
+
+  it('rejects an oversized page instead of accepting a broken pagination contract', async () => {
+    await expect(fetchCanonicalAbcPnl({
+      accessToken: 'synthetic', marketplaceAccountId: 31,
+      period: { fromIso: '2026-09-01', toIso: '2026-09-07' }, pageSize: 1,
+      request: async () => ({ ...page(), total: 2, limit: 1, items: [row, { ...row, nmId: 42 }] }),
+    })).rejects.toMatchObject({ code: 'CANONICAL_PAGINATION_DRIFT' })
+  })
+
+  it('does not publish a late response when transport ignores cancellation', async () => {
+    const controller = new AbortController()
+    await expect(fetchCanonicalAbcPnl({
+      accessToken: 'synthetic', marketplaceAccountId: 31,
+      period: { fromIso: '2026-09-01', toIso: '2026-09-07' }, signal: controller.signal,
+      request: async () => { controller.abort(); return page() },
+    })).rejects.toMatchObject({ name: 'AbortError' })
+  })
   it.each(['ready', 'partial', 'future', 'empty', 'missing'] as const)('preserves the %s source state', (state) => {
     expect(parseCanonicalAbcPnlPage(page(state)).meta.state).toBe(state)
   })
@@ -271,6 +424,54 @@ describe('canonical ABC/P&L contract', () => {
       pageSize: 1,
       request,
     })).rejects.toMatchObject({ code: 'CANONICAL_PAGINATION_DRIFT' })
+  })
+
+  it.each([
+    ['summary', { summary: { ...summary, revenueKopecks: 1 } }],
+    ['total', { total: 3 }],
+    ['repeated offset', { offset: 0 }],
+    ['stalled page', { items: [] }],
+    ['snapshot', { meta: { ...page().meta, advertisingSnapshotChecksum: 'different' } }],
+    ['cost revision', { meta: { ...page().meta, costLedgerRevision: 99 } }],
+    ['evidence', { meta: { ...page().meta, advertisingEvidenceStatus: 'aggregate_only' } }],
+    ['account', { meta: { ...page().meta, marketplaceAccountId: 32 } }],
+  ])('rejects %s drift on a later page without returning partial rows', async (_label, override) => {
+    const first = { ...page(), total: 2, limit: 1 }
+    const second = { ...first, offset: 1, items: [{ ...row, nmId: 453200670 }], ...override }
+    const request = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second)
+    await expect(fetchCanonicalAbcPnl({
+      accessToken: 'token', marketplaceAccountId: 31,
+      period: { fromIso: '2026-09-01', toIso: '2026-09-07' }, pageSize: 1, request,
+    })).rejects.toMatchObject({ code: 'CANONICAL_PAGINATION_DRIFT' })
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
+  it('allows distinct nmIds with the same article and one unmapped bucket', async () => {
+    const items = [row, { ...row, nmId: 453200670 }, { ...row, nmId: null }]
+    const result = await fetchCanonicalAbcPnl({
+      accessToken: 'token', marketplaceAccountId: 31,
+      period: { fromIso: '2026-09-01', toIso: '2026-09-07' },
+      request: vi.fn().mockResolvedValue({ ...page(), total: 3, items }),
+    })
+    expect(result.items).toHaveLength(3)
+  })
+
+  it('rejects an unknown formula instead of calculating a substitute in the UI', () => {
+    expect(() => parseCanonicalAbcPnlPage({ ...page(), meta: { ...page().meta, formulaVersion: 'v2' } })).toThrow(ApiError)
+  })
+
+  it('uses GET with bearer authorization and no mutation body through the real API client', async () => {
+    const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(page()))
+    vi.stubGlobal('fetch', request)
+    await fetchCanonicalAbcPnl({
+      accessToken: 'fake-read-token', marketplaceAccountId: 31,
+      period: { fromIso: '2026-09-01', toIso: '2026-09-07' },
+    })
+    const [url, init] = request.mock.calls[0]!
+    expect(String(url)).toContain('/api/v2/wb/reports/abc-pnl?')
+    expect(init?.method ?? 'GET').toBe('GET')
+    expect(init?.body).toBeUndefined()
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer fake-read-token')
   })
 
   it.each([

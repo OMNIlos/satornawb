@@ -2,7 +2,7 @@
 
 ## Scope
 
-Move the ABC and financial P&L frontend consumers to `GET /api/v2/wb/reports/abc-pnl` for explicitly allowlisted organizations only. Keep the legacy routes as the default and immediate rollback path. Do not change backend code or the final P&L formula.
+Move the ABC and financial P&L frontend consumers to `GET /api/v2/wb/reports/abc-pnl` for explicitly allowlisted organizations only. Keep the legacy routes as the default and a rollback path requiring a frontend rebuild/redeploy. Do not change backend code or the final P&L formula.
 
 ## Contract boundaries
 
@@ -24,4 +24,4 @@ Move the ABC and financial P&L frontend consumers to `GET /api/v2/wb/reports/abc
 
 ## Rollback
 
-Remove the organization from `VITE_CANONICAL_WB_ABC_PNL_ROLLOUT` (or leave the variable empty). The frontend immediately uses the existing legacy ABC/P&L consumers without a backend deploy.
+Remove the organization from `VITE_CANONICAL_WB_ABC_PNL_ROLLOUT` (or leave the variable empty) and redeploy the frontend build. The new frontend build uses the existing legacy ABC/P&L consumers; no backend deploy is required.

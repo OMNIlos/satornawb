@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useLocation } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, FileSpreadsheet, FolderPlus, Settings, Sparkles, Upload, X } from 'lucide-react'
 import QRCode from 'qrcode'
-import { useAuth } from '@/features/auth/authContext'
+import { AuthContext, useAuth } from '@/features/auth/authContext'
 import { authorizationHeaders, type PermissionProfile } from '@/features/auth/authApi'
 import { applyAuthProfileToParity, bindParityLogout } from '@/features/auth/parityBridge'
 import {
@@ -52,6 +52,7 @@ import {
   type PnlReportJobView,
 } from './pnlReportJob'
 import { shouldPollBackgroundReportJob } from './backgroundReportPolling'
+import { selectScopedReportState, type ScopedReportState } from './scopedReportState'
 import { avitoCooldownRemainingMs, avitoCooldownUntilFromPayload, formatAvitoRefreshCountdown } from './avitoCooldown'
 import { downloadAvitoOrdersPickingXlsx } from './avitoOrdersXlsx'
 import { clearVellaWindowProperty } from './windowGlobals'
@@ -5734,21 +5735,40 @@ function emitAbcLiveStateUpdated() {
   window.dispatchEvent(new CustomEvent('vella:abc-live-updated'))
 }
 
+function currentScopedAbcLiveState() {
+  return {
+    scope: JSON.stringify([abcReportMemoryToken, abcReportMemoryRolloutKey, window.__vellaAbcLiveRequestKey]),
+    state: currentAbcLiveState(),
+  }
+}
+
 function useAbcLiveState() {
-  const [state, setState] = useState<AbcLiveState>(currentAbcLiveState)
+  const auth = useContext(AuthContext)
+  const [published, setPublished] = useState(currentScopedAbcLiveState)
 
   useEffect(() => {
-    const refresh = () => setState(currentAbcLiveState())
+    const refresh = () => setPublished(currentScopedAbcLiveState())
     window.addEventListener('vella:abc-live-updated', refresh)
     window.addEventListener('vella:abc-rows-updated', refresh)
+    window.addEventListener(REPORT_PERIOD_EVENT, refresh)
     refresh()
     return () => {
       window.removeEventListener('vella:abc-live-updated', refresh)
       window.removeEventListener('vella:abc-rows-updated', refresh)
+      window.removeEventListener(REPORT_PERIOD_EVENT, refresh)
     }
   }, [])
 
-  return state
+  // Standalone legacy renderers have no auth provider. In the application,
+  // compare the selected scope during render, before the bridge's effect runs.
+  if (!auth) return published.state
+  const rollout = resolveCanonicalAbcPnlRollout(auth.cabinetMe?.organization.organizationId)
+  const rolloutKey = rollout ? `canonical:${rollout.organizationId}:${rollout.marketplaceAccountId}` : 'legacy'
+  const period = readReportPeriodState('abc')
+  const requestKey = `${rolloutKey}:${period.fromIso}:${period.toIso}:sku`
+  return selectScopedReportState<AbcLiveState>(JSON.stringify([auth.accessToken, rolloutKey, requestKey]), published, {
+    loading: true, report: null, rows: [], error: null, authExpired: false, accessDenied: false,
+  })
 }
 
 function abcBackendSummaryNumber(report: AbcBackendReport | null, key: string) {
@@ -5818,9 +5838,6 @@ export function installAbcLiveDataBridge(accessToken: string | null, canonicalRo
     if (!shouldLoadPeriodSurface(activeTab, 'abc')) return null
     const period = readReportPeriodState('abc')
     const requestKey = `${rolloutKey}:${period.fromIso}:${period.toIso}:sku`
-    if (window.__vellaAbcLiveRequestKey === requestKey && Array.isArray(window.__vellaAbcLiveRows) && window.__vellaAbcLiveReport) {
-      return window.__vellaAbcLiveRows
-    }
     const memoryEntry = abcReportMemoryCache.get(requestKey)
     if (memoryEntry && Date.now() - memoryEntry.cachedAt < ABC_REPORT_MEMORY_TTL_MS) {
       if (window.__vellaAbcLiveLoading && window.__vellaAbcLiveRequestKey !== requestKey) {
@@ -12696,7 +12713,7 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
   )
   const activeTab = useContext(ActiveParityTabContext)
   const pnlReportActive = shouldLoadPeriodSurface(activeTab, 'pnl')
-  const [state, setState] = useState<PnlLiveState>({ status: 'loading' })
+  const [publishedState, setPublishedState] = useState<ScopedReportState<PnlLiveState> | null>(null)
   const [periodState, setPeriodState] = useState(() => readReportPeriodState('pnl'))
   // 1C is out of scope and disabled on the backend, so the operational P&L has
   // no source of data and only ever renders its "ждём 1С" placeholder.  Open on
@@ -12707,6 +12724,12 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
   const pnlSource: BackgroundReportSource = pnlMode === 'operational' ? 'operational' : 'financial'
   const isOperationalPnl = pnlMode === 'operational'
   const canonicalPnlEnabled = shouldUseCanonicalAbcPnl(canonicalRollout, 'pnl', pnlMode)
+  // Session material stays in component memory only; never log or persist this key.
+  const requestScope = JSON.stringify([
+    accessToken, cabinetMe?.organization.organizationId, canonicalRollout?.marketplaceAccountId,
+    canonicalPnlEnabled, periodFromIso, periodToIso, pnlSource,
+  ])
+  const state = selectScopedReportState<PnlLiveState>(requestScope, publishedState, { status: 'loading' })
   const operationalCashFlowReady = isOperationalPnl && state.status === 'ready' && state.report.cashFlow?.status === 'ready'
   const operationalWaitingJob = state.status === 'ready'
     ? describePnlReportJob(state.report.reportJob ?? { state: operationalCashFlowReady ? 'completed' : 'waiting_1c', stage: operationalCashFlowReady ? 'completed' : 'waiting_1c', label: operationalCashFlowReady ? '1С ДДС готова' : 'Ждём 1С ДДС', percent: operationalCashFlowReady ? 100 : 20 })
@@ -12736,6 +12759,9 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
     const controller = new AbortController()
 
     async function loadPnlReportCache() {
+      const setState = (next: PnlLiveState) => {
+        if (!cancelled) setPublishedState({ scope: requestScope, state: next })
+      }
       if (!accessToken) {
         setState({ status: 'error', message: 'Сессия истекла. Войдите снова, чтобы открыть P&L.' })
         return
@@ -12773,7 +12799,7 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       cancelled = true
       controller.abort()
     }
-  }, [accessToken, canonicalPnlEnabled, canonicalRollout, periodFromIso, periodToIso, pnlReportActive, pnlSource])
+  }, [accessToken, canonicalPnlEnabled, canonicalRollout, periodFromIso, periodToIso, pnlReportActive, pnlSource, requestScope])
 
   useEffect(() => {
     const render = (event: Event) => {
@@ -13049,10 +13075,7 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       <PnlToolbarIsland
         replacementKey={`${replacementKey}-toolbar`}
         mode={pnlMode}
-        onModeChange={(mode) => {
-          setPnlMode(mode)
-          setState({ status: 'loading' })
-        }}
+        onModeChange={setPnlMode}
       />
       <PnlLiveSourceStripIsland replacementKey={`${replacementKey}-source`} state={state} period={periodState} source={pnlSource} />
       {isOperationalPnl ? (

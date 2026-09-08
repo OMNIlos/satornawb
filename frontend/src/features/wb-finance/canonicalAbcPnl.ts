@@ -186,17 +186,20 @@ export function resolveCanonicalAbcPnlRollout(
   organizationId: number | null | undefined,
   rawFlag = import.meta.env.VITE_CANONICAL_WB_ABC_PNL_ROLLOUT ?? '',
 ): CanonicalAbcPnlRollout | null {
-  if (!Number.isInteger(organizationId) || Number(organizationId) <= 0) return null
+  if (!Number.isSafeInteger(organizationId) || Number(organizationId) <= 0 || !rawFlag.trim()) return null
+  const mappings = new Map<number, number>()
   for (const entry of rawFlag.split(',')) {
-    const [rawOrganizationId, rawMarketplaceAccountId, ...extra] = entry.trim().split(':')
-    if (extra.length > 0) continue
+    const match = /^([1-9]\d*):([1-9]\d*)$/.exec(entry.trim())
+    if (!match) return null
+    const [, rawOrganizationId, rawMarketplaceAccountId] = match
     const candidateOrganizationId = Number(rawOrganizationId)
     const marketplaceAccountId = Number(rawMarketplaceAccountId)
-    if (!Number.isInteger(candidateOrganizationId) || candidateOrganizationId <= 0) continue
-    if (!Number.isInteger(marketplaceAccountId) || marketplaceAccountId <= 0) continue
-    if (candidateOrganizationId === organizationId) return { organizationId: candidateOrganizationId, marketplaceAccountId }
+    if (!Number.isSafeInteger(candidateOrganizationId) || !Number.isSafeInteger(marketplaceAccountId)) return null
+    if (mappings.has(candidateOrganizationId)) return null
+    mappings.set(candidateOrganizationId, marketplaceAccountId)
   }
-  return null
+  const marketplaceAccountId = mappings.get(organizationId as number)
+  return marketplaceAccountId === undefined ? null : { organizationId: organizationId as number, marketplaceAccountId }
 }
 
 export function buildCanonicalAbcPnlPath(input: {
@@ -244,10 +247,13 @@ export async function fetchCanonicalAbcPnl(input: {
   const request = input.request ?? apiRequest
   const pageSize = Math.min(500, Math.max(1, Math.trunc(input.pageSize ?? 500)))
   const pages: CanonicalAbcPnlPage[] = []
+  // Canonical finance groups rows by nmId, including one nullable unknown bucket.
+  const seenNmIds = new Set<number | null>()
   let offset = 0
   let identity: string | null = null
 
   while (pages.length === 0 || offset < pages[0].total) {
+    input.signal?.throwIfAborted()
     const path = buildCanonicalAbcPnlPath({
       marketplaceAccountId: input.marketplaceAccountId,
       period: input.period,
@@ -258,6 +264,7 @@ export async function fetchCanonicalAbcPnl(input: {
       signal: input.signal,
       headers: { Authorization: `Bearer ${input.accessToken}` },
     })
+    input.signal?.throwIfAborted()
     const page = parseCanonicalAbcPnlPage(payload)
     const periodMatchesRequest = page.meta.period.dateFrom === input.period.fromIso
       && page.meta.period.dateTo === input.period.toIso
@@ -266,6 +273,7 @@ export async function fetchCanonicalAbcPnl(input: {
       || page.limit !== pageSize
       || page.meta.marketplaceAccountId !== input.marketplaceAccountId
       || !periodMatchesRequest
+      || page.items.length > pageSize
     ) {
       throw new ApiError('Canonical ABC/P&L pagination drift', 409, 'CANONICAL_PAGINATION_DRIFT')
     }
@@ -274,6 +282,12 @@ export async function fetchCanonicalAbcPnl(input: {
       throw new ApiError('Canonical ABC/P&L pagination drift', 409, 'CANONICAL_PAGINATION_DRIFT')
     }
     identity = currentIdentity
+    for (const item of page.items) {
+      if (seenNmIds.has(item.nmId)) {
+        throw new ApiError('Canonical ABC/P&L duplicate row', 409, 'CANONICAL_PAGINATION_DRIFT')
+      }
+      seenNmIds.add(item.nmId)
+    }
     pages.push(page)
     if (page.items.length === 0) {
       if (offset < page.total) throw new ApiError('Canonical ABC/P&L pagination stalled', 409, 'CANONICAL_PAGINATION_DRIFT')
