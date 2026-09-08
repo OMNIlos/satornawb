@@ -8,7 +8,7 @@ from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.modules.orders import OrderContractValidationError
+from app.modules.orders import ExternalOrderIdentity, OrderContractValidationError
 from app.orders.contracts import AccountCoverage, OrderReadPage, OrderReadRow
 from app.orders.ingestion import _integer
 from app.orders.serialization import (
@@ -54,6 +54,8 @@ class OrdersSnapshotRepository:
         coverage: tuple[AccountCoverage, ...],
         high_water_mark: str,
         query_checksum: str,
+        *,
+        parent_versions: dict[ExternalOrderIdentity, int],
     ) -> int:
         self._prepare(query_checksum)
         if type(coverage) is not tuple or any(
@@ -85,6 +87,12 @@ class OrdersSnapshotRepository:
             None,
             coverage,
         )
+        if type(parent_versions) is not dict or set(parent_versions) != {
+            row.observation.identity for row in rows
+        }:
+            raise OrderContractValidationError("Snapshot parent version scope differs")
+        for version in parent_versions.values():
+            _integer(version)
         bound = []
         # Lock the concrete projections in a deterministic identity order before freezing.
         ordered = sorted(
@@ -109,6 +117,7 @@ class OrdersSnapshotRepository:
             record = (
                 self.session.execute(
                     text("""SELECT i.order_id,i.order_item_id,i.version,i.quantity,
+                o.version AS parent_version,o.raw_status,o.canonical_status,o.mapping_state,o.mapping_version,
                 i.external_item_id,i.occurrence_index,i.resolution_state,i.resolution_version,
                 i.marketplace_product_id,i.marketplace_offer_id,i.catalog_sku_id,
                 e.observation_id,e.normalized_evidence
@@ -164,6 +173,21 @@ class OrdersSnapshotRepository:
                 raise OrderContractValidationError(
                     "Snapshot observation binding changed"
                 )
+            status = row.observation.status
+            if (
+                record["parent_version"],
+                record["raw_status"],
+                record["canonical_status"],
+                record["mapping_state"],
+                record["mapping_version"],
+            ) != (
+                parent_versions[identity],
+                status.raw_status,
+                status.canonical_status,
+                status.mapping_state,
+                status.mapping_version,
+            ):
+                raise OrderContractValidationError("Snapshot parent projection changed")
             bound.append((row, record))
         encoded_coverage = json.dumps(
             [asdict(value) for value in coverage],
