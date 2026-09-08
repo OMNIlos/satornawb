@@ -44,3 +44,25 @@ remains. The generic unmatched-route behavior is outside this removal slice.
 No need for a new backend marking contract is inferred. Historical documentation
 and source evidence are retained. This slice is not a claim that every marking
 reference has been removed.
+
+## Follow-up: independent copy and prototype navigation
+
+Removed the marking module from the prototype production user's displayed module
+list, the invented marking prerequisite from a prototype order notification,
+and the two static repricer marking counters/navigation sections. The removed
+sections contained no other entries. Account IDs, dangerous permissions, price
+controls and other notification restrictions are unchanged. `blockedActions` is
+descriptive UI content here, not a print execution policy.
+
+Four new real projection/SSR cases reproduced failures before the change;
+combined settings/notifications/repricer/navigation/print-list tests: 26 pass.
+Independent scoped review: PASS, no important findings.
+Direct typecheck and Git diff checks after this follow-up: exit 0.
+
+Shared HTML dependency discovery: `ordersIsProblemStatus` includes the historical
+`missing_honest_sign` state and affects problem/ready filtering. `honestSign` also
+participates in manual/edit fields, drawer external-code display and the sticker
+code fallback. It is not proven to be a backend execution gate. These are not
+safe targets for blind string deletion or automatic status conversion. Preserve
+historical fields/data and barcode fallback until a compatibility-tested removal
+of exposed controls is implemented. No additional marking service is required.
