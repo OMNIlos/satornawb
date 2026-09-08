@@ -14,8 +14,27 @@ from app.platform.catalog.orm import MarketplaceOfferRow, MarketplaceProductRow
 from tests import test_orders_schema_candidate as candidate
 
 cluster = candidate.cluster
-db = candidate.db
 MUTABLE = {"order_sync_runs", "marketplace_orders", "marketplace_order_items"}
+
+
+@pytest.fixture(scope="module")
+def db(cluster):
+    """Actual shared grant script uses latest schema; Orders feature stays 0062."""
+    role = "orders_script_" + uuid4().hex
+    with candidate.disposable_database(cluster, (role,)) as database:
+        result = candidate.migrate(database.url, "upgrade", "head")
+        assert result.returncode == 0, result.stderr
+        owner = create_engine(database.url)
+        runtime = create_engine(owner.url.set(username=role))
+        try:
+            with owner.begin() as c:
+                c.exec_driver_sql("INSERT INTO lk_organizations(organization_id,slug,name) VALUES (91001,'orders-script-one','Synthetic'),(91002,'orders-script-two','Synthetic')")
+                c.exec_driver_sql("""INSERT INTO marketplace_accounts(marketplace_account_id,organization_id,marketplace,external_account_id,status)
+                    VALUES (91101,91001,'avito','synthetic-a','connected'),(91102,91001,'avito','synthetic-b','connected'),(91201,91002,'wb','synthetic-c','connected')""")
+            yield owner, runtime
+        finally:
+            runtime.dispose()
+            owner.dispose()
 
 
 def runtime_script(owner, role, *, fail_after_broad=False):
