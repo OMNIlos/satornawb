@@ -85,7 +85,9 @@ function extractErrorHeaders(response: Response) {
 }
 
 async function parseResponse<T>(response: Response) {
-  const isJson = response.headers.get('content-type')?.includes('application/json')
+  const mediaType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+  const isJson = mediaType === 'application/json' || mediaType.endsWith('+json')
+  if (response.ok && (response.status === 204 || response.status === 205)) return null as T
   const payload = isJson ? ((await response.json()) as T) : null
   if (!response.ok) {
     const errorPayload = payload as {
@@ -97,6 +99,15 @@ async function parseResponse<T>(response: Response) {
       response.status,
       errorPayload?.error?.code ?? errorPayload?.detail?.code,
       errorPayload?.error?.details ?? errorPayload?.detail?.details,
+      extractErrorHeaders(response),
+    )
+  }
+  if (!isJson) {
+    throw new ApiError(
+      'API returned a successful non-JSON response',
+      502,
+      'INVALID_API_RESPONSE',
+      { contentType: response.headers.get('content-type') },
       extractErrorHeaders(response),
     )
   }
