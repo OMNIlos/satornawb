@@ -13,6 +13,18 @@ from app.modules.wb_price_snapshots import (
 NOW=datetime(2026,9,9,tzinfo=UTC)
 
 
+@pytest.mark.parametrize("exponent", [b"99999999999999999999999", b"-99999999999999999999999"])
+def test_decimal_decoder_extreme_exponent_is_a_safe_rejected_page(exponent):
+    raw = (b'{"data":{"listGoods":[{"nmID":101,"sizes":[{"sizeID":201,"price":1e'
+           + exponent + b'}]}]}}')
+    with pytest.raises(PriceSourceValidationError) as caught:
+        parse_goods_price_page(raw, organization_id=7, marketplace_account_id=42,
+                               offset=0, limit=2, received_at=NOW, request_checksum="a" * 64)
+    assert exponent.decode() not in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__
+
+
 def parse(goods,**kwargs):
     return parse_goods_price_page(json.dumps({"data":{"listGoods":goods}}).encode(),
                                   organization_id=7,marketplace_account_id=42,

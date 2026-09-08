@@ -58,3 +58,12 @@ python -m pytest -q -p tests.repricer_offline_plugin tests/test_wb_canonical_pri
 
 Python: local wave1-integration/backend/.venv; Ruff:
 `/tmp/satorna-backend-verify-20260908/bin/python -m ruff`.
+# Decoder correction — 2026-09-09
+
+Root independent review reproduced Decimal.InvalidOperation for syntactically valid
+JSON numeric tokens with positive/negative exponent beyond Decimal implementation
+range. Two regression cases failed before the fix (54 original cases passed).
+The raw decode boundary now translates DecimalException to PriceSourceValidationError
+with suppressed context, alongside existing JSON/UTF-8 errors. No coercion, rounding
+or payload reflection. Fresh parser56 plus root synthetic16 =72PASS; Ruff/compileall/
+diff0. This is separate from approval Unicode227PASS and not a DB acceptance claim.

@@ -12,7 +12,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from typing import Literal
 
 
@@ -187,7 +187,7 @@ def parse_goods_price_page(
     try:
         payload = json.loads(raw_json.decode("utf-8"), parse_float=Decimal,
                              parse_constant=_invalid_constant, object_pairs_hook=_unique_object)
-    except (ValueError, UnicodeError):
+    except (ValueError, UnicodeError, DecimalException):
         raise PriceSourceValidationError("invalid source JSON") from None
     if (not isinstance(payload, dict) or not isinstance(payload.get("data"), dict)
             or not isinstance(payload["data"].get("listGoods"), list)):
