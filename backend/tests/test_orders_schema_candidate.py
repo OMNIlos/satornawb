@@ -1,8 +1,10 @@
-"""Execute unregistered SQL only in fresh test databases; never use application URLs."""
+"""Exercise the active Orders revision only in fresh disposable PostgreSQL databases."""
 # Separate contexts expose the transaction commit boundary under assertion.
 # ruff: noqa: SIM117
 
 import getpass
+from contextlib import contextmanager
+from types import SimpleNamespace
 import os
 import shutil
 import socket
@@ -15,6 +17,10 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
@@ -38,10 +44,22 @@ TABLES = (
 ROLE = "orders_candidate_runtime_" + uuid4().hex[:12]
 
 
-def test_candidate_is_available_but_does_not_register_a_revision():
-    assert (BUNDLE / "upgrade.sql").is_file(), "Orders schema candidate is missing"
-    assert (BUNDLE / "downgrade.sql").is_file()
-    assert not list((ROOT / "alembic/versions").glob("*orders*"))
+def orders_revision():
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+    return ScriptDirectory.from_config(config).get_revision("20260909_0062").module
+
+
+def run_revision(connection, action):
+    with Operations.context(MigrationContext.configure(connection)):
+        getattr(orders_revision(), action)()
+
+
+def test_candidate_is_embedded_in_actual_revision():
+    migration = orders_revision()
+    assert migration.UPGRADE_SQL == (BUNDLE / "upgrade.sql").read_text()
+    assert migration.DOWNGRADE_SQL == (BUNDLE / "downgrade.sql").read_text()
+    assert migration.down_revision == "20260908_0061"
 
 
 @pytest.fixture(scope="module")
@@ -75,113 +93,101 @@ def cluster(tmp_path_factory):
             "UTF8",
         ]
     )
-    run(
-        [
-            binaries["pg_ctl"],
-            "-D",
-            str(root / "data"),
-            "-l",
-            str(root / "server.log"),
-            "-o",
-            f"-p {port} -h 127.0.0.1 -k {root} -c fsync=off",
-            "-w",
-            "start",
-        ]
-    )
     try:
+        run(
+            [
+                binaries["pg_ctl"], "-D", str(root / "data"),
+                "-l", str(root / "server.log"),
+                "-o", f"-p {port} -h '' -k {root} -c fsync=off",
+                "-w", "start",
+            ]
+        )
         yield binaries, root, port, owner
     finally:
         run([binaries["pg_ctl"], "-D", str(root / "data"), "-m", "fast", "-w", "stop"])
 
 
-@pytest.fixture(scope="module")
-def db(cluster, request):
-    _binaries, root, port, owner = cluster
-    name = "orders_candidate_test_" + uuid4().hex
-    host = "/tmp" if root is None else "127.0.0.1"
-    # The CREATE DATABASE target is a random name owned by this fixture.
-    admin = psycopg.connect(
-        host=host, port=port, dbname="postgres", user=owner, autocommit=True
-    )
-    admin.execute(
-        psycopg.sql.SQL("CREATE DATABASE {}").format(psycopg.sql.Identifier(name))
+def isolated_environment():
+    environment = safe_environment()
+    environment.update(PGPASSFILE="/dev/null", PGSERVICEFILE="/dev/null", NETRC="/dev/null")
+    return environment
+
+
+def migrate(url, action, revision):
+    environment = isolated_environment()
+    environment["VELLA_DATABASE_URL"] = url
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", action, revision], cwd=ROOT,
+        env=environment, capture_output=True, text=True, timeout=60, check=False,
     )
 
-    def cleanup():
+
+@contextmanager
+def disposable_database(cluster, roles=()):
+    _, root, port, owner = cluster
+    name = "orders_test_" + uuid4().hex
+    host = "/tmp" if root is None else str(root)
+    admin = psycopg.connect(
+        host=host, port=port, dbname="postgres", user=owner, autocommit=True,
+        passfile="/dev/null",
+    )
+    attempted_db = False
+    attempted_roles = []
+    try:
+        assert admin.execute("SELECT inet_server_addr() IS NULL").fetchone() == (True,)
+        assert not admin.execute("SELECT 1 FROM pg_database WHERE datname=%s", (name,)).fetchone()
+        attempted_db = True
+        admin.execute(psycopg.sql.SQL("CREATE DATABASE {}").format(psycopg.sql.Identifier(name)))
+        for role in roles:
+            assert not admin.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (role,)).fetchone()
+            attempted_roles.append(role)
+            admin.execute(psycopg.sql.SQL(
+                "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+            ).format(psycopg.sql.Identifier(role)))
+        url = f"postgresql+psycopg://{owner}@/{name}?host={host}&port={port}"
+        yield SimpleNamespace(name=name, host=host, port=port, owner=owner, url=url, admin=admin)
+    finally:
         try:
-            admin.execute(
-                psycopg.sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
-                    psycopg.sql.Identifier(name)
-                )
-            )
-            admin.execute(
-                psycopg.sql.SQL("DROP ROLE IF EXISTS {}").format(
-                    psycopg.sql.Identifier(ROLE)
-                )
-            )
+            if attempted_db:
+                admin.execute(psycopg.sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                    psycopg.sql.Identifier(name)))
+            for role in reversed(attempted_roles):
+                admin.execute(psycopg.sql.SQL("DROP ROLE IF EXISTS {}").format(psycopg.sql.Identifier(role)))
+            assert not admin.execute("SELECT 1 FROM pg_database WHERE datname=%s", (name,)).fetchone()
+            for role in attempted_roles:
+                assert not admin.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (role,)).fetchone()
+            print(f"Orders cleanup verified: database={name}; roles={','.join(attempted_roles)}")
         finally:
             admin.close()
 
-    request.addfinalizer(cleanup)
-    url = (
-        f"postgresql+psycopg://{owner}@/{name}?host=/tmp"
-        if root is None
-        else f"postgresql+psycopg://{owner}@127.0.0.1:{port}/{name}"
-    )
-    environment = safe_environment()
-    environment["VELLA_DATABASE_URL"] = url
-    # Fresh process avoids cached application settings/inherited working DB URLs.
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        cwd=ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    engine = create_engine(url)
-    with engine.begin() as c:
-        c.exec_driver_sql(
-            f"CREATE ROLE {ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
-        )
-        c.exec_driver_sql(f"GRANT USAGE ON SCHEMA public TO {ROLE}")
-        c.exec_driver_sql(
-            f"ALTER DEFAULT PRIVILEGES GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON TABLES TO {ROLE}"
-        )
-        c.exec_driver_sql(
-            f"ALTER DEFAULT PRIVILEGES GRANT USAGE, SELECT ON SEQUENCES TO {ROLE}"
-        )
-        c.execute(text((BUNDLE / "upgrade.sql").read_text()))
-        c.execute(text((BUNDLE / "downgrade.sql").read_text()))
-        c.execute(text((BUNDLE / "upgrade.sql").read_text()))
-        # Simulate later broad runtime grants too: triggers still protect evidence.
-        c.exec_driver_sql(
-            f"GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO {ROLE}"
-        )
-        c.exec_driver_sql(
-            f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {ROLE}"
-        )
-        c.exec_driver_sql(
-            "INSERT INTO lk_organizations (organization_id, slug, name) VALUES (91001,'orders-one','Synthetic one'),(91002,'orders-two','Synthetic two')"
-        )
-        c.exec_driver_sql("""INSERT INTO marketplace_accounts
-          (marketplace_account_id, organization_id, marketplace, external_account_id, status)
-          VALUES (91101,91001,'avito','synthetic-a','connected'),
-                 (91102,91001,'avito','synthetic-b','connected'),
-                 (91201,91002,'wb','synthetic-c','connected')""")
-    runtime_url = (
-        f"postgresql+psycopg://{ROLE}@/{name}?host=/tmp"
-        if root is None
-        else f"postgresql+psycopg://{ROLE}@127.0.0.1:{port}/{name}"
-    )
-    runtime = create_engine(runtime_url)
-    try:
-        yield engine, runtime
-    finally:
-        runtime.dispose()
-        engine.dispose()
+
+@pytest.fixture(scope="module")
+def db(cluster):
+    with disposable_database(cluster, (ROLE,)) as database:
+        result = migrate(database.url, "upgrade", "20260909_0062")
+        assert result.returncode == 0, result.stderr
+        engine = create_engine(database.url)
+        runtime_url = f"postgresql+psycopg://{ROLE}@/{database.name}?host={database.host}&port={database.port}"
+        runtime = create_engine(runtime_url)
+        try:
+            with engine.begin() as c:
+                # Deliberately broad only in this isolated fixture: history triggers
+                # must remain a second defense independently of runtime ACLs.
+                c.exec_driver_sql(f"GRANT USAGE ON SCHEMA public TO {ROLE}")
+                c.exec_driver_sql(f"GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO {ROLE}")
+                c.exec_driver_sql(f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {ROLE}")
+                c.exec_driver_sql(
+                    "INSERT INTO lk_organizations (organization_id, slug, name) VALUES (91001,'orders-one','Synthetic one'),(91002,'orders-two','Synthetic two')"
+                )
+                c.exec_driver_sql("""INSERT INTO marketplace_accounts
+                  (marketplace_account_id, organization_id, marketplace, external_account_id, status)
+                  VALUES (91101,91001,'avito','synthetic-a','connected'),
+                         (91102,91001,'avito','synthetic-b','connected'),
+                         (91201,91002,'wb','synthetic-c','connected')""")
+            yield engine, runtime
+        finally:
+            runtime.dispose()
+            engine.dispose()
 
 
 def scope(c, org=91001):
@@ -347,13 +353,19 @@ def test_nonempty_downgrade_preserves_every_table(db):
     with runtime.begin() as c:
         scope(c)
         order(c)
-    with pytest.raises(DBAPIError, match="nonempty"), owner.begin() as c:
-        c.execute(text((BUNDLE / "downgrade.sql").read_text()))
+    with owner.connect() as c:
+        before = {table: c.exec_driver_sql(f"SELECT count(*) FROM {table}").scalar_one() for table in TABLES}
+    url = owner.url
+    # Keep the Unix path literal: Alembic Config treats percent-encoded / as interpolation.
+    result = migrate(f"postgresql+psycopg://{url.username}@/{url.database}?host={url.query['host']}&port={url.query['port']}", "downgrade", "20260908_0061")
+    assert result.returncode != 0 and "nonempty" in result.stderr
     with owner.connect() as c:
         assert all(
             c.execute(text("SELECT to_regclass(:name)"), {"name": table}).scalar_one()
             for table in TABLES
         )
+        assert c.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "20260909_0062"
+        assert {table: c.exec_driver_sql(f"SELECT count(*) FROM {table}").scalar_one() for table in TABLES} == before
 
 
 def test_concurrent_replay_uniqueness_uses_two_postgres_sessions(db):
@@ -629,17 +641,24 @@ def test_downgrade_fails_closed_for_nonbypass_owner_with_hidden_rows(db):
     with runtime.begin() as c:
         scope(c, 91002)
         order(c, 91201, 91002)
+    hidden_owner = "orders_hidden_" + uuid4().hex
+    with owner.connect() as c:
+        before = {table: c.exec_driver_sql(f"SELECT count(*) FROM {table}").scalar_one() for table in TABLES}
     with pytest.raises(DBAPIError, match="row-level security"):
         with owner.begin() as c:
             c.exec_driver_sql(
-                "CREATE ROLE orders_unprivileged_owner NOSUPERUSER NOBYPASSRLS"
+                f"CREATE ROLE {hidden_owner} NOSUPERUSER NOBYPASSRLS"
             )
             for table in TABLES:
                 c.exec_driver_sql(
-                    f"ALTER TABLE {table} OWNER TO orders_unprivileged_owner"
+                    f"ALTER TABLE {table} OWNER TO {hidden_owner}"
                 )
-            c.exec_driver_sql("SET LOCAL ROLE orders_unprivileged_owner")
-            c.execute(text((BUNDLE / "downgrade.sql").read_text()))
+            c.exec_driver_sql(f"SET LOCAL ROLE {hidden_owner}")
+            run_revision(c, "downgrade")
+    with owner.connect() as c:
+        assert c.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "20260909_0062"
+        assert {table: c.exec_driver_sql(f"SELECT count(*) FROM {table}").scalar_one() for table in TABLES} == before
+        assert c.execute(text("SELECT count(*) FROM pg_roles WHERE rolname=:role"), {"role": hidden_owner}).scalar_one() == 0
 
 
 def test_observation_source_must_match_run(db):
@@ -746,92 +765,15 @@ def test_snapshot_scope_cannot_contain_null_or_nonpositive_accounts(db, accounts
             )
 
 
-def test_candidate_roundtrip_in_temporary_single_head_alembic_tree(cluster, tmp_path):
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
-
-    _binaries, root, port, owner = cluster
-    host = "/tmp" if root is None else "127.0.0.1"
-    name = "orders_candidate_chain_" + uuid4().hex
-    admin = psycopg.connect(
-        host=host, port=port, dbname="postgres", user=owner, autocommit=True
-    )
-    admin.execute(
-        psycopg.sql.SQL("CREATE DATABASE {}").format(psycopg.sql.Identifier(name))
-    )
-    try:
-        # Copy only migration sources. The active checkout is never modified.
-        versions = tmp_path / "versions"
-        shutil.copytree(
-            ROOT / "alembic" / "versions",
-            versions,
-            ignore=shutil.ignore_patterns("__pycache__"),
-        )
-        config = Config(str(ROOT / "alembic.ini"))
-        config.set_main_option("script_location", str(ROOT / "alembic"))
-        config.set_main_option("version_locations", str(versions))
-        config.set_main_option("path_separator", "os")
-        head = ScriptDirectory.from_config(config).get_current_head()
-        assert head == "20260908_0061"
-        wrapper = "from alembic import op\nfrom sqlalchemy import text\nfrom pathlib import Path\n"
-        wrapper += f"revision='orders_candidate_test'\ndown_revision={head!r}\n"
-        wrapper += f"bundle=Path({str(BUNDLE)!r})\n"
-        wrapper += (
-            "def upgrade():\n    op.execute(text((bundle/'upgrade.sql').read_text()))\n"
-        )
-        wrapper += "def downgrade():\n    op.execute(text((bundle/'downgrade.sql').read_text()))\n"
-        (versions / "orders_candidate_test.py").write_text(wrapper)
-        assert ScriptDirectory.from_config(config).get_heads() == [
-            "orders_candidate_test"
-        ]
-        url = (
-            f"postgresql+psycopg://{owner}@/{name}?host=/tmp"
-            if root is None
-            else f"postgresql+psycopg://{owner}@127.0.0.1:{port}/{name}"
-        )
-        environment = safe_environment()
-        environment["VELLA_DATABASE_URL"] = url
-        script = f"""from alembic import command
-from alembic.config import Config
-c=Config({str(ROOT / "alembic.ini")!r})
-c.set_main_option('script_location',{str(ROOT / "alembic")!r})
-c.set_main_option('version_locations',{str(versions)!r})
-c.set_main_option('path_separator','os')
-command.upgrade(c,'head')
-command.downgrade(c,{head!r})
-command.upgrade(c,'head')
-"""
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=ROOT,
-            env=environment,
-            text=True,
-            capture_output=True,
-            timeout=60,
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr
-        engine = create_engine(url)
+def test_actual_single_head_alembic_roundtrip(cluster):
+    with disposable_database(cluster) as database:
+        for action, revision in [("upgrade", "20260909_0062"), ("downgrade", "20260908_0061"), ("upgrade", "20260909_0062")]:
+            result = migrate(database.url, action, revision)
+            assert result.returncode == 0, result.stderr
+        engine = create_engine(database.url)
         try:
             with engine.connect() as c:
-                assert (
-                    c.exec_driver_sql(
-                        "SELECT version_num FROM alembic_version"
-                    ).scalar_one()
-                    == "orders_candidate_test"
-                )
-                assert (
-                    c.exec_driver_sql(
-                        "SELECT count(*) FROM order_sync_runs"
-                    ).scalar_one()
-                    == 0
-                )
+                assert c.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == "20260909_0062"
+                assert c.exec_driver_sql("SELECT count(*) FROM order_sync_runs").scalar_one() == 0
         finally:
             engine.dispose()
-    finally:
-        admin.execute(
-            psycopg.sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
-                psycopg.sql.Identifier(name)
-            )
-        )
-        admin.close()
