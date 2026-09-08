@@ -28,7 +28,7 @@ Independent scoped review: PASS. The old URL now reaches the application's
 existing generic wildcard ComingSoon page, not a new 404; no KIZ-specific route
 remains. The generic unmatched-route behavior is outside this removal slice.
 
-## Remaining removal work, not declared completed
+## Remaining at the first slice (updated by the follow-ups below)
 
 - Settings prototype module label and Notifications prototype blocked-action copy.
 - Repricer prototype navigation counters and future marking gate.
@@ -84,3 +84,32 @@ PASS. Positive assertions retain the estimate/time/deadline rows, not proof of
 their numeric business formula. Shared HTML fields/statuses remain unchanged.
 Direct typecheck: exit 0. Full suite last recorded before this browser slice:
 274 passed / 26 failed; no new full-suite result is inferred from focused checks.
+
+## Avito picking column removal with loaded and filtered states
+
+The actual Avito consumer renders the picking table only when browser-snapshot
+metadata and rows are present. Empty initial SSR is not coverage of that branch;
+the exploratory SSR-only test was discarded without changing runtime behavior.
+
+The new browser fixture mounts the actual `AvitoOrdersIsland` with a synthetic
+auth context and intercepts the three existing read-only legacy endpoints on a
+reserved `.test` origin. The complete synthetic order response exercises the
+real fetch/effect/render path; it is not a new canonical endpoint or live backend.
+All non-GET, unexpected-path or other-origin requests are aborted and recorded.
+Only the order-page HTML and existing GET fixtures are fulfilled; printing,
+export, token rotation and return-sync actions are not clicked.
+
+RED failed specifically on the loaded table's marking header. Removed that
+header and the matching always-null cell; empty-state colspan changes 16 to 15.
+The test verifies all header/row column counts and existing job/quantity/sticker/
+barcode/Avito item positions, then types an unmatched search and verifies the
+empty row's colspan and message. Return matching and sticker callbacks are unchanged.
+The component gains only a named export for the browser fixture.
+
+Fresh focused set: 12 passed, including both actual-browser regressions. Direct
+typecheck and Git diff check: exit 0. No unexpected requests or page errors in the
+Avito fixture. Current remaining non-test source references are in shared HTML /
+generated snapshot and `vellaBackendContracts.ts`; their compatibility assessment
+remains separate, and no stored field or historical status was erased.
+Independent scoped review: PASS. These browser checks do not claim live backend
+authorization, complete account isolation, hosted parity or successful printing.

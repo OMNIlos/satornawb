@@ -21294,7 +21294,7 @@ function avitoPickingStatusClass(status: string) {
   return 'ok'
 }
 
-function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
+export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
   const location = useLocation()
   const { accessToken } = useAuth()
   const isAvitoOrdersRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'orders-avito'
@@ -21918,7 +21918,6 @@ function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: 
                     <th>Возврат</th>
                     <th>Стикер</th>
                     <th>Баркод</th>
-                    <th>КИЗ</th>
                     <th>QR/штрихкод Авито</th>
                     <th>Статус</th>
                   </tr>
@@ -21939,13 +21938,12 @@ function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: 
                       <td>{avitoOrderReturnBadge(item)}</td>
                       <td><button className="btn btn-default btn-sm" type="button" onClick={(event) => { event.stopPropagation(); openStickerDesigner({ key, order, item, index }) }}>Стикеры</button><span className="orders-picking-muted">{order.trackNumber || 'трек не указан'}</span></td>
                       <td>{avitoPickingCell(order.trackNumber)}</td>
-                      <td>{avitoPickingCell(null)}</td>
                       <td>{avitoPickingCell(item.itemId || order.trackNumber)}</td>
                       <td><span className={`orders-status ${avitoPickingStatusClass(order.status)}`}>{avitoOrderStatusLabel(order.status)}</span></td>
                     </tr>
                   )) : (
                     <tr className="avito-orders-empty-row">
-                      <td colSpan={16}>
+                      <td colSpan={15}>
                         {live.loading ? (
                           <AvitoDataState kind="loading" title="Загружаем лист подбора" subtitle="Собираем заказы и товары Авито." />
                         ) : sourceError ? (
