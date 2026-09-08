@@ -1,0 +1,82 @@
+{
+  "fixture": "synthetic-only",
+  "cases": {
+    "can_answer_true_numeric_id": {
+      "reviewId": 51001,
+      "itemId": 61001,
+      "createdAt": "2026-09-01T09:10:11+02:00",
+      "updatedAt": "2026-09-01T08:15:00Z",
+      "score": 4,
+      "text": "[TEST] Avito synthetic positive review",
+      "stage": "published",
+      "canAnswer": true,
+      "answer": null
+    },
+    "can_answer_false_string_id": {
+      "reviewId": "test-avito-review-shared-001",
+      "createdAt": "2026-09-02T07:00:00Z",
+      "score": 1,
+      "text": "[TEST] Avito synthetic critical review",
+      "stage": "moderating",
+      "canAnswer": false,
+      "answer": null
+    },
+    "can_answer_null": {
+      "reviewId": "test-avito-review-null-001",
+      "createdAt": "2026-09-03T07:00:00Z",
+      "canAnswer": null,
+      "answer": null
+    },
+    "answered": {
+      "reviewId": "test-avito-review-answered-001",
+      "itemId": "test-avito-item-001",
+      "createdAt": "2026-09-04T07:00:00Z",
+      "updatedAt": "2026-09-04T08:00:00Z",
+      "score": 3,
+      "text": "[TEST] Avito synthetic answered review",
+      "stage": "published",
+      "canAnswer": false,
+      "answer": {
+        "answerId": "test-avito-answer-001"
+      }
+    },
+    "updated_source_fact": {
+      "reviewId": "test-avito-review-shared-001",
+      "createdAt": "2026-09-02T07:00:00Z",
+      "updatedAt": "2026-09-05T11:00:00Z",
+      "score": 2,
+      "text": "[TEST] Avito synthetic updated critical review",
+      "stage": "published",
+      "canAnswer": false,
+      "answer": {
+        "answerId": "test-avito-answer-002"
+      },
+      "sourceSchemaVersion": "avito-review-row-v2"
+    }
+  },
+  "invalid": {
+    "float_id": {
+      "reviewId": 51001.5,
+      "createdAt": "2026-09-03T07:00:00Z"
+    },
+    "boolean_id": {
+      "reviewId": false,
+      "createdAt": "2026-09-03T07:00:00Z"
+    },
+    "exponent_id": {
+      "reviewId": "2E4",
+      "createdAt": "2026-09-03T07:00:00Z"
+    },
+    "invalid_rating": {
+      "reviewId": "test-avito-review-invalid-rating-001",
+      "createdAt": "2026-09-03T07:00:00Z",
+      "score": 9,
+      "text": "[TEST] Avito synthetic invalid rating review"
+    },
+    "malformed_timestamp": {
+      "reviewId": "test-avito-review-invalid-time-001",
+      "createdAt": "not-a-timestamp",
+      "text": "[TEST] Avito synthetic invalid timestamp review"
+    }
+  }
+}
