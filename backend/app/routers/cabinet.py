@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.orm import Session
 
 from app.cabinet.schemas import (
     AuditEventView,
     CabinetMeView,
     IntegrationUpsertRequest,
     IntegrationView,
+    MarketplaceCredentialStatusView,
+    MarketplaceCredentialWriteRequest,
     SessionBulkRevokeResponse,
     SessionView,
     TeamUserCreateRequest,
@@ -43,7 +46,36 @@ from app.cabinet.store import (
 )
 from app.config import get_settings
 from app.contracts.envelopes import DataEnvelope, PaginatedEnvelope
-from app.control_plane.auth import actor_from_request, has_permission, hash_password
+from app.control_plane.auth import (
+    ActorContext,
+    actor_from_request,
+    has_permission,
+    hash_password,
+)
+from app.infra.db import get_db_session
+from app.platform.integrations.access import (
+    MarketplaceAccountCredentialAccess,
+    get_marketplace_credential_actor,
+    require_marketplace_account_credential_access,
+    require_marketplace_credential_write,
+)
+from app.platform.integrations.credential_store import (
+    CredentialMetadata,
+    CredentialStoreError,
+    get_marketplace_credential_metadata,
+    put_marketplace_credential,
+    require_marketplace_credential_store_ready,
+    resolve_marketplace_credential,
+    revoke_marketplace_credential,
+)
+from app.platform.integrations.wb_credentials import (
+    WbCredentialBindingError,
+    fetch_wb_seller_id,
+)
+from app.security.marketplace_credentials import (
+    MAX_SECRET_FIELD_BYTES,
+    CredentialCryptoError,
+)
 
 
 router = APIRouter(tags=["cabinet"])
@@ -87,6 +119,156 @@ def _validate_avito_credentials_for_user_request(client_id: str, client_secret: 
         or any(char.isspace() for char in normalized_client_secret)
     ):
         raise HTTPException(status_code=400, detail="AVITO_CREDENTIALS_HAVE_WHITESPACE")
+
+
+def _credential_error(code: str) -> HTTPException:
+    if code == "credential_account_not_found":
+        status_code = 404
+    elif code in {
+        "credential_account_identity_mismatch",
+        "credential_auth_failed",
+        "credential_expired",
+    }:
+        status_code = 409
+    elif code in {
+        "credential_configuration_invalid",
+        "credential_persistence_failed",
+        "credential_key_unavailable",
+    }:
+        status_code = 503
+    elif code == "credential_missing":
+        status_code = 404
+    else:
+        status_code = 400
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": code},
+    )
+
+
+def _credential_access(
+    session: Session,
+    actor: ActorContext,
+    *,
+    marketplace_account_id: int,
+    provider: str,
+) -> MarketplaceAccountCredentialAccess:
+    require_marketplace_credential_write(actor)
+    return require_marketplace_account_credential_access(
+        session,
+        actor,
+        marketplace_account_id=marketplace_account_id,
+        provider=provider,
+    )
+
+
+def _require_user_managed_credential_kind(
+    provider: str,
+    credential_kind: str,
+) -> None:
+    if (provider, credential_kind) not in {
+        ("wb", "wb_api"),
+        ("avito", "avito_oauth_client"),
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "CREDENTIAL_KIND_UNSUPPORTED",
+                "message": "Credential kind is unsupported for this API",
+            },
+        )
+
+
+def _require_bounded_secret(value: str) -> None:
+    try:
+        size = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        size = MAX_SECRET_FIELD_BYTES + 1
+    if size > MAX_SECRET_FIELD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "CREDENTIAL_PAYLOAD_INVALID",
+                "message": "Credential payload is invalid",
+            },
+        )
+
+
+def _credential_payload(
+    provider: str,
+    credential_kind: str,
+    payload: MarketplaceCredentialWriteRequest,
+) -> dict[str, str]:
+    if provider == "wb" and credential_kind == "wb_api":
+        if (
+            payload.wbToken is None
+            or payload.clientId is not None
+            or payload.clientSecret is not None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "CREDENTIAL_PAYLOAD_INVALID",
+                    "message": "Credential payload does not match credential kind",
+                },
+            )
+        token = payload.wbToken.get_secret_value()
+        _require_bounded_secret(token)
+        _validate_wb_token_for_user_request(token)
+        return {"token": token}
+    if provider == "avito" and credential_kind == "avito_oauth_client":
+        if (
+            payload.wbToken is not None
+            or payload.clientId is None
+            or payload.clientSecret is None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "CREDENTIAL_PAYLOAD_INVALID",
+                    "message": "Credential payload does not match credential kind",
+                },
+            )
+        client_id = payload.clientId.get_secret_value()
+        client_secret = payload.clientSecret.get_secret_value()
+        _require_bounded_secret(client_id)
+        _require_bounded_secret(client_secret)
+        _validate_avito_credentials_for_user_request(client_id, client_secret)
+        return {"clientId": client_id, "clientSecret": client_secret}
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "code": "CREDENTIAL_KIND_UNSUPPORTED",
+            "message": "Credential kind is unsupported for this API",
+        },
+    )
+
+
+def _credential_status_view(
+    marketplace_account_id: int,
+    metadata: CredentialMetadata | None,
+) -> MarketplaceCredentialStatusView:
+    if metadata is None:
+        return MarketplaceCredentialStatusView(
+            marketplaceAccountId=marketplace_account_id,
+            status="missing",
+        )
+    if metadata.revoked_at is not None:
+        status = "revoked"
+    elif metadata.expires_at is not None and metadata.expires_at <= datetime.now(
+        timezone.utc
+    ):
+        status = "expired"
+    else:
+        status = "active"
+    return MarketplaceCredentialStatusView(
+        marketplaceAccountId=marketplace_account_id,
+        status=status,
+        createdAt=metadata.created_at,
+        updatedAt=metadata.updated_at,
+        expiresAt=metadata.expires_at,
+        revokedAt=metadata.revoked_at,
+    )
 
 
 @router.get("/api/v1/cabinet/me", response_model=DataEnvelope[CabinetMeView])
@@ -282,6 +464,127 @@ def delete_my_avito_credentials(request: Request) -> DataEnvelope[UserAvitoCrede
         user_agent=request.headers.get("user-agent"),
     )
     return DataEnvelope(data=cleared)
+
+
+@router.get(
+    "/api/v1/cabinet/marketplace-accounts/{marketplaceAccountId}/credentials/{provider}/{credentialKind}",
+    response_model=DataEnvelope[MarketplaceCredentialStatusView],
+)
+def get_marketplace_account_credential_status(
+    marketplaceAccountId: int,
+    provider: str,
+    credentialKind: str,
+    actor: ActorContext = Depends(get_marketplace_credential_actor),
+    session: Session = Depends(get_db_session),
+) -> DataEnvelope[MarketplaceCredentialStatusView]:
+    _require_user_managed_credential_kind(provider, credentialKind)
+    access = _credential_access(
+        session,
+        actor,
+        marketplace_account_id=marketplaceAccountId,
+        provider=provider,
+    )
+    try:
+        metadata = get_marketplace_credential_metadata(access.owner, credentialKind)
+        view = _credential_status_view(marketplaceAccountId, metadata)
+        if view.status == "active":
+            resolve_marketplace_credential(access.owner, credentialKind)
+    except (CredentialCryptoError, CredentialStoreError) as exc:
+        raise _credential_error(exc.code) from None
+    return DataEnvelope(data=view)
+
+
+@router.put(
+    "/api/v1/cabinet/marketplace-accounts/{marketplaceAccountId}/credentials/{provider}/{credentialKind}",
+    response_model=DataEnvelope[MarketplaceCredentialStatusView],
+)
+def put_marketplace_account_credential(
+    marketplaceAccountId: int,
+    provider: str,
+    credentialKind: str,
+    payload: MarketplaceCredentialWriteRequest,
+    actor: ActorContext = Depends(get_marketplace_credential_actor),
+    session: Session = Depends(get_db_session),
+) -> DataEnvelope[MarketplaceCredentialStatusView]:
+    _require_user_managed_credential_kind(provider, credentialKind)
+    access = _credential_access(
+        session,
+        actor,
+        marketplace_account_id=marketplaceAccountId,
+        provider=provider,
+    )
+    plaintext = _credential_payload(provider, credentialKind, payload)
+    try:
+        require_marketplace_credential_store_ready()
+    except (CredentialCryptoError, CredentialStoreError) as exc:
+        raise _credential_error(exc.code) from None
+    expected_external_account_id: str | None = None
+    if provider == "wb":
+        try:
+            seller_id = fetch_wb_seller_id(plaintext["token"])
+        except WbCredentialBindingError:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "WB_CREDENTIAL_IDENTITY_INVALID",
+                    "message": "WB credential identity could not be verified",
+                },
+            ) from None
+        if seller_id != access.external_account_id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "WB_SELLER_IDENTITY_MISMATCH",
+                    "message": "WB seller identity does not match marketplace account",
+                },
+            )
+        expected_external_account_id = seller_id
+    try:
+        metadata = put_marketplace_credential(
+            access.owner,
+            credentialKind,
+            plaintext,
+            actor_user_id=actor.user_id,
+            expected_external_account_id=expected_external_account_id,
+        )
+    except (CredentialCryptoError, CredentialStoreError) as exc:
+        raise _credential_error(exc.code) from None
+    return DataEnvelope(
+        data=_credential_status_view(marketplaceAccountId, metadata)
+    )
+
+
+@router.delete(
+    "/api/v1/cabinet/marketplace-accounts/{marketplaceAccountId}/credentials/{provider}/{credentialKind}",
+    response_model=DataEnvelope[MarketplaceCredentialStatusView],
+)
+def delete_marketplace_account_credential(
+    marketplaceAccountId: int,
+    provider: str,
+    credentialKind: str,
+    reasonCode: str = Query(default="operator_revoked"),
+    actor: ActorContext = Depends(get_marketplace_credential_actor),
+    session: Session = Depends(get_db_session),
+) -> DataEnvelope[MarketplaceCredentialStatusView]:
+    _require_user_managed_credential_kind(provider, credentialKind)
+    access = _credential_access(
+        session,
+        actor,
+        marketplace_account_id=marketplaceAccountId,
+        provider=provider,
+    )
+    try:
+        metadata = revoke_marketplace_credential(
+            access.owner,
+            credentialKind,
+            reasonCode,
+            actor_user_id=actor.user_id,
+        )
+    except (CredentialCryptoError, CredentialStoreError) as exc:
+        raise _credential_error(exc.code) from None
+    return DataEnvelope(
+        data=_credential_status_view(marketplaceAccountId, metadata)
+    )
 
 
 @router.get("/api/v1/cabinet/audit/events", response_model=PaginatedEnvelope[AuditEventView])

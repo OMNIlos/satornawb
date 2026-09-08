@@ -96,11 +96,19 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+        issues = [
+            {
+                key: value
+                for key, value in issue.items()
+                if key not in {"input", "ctx"}
+            }
+            for issue in exc.errors()
+        ]
         payload = ErrorEnvelope(
             error=ErrorEnvelopeItem(
                 code="VALIDATION_ERROR",
                 message="Request validation failed",
-                details={"issues": exc.errors()},
+                details={"issues": issues},
             )
         )
         return JSONResponse(status_code=422, content=payload.model_dump(mode="json"))
