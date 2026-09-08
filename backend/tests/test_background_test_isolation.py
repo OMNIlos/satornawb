@@ -13,7 +13,9 @@ LEGACY_TEST = (
     "tests/test_wb_repricer_bff.py::"
     "test_manual_cold_full_sync_enqueues_onboarding_task"
 )
-SAFE_MARKER = "INNER_STATUS=1 COLLECTED=1 FAILED=1 SENTINEL_REACHED=0"
+SAFE_MARKER = (
+    "INNER_STATUS=1 COLLECTED=1 FAILED=1 ERRORS=0 SENTINEL_REACHED=0"
+)
 
 
 def test_legacy_onboarding_case_fences_actual_background_entrypoint() -> None:
@@ -30,6 +32,7 @@ def test_legacy_onboarding_case_fences_actual_background_entrypoint() -> None:
         class RunSummary:
             collected = 0
             failed = 0
+            errors = 0
 
             def pytest_collection_finish(self, session):
                 self.collected = len(session.items)
@@ -37,6 +40,8 @@ def test_legacy_onboarding_case_fences_actual_background_entrypoint() -> None:
             def pytest_runtest_logreport(self, report):
                 if report.when == "call" and report.failed:
                     self.failed += 1
+                elif report.failed:
+                    self.errors += 1
 
         def safe_sentinel(*_args, **_kwargs):
             global sentinel_reached
@@ -51,7 +56,8 @@ def test_legacy_onboarding_case_fences_actual_background_entrypoint() -> None:
             )
         print(
             f"INNER_STATUS={{int(status)}} COLLECTED={{summary.collected}} "
-            f"FAILED={{summary.failed}} SENTINEL_REACHED={{int(sentinel_reached)}}"
+            f"FAILED={{summary.failed}} ERRORS={{summary.errors}} "
+            f"SENTINEL_REACHED={{int(sentinel_reached)}}"
         )
         """
     )
