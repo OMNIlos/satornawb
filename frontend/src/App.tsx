@@ -154,7 +154,6 @@ function RoutedApp() {
                 <Route path="/avito/wallets" element={<ComingSoon />} />
 
                 <Route path="/orders" element={<OrdersPrintListPage />} />
-                <Route path="/orders/kiz" element={<ComingSoon />} />
                 <Route path="/orders/returns" element={<ComingSoon />} />
 
                 <Route path="/help" element={<Navigate to="/wiki/wb-repricer" replace />} />
