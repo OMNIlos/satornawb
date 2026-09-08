@@ -1,25 +1,39 @@
-from dataclasses import FrozenInstanceError, replace
-from datetime import datetime, timedelta, timezone
-from hashlib import sha256
 import inspect
+from dataclasses import FrozenInstanceError, replace
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 
 import pytest
 
 from app.modules.wb_repricing import (
-    ApprovalConflictError, ApprovalStatus, ApprovalValidationError,
-    PriceApprovalSnapshot, SAFE_APPLY_ERROR_CODES, build_action_key, claim_approval,
-)
-from app.modules.wb_repricing_repository import (
-    ApprovalRepositoryScope, AuthenticatedApprovalActor, PriceApprovalRepository,
+    SAFE_APPLY_ERROR_CODES,
+    ApprovalConflictError,
+    ApprovalStatus,
+    ApprovalValidationError,
+    PriceApprovalSnapshot,
+    build_action_key,
+    claim_approval,
 )
 from app.modules.wb_repricing_dispatch import (
-    CanonicalApplyRequest, AttemptStatus, ApplyOutcome,
-    ApprovalAuditEvent, AuditKind, AuditActorKind,
-    bind_request, build_dispatch_key, reserve_attempt, mark_dispatched, finish_attempt,
+    ApplyOutcome,
+    ApprovalAuditEvent,
+    AttemptStatus,
+    AuditActorKind,
+    AuditKind,
+    CanonicalApplyRequest,
+    bind_request,
+    build_dispatch_key,
+    finish_attempt,
+    mark_dispatched,
+    reserve_attempt,
+)
+from app.modules.wb_repricing_repository import (
+    ApprovalRepositoryScope,
+    AuthenticatedApprovalActor,
+    PriceApprovalRepository,
 )
 
-
-NOW = datetime(2026, 9, 9, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 9, tzinfo=UTC)
 SCOPE = ApprovalRepositoryScope(7, 42, "approval-1")
 ACTOR = AuthenticatedApprovalActor(7, 314)
 ATTEMPT_ID = "12345678-1234-4234-8234-123456789abc"

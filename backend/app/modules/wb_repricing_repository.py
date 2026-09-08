@@ -14,7 +14,10 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from app.modules.wb_repricing_dispatch import (
-        ApplyAttempt, ApplyOutcome, AttemptResult, CanonicalApplyRequest,
+        ApplyAttempt,
+        ApplyOutcome,
+        AttemptResult,
+        CanonicalApplyRequest,
     )
 
 from app.modules.wb_repricing import (
@@ -22,7 +25,6 @@ from app.modules.wb_repricing import (
     ApprovalValidationError,
     PriceApprovalSnapshot,
 )
-
 
 UNRESOLVED_LEGACY_IDENTITY_BLOCKER = (
     "WB_REPRICER_APPROVAL_IDENTITY_UNRESOLVED"

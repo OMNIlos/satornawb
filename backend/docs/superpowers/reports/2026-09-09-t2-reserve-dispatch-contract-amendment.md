@@ -294,6 +294,11 @@ wave1-integration venv (`No module named ruff`), lint pass не заявляет
 Повторный independent critic: оба замечания закрыты, новых blockers для передачи
 domain amendment T1 нет. Финальный expanded pure group (dispatch/repository/kernel/
 price-input/source-revision/source-grain): **232 passed, exit 0**.
+Follow-up coordinator review предоставил Ruff runtime
+`/tmp/satorna-backend-verify-20260908/bin/python`: новые import-order findings и
+UTC-alias style исправлены без изменения domain semantics; targeted Ruff check
+четырёх dispatch/size-test файлов — exit0, повторный kernel/repository/dispatch
+group — 155 passed exit0. Legacy runtime-wide lint baseline этим не объявлен зелёным.
 Runtime flow, flags, P&L formulas, migrations, DB/Redis/provider calls не менялись.
 
 ## 9. Requirement → commit → tests → remaining (T2)

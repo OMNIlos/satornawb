@@ -6,22 +6,29 @@ module owns no clock, random ID generator, provider, persistence or recovery job
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from datetime import datetime
-from enum import Enum
 import hashlib
 import json
 import re
+from dataclasses import dataclass, replace
+from datetime import datetime
+from enum import Enum
 from uuid import UUID
 
 from app.modules.wb_repricing import (
-    ApprovalConflictError, ApprovalStatus, ApprovalValidationError,
-    PriceApprovalSnapshot, SAFE_APPLY_ERROR_CODES,
-    build_action_key, record_apply_failure, record_apply_success,
+    SAFE_APPLY_ERROR_CODES,
+    ApprovalConflictError,
+    ApprovalStatus,
+    ApprovalValidationError,
+    PriceApprovalSnapshot,
+    build_action_key,
+    record_apply_failure,
+    record_apply_success,
 )
 from app.modules.wb_repricing_repository import (
-    ApprovalRepositoryScope, AuthenticatedApprovalActor,
-    bridge_actor_membership_id, bridge_snapshot_identity,
+    ApprovalRepositoryScope,
+    AuthenticatedApprovalActor,
+    bridge_actor_membership_id,
+    bridge_snapshot_identity,
 )
 
 
