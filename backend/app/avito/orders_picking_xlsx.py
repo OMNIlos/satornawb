@@ -8,7 +8,6 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from app.avito.orders import AvitoOrderRow
 
-
 HEADERS = [
     "№ задания",
     "Фото",
@@ -38,6 +37,17 @@ def _col_ref(index: int) -> str:
 
 def _cell(ref: str, value: Any, style: int = 2) -> str:
     text = "" if value is None else str(value)
+    # Reject XML 1.0-invalid input rather than emit a corrupt workbook or drop text.
+    if any(
+        not (
+            code in (9, 10, 13)
+            or 0x20 <= code <= 0xD7FF
+            or 0xE000 <= code <= 0xFFFD
+            or 0x10000 <= code <= 0x10FFFF
+        )
+        for code in map(ord, text)
+    ):
+        raise ValueError("Invalid XML character in XLSX text")
     if not text:
         return f'<c r="{ref}" s="{style}"/>'
     return f'<c r="{ref}" s="{style}" t="inlineStr"><is><t>{escape(text)}</t></is></c>'
