@@ -1,0 +1,46 @@
+{
+  "orders": [
+    {
+      "organizationId": 101,
+      "marketplaceAccountId": 1001,
+      "externalOrderId": "synthetic-order-shared",
+      "items": [
+        {
+          "externalItemId": "synthetic-listing-repeated",
+          "occurrenceIndex": 0
+        },
+        {
+          "externalItemId": "synthetic-listing-repeated",
+          "occurrenceIndex": 1
+        },
+        {
+          "externalItemId": "synthetic-listing-distinct",
+          "occurrenceIndex": 0,
+          "stableOrderLineId": "synthetic-line-stable"
+        }
+      ]
+    },
+    {
+      "organizationId": 202,
+      "marketplaceAccountId": 2002,
+      "externalOrderId": "synthetic-order-shared",
+      "items": [
+        {
+          "externalItemId": "synthetic-listing-repeated",
+          "occurrenceIndex": 0
+        }
+      ]
+    }
+  ],
+  "statuses": [
+    {"rawStatus": "on_confirmation", "canonicalStatus": "pending_confirmation"},
+    {"rawStatus": "ready_to_ship", "canonicalStatus": "ready_for_fulfillment"},
+    {"rawStatus": "in_transit", "canonicalStatus": "in_delivery"},
+    {"rawStatus": "delivered", "canonicalStatus": "delivered"},
+    {"rawStatus": "closed", "canonicalStatus": "closed"},
+    {"rawStatus": "canceled", "canonicalStatus": "cancelled"},
+    {"rawStatus": "on_return", "canonicalStatus": "returning"},
+    {"rawStatus": "in_dispute", "canonicalStatus": "disputed"},
+    {"rawStatus": "synthetic_unknown_status", "canonicalStatus": null}
+  ]
+}

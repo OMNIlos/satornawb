@@ -1,0 +1,31 @@
+{
+  "orders": [
+    {
+      "organizationId": 101,
+      "marketplaceAccountId": 1001,
+      "externalOrderId": "synthetic-wb-order-shared",
+      "stableUnitId": "synthetic-srid-unit-cancelled",
+      "rawStatus": null,
+      "isCancelled": true,
+      "cancelEvidencePresent": false
+    },
+    {
+      "organizationId": 202,
+      "marketplaceAccountId": 2002,
+      "externalOrderId": "synthetic-wb-order-shared",
+      "stableUnitId": "synthetic-srid-unit-marker",
+      "rawStatus": "synthetic_cancel_marker_status",
+      "isCancelled": false,
+      "cancelEvidencePresent": true
+    },
+    {
+      "organizationId": 101,
+      "marketplaceAccountId": 1001,
+      "externalOrderId": "synthetic-wb-order-noncancelled",
+      "stableUnitId": "synthetic-srid-unit-active",
+      "rawStatus": "synthetic_supplier_order_observed",
+      "isCancelled": false,
+      "cancelEvidencePresent": false
+    }
+  ]
+}
