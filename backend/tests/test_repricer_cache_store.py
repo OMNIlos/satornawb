@@ -1,4 +1,6 @@
+from copy import deepcopy
 from datetime import date, datetime, timezone
+import pytest
 
 from app.repricer_cache.store import (
     _source_cache_metadata,
@@ -9,6 +11,15 @@ from app.repricer_cache.store import (
 )
 from app.repricer_cache.orm import WbRepricerSourceCacheRow
 from sqlalchemy.exc import IntegrityError
+
+
+@pytest.fixture(autouse=True)
+def isolated_cache_boundaries(monkeypatch):
+    """Unit tests never resolve configured PostgreSQL or Redis connections."""
+    monkeypatch.setattr("app.repricer_cache.store._run_db", lambda fn: None)
+    monkeypatch.setattr("app.repricer_cache.store._redis_get_json", lambda *a, **kw: None)
+    monkeypatch.setattr("app.repricer_cache.store._redis_set_json", lambda *a, **kw: None)
+    monkeypatch.setattr("app.repricer_cache.store._redis_delete", lambda *a, **kw: None)
 
 
 def test_source_cache_metadata_is_derived_without_mutating_payload():
@@ -24,13 +35,15 @@ def test_source_cache_metadata_is_derived_without_mutating_payload():
             "2026-07-12": {"123": {"baskets": 1}},
         },
     }
-    original = dict(payload)
+    original = deepcopy(payload)
 
     metadata = _source_cache_metadata("baskets_2026-07-11_2026-08-09", payload)
 
     assert metadata == {
         "range_date_from": date(2026, 7, 11),
         "range_date_to": date(2026, 8, 9),
+        "revenue_basis": None,
+        "finance_schema_version": None,
         "daily_detail_status": "partial",
         "daily_detail_error": "часть запросов не загрузилась",
         "daily_detail_deferred_at": None,
@@ -47,18 +60,33 @@ def test_source_cache_metadata_is_derived_without_mutating_payload():
     assert payload == original
 
 
+def test_finance_metadata_preserves_basis_version_and_payload():
+    payload = {
+        "dateFrom": "2026-07-11", "dateTo": "2026-08-09",
+        "revenueBasis": "synthetic-seller-revenue",
+        "financeSchemaVersion": "synthetic-v2",
+        "dailyAggregates": {"2026-07-11": {"123": {"revenueKopecks": 0}}},
+    }
+    original = deepcopy(payload)
+    metadata = _source_cache_metadata("finance_2026-07-11_2026-08-09", payload)
+    assert metadata["revenue_basis"] == "synthetic-seller-revenue"
+    assert metadata["finance_schema_version"] == "synthetic-v2"
+    assert payload == original
+
+
 def test_list_source_cache_ranges_avoids_payload_and_parses_legacy_key(monkeypatch):
     class FakeResult:
         def mappings(self):
             return self
 
         def __iter__(self):
-            return iter(
-                [
+            records = [
                     {
                         "source_key": "baskets_2026-07-11_2026-08-09",
                         "range_date_from": None,
                         "range_date_to": None,
+                        "revenue_basis": None,
+                        "finance_schema_version": None,
                         "daily_detail_status": None,
                         "daily_detail_error": None,
                         "daily_detail_deferred_at": None,
@@ -74,7 +102,11 @@ def test_list_source_cache_ranges_avoids_payload_and_parses_legacy_key(monkeypat
                         "fetched_at": datetime(2026, 8, 10, 16, 10, tzinfo=timezone.utc),
                     }
                 ]
-            )
+            return iter([
+                records[0],
+                {**records[0], "revenue_basis": "synthetic-seller-revenue",
+                 "finance_schema_version": "synthetic-v2"},
+            ])
 
     class FakeSession:
         def execute(self, statement, params):
@@ -96,6 +128,10 @@ def test_list_source_cache_ranges_avoids_payload_and_parses_legacy_key(monkeypat
     assert result[0]["dateTo"] == "2026-08-09"
     assert result[0]["dailyAggregateDates"] == []
     assert result[0]["dailyAggregatesDays"] is None
+    assert result[0]["revenueBasis"] is None
+    assert result[0]["financeSchemaVersion"] is None
+    assert result[1]["revenueBasis"] == "synthetic-seller-revenue"
+    assert result[1]["financeSchemaVersion"] == "synthetic-v2"
 
 
 def test_slim_finance_source_cache_drops_raw_rows():

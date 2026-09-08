@@ -309,7 +309,9 @@ def _apply_external_spp_prices_to_goods(goods: list[dict[str, Any]], prices_by_n
         target_size["buyerPriceKopecks"] = buyer_price_kopecks
         target_size["buyerPrice"] = buyer_price_rubles
         target_size["clientPrice"] = buyer_price_rubles
-        good["sizes"] = [target_size]
+        # Keep other source sizes intact; the legacy nm-level enrichment does
+        # not establish buyer-price provenance for each individual offer.
+        good["sizes"] = [target_size, *target_sizes[1:]]
         matched += 1
     return matched
 

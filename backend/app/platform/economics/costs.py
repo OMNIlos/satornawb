@@ -75,7 +75,7 @@ def _view(row: Any) -> CostValue:
 
 class CostsService:
     def __init__(self, session: Session, organization_id: int, *, now: Callable[[], datetime] = utc_now):
-        if organization_id < 1:
+        if type(organization_id) is not int or organization_id < 1:
             raise CostValidationError("organization_id must be positive")
         self.session = session
         self.organization_id = organization_id
@@ -85,6 +85,7 @@ class CostsService:
         set_tenant_context(self.session, self.organization_id)
 
     def _sku(self, catalog_sku_id: int) -> CatalogSkuRow:
+        self._validate_sku_id(catalog_sku_id)
         self._prepare()
         row = self.session.scalar(
             select(CatalogSkuRow).where(
@@ -95,6 +96,11 @@ class CostsService:
         if row is None:
             raise CostNotFoundError("catalog SKU not found")
         return row
+
+    @staticmethod
+    def _validate_sku_id(catalog_sku_id: int) -> None:
+        if type(catalog_sku_id) is not int or catalog_sku_id < 1:
+            raise CostValidationError("catalog_sku_id must be a positive internal integer")
 
     def _by_reference(self, source: str, source_reference: str) -> CatalogCostVersionRow | None:
         self._prepare()
@@ -244,6 +250,8 @@ class CostsService:
         return self.get_cost_at(catalog_sku_id, self.now())
 
     def get_costs_at(self, catalog_sku_ids: list[int], at: datetime) -> dict[int, CostValue]:
+        for sku_id in catalog_sku_ids:
+            self._validate_sku_id(sku_id)
         effective_at = _aware_utc(at)
         sku_ids = sorted(set(catalog_sku_ids))
         if not sku_ids:
@@ -286,6 +294,8 @@ class CostsService:
         catalog_sku_ids: list[int],
         at: list[datetime],
     ) -> dict[tuple[int, datetime], CostValue]:
+        for sku_id in catalog_sku_ids:
+            self._validate_sku_id(sku_id)
         sku_ids = sorted(set(catalog_sku_ids))
         instants = sorted({_aware_utc(value) for value in at})
         if not sku_ids or not instants:
@@ -298,6 +308,8 @@ class CostsService:
         self,
         points: list[tuple[int, datetime]],
     ) -> dict[tuple[int, datetime], CostValue]:
+        for sku_id, _ in points:
+            self._validate_sku_id(sku_id)
         normalized = {
             instant: _aware_utc(instant)
             for instant in dict.fromkeys(instant for _, instant in points)
