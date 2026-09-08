@@ -120,3 +120,19 @@ existing `filipp` lineage; no remote publication has occurred.
 
 Actual domain repositories, shared authorization fencing, subsequent schemas
 and full release checks remain in progress.
+
+## Open release blocker: long Orders identity keys
+
+A later PostgreSQL 16.15 test found an uncovered limit in revision 0062: valid
+4096-byte external order, item-line and source-run keys exceed the physical
+B-tree index tuple limit (SQLSTATE 54000), including existing ON CONFLICT paths.
+Rollback preserved all eleven Orders tables in the reproduced cases. Earlier
+101 passing cases did not cover this boundary.
+
+T1 owns an explicit migration amendment; T3 must adapt the corresponding
+repository identity/replay operations. Preserve exact valid TEXT without an
+invented length cap or treating a hash collision as identity. Check every raw
+TEXT unique/index key in the new schema, not just the three reproduced ones.
+Require real long-key/replay/concurrency/collision/rollback/downgrade evidence,
+including supported transaction isolation. This defect must be closed before
+full persistence acceptance and publication.
