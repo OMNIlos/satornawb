@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -271,6 +272,16 @@ def _wait_for_postgres_lock(owner_engine, backend_pid: int) -> None:
     pytest.fail("worker did not enter a PostgreSQL lock wait")
 
 
+@contextmanager
+def _pool_releasing_transaction_before_shutdown(transaction, pool):
+    with pool as entered_pool:
+        try:
+            yield entered_pool
+        finally:
+            if transaction.is_active:
+                transaction.rollback()
+
+
 def _assert_invalid(raw_bearer: object) -> None:
     with pytest.raises(ingestion_tokens.IngestionTokenStoreError) as caught:
         ingestion_tokens.verify_ingestion_token(raw_bearer)  # type: ignore[arg-type]
@@ -303,6 +314,35 @@ def test_fixture_is_fresh_loopback_postgres_pinned_to_0061(disposable_postgres) 
             ).one() == (True, True)
     finally:
         engine.dispose()
+
+
+def test_lock_guard_rolls_back_before_pool_exit_when_sync_assertion_fails() -> None:
+    events: list[str] = []
+
+    class FakeTransaction:
+        is_active = True
+
+        def rollback(self) -> None:
+            events.append("rollback")
+            self.is_active = False
+
+    transaction = FakeTransaction()
+
+    class FakeExecutor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _error_type, _error, _traceback) -> bool:
+            events.append("pool_exit")
+            assert not transaction.is_active
+            return False
+
+    with pytest.raises(AssertionError, match="injected synchronization failure"):
+        with _pool_releasing_transaction_before_shutdown(transaction, FakeExecutor()):
+            events.append("body")
+            raise AssertionError("injected synchronization failure")
+
+    assert events == ["body", "rollback", "pool_exit"]
 
 
 def test_issue_uses_256_bit_secret_and_persists_only_sha256_verifier(
@@ -720,8 +760,9 @@ def test_verify_refreshes_expiry_after_waiting_for_account_lock(token_store) -> 
         token_store["runtime_engine"], "after_cursor_execute", observe_locator_read
     )
     try:
-        with ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="verify-expiry"
+        with _pool_releasing_transaction_before_shutdown(
+            lock_transaction,
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="verify-expiry"),
         ) as pool:
             future = pool.submit(ingestion_tokens.verify_ingestion_token, raw_bearer)
             assert locator_read.wait(timeout=5)
@@ -732,8 +773,6 @@ def test_verify_refreshes_expiry_after_waiting_for_account_lock(token_store) -> 
                 future.result(timeout=5)
             assert caught.value.code == "ingestion_token_invalid"
     finally:
-        if lock_transaction.is_active:
-            lock_transaction.rollback()
         lock_connection.close()
         event.remove(
             token_store["runtime_engine"],
@@ -781,8 +820,9 @@ def test_issue_rechecks_expiry_after_lock_and_preserves_prior_token(
         token_store["runtime_engine"], "before_cursor_execute", observe_account_lock
     )
     try:
-        with ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="issue-expiry"
+        with _pool_releasing_transaction_before_shutdown(
+            lock_transaction,
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="issue-expiry"),
         ) as pool:
             future = pool.submit(
                 ingestion_tokens.issue_ingestion_token,
@@ -797,8 +837,6 @@ def test_issue_rechecks_expiry_after_lock_and_preserves_prior_token(
                 future.result(timeout=5)
             assert caught.value.code == "ingestion_token_contract_invalid"
     finally:
-        if lock_transaction.is_active:
-            lock_transaction.rollback()
         lock_connection.close()
         event.remove(
             token_store["runtime_engine"],
