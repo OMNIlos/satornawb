@@ -17,6 +17,13 @@ from app.cash_flow import orm as _cash_flow_models  # noqa: F401
 from app.config import get_settings
 from app.control_plane import orm as _control_plane_models  # noqa: F401
 from app.infra.models import Base
+from app.platform.advertising import orm as _advertising_models  # noqa: F401
+from app.platform.catalog import orm as _catalog_models  # noqa: F401
+from app.platform.economics import orm as _economics_models  # noqa: F401
+from app.platform.finance import orm as _finance_models  # noqa: F401
+from app.platform.funnel import orm as _funnel_models  # noqa: F401
+from app.platform.identity import orm as _identity_models  # noqa: F401
+from app.platform.integrations import orm as _integration_models  # noqa: F401
 from app.repricer_cache import orm as _repricer_cache_models  # noqa: F401
 from app.repricer_persistence import orm as _repricer_persistence_models  # noqa: F401
 from app.report_rules import orm as _report_rules_models  # noqa: F401

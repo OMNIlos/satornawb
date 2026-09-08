@@ -1,0 +1,20 @@
+{
+  "period": {"from": "2026-08-17", "to": "2026-08-23", "timezone": "Europe/Moscow"},
+  "revenueBasis": "retailAmount",
+  "includedReportTypes": ["Основной", "По выкупам"],
+  "mainKopecks": 602842752,
+  "buyoutKopecks": 32694699,
+  "lateCorrectionKopecks": 120800,
+  "liveKopecks": 635658251,
+  "uiRoundedRubles": 6356583,
+  "evidence": {
+    "mainReportId": 820347930,
+    "mainReportType": 1,
+    "mainSourceSha256": "1b4955a953180a01978da79edb2a0f5dd6c9878ee1697c39725875aaf8860952",
+    "redemptionsReportId": 820347933,
+    "redemptionsReportType": 2,
+    "redemptionsSourceSha256": "d282d953467f336fd8ffc10770cb561c4a419a46dfc662962788bee7a6a41fd4",
+    "lateCorrectionEvidence": "derived_live_snapshot_delta",
+    "rawLateCorrectionIdentityAvailable": false
+  }
+}

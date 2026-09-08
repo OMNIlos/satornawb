@@ -1,0 +1,112 @@
+{
+  "period": {"dateFrom": "2026-09-01", "dateTo": "2026-09-01"},
+  "promotion": {
+    "adverts": [
+      {"type": 8, "status": 9, "count": 1, "advert_list": [{"advertId": 1001, "changeTime": "2026-09-01T09:00:00+03:00"}]},
+      {"type": 8, "status": 11, "count": 1, "advert_list": [{"advertId": 1002, "changeTime": "2026-09-01T09:05:00+03:00"}]}
+    ],
+    "all": 2
+  },
+  "adverts": {
+    "adverts": [
+      {
+        "id": 1001,
+        "status": 9,
+        "bid_type": "manual",
+        "currency": "RUB",
+        "settings": {"name": "campaign-a", "payment_type": "cpm", "placements": {}},
+        "timestamps": {"created": "2026-08-01T09:00:00+03:00", "started": "2026-08-02T09:00:00+03:00", "updated": "2026-09-01T09:00:00+03:00", "deleted": null},
+        "restrictions": {"can_change_nms": true},
+        "nm_settings": [{"nm_id": 2001, "bids_kopecks": {}, "subject": {}}]
+      },
+      {
+        "id": 1002,
+        "status": 11,
+        "bid_type": "manual",
+        "currency": "RUB",
+        "settings": {"name": "campaign-b", "payment_type": "cpm", "placements": {}},
+        "timestamps": {"created": "2026-08-01T09:00:00+03:00", "started": null, "updated": "2026-09-01T09:05:00+03:00", "deleted": null},
+        "restrictions": {"can_change_nms": true},
+        "nm_settings": []
+      }
+    ]
+  },
+  "fullstats": [
+    {
+      "dateFrom": "2026-09-01",
+      "dateTo": "2026-09-01",
+      "campaignIds": [1001, 1002],
+      "payload": [
+        {
+          "advertId": 1001,
+          "views": 15,
+          "clicks": 3,
+          "ctr": 20.0,
+          "cpc": 0.5,
+          "sum": 1.5,
+          "atbs": 1,
+          "orders": 1,
+          "cr": 33.33,
+          "shks": 1,
+          "sum_price": 5,
+          "canceled": 1,
+          "currency": "RUB",
+          "days": [
+            {
+              "date": "2026-09-01T00:00:00Z",
+              "views": 15,
+              "clicks": 3,
+              "ctr": 20.0,
+              "cpc": 0.5,
+              "sum": 1.5,
+              "atbs": 1,
+              "orders": 1,
+              "cr": 33.33,
+              "shks": 1,
+              "sum_price": 5,
+              "canceled": 1,
+              "apps": [
+                {"appType": 1, "views": 10, "clicks": 2, "ctr": 20.0, "cpc": 0.55, "sum": 1.1, "atbs": 1, "orders": 1, "cr": 50.0, "shks": 1, "sum_price": 5, "canceled": 0, "nms": [{"name": "product-a", "nmId": 2001, "views": 10, "clicks": 2, "ctr": 20.0, "cpc": 0.55, "sum": 1.1, "atbs": 1, "orders": 1, "cr": 50.0, "shks": 1, "sum_price": 5, "canceled": 0}]},
+                {"appType": 32, "views": 5, "clicks": 1, "ctr": 20.0, "cpc": 0.4, "sum": 0.4, "atbs": 0, "orders": 0, "cr": 0, "shks": 0, "sum_price": 0, "canceled": 1, "nms": [{"name": "product-a", "nmId": 2001, "views": 5, "clicks": 1, "ctr": 20.0, "cpc": 0.4, "sum": 0.4, "atbs": 0, "orders": 0, "cr": 0, "shks": 0, "sum_price": 0, "canceled": 1}]}
+              ]
+            }
+          ],
+          "boosterStats": []
+        },
+        {
+          "advertId": 1002,
+          "views": 4,
+          "clicks": 0,
+          "ctr": 0,
+          "cpc": 0,
+          "sum": 0.5,
+          "atbs": 0,
+          "orders": 0,
+          "cr": 0,
+          "shks": 0,
+          "sum_price": 0,
+          "canceled": 0,
+          "currency": "RUB",
+          "days": [{"date": "2026-09-01T00:00:00Z", "views": 4, "clicks": 0, "ctr": 0, "cpc": 0, "sum": 0.5, "atbs": 0, "orders": 0, "cr": 0, "shks": 0, "sum_price": 0, "canceled": 0, "apps": []}],
+          "boosterStats": []
+        }
+      ]
+    }
+  ],
+  "upd": [
+    {
+      "dateFrom": "2026-09-01",
+      "dateTo": "2026-09-01",
+      "payload": [
+        {"updNum": 7001, "updTime": "2026-09-01T12:00:00+03:00", "updSum": 1.5, "advertId": 1001, "campName": "campaign-a", "advertType": 8, "paymentType": "cpm", "advertStatus": 9, "currency": "RUB"},
+        {"updNum": 7001, "updTime": "2026-09-01T12:05:00+03:00", "updSum": 0.5, "advertId": 1002, "campName": "campaign-b", "advertType": 8, "paymentType": "cpm", "advertStatus": 11, "currency": "RUB"}
+      ]
+    }
+  ],
+  "manifest": [
+    {"endpoint": "GET /adv/v1/promotion/count", "ok": true, "statusCode": 200, "request": {}},
+    {"endpoint": "GET /api/advert/v2/adverts", "ok": true, "statusCode": 200, "request": {"statuses": "7,9,11"}},
+    {"endpoint": "GET /adv/v1/upd", "ok": true, "statusCode": 200, "request": {"from": "2026-09-01", "to": "2026-09-01"}},
+    {"endpoint": "GET /adv/v3/fullstats", "ok": true, "statusCode": 200, "request": {"ids": "1001,1002", "beginDate": "2026-09-01", "endDate": "2026-09-01"}}
+  ]
+}

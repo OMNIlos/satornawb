@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 secrets.txt
+confidentials.md
 *.pem
 *.key
 

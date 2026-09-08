@@ -283,8 +283,11 @@ class AbcFilteredSummary(BaseModel):
     filterHash: str = Field(min_length=1)
     skuCount: int = Field(ge=0)
     locomotiveCount: Optional[int] = Field(default=None, ge=0)
+    basketsCount: Optional[int] = Field(default=None, ge=0)
     ordersCount: Optional[int] = Field(default=None, ge=0)
     ordersKopecks: Optional[int] = Field(default=None, ge=0)
+    salesKopecks: Optional[int] = None
+    returnsKopecks: Optional[int] = Field(default=None, ge=0)
     profitKopecks: Optional[int]
     marginPct: Optional[float]
     adSpendKopecks: Optional[int] = Field(default=None, ge=0)

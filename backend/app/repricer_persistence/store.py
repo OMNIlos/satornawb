@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 from pathlib import Path
+from zoneinfo import ZoneInfo
 import json
 import logging
 import os
@@ -13,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.infra.db import get_engine, get_session_factory
+from app.infra.db import get_session_factory
 from app.repricer_persistence.orm import (
     WbRepricerChangelogRow,
     WbRepricerExecutionRunRow,
@@ -33,6 +34,7 @@ def _runtime_state_defaults(payload: dict[str, Any] | None = None) -> dict[str, 
     state.setdefault("assignments", {})
     state.setdefault("skuMetaOverrides", {})
     state.setdefault("skuSettingsOverrides", {})
+    state.setdefault("cogsHistory", {})
     state.setdefault("liquidationActive", {})
     state.setdefault("liquidationHistory", [])
     state.setdefault("negativeMarginConfirmations", {})
@@ -106,9 +108,6 @@ def _save_file_algorithm_settings(organization_id: int, settings_payload: dict[s
 
 def _run_db(db_fn):
     try:
-        engine = get_engine()
-        with engine.connect() as connection:
-            connection.exec_driver_sql("SELECT 1")
         session_factory = get_session_factory()
         with session_factory() as session:
             return db_fn(session)
@@ -134,11 +133,9 @@ def load_runtime_state(organization_id: int) -> dict[str, Any] | None:
         return _runtime_state_defaults(row.state_payload)
 
     payload = _run_db(_db)
-    file_payload = _load_file_runtime_state(organization_id)
     if payload is not None:
-        payload = _runtime_state_defaults(payload)
-        _MEMORY_RUNTIME_STATE[organization_id] = deepcopy(payload)
-        return payload
+        return _runtime_state_defaults(payload)
+    file_payload = _load_file_runtime_state(organization_id)
     if file_payload is not None:
         _MEMORY_RUNTIME_STATE[organization_id] = deepcopy(file_payload)
         return file_payload
@@ -154,10 +151,9 @@ def load_algorithm_settings(organization_id: int) -> dict[str, Any] | None:
         return dict(row.settings_payload or {})
 
     payload = _run_db(_db)
-    file_payload = _load_file_algorithm_settings(organization_id)
     if payload is not None:
-        _MEMORY_ALGORITHM_SETTINGS[organization_id] = deepcopy(payload)
         return payload
+    file_payload = _load_file_algorithm_settings(organization_id)
     if file_payload is not None:
         _MEMORY_ALGORITHM_SETTINGS[organization_id] = deepcopy(file_payload)
         return file_payload
@@ -449,10 +445,27 @@ def hydrate_repricer_bff_state(organization_id: int, repricer_bff_module: Any) -
 
 def flush_repricer_bff_state(organization_id: int, repricer_bff_module: Any) -> bool:
     previous_payload = load_runtime_state(organization_id) or {}
+    previous_algorithm = load_algorithm_settings(organization_id) or {}
+    previous_settings = previous_payload.get("skuSettingsOverrides") or {}
+    current_settings = dict(repricer_bff_module.SKU_SETTINGS_OVERRIDES)
+    cogs_history = deepcopy(previous_payload.get("cogsHistory") or {})
+    changed_at = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Moscow")).isoformat()
+    for article_id in set(previous_settings) | set(current_settings):
+        old = (previous_settings.get(article_id) or {}).get("cogsKopecks")
+        new = (current_settings.get(article_id) or {}).get("cogsKopecks")
+        if old is None and new is None:
+            continue
+        history = cogs_history.setdefault(article_id, [])
+        if not history and old is not None:
+            history.append({"effectiveFrom": changed_at, "cogsKopecks": old, "source": "observed_snapshot"})
+        if old == new:
+            continue
+        history.append({"effectiveFrom": changed_at, "cogsKopecks": new, "source": "platform_settings"})
     payload = {
         "assignments": dict(repricer_bff_module.FRONTEND_STRATEGY_ASSIGNMENTS),
         "skuMetaOverrides": dict(repricer_bff_module.SKU_META_OVERRIDES),
-        "skuSettingsOverrides": dict(repricer_bff_module.SKU_SETTINGS_OVERRIDES),
+        "skuSettingsOverrides": current_settings,
+        "cogsHistory": cogs_history,
         "liquidationActive": dict(repricer_bff_module.LIQUIDATION_ACTIVE),
         "liquidationHistory": list(repricer_bff_module.LIQUIDATION_HISTORY),
         "negativeMarginConfirmations": dict(repricer_bff_module.NEGATIVE_MARGIN_CONFIRMATIONS),
@@ -460,9 +473,20 @@ def flush_repricer_bff_state(organization_id: int, repricer_bff_module: Any) -> 
         "pendingPriceApprovals": dict(previous_payload.get("pendingPriceApprovals") or {}),
         "flushedAt": datetime.now(timezone.utc).isoformat(),
     }
-    algorithm_saved = save_algorithm_settings(
-        organization_id,
-        dict(getattr(repricer_bff_module, "ALGORITHM_SETTINGS_STATE", {})),
-    )
+    algorithm = dict(getattr(repricer_bff_module, "ALGORITHM_SETTINGS_STATE", {}))
+    previous_garments = previous_algorithm.get("cogsByGarmentRub") or {}
+    current_garments = algorithm.get("cogsByGarmentRub") or {}
+    garment_history = deepcopy(previous_algorithm.get("cogsByGarmentHistory") or algorithm.get("cogsByGarmentHistory") or {})
+    for garment in set(previous_garments) | set(current_garments):
+        old = previous_garments.get(garment)
+        new = current_garments.get(garment)
+        history = garment_history.setdefault(garment, [])
+        if not history and old is not None:
+            history.append({"effectiveFrom": changed_at, "cogsRub": old, "source": "observed_snapshot"})
+        if old == new:
+            continue
+        history.append({"effectiveFrom": changed_at, "cogsRub": new, "source": "platform_settings"})
+    algorithm["cogsByGarmentHistory"] = garment_history
+    algorithm_saved = save_algorithm_settings(organization_id, algorithm)
     runtime_saved = save_runtime_state(organization_id, payload)
     return bool(runtime_saved and algorithm_saved)

@@ -19,6 +19,16 @@ def test_infra_settings_defaults_are_present():
     assert settings.celery_result_backend.startswith("redis://")
 
 
+def test_advertising_shadow_settings_parse_canary_organizations(monkeypatch):
+    monkeypatch.setenv("VELLA_ADVERTISING_SHADOW_INGEST_ENABLED", "true")
+    monkeypatch.setenv("VELLA_ADVERTISING_SHADOW_INGEST_ORGANIZATION_IDS", "2, 7")
+
+    settings = get_settings()
+
+    assert settings.advertising_shadow_ingest_enabled is True
+    assert settings.advertising_shadow_ingest_organization_ids == (2, 7)
+
+
 def test_health_exposes_infrastructure_config_flags():
     response = TestClient(create_app()).get("/health")
 
@@ -38,9 +48,15 @@ def test_celery_app_is_configured_from_settings():
     assert celery_app.conf.result_backend == settings.celery_result_backend
     assert "repricer-execute-assigned" in celery_app.conf.beat_schedule
     assert "repricer-execute-avito" in celery_app.conf.beat_schedule
-    assert celery_app.conf.beat_schedule["repricer-execute-avito"]["task"] == "repricer.execute_avito_all_orgs"
+    assert (
+        celery_app.conf.beat_schedule["repricer-execute-avito"]["task"]
+        == "repricer.execute_avito_all_orgs"
+    )
     assert "repricer-sync-wb-nightly" in celery_app.conf.beat_schedule
-    assert celery_app.conf.beat_schedule["repricer-sync-wb-nightly"]["task"] == "repricer.sync_wb_nightly_all_orgs"
+    assert (
+        celery_app.conf.beat_schedule["repricer-sync-wb-nightly"]["task"]
+        == "repricer.sync_wb_nightly_all_orgs"
+    )
 
 
 def test_infra_metadata_contains_baseline_table():

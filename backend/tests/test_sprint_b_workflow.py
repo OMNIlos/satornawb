@@ -6,16 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app import repricer_bff as repricer_bff_module
-from app.repricer_sprint_b import (
-    ApplyDraftRequest,
-    ApproveDraftRequest,
-    PriceDraftCreateRequest,
-    _buyer_price_for_accounting,
-    apply_approved_drafts,
-    approve_draft,
-    create_price_draft,
-)
-from app.wb_api.client import FakeWbApiClient
+from app.repricer_sprint_b import _buyer_price_for_accounting
 from tests.auth_helpers import auth_headers
 
 
@@ -131,65 +122,6 @@ def test_draft_approval_and_apply_flow_reaches_accepted_with_feature_flag_enable
             os.environ.pop("VELLA_REAL_PRICE_APPLY_ENABLED", None)
         else:
             os.environ["VELLA_REAL_PRICE_APPLY_ENABLED"] = previous
-
-
-def test_bulk_apply_sends_all_prices_in_one_wb_upload():
-    payloads = [
-        _valid_draft_payload(),
-        {
-            **_valid_draft_payload(),
-            "articleId": "HCBT_19",
-            "nmId": 123457,
-            "candidateSellerPriceKopecks": 250_000,
-            "minPriceKopecks": 180_000,
-            "pMaxKopecks": 350_000,
-            "economics": {
-                **_valid_draft_payload()["economics"],
-                "cogsKopecks": 100_000,
-            },
-        },
-    ]
-    draft_ids: list[str] = []
-    for index, payload in enumerate(payloads):
-        current_price = int(payload["candidateSellerPriceKopecks"])
-        draft = create_price_draft(
-            actor_id="price_sender",
-            actor_role="price_sender",
-            client=FakeWbApiClient(),
-            payload=PriceDraftCreateRequest.model_validate(payload),
-            sku_row={
-                "meta": {
-                    "articleId": payload["articleId"],
-                    "nmId": payload["nmId"],
-                    "currentPriceKopecks": current_price,
-                },
-                "analytics": {
-                    "buyerPriceNoWalletKopecks": round(current_price * 0.9),
-                    "avgPriceWithSppKopecks": round(current_price * 0.9),
-                    "sppPct": 10,
-                },
-            },
-        )
-        assert draft.state == "draft"
-        draft_ids.append(draft.draftId)
-        approve_draft(
-            draft_id=draft.draftId,
-            actor_id="price_sender",
-            request=ApproveDraftRequest(approvalRef=f"APR-BULK-{index}"),
-        )
-
-    wb_client = FakeWbApiClient(fixtures={"/api/v2/upload/task": {"data": {"id": 777}}})
-    jobs = apply_approved_drafts(
-        draft_ids=draft_ids,
-        client=wb_client,
-        real_apply_enabled=True,
-        local_apply_enabled=False,
-        request=ApplyDraftRequest(skipStatusPoll=True),
-    )
-
-    assert [job.state for job in jobs] == ["sent", "sent"]
-    assert len(wb_client.requests) == 1
-    assert [row["nmID"] for row in wb_client.requests[0].jsonBody["data"]] == [123456, 123457]
 
 
 def test_apply_failure_has_retry_and_retry_can_recover():

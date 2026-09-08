@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -169,6 +170,11 @@ def test_execute_endpoint_returns_per_sku_results(monkeypatch):
 
 
 def test_execute_stops_wb_uploads_after_rate_limit(monkeypatch):
+    monkeypatch.setattr(
+        repricer_execution_module,
+        "_utc_now",
+        lambda: datetime(2026, 6, 24, 9, tzinfo=timezone.utc),
+    )
     rows = []
     for index, article_id in enumerate(["SKU1", "SKU2"], start=1):
         rows.append(
@@ -267,6 +273,11 @@ def test_execute_stops_wb_uploads_after_rate_limit(monkeypatch):
 
 
 def test_execute_with_worker_approval_creates_pending_without_applying(monkeypatch):
+    monkeypatch.setattr(
+        repricer_execution_module,
+        "_utc_now",
+        lambda: datetime(2026, 6, 24, 9, tzinfo=timezone.utc),
+    )
     row = {
         "meta": {
             "articleId": "SKU_APPROVAL",

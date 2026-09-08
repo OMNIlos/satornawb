@@ -25,7 +25,7 @@ from vella_wb_19_05.models import (
     SourceEvidence,
     utc_now,
 )
-from app.repricer_bff import DEFAULT_ALGORITHM_SETTINGS, TYPE_DEFAULTS, _extract_wb_media_url
+from app.repricer_bff import DEFAULT_ALGORITHM_SETTINGS, TYPE_DEFAULTS, _article_type, _extract_wb_media_url
 from app.repricer_cache.store import (
     finance_cache_uses_current_revenue_basis,
     get_source_cache,
@@ -173,8 +173,9 @@ def _abc_financial_components(
     ads: dict[str, Any],
     revenue_kopecks: int,
     sales_units: int,
+    cogs_kopecks: int | None = None,
 ) -> dict[str, int]:
-    cogs = _nonnegative_int(settings.get("cogsKopecks")) * sales_units
+    cogs = _nonnegative_int(settings.get("cogsKopecks")) * sales_units if cogs_kopecks is None else cogs_kopecks
     commission = _finance_commission_kopecks(finance)
     logistics = _int_or_zero(finance.get("logisticsKopecks"))
     penalty_signed = _int_or_zero(finance.get("penaltyKopecks"))
@@ -183,24 +184,19 @@ def _abc_financial_components(
     acceptance = _int_or_zero(finance.get("acceptanceKopecks"))
     penalty = max(0, penalty_signed)
     deduction = max(0, deduction_signed)
-    finance_credits = (
-        _int_or_zero(finance.get("additionalPaymentKopecks"))
-        + max(0, -penalty_signed)
-        + max(0, -deduction_signed)
-    )
+    additional_payment_signed = _int_or_zero(finance.get("additionalPaymentKopecks"))
+    finance_other_expenses = max(0, -additional_payment_signed)
+    compensation = max(0, additional_payment_signed) + max(0, -penalty_signed) + max(0, -deduction_signed)
+    finance_credits = compensation - finance_other_expenses
     acquiring = _int_or_zero(finance.get("acquiringKopecks"))
     loyalty_cost = _int_or_zero(finance.get("loyaltyCostKopecks"))
-    ad_spend = _nonnegative_int(
-        finance.get("adSpendKopecks")
-        if finance.get("financeAdSpendAuthoritative")
-        else ads.get("adSpendKopecks") or finance.get("adSpendKopecks")
-    )
+    ad_spend = _nonnegative_int(ads.get("adSpendKopecks"))
     other_expenses = (
         _nonnegative_int(settings.get("otherExpensePerSaleKopecks")) * sales_units
         + int(round(revenue_kopecks * _nonnegative_float_or_zero(settings.get("otherExpensePricePct")) / 100))
     )
     tax = int(round(revenue_kopecks * _nonnegative_float_or_zero(settings.get("taxPct")) / 100))
-    expenses = cogs + commission + logistics + storage + acceptance + penalty + deduction + acquiring + loyalty_cost + ad_spend + other_expenses + tax - finance_credits
+    expenses = cogs + commission + logistics + storage + acceptance + penalty + deduction + finance_other_expenses + acquiring + loyalty_cost + ad_spend + other_expenses + tax - compensation
     net_profit = revenue_kopecks - expenses
     return {
         "revenueKopecks": revenue_kopecks,
@@ -212,6 +208,8 @@ def _abc_financial_components(
         "penaltyKopecks": penalty,
         "deductionKopecks": deduction,
         "financeCreditsKopecks": finance_credits,
+        "financeOtherExpensesKopecks": finance_other_expenses,
+        "compensationKopecks": compensation,
         "acquiringKopecks": acquiring,
         "loyaltyCostKopecks": loyalty_cost,
         "adSpendKopecks": ad_spend,
@@ -656,18 +654,35 @@ def _save_pnl_response_cache(
     )
 
 
-def _article_type(article_id: str) -> str:
-    normalized = str(article_id or "").strip().upper()
-    return normalized[:1] if normalized[:1] in TYPE_DEFAULTS else "F"
-
-
-def _goods_index(organization_id: int) -> dict[int, dict[str, Any]]:
+def _goods_index(organization_id: int, content_cards_cache: dict[str, Any] | None = None) -> dict[int, dict[str, Any]]:
     result: dict[int, dict[str, Any]] = {}
     for good in list_cached_goods(organization_id):
         nm_id = _int_or_zero(good.get("nmID") or good.get("nmId"))
         if nm_id <= 0:
             continue
         result[nm_id] = good
+    cards = (content_cards_cache if content_cards_cache is not None else get_source_cache(organization_id, "content_cards", slim=False) or {}).get("cards") or []
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        nm_id = _int_or_zero(card.get("nmID") or card.get("nmId"))
+        if nm_id <= 0:
+            continue
+        good = result.get(nm_id, {})
+        merged = {**good, **{key: value for key, value in card.items() if value is not None}}
+        for key in (
+            "sizes",
+            "discountedPrice",
+            "price",
+            "buyerPriceNoWalletKopecks",
+            "buyerPriceNoWallet",
+            "buyerPriceKopecks",
+            "buyerPrice",
+            "clientPrice",
+        ):
+            if good.get(key) is not None:
+                merged[key] = good[key]
+        result[nm_id] = merged
     return result
 
 
@@ -690,14 +705,37 @@ def _sku_settings_from_state(
     *,
     runtime: dict[str, Any],
     algorithm: dict[str, Any],
+    effective_on: date | None = None,
 ) -> dict[str, Any]:
     defaults = dict(TYPE_DEFAULTS.get(_article_type(article_id), TYPE_DEFAULTS["F"]))
+    cogs_source = "type_default"
+    cogs_effective_from: str | None = None
     cogs_key = {"F": "tshirt", "H": "hoodie", "L": "longsleeve"}.get(_article_type(article_id))
     cogs_by_garment = algorithm.get("cogsByGarmentRub")
     if cogs_key and isinstance(cogs_by_garment, dict):
         cogs_rub = _float_or_none(cogs_by_garment.get(cogs_key))
         if cogs_rub and cogs_rub > 0:
             defaults["cogsKopecks"] = int(round(cogs_rub * 100))
+            cogs_source = "algorithm_garment"
+
+    garment_history = (algorithm.get("cogsByGarmentHistory") or {}).get(cogs_key) if cogs_key else None
+    if effective_on is not None and isinstance(garment_history, list):
+        effective_entries = []
+        for index, entry in enumerate(garment_history):
+            if not isinstance(entry, dict) or "cogsRub" not in entry:
+                continue
+            effective_from = _parse_cache_date(entry.get("effectiveFrom")) or date.min
+            if effective_from <= effective_on:
+                effective_entries.append((effective_from, index, entry))
+        if effective_entries:
+            _effective_from, _index, entry = max(effective_entries, key=lambda item: item[:2])
+            cogs_rub = _float_or_none(entry.get("cogsRub"))
+            if cogs_rub is not None and cogs_rub > 0:
+                defaults["cogsKopecks"] = int(round(cogs_rub * 100))
+                cogs_source = "algorithm_garment_history"
+            else:
+                cogs_source = "type_default_after_algorithm_override"
+            cogs_effective_from = entry.get("effectiveFrom")
 
     settings = {
         "cogsKopecks": int(defaults.get("cogsKopecks") or 0),
@@ -705,12 +743,98 @@ def _sku_settings_from_state(
         "otherExpensePricePct": float(_float_or_none(algorithm.get("otherExpensePricePct")) or 0),
         "otherExpensePerSaleKopecks": int(round(float(_float_or_none(algorithm.get("otherExpensePerSaleRub")) or 0) * 100)),
     }
+    base_cogs_kopecks = settings["cogsKopecks"]
+    base_cogs_source = cogs_source
+    base_cogs_effective_from = cogs_effective_from
     overrides = (runtime.get("skuSettingsOverrides") or {}).get(article_id)
     if isinstance(overrides, dict):
         for key in ("cogsKopecks", "taxPct", "otherExpensePricePct", "otherExpensePerSaleKopecks"):
             if overrides.get(key) is not None:
                 settings[key] = overrides[key]
+        if overrides.get("cogsKopecks") is not None:
+            cogs_source = "sku_override"
+            cogs_effective_from = None
+
+    history = (runtime.get("cogsHistory") or {}).get(article_id)
+    if effective_on is not None and isinstance(history, list):
+        effective_entries = []
+        for index, entry in enumerate(history):
+            if not isinstance(entry, dict) or "cogsKopecks" not in entry:
+                continue
+            effective_from = _parse_cache_date(entry.get("effectiveFrom")) or date.min
+            if effective_from <= effective_on:
+                effective_entries.append((effective_from, index, entry))
+        if effective_entries:
+            _effective_from, _index, entry = max(effective_entries, key=lambda item: item[:2])
+            if entry.get("cogsKopecks") is not None:
+                settings["cogsKopecks"] = entry["cogsKopecks"]
+                cogs_source = "sku_history"
+            else:
+                settings["cogsKopecks"] = base_cogs_kopecks
+                cogs_source = f"{base_cogs_source}_after_sku_override"
+                cogs_effective_from = (
+                    max((base_cogs_effective_from, entry.get("effectiveFrom")), key=lambda raw: _parse_cache_date(raw) or date.min)
+                    if base_cogs_effective_from and entry.get("effectiveFrom")
+                    else None
+                )
+            if entry.get("cogsKopecks") is not None:
+                cogs_effective_from = entry.get("effectiveFrom")
+    settings["cogsSource"] = cogs_source
+    settings["cogsEffectiveFrom"] = cogs_effective_from
     return settings
+
+
+def _abc_period_cogs(
+    *,
+    nm_id: int,
+    article_id: str,
+    finance: dict[str, Any],
+    finance_cache: dict[str, Any],
+    runtime: dict[str, Any],
+    algorithm: dict[str, Any],
+    date_from: date,
+    date_to: date,
+) -> tuple[int, dict[str, Any]]:
+    net_units = _int_or_zero(finance.get("netSalesUnits")) if "netSalesUnits" in finance else _int_or_zero(finance.get("salesUnits")) - _int_or_zero(finance.get("returnsUnits"))
+    end_settings = _sku_settings_from_state(
+        article_id,
+        runtime=runtime,
+        algorithm=algorithm,
+        effective_on=date_to,
+    )
+    end_settings["cogsEvidenceStatus"] = "dated" if end_settings.get("cogsEffectiveFrom") else "undated"
+    daily = finance_cache.get("dailyAggregates")
+    if not isinstance(daily, dict):
+        end_settings["cogsEvidenceStatus"] = "period_end_fallback"
+        end_settings["cogsSource"] = f"{end_settings['cogsSource']}_period_end_fallback"
+        return _nonnegative_int(end_settings.get("cogsKopecks")) * net_units, end_settings
+
+    daily_units = 0
+    cogs = 0
+    has_undated_units = False
+    for day_key, rows in daily.items():
+        day = _parse_cache_date(day_key)
+        row = rows.get(str(nm_id)) if isinstance(rows, dict) else None
+        if day is None or day < date_from or day > date_to or not isinstance(row, dict):
+            continue
+        units = _int_or_zero(row.get("netSalesUnits")) if "netSalesUnits" in row else _int_or_zero(row.get("salesUnits")) - _int_or_zero(row.get("returnsUnits"))
+        daily_units += units
+        settings = _sku_settings_from_state(
+            article_id,
+            runtime=runtime,
+            algorithm=algorithm,
+            effective_on=day,
+        )
+        has_undated_units = has_undated_units or (units != 0 and not settings.get("cogsEffectiveFrom"))
+        cogs += _nonnegative_int(settings.get("cogsKopecks")) * units
+    if daily_units == net_units:
+        if has_undated_units or not end_settings.get("cogsEffectiveFrom"):
+            end_settings["cogsEvidenceStatus"] = "undated"
+            end_settings["cogsSource"] = f"{end_settings['cogsSource']}_undated"
+        return cogs, end_settings
+    end_settings["cogsEvidenceStatus"] = "period_end_fallback"
+    end_settings["cogsSource"] = f"{end_settings['cogsSource']}_period_end_fallback"
+    return _nonnegative_int(end_settings.get("cogsKopecks")) * net_units, end_settings
 
 
 def _sku_meta(
@@ -790,7 +914,8 @@ def _build_cached_pnl_report(
 
     ads_cache = _period_cache(organization_id, "ads", date_from, date_to)
     ads_aggregates = ads_cache.get("aggregates") if isinstance(ads_cache.get("aggregates"), dict) else {}
-    goods_by_nm = _goods_index(organization_id)
+    content_cards_cache = get_source_cache(organization_id, "content_cards", slim=False) or {}
+    goods_by_nm = _goods_index(organization_id, content_cards_cache)
     runtime = load_runtime_state(organization_id) or {}
     algorithm = dict(DEFAULT_ALGORITHM_SETTINGS)
     algorithm.update(load_algorithm_settings(organization_id) or {})
@@ -1557,11 +1682,11 @@ def _abc_group_rows(rows: list[dict[str, Any]], group_by: ReportGroupBy) -> list
     for bucket in grouped.values():
         sales = bucket["salesKopecks"]
         profit = bucket["netTotalKopecks"]
-        bucket["marginPct"] = _calc_margin_pct(profit, sales)
+        bucket["marginPct"] = profit / sales * 100 if sales > 0 else None
         bucket["ordersComposite"] = _composite_metric(bucket["ordersUnits"], bucket["ordersKopecks"])
         bucket["salesComposite"] = _composite_metric(bucket["salesUnits"], bucket["salesKopecks"])
-        bucket["ctrPct"] = round(bucket["clicks"] / max(bucket["impressions"], 1) * 100, 2) if bucket["impressions"] else 0
-        bucket["cartCrPct"] = round(bucket["ordersUnits"] / bucket["baskets"] * 100, 2) if bucket["baskets"] else 0
+        bucket["ctrPct"] = bucket["clicks"] / bucket["impressions"] * 100 if bucket["impressions"] else None
+        bucket["cartCrPct"] = bucket["ordersUnits"] / bucket["baskets"] * 100 if bucket["baskets"] else None
         bucket["abcCode"] = "BB"
         result.append(bucket)
     return sorted(result, key=lambda item: _int_or_zero(item.get("netTotalKopecks")), reverse=True)
@@ -1674,6 +1799,26 @@ def _abc_promotion_lookup(promotions: list[dict[str, Any]]) -> dict[str, dict[An
     return lookup
 
 
+def _abc_ktr_rows(organization_id: int) -> list[dict[str, Any]]:
+    cache = get_source_cache(organization_id, "ktr_table", slim=False) or {}
+    data = cache.get("data")
+    if isinstance(data, dict):
+        data = data.get("items") or data.get("data") or data.get("rows")
+    return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+
+
+def _abc_ktr_value(rows: list[dict[str, Any]], localization_pct: float | None) -> float | None:
+    if localization_pct is None:
+        return None
+    for row in rows:
+        lower = _first_float_or_none(row, "fromPct", "from", "min")
+        upper = _first_float_or_none(row, "toPct", "to", "max")
+        value = _first_float_or_none(row, "ktr", "ktrIndex", "value")
+        if lower is not None and upper is not None and value is not None and lower <= localization_pct <= upper:
+            return value
+    return None
+
+
 def _active_promotion_from_lookup(
     article_id: str,
     nm_id: int,
@@ -1707,44 +1852,66 @@ def _build_abc_report_from_snapshots(
         require_current_finance_basis=True,
     )
     finance_basis_compatible = not finance_cache or finance_cache_uses_current_revenue_basis(finance_cache)
-    finance_aggregates = _cache_aggregates(finance_cache) if finance_basis_compatible else {}
+    finance_source_available = finance_allowed and bool(finance_cache) and finance_basis_compatible
+    finance_aggregates = _cache_aggregates(finance_cache) if finance_source_available else {}
 
-    ads_aggregates = _cache_aggregates(_period_cache(organization_id, "ads", date_from, date_to))
+    ads_cache = _period_cache(organization_id, "ads", date_from, date_to)
+    ads_source_available = bool(ads_cache)
+    ads_aggregates = _cache_aggregates(ads_cache)
+    period_stats_cache = _period_cache(organization_id, "period_stats", date_from, date_to)
+    period_stats_aggregates = _cache_aggregates(period_stats_cache)
     baskets_cache = _period_cache(organization_id, "baskets", date_from, date_to)
     baskets_aggregates = _cache_aggregates(baskets_cache)
-    stock_aggregates = _cache_aggregates(_stock_cache(organization_id, date_from, date_to))
-    goods_by_nm = _goods_index(organization_id)
+    stock_cache = _stock_cache(organization_id, date_from, date_to)
+    stock_aggregates = _cache_aggregates(stock_cache)
+    content_cards_cache = get_source_cache(organization_id, "content_cards", slim=False) or {}
+    goods_by_nm = _goods_index(organization_id, content_cards_cache)
     status_filter = _abc_filter_status(filters)
     blockers: list[str] = []
-    if finance_cache and not finance_basis_compatible:
+    if not finance_allowed:
+        blockers.append("WB_ABC_FINANCE_FORBIDDEN")
+    elif finance_cache and not finance_basis_compatible:
         blockers.append("WB_ABC_FINANCE_REVENUE_BASIS_INCOMPATIBLE")
     elif not finance_cache:
         blockers.append("WB_ABC_FINANCE_CACHE_MISSING")
     if not baskets_cache:
         blockers.append("WB_ABC_SALES_FUNNEL_CACHE_MISSING")
+    if not ads_cache:
+        blockers.append("WB_ABC_ADS_CACHE_MISSING")
+    if not period_stats_cache:
+        blockers.append("WB_ABC_PERIOD_STATS_CACHE_MISSING")
+    if not stock_cache:
+        blockers.append("WB_ABC_STOCK_CACHE_MISSING")
+    if not content_cards_cache:
+        blockers.append("WB_ABC_CONTENT_CARDS_CACHE_MISSING")
     if any(
         _int_or_zero(row.get("sellerRevenueMissingRows")) > 0
         for row in finance_aggregates.values()
         if isinstance(row, dict)
     ):
         blockers.append("WB_ABC_RETAIL_AMOUNT_MISSING")
+    ktr_rows = _abc_ktr_rows(organization_id)
+    if not ktr_rows:
+        blockers.append("WB_ABC_KTR_TABLE_MISSING")
     source_status: Literal["fresh", "partial", "stale", "blocked", "unknown"] = "fresh" if finance_allowed and not blockers else "partial"
     confidence: Literal["high", "medium", "low", "blocked"] = "high" if source_status == "fresh" else "medium"
     rows: list[dict[str, Any]] = []
+    cogs_evidence_statuses: set[str] = set()
     promotions = _cached_promotions_for_abc(organization_id)
     promotion_lookup = _abc_promotion_lookup(promotions)
     runtime = load_runtime_state(organization_id) or {}
     algorithm = dict(DEFAULT_ALGORITHM_SETTINGS)
     algorithm.update(load_algorithm_settings(organization_id) or {})
 
-    row_sources = (finance_aggregates, baskets_aggregates)
+    row_sources = (finance_aggregates, baskets_aggregates, period_stats_aggregates, ads_aggregates, stock_aggregates)
     all_nm_ids = sorted(
         {
             str(raw_nm_id)
             for source in row_sources
             for raw_nm_id, aggregate in source.items()
             if isinstance(aggregate, dict) and _int_or_zero(raw_nm_id) > 0
-        },
+        }
+        | {str(nm_id) for nm_id in goods_by_nm},
         key=lambda value: _int_or_zero(value),
     )
     total_nm_ids = len(all_nm_ids)
@@ -1758,14 +1925,15 @@ def _build_abc_report_from_snapshots(
         good = goods_by_nm.get(nm_id, {})
         baskets = baskets_aggregates.get(str(nm_id)) or {}
         article_id = str(good.get("vendorCode") or good.get("vendor_code") or finance.get("vendorCode") or baskets.get("vendorCode") or f"NM_{nm_id}")
-        settings = _sku_settings_from_state(article_id, runtime=runtime, algorithm=algorithm)
+        settings = _sku_settings_from_state(article_id, runtime=runtime, algorithm=algorithm, effective_on=date_to)
         meta = _sku_meta_from_state(article_id, runtime=runtime)
         product_status = str(meta.get("status") or "unknown")
         if status_filter and product_status != status_filter:
             continue
 
-        ads = ads_aggregates.get(str(nm_id)) or {}
         stock = stock_aggregates.get(str(nm_id)) or {}
+        period_stats = period_stats_aggregates.get(str(nm_id)) or {}
+        ads = ads_aggregates.get(str(nm_id)) or {}
 
         funnel_orders_units = _first_nonnegative_int_or_none(baskets, "orderCount", "ordersCount", "orders")
         funnel_orders_kopecks = _first_nonnegative_int_or_none(baskets, "orderSumKopecks", "ordersKopecks")
@@ -1780,12 +1948,26 @@ def _build_abc_report_from_snapshots(
         orders_units = funnel_orders_units if funnel_orders_units is not None else 0
         orders_kopecks = funnel_orders_kopecks if funnel_orders_kopecks is not None else 0
         sales_kopecks = seller_revenue
+        finance_row_complete = finance_source_available and _int_or_zero(finance.get("sellerRevenueMissingRows")) == 0
+        profit_row_complete = finance_row_complete and ads_source_available
+        cogs_total, cogs_settings = _abc_period_cogs(
+            nm_id=nm_id,
+            article_id=article_id,
+            finance=finance,
+            finance_cache=finance_cache,
+            runtime=runtime,
+            algorithm=algorithm,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        cogs_evidence_statuses.add(str(cogs_settings.get("cogsEvidenceStatus") or "undated"))
         financial = _abc_financial_components(
             finance=finance,
             settings=settings,
             ads=ads,
             revenue_kopecks=seller_revenue,
             sales_units=sales_units_for_costs,
+            cogs_kopecks=cogs_total,
         )
         cogs = financial["cogsKopecks"]
         commission = financial["commissionKopecks"]
@@ -1795,33 +1977,42 @@ def _build_abc_report_from_snapshots(
         penalty = financial["penaltyKopecks"]
         deduction = financial["deductionKopecks"]
         finance_credits = financial["financeCreditsKopecks"]
+        finance_other_expenses = financial["financeOtherExpensesKopecks"]
+        compensation = financial["compensationKopecks"]
         acquiring = financial["acquiringKopecks"]
         loyalty_cost = financial["loyaltyCostKopecks"]
         ad_spend = financial["adSpendKopecks"]
         tax = financial["taxKopecks"]
         overhead = financial["otherExpensesKopecks"]
         net_profit = financial["netProfitKopecks"]
+        gross_margin = sales_kopecks - cogs
         funnel_baskets = _abc_funnel_cart_count(baskets)
         baskets_count = funnel_baskets if funnel_baskets is not None else 0
         funnel_impressions = _abc_funnel_impressions(baskets)
         funnel_opens = _abc_funnel_open_count(baskets)
-        ad_impressions = max(0, _int_or_zero(ads.get("adImpressions")))
-        ad_clicks = max(0, _int_or_zero(ads.get("adClicks")))
         traffic_impressions = funnel_impressions
         traffic_clicks = funnel_opens
         funnel_stock_units = _first_nonnegative_int_or_none(baskets, "wbStockUnits")
+        stock_data_available = funnel_stock_units is not None or bool(stock)
         stock_units = funnel_stock_units if funnel_stock_units is not None else max(0, _int_or_zero(stock.get("wbStockUnits") or stock.get("stockUnits") or stock.get("quantity")))
         price_before_spp = _good_seller_price_kopecks(good)
         price_with_spp = _good_buyer_price_no_wallet_kopecks(good)
-        cogs_per_unit = _nonnegative_int(settings.get("cogsKopecks"))
-        cart_to_order_pct = round(orders_units / baskets_count * 100, 2) if baskets_count > 0 else 0.0
+        cogs_per_unit = _nonnegative_int(cogs_settings.get("cogsKopecks"))
+        cart_to_order_pct = orders_units / baskets_count * 100 if baskets_count > 0 else None
         clicks_delta_pct = _first_float_or_none(baskets, "openCountDeltaPct", "clicksDeltaPct")
         baskets_delta_pct = _first_float_or_none(baskets, "cartCountDeltaPct", "basketsDeltaPct")
         orders_delta_pct = _first_float_or_none(baskets, "orderCountDeltaPct", "ordersDeltaPct")
         sales_delta_pct = _first_float_or_none(finance, "salesDeltaPct")
-        buyout_pct = _float_or_none(baskets.get("buyoutPct"))
-        if buyout_pct is None:
-            buyout_pct = round(sales_units / orders_units * 100, 1) if funnel_orders_units is not None and orders_units else 0
+        buyout_count = _first_nonnegative_int_or_none(baskets, "buyoutCount", "buyoutsCount", "buyouts")
+        buyout_pct = buyout_count / orders_units * 100 if buyout_count is not None and orders_units > 0 else None
+        gross_sales_units = _nonnegative_int(finance.get("salesUnits"))
+        returns_units = _nonnegative_int(finance.get("returnsUnits"))
+        gross_sales_kopecks = _nonnegative_int(finance.get("grossSalesKopecks"))
+        returns_kopecks = _nonnegative_int(finance.get("returnsKopecks"))
+        average_sale_price = gross_sales_kopecks / gross_sales_units if gross_sales_units > 0 else None
+        cancelled_orders_units = _nonnegative_int(period_stats.get("cancelledOrdersUnits")) if period_stats else None
+        turnover_days = stock_units * max(1, (date_to - date_from).days + 1) / sales_units if stock_units >= 0 and sales_units > 0 else None
+        localization_pct = _first_float_or_none(baskets, "localizationPct", "localizationPercent")
         promotion = _active_promotion_from_lookup(article_id, nm_id, promotion_lookup)
         promotion_name = _promotion_label(promotion) if promotion else None
         promotion_id = (
@@ -1837,57 +2028,79 @@ def _build_abc_report_from_snapshots(
             "productName": str(good.get("title") or good.get("name") or baskets.get("productName") or article_id),
             "productStatus": product_status,
             "managerId": meta.get("managerId"),
-            "manager": meta.get("managerId") or "Не задано",
+            "manager": meta.get("managerName") or meta.get("managerId") or "Не задано",
             "brand": str(good.get("brand") or good.get("brandName") or baskets.get("brand") or meta.get("brand") or "Не задано"),
             "category": str(good.get("subjectName") or good.get("subject") or baskets.get("category") or "Не задано"),
             "priceBeforeSppKopecks": price_before_spp,
             "priceWithSppKopecks": price_with_spp,
+            "averageSalePriceKopecks": average_sale_price,
             "cogsPerUnitKopecks": cogs_per_unit,
-            "cogsKopecks": cogs,
-            "marginPct": _calc_margin_pct(net_profit, sales_kopecks) if sales_kopecks > 0 else None,
-            "marginKopecks": int(round(net_profit / max(sales_units_for_costs, 1))) if sales_units_for_costs else net_profit,
+            "cogsKopecks": cogs if finance_source_available else None,
+            "cogsSource": cogs_settings.get("cogsSource"),
+            "cogsEffectiveFrom": cogs_settings.get("cogsEffectiveFrom"),
+            "cogsEvidenceStatus": cogs_settings.get("cogsEvidenceStatus"),
+            "grossMarginKopecks": gross_margin if finance_row_complete else None,
+            "grossMarginPct": gross_margin / sales_kopecks * 100 if finance_row_complete and sales_kopecks > 0 else None,
+            "profitabilityPct": net_profit / sales_kopecks * 100 if profit_row_complete and sales_kopecks > 0 else None,
+            "marginPct": net_profit / sales_kopecks * 100 if profit_row_complete and sales_kopecks > 0 else None,
+            "marginKopecks": (int(round(net_profit / max(sales_units_for_costs, 1))) if sales_units_for_costs else net_profit) if profit_row_complete else None,
             "marginDeltaPct": None,
             "impressions": traffic_impressions,
             "clicks": traffic_clicks,
             "clicksDeltaPct": clicks_delta_pct,
-            "ctrPct": round(traffic_clicks / traffic_impressions * 100, 2) if traffic_impressions and traffic_clicks is not None else None,
-            "baskets": baskets_count,
+            "ctrPct": traffic_clicks / traffic_impressions * 100 if traffic_impressions and traffic_clicks is not None else None,
+            "baskets": baskets_count if baskets else None,
             "cartCrPct": cart_to_order_pct,
             "basketsDeltaPct": baskets_delta_pct,
             "ordersUnits": orders_units,
             "ordersDeltaPct": orders_delta_pct,
             "ordersKopecks": orders_kopecks,
-            "ordersComposite": _composite_metric(orders_units, orders_kopecks, orders_delta_pct),
-            "salesUnits": sales_units,
+            "cancelledOrdersUnits": cancelled_orders_units,
+            "ordersComposite": _composite_metric(orders_units, orders_kopecks, orders_delta_pct) if baskets else None,
+            "salesUnits": sales_units if finance_row_complete else None,
             "salesDeltaPct": sales_delta_pct,
-            "salesKopecks": sales_kopecks,
-            "salesComposite": _composite_metric(sales_units, sales_kopecks, sales_delta_pct),
-            "adSpendKopecks": ad_spend,
-            "acquiringKopecks": acquiring,
-            "acceptanceKopecks": acceptance,
-            "penaltyKopecks": penalty,
-            "deductionKopecks": deduction,
-            "additionalPaymentKopecks": _int_or_zero(finance.get("additionalPaymentKopecks")),
-            "financeCreditsKopecks": finance_credits,
-            "rewardAdjustmentKopecks": _int_or_zero(finance.get("rewardAdjustmentKopecks")),
-            "paymentScheduleKopecks": _int_or_zero(finance.get("paymentScheduleKopecks")),
-            "loyaltyCostKopecks": loyalty_cost,
-            "taxKopecks": tax,
-            "otherExpensesKopecks": overhead,
-            "drrOrdersPct": _calc_drr_pct(ad_spend, orders_kopecks) if orders_kopecks > 0 else None,
-            "drrSalesPct": _calc_drr_pct(ad_spend, sales_kopecks) if sales_kopecks > 0 else None,
-            "netPerUnitKopecks": int(round(net_profit / max(sales_units_for_costs, 1))) if sales_units_for_costs else net_profit,
-            "netTotalKopecks": net_profit,
-            "logisticsCostPct": _calc_drr_pct(logistics, seller_revenue) if seller_revenue > 0 else None,
+            "salesKopecks": sales_kopecks if finance_row_complete else None,
+            "grossSalesUnits": gross_sales_units if finance_row_complete else None,
+            "returnsUnits": returns_units if finance_row_complete else None,
+            "grossSalesKopecks": gross_sales_kopecks if finance_row_complete else None,
+            "returnsKopecks": returns_kopecks if finance_row_complete else None,
+            "salesComposite": _composite_metric(sales_units, sales_kopecks, sales_delta_pct) if finance_row_complete else None,
+            "adSpendKopecks": ad_spend if ads_source_available else None,
+            "adSpendSource": "wb_ads_api" if ads_source_available else None,
+            "commissionKopecks": commission if finance_source_available else None,
+            "commissionSource": finance.get("commissionSource"),
+            "logisticsKopecks": logistics if finance_source_available else None,
+            "storageKopecks": storage if finance_source_available else None,
+            "acquiringKopecks": acquiring if finance_source_available else None,
+            "acceptanceKopecks": acceptance if finance_source_available else None,
+            "penaltyKopecks": penalty if finance_source_available else None,
+            "deductionKopecks": deduction if finance_source_available else None,
+            "additionalPaymentKopecks": _int_or_zero(finance.get("additionalPaymentKopecks")) if finance_source_available else None,
+            "financeCreditsKopecks": finance_credits if finance_source_available else None,
+            "financeOtherExpensesKopecks": finance_other_expenses if finance_source_available else None,
+            "totalOtherExpensesKopecks": overhead + finance_other_expenses if finance_row_complete else None,
+            "compensationKopecks": compensation if finance_source_available else None,
+            "rewardAdjustmentKopecks": _int_or_zero(finance.get("rewardAdjustmentKopecks")) if finance_source_available else None,
+            "paymentScheduleKopecks": _int_or_zero(finance.get("paymentScheduleKopecks")) if finance_source_available else None,
+            "loyaltyCostKopecks": loyalty_cost if finance_source_available else None,
+            "taxKopecks": tax if finance_row_complete else None,
+            "otherExpensesKopecks": overhead if finance_row_complete else None,
+            "drrOrdersPct": ad_spend / orders_kopecks * 100 if ads_source_available and orders_kopecks > 0 else None,
+            "drrSalesPct": ad_spend / sales_kopecks * 100 if profit_row_complete and sales_kopecks > 0 else None,
+            "netPerUnitKopecks": (int(round(net_profit / max(sales_units_for_costs, 1))) if sales_units_for_costs else net_profit) if profit_row_complete else None,
+            "netTotalKopecks": net_profit if profit_row_complete else None,
+            "logisticsCostPct": logistics / seller_revenue * 100 if seller_revenue > 0 else None,
             "logisticsDeltaPct": None,
-            "commissionCostPct": _calc_drr_pct(commission, seller_revenue) if seller_revenue > 0 else None,
+            "commissionCostPct": commission / seller_revenue * 100 if seller_revenue > 0 else None,
             "commissionDeltaPct": None,
-            "storageCostPct": _calc_drr_pct(storage + acceptance + penalty + deduction + loyalty_cost - finance_credits, seller_revenue) if seller_revenue > 0 else None,
+            "storageCostPct": storage / seller_revenue * 100 if seller_revenue > 0 else None,
             "storageDeltaPct": None,
-            "ktrIndex": None,
-            "localizationPct": _first_float_or_none(baskets, "localizationPct", "localizationPercent"),
-            "wbStockUnits": stock_units,
-            "wbStockKopecks": stock_units * price_with_spp if price_with_spp is not None else None,
+            "ktrIndex": _abc_ktr_value(ktr_rows, localization_pct),
+            "localizationPct": localization_pct,
+            "wbStockUnits": stock_units if stock_data_available else None,
+            "wbStockKopecks": stock_units * price_with_spp if stock_data_available and price_with_spp is not None else None,
+            "turnoverDays": turnover_days if stock_data_available else None,
+            "daysToOos": turnover_days if stock_data_available else None,
             "promotionStatus": "yes" if promotion else "no",
             "promotionStatusText": promotion_name,
             "promotionName": promotion_name,
@@ -1902,10 +2115,18 @@ def _build_abc_report_from_snapshots(
         if progress_callback and (index % 100 == 0 or index == total_nm_ids):
             progress_callback({"phase": "abc-build", "processed": index, "total": total_nm_ids})
 
-    if not rows:
-        return None
+    if "undated" in cogs_evidence_statuses or any(not row.get("cogsEffectiveFrom") for row in rows):
+        blockers.append("WB_ABC_COGS_EFFECTIVE_DATE_MISSING")
+    if "period_end_fallback" in cogs_evidence_statuses:
+        blockers.append("WB_ABC_COGS_DAILY_COVERAGE_MISMATCH")
+    source_status = "fresh" if finance_allowed and not blockers else "partial"
+    confidence = "high" if source_status == "fresh" else "medium"
+    for row in rows:
+        row["sourceStatus"] = source_status
+        row["confidence"] = confidence
+        row["blockerIds"] = list(blockers)
 
-    sales_rank = sorted(rows, key=lambda row: (_int_or_zero(row.get("salesUnits")), _int_or_zero(row.get("ordersUnits")), _int_or_zero(row.get("salesKopecks"))), reverse=True)
+    sales_rank = sorted(rows, key=lambda row: (_int_or_zero(row.get("salesKopecks")), _int_or_zero(row.get("salesUnits")), _int_or_zero(row.get("ordersUnits"))), reverse=True)
     profit_rank = sorted(rows, key=lambda row: _int_or_zero(row.get("netTotalKopecks")), reverse=True)
     sales_letters = {row["nmId"]: _abc_letter(index, len(sales_rank)) for index, row in enumerate(sales_rank)}
     profit_letters = {row["nmId"]: _abc_letter(index, len(profit_rank)) for index, row in enumerate(profit_rank)}
@@ -1914,11 +2135,15 @@ def _build_abc_report_from_snapshots(
 
     rows = sorted(rows, key=lambda row: (_int_or_zero(row.get("salesKopecks")), _int_or_zero(row.get("netTotalKopecks"))), reverse=True)
     output_rows = _abc_group_rows(rows, group_by)
-    total_orders = sum(_int_or_zero(row.get("ordersUnits")) for row in rows)
-    total_orders_kopecks = sum(_int_or_zero(row.get("ordersKopecks")) for row in rows)
-    total_profit = sum(_int_or_zero(row.get("netTotalKopecks")) for row in rows)
-    total_sales = sum(_int_or_zero(row.get("salesKopecks")) for row in rows)
-    total_ad_spend = sum(_int_or_zero(row.get("adSpendKopecks")) for row in rows)
+    finance_values_complete = finance_source_available and "WB_ABC_RETAIL_AMOUNT_MISSING" not in blockers
+    profit_values_complete = finance_values_complete and ads_source_available
+    total_orders = sum(_int_or_zero(row.get("ordersUnits")) for row in rows) if baskets_cache else None
+    total_orders_kopecks = sum(_int_or_zero(row.get("ordersKopecks")) for row in rows) if baskets_cache else None
+    total_profit = sum(_int_or_zero(row.get("netTotalKopecks")) for row in rows) if profit_values_complete else None
+    total_sales = sum(_int_or_zero(row.get("salesKopecks")) for row in rows) if finance_values_complete else None
+    total_returns = sum(_int_or_zero(row.get("returnsKopecks")) for row in rows) if finance_values_complete else None
+    total_baskets = sum(_int_or_zero(row.get("baskets")) for row in rows) if baskets_cache else None
+    total_ad_spend = sum(_int_or_zero(row.get("adSpendKopecks")) for row in rows) if ads_source_available else None
 
     source_evidence = [
         SourceEvidence(
@@ -1927,9 +2152,57 @@ def _build_abc_report_from_snapshots(
             sourceName="WB Finance /api/finance/v1/sales-reports/detailed snapshot from repricer sync",
             lastSyncedAt=_parse_cache_datetime(finance_cache.get("fetchedAt")) or utc_now(),
             freshnessTtlMinutes=1440,
-            fieldsUsed=["salesUnits", "returnsUnits", "netSalesUnits", "sellerRevenueKopecks", "commissionKopecks", "logisticsKopecks", "storageKopecks", "acceptanceKopecks", "penaltyKopecks", "deductionKopecks", "additionalPaymentKopecks", "loyaltyCostKopecks", "acquiringKopecks"],
+            fieldsUsed=["salesUnits", "returnsUnits", "netSalesUnits", "grossSalesKopecks", "returnsKopecks", "sellerRevenueKopecks", "commissionKopecks", "logisticsKopecks", "storageKopecks", "acceptanceKopecks", "penaltyKopecks", "deductionKopecks", "additionalPaymentKopecks", "loyaltyCostKopecks", "acquiringKopecks"],
         ),
-        *_evidence("wb-abc-runtime", "derived", "Runtime ABC from cold-load snapshots", ["finance", "ads", "baskets.sales_funnel", "stocks", "promotions"]),
+        SourceEvidence(
+            sourceId="wb-sales-funnel-products-cache",
+            sourceType="wb_api",
+            sourceName="WB Analytics /api/analytics/v3/sales-funnel/products",
+            lastSyncedAt=_parse_cache_datetime(baskets_cache.get("fetchedAt")) or utc_now(),
+            freshnessTtlMinutes=1440,
+            fieldsUsed=["openCount", "cartCount", "orderCount", "orderSumKopecks", "buyoutCount", "localizationPct"],
+        ),
+        SourceEvidence(
+            sourceId="wb-period-stats-cache",
+            sourceType="wb_api",
+            sourceName="WB Statistics orders/sales period snapshot",
+            lastSyncedAt=_parse_cache_datetime(period_stats_cache.get("fetchedAt")) or utc_now(),
+            freshnessTtlMinutes=1440,
+            fieldsUsed=["cancelledOrdersUnits"],
+        ),
+        SourceEvidence(
+            sourceId="wb-ads-cache",
+            sourceType="wb_api",
+            sourceName="WB Promotion campaign statistics",
+            lastSyncedAt=_parse_cache_datetime(ads_cache.get("fetchedAt")) or utc_now(),
+            freshnessTtlMinutes=1440,
+            fieldsUsed=["adSpendKopecks"],
+        ),
+        SourceEvidence(
+            sourceId="wb-current-goods-cache",
+            sourceType="wb_api",
+            sourceName="WB goods/prices and content cards current snapshots",
+            lastSyncedAt=_parse_cache_datetime(content_cards_cache.get("fetchedAt")) or utc_now(),
+            freshnessTtlMinutes=60,
+            fieldsUsed=["vendorCode", "nmID", "title", "photoUrl", "brand", "subjectName", "priceBeforeSppKopecks", "priceWithSppKopecks"],
+        ),
+        SourceEvidence(
+            sourceId="platform-ktr-table",
+            sourceType="manual",
+            sourceName="Organization KTR lookup table",
+            lastSyncedAt=utc_now(),
+            freshnessTtlMinutes=1440,
+            fieldsUsed=["ktrIndex"],
+        ),
+        SourceEvidence(
+            sourceId="platform-abc-settings",
+            sourceType="manual",
+            sourceName="Organization SKU settings, COGS history and ABC algorithm rules",
+            lastSyncedAt=utc_now(),
+            freshnessTtlMinutes=1440,
+            fieldsUsed=["productStatus", "managerId", "cogsKopecks", "cogsEffectiveFrom", "taxPct", "otherExpensePricePct"],
+        ),
+        *_evidence("wb-abc-derived", "derived", "ABC calculations from canonical snapshots", ["abcCode", "averageSalePriceKopecks", "cartCrPct", "grossMarginKopecks", "profitabilityPct", "turnoverDays"]),
     ]
 
     return AbcReportResponse(
@@ -1943,10 +2216,13 @@ def _build_abc_report_from_snapshots(
             filterHash=sha1(f"{date_from}:{date_to}:{group_by}:{filters}".encode("utf-8")).hexdigest()[:12],
             skuCount=len(rows),
             locomotiveCount=sum(1 for row in rows if str(row.get("productStatus")) == "locomotive"),
+            basketsCount=total_baskets,
             ordersCount=total_orders,
             ordersKopecks=total_orders_kopecks,
+            salesKopecks=total_sales,
+            returnsKopecks=total_returns,
             profitKopecks=total_profit,
-            marginPct=_calc_margin_pct(total_profit, total_sales),
+            marginPct=total_profit / total_sales * 100 if total_profit is not None and total_sales is not None and total_sales > 0 else None,
             adSpendKopecks=total_ad_spend,
             sourceStatus=source_status,
             confidence=confidence,
@@ -1971,12 +2247,12 @@ def _empty_abc_report_from_snapshot_miss(date_from: date, date_to: date, group_b
         filteredSummary=AbcFilteredSummary(
             filterHash=sha1(f"{date_from}:{date_to}:{group_by}:{filters}".encode("utf-8")).hexdigest()[:12],
             skuCount=0,
-            locomotiveCount=0,
-            ordersCount=0,
-            ordersKopecks=0,
-            profitKopecks=0,
+            locomotiveCount=None,
+            ordersCount=None,
+            ordersKopecks=None,
+            profitKopecks=None,
             marginPct=None,
-            adSpendKopecks=0,
+            adSpendKopecks=None,
             sourceStatus="partial",
             confidence="low",
         ),

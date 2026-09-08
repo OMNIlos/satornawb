@@ -10,6 +10,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from app.config import get_settings, validate_security_settings
 from app.contracts.envelopes import ErrorEnvelope, ErrorEnvelopeItem
+from app.infra.health import readiness_status
 from app.routers.account_health import router as account_health_router
 from app.routers.avito_chats import router as avito_chats_router
 from app.routers.avito_listings import router as avito_listings_router
@@ -21,7 +22,9 @@ from app.routers.avito_reviews import router as avito_reviews_router
 from app.routers.avito_stats import router as avito_stats_router
 from app.routers.auth import router as auth_router
 from app.routers.cabinet import router as cabinet_router
+from app.routers.catalog_v2 import router as catalog_v2_router
 from app.routers.control_plane import router as control_plane_router
+from app.routers.finance_v2 import router as finance_v2_router
 from app.routers.notifications import router as notifications_router
 from app.routers.one_c_cash_flow import router as one_c_cash_flow_router
 from app.routers.source_registry import router as source_registry_router
@@ -29,6 +32,7 @@ from app.routers.wb_discovery import router as wb_discovery_router
 from app.routers.wb_19_05 import router as wb_19_05_router
 from app.routers.wb_reports_sprint_d import router as wb_reports_sprint_d_router
 from app.routers.wb_reports_bff import router as wb_reports_bff_router
+from app.routers.wb_reports_v2 import router as wb_reports_v2_router
 from app.routers.wb_reviews import router as wb_reviews_router
 from app.routers.wb_repricer_bff import router as wb_repricer_bff_router
 from app.routers.wb_repricer_sprint_b import router as wb_repricer_sprint_b_router
@@ -120,6 +124,18 @@ def create_app() -> FastAPI:
             },
         }
 
+    @app.get("/health/live")
+    def health_live() -> Dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/health/ready")
+    def health_ready() -> JSONResponse:
+        payload = readiness_status()
+        return JSONResponse(
+            status_code=200 if payload["status"] == "ready" else 503,
+            content=payload,
+        )
+
     app.include_router(auth_router)
     app.include_router(avito_chats_router)
     app.include_router(avito_listings_router)
@@ -130,6 +146,9 @@ def create_app() -> FastAPI:
     app.include_router(avito_reviews_router)
     app.include_router(avito_stats_router)
     app.include_router(cabinet_router)
+    app.include_router(catalog_v2_router)
+    app.include_router(finance_v2_router)
+    app.include_router(wb_reports_v2_router)
     app.include_router(notifications_router)
     if settings.one_c_enabled:
         app.include_router(one_c_cash_flow_router)

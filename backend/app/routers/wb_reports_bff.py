@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+from hashlib import sha1
 from typing import Any, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
@@ -37,6 +39,7 @@ from app.repricer_cache.store import (
     save_source_cache,
 )
 from app.repricer_bff import _extract_wb_media_url
+from app.repricer_persistence.store import load_algorithm_settings, load_runtime_state
 from app.wb_ads_cache.store import get_ads_report_cache, save_ads_history_snapshots, save_ads_report_cache
 from app.wb_api.ads_runtime import AdsAttributionRow, AdsAttributionSnapshot
 from app.wb_api.client import (
@@ -189,7 +192,7 @@ REPORT_DAILY_SOURCE_PREFIXES: dict[str, str] = {
 
 REPORT_DAILY_SOURCES_BY_ID: dict[str, tuple[str, ...]] = {
     "digest": ("period-stats", "finance", "ads", "baskets"),
-    "abc": ("finance", "ads", "baskets"),
+    "abc": ("period-stats", "finance", "ads", "baskets"),
     "rnp": ("baskets", "ads"),
     "ads": ("ads",),
     "stock": ("period-stats", "finance"),
@@ -799,6 +802,33 @@ def _cached_funnel_daily_rows(cache: dict[str, Any]) -> dict[str, list[dict[str,
     return result
 
 
+def _funnel_rows_from_merged_daily(merged: dict[str, Any]) -> list[dict[str, Any]]:
+    """Sum per-SKU daily funnel rows into one row set for the whole period.
+
+    Lets a range that crosses cache boundaries still report totals instead of
+    falling back to "blocked" and rendering every KPI as zero.
+    """
+    countable = (
+        "openCount", "cartCount", "orderCount", "orderSumKopecks",
+        "buyoutCount", "buyoutSumKopecks", "cancelCount", "cancelSumKopecks",
+        "impressions", "clicks",
+    )
+    totals: dict[str, dict[str, Any]] = {}
+    for rows in merged.values():
+        if not isinstance(rows, dict):
+            continue
+        for raw_nm_id, row in rows.items():
+            if not isinstance(row, dict):
+                continue
+            accumulated = totals.setdefault(str(raw_nm_id), {})
+            for field in countable:
+                value = row.get(field)
+                if value is None:
+                    continue
+                accumulated[field] = _int_value(accumulated.get(field)) + _int_value(value)
+    return _cached_funnel_rows_from_baskets_cache({"aggregates": totals})
+
+
 def _merged_daily_aggregates(
     organization_id: int,
     prefix: str,
@@ -926,6 +956,10 @@ def _build_digest_funnel_snapshot(
     cache = _period_cache(organization_id, "baskets", date_from, date_to)
     graph_from = max(date_from, date_to - timedelta(days=13))
     rows = _cached_funnel_rows_from_baskets_cache(cache)
+    if not rows:
+        rows = _funnel_rows_from_merged_daily(
+            _merged_daily_aggregates(organization_id, "baskets_", date_from, date_to)
+        )
     daily = _merged_funnel_daily_rows(organization_id, graph_from, date_to)
     if not daily:
         graph_cache = get_covering_source_cache(
@@ -2659,35 +2693,44 @@ def _repricer_row_to_abc_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _abc_filtered_summary_from_rows(rows: list[dict[str, Any]], *, source_status: str, confidence: str) -> dict[str, Any]:
-    sales_kopecks = sum(_int_value((row.get("salesComposite") or {}).get("kopecks")) for row in rows if isinstance(row, dict))
-    profit_kopecks = sum(_int_value(row.get("netTotalKopecks") or row.get("profitKopecks")) for row in rows if isinstance(row, dict))
-    margin_pct = round(profit_kopecks / sales_kopecks * 100, 2) if sales_kopecks > 0 else None
+    def complete_sum(values: list[Any]) -> int | None:
+        return sum(_int_value(value) for value in values) if values and all(value is not None for value in values) else None
+
+    def composites(field: str, part: str) -> list[Any]:
+        return [
+            row[field].get(part) if isinstance(row.get(field), dict) else None
+            for row in rows
+            if isinstance(row, dict)
+        ]
+    sales_kopecks = complete_sum(composites("salesComposite", "kopecks"))
+    profit_kopecks = complete_sum([
+        row.get("netTotalKopecks") if row.get("netTotalKopecks") is not None else row.get("profitKopecks")
+        for row in rows
+        if isinstance(row, dict)
+    ])
+    margin_pct = round(profit_kopecks / sales_kopecks * 100, 2) if profit_kopecks is not None and sales_kopecks and sales_kopecks > 0 else None
     return {
         "filterHash": "repricer-list",
         "skuCount": len(rows),
         "locomotiveCount": sum(1 for row in rows if str(row.get("productStatus")) == "locomotive"),
-        "ordersCount": sum(_int_value((row.get("ordersComposite") or {}).get("units")) for row in rows if isinstance(row, dict)),
-        "ordersKopecks": sum(_int_value((row.get("ordersComposite") or {}).get("kopecks")) for row in rows if isinstance(row, dict)),
+        "basketsCount": complete_sum([row.get("baskets") for row in rows if isinstance(row, dict)]),
+        "ordersCount": complete_sum(composites("ordersComposite", "units")),
+        "ordersKopecks": complete_sum(composites("ordersComposite", "kopecks")),
+        "salesKopecks": sales_kopecks,
+        "returnsKopecks": complete_sum([row.get("returnsKopecks") for row in rows if isinstance(row, dict)]),
         "profitKopecks": profit_kopecks,
         "marginPct": margin_pct,
-        "adSpendKopecks": sum(_int_value(row.get("adSpendKopecks")) for row in rows if isinstance(row, dict)),
+        "adSpendKopecks": complete_sum([row.get("adSpendKopecks") for row in rows if isinstance(row, dict)]),
         "sourceStatus": source_status,
         "confidence": confidence,
     }
 
 
-def _abc_row_cart_count(row: dict[str, Any]) -> int:
-    return max(
-        0,
-        _int_value(
-            row.get("baskets")
-            or row.get("cartCount")
-            or row.get("cartAdds")
-            or row.get("addToCart")
-            or row.get("addToCartCount")
-            or row.get("basketCount")
-        ),
-    )
+def _abc_row_cart_count(row: dict[str, Any]) -> int | None:
+    for key in ("baskets", "cartCount", "cartAdds", "addToCart", "addToCartCount", "basketCount"):
+        if row.get(key) is not None:
+            return max(0, _int_value(row[key]))
+    return None
 
 
 def _normalize_abc_report_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2703,6 +2746,55 @@ def _normalize_abc_report_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any
             item["cartCountDeltaPct"] = item.get("basketsDeltaPct")
         normalized.append(item)
     return normalized
+
+
+def _abc_report_columns() -> list[dict[str, Any]]:
+    right = {"format": "currency", "align": "right"}
+    number = {"format": "number", "align": "right"}
+    percent = {"format": "percent", "align": "right"}
+    return [
+        {"key": "sku", "label": "Товар", "sticky": True},
+        {"key": "brand", "label": "Бренд"},
+        {"key": "nmId", "label": "Артикул WB"},
+        {"key": "productStatus", "label": "Статус"},
+        {"key": "abcCode", "label": "ABC", "format": "abc", "align": "center"},
+        {"key": "ruleStatus", "label": "Статус правила"},
+        {"key": "ruleReasons", "label": "Причина правила"},
+        {"key": "promotionStatusText", "label": "Акция"},
+        {"key": "manager", "label": "Менеджер"},
+        {"key": "priceBeforeSppKopecks", "label": "Цена до СПП", **right},
+        {"key": "priceWithSppKopecks", "label": "Цена после СПП", **right},
+        {"key": "averageSalePriceKopecks", "label": "Средняя цена", **right},
+        {"key": "cogsPerUnitKopecks", "label": "Себестоимость", **right},
+        {"key": "grossMarginKopecks", "label": "Валовая маржа", **right},
+        {"key": "profitabilityPct", "label": "Рентабельность", **percent},
+        {"key": "marginKopecks", "label": "Маржа на единицу", **right},
+        {"key": "impressions", "label": "Показы", **number},
+        {"key": "clicks", "label": "Переходы / CTR", **number},
+        {"key": "baskets", "label": "Корзины", **number},
+        {"key": "cartCrPct", "label": "Конверсия", **percent},
+        {"key": "ordersComposite", "label": "Заказы"},
+        {"key": "cancelledOrdersUnits", "label": "Отмены", **number},
+        {"key": "salesComposite", "label": "Продажи"},
+        {"key": "returnsKopecks", "label": "Возвраты", **right},
+        {"key": "adSpendKopecks", "label": "Реклама / ДРР", **right},
+        {"key": "commissionKopecks", "label": "Комиссия WB", **right},
+        {"key": "logisticsKopecks", "label": "Логистика", **right},
+        {"key": "storageKopecks", "label": "Хранение", **right},
+        {"key": "acceptanceKopecks", "label": "Приёмка", **right},
+        {"key": "acquiringKopecks", "label": "Эквайринг", **right},
+        {"key": "penaltyKopecks", "label": "Штрафы", **right},
+        {"key": "deductionKopecks", "label": "Удержания", **right},
+        {"key": "loyaltyCostKopecks", "label": "Лояльность WB", **right},
+        {"key": "taxKopecks", "label": "Налоги", **right},
+        {"key": "totalOtherExpensesKopecks", "label": "Прочие расходы", **right},
+        {"key": "compensationKopecks", "label": "Компенсации", **right},
+        {"key": "netTotalKopecks", "label": "Чистая прибыль", **right},
+        {"key": "ktrIndex", "label": "КТР / локализация", **number},
+        {"key": "wbStockUnits", "label": "Остаток WB", **number},
+        {"key": "turnoverDays", "label": "Оборачиваемость", **number},
+        {"key": "comment", "label": "Комментарий"},
+    ]
 
 
 def _map_abc_to_report_response(payload: Any, date_range: dict[str, str]) -> dict[str, Any]:
@@ -2724,48 +2816,29 @@ def _map_abc_to_report_response(payload: Any, date_range: dict[str, str]) -> dic
         filtered_summary["sourceStatus"] = source_status
         filtered_summary["confidence"] = confidence
     group_by = getattr(payload, "groupBy", "sku")
+    def metric_text(value: Any) -> str:
+        return "—" if value is None else str(value)
     return {
         "cacheVersion": ABC_REPORT_PAYLOAD_VERSION,
         "meta": _meta("abc", "ABC-анализ", "ABC and SKU profitability view.", "operational", source_status),
         "headline": "ABC summary for selected period.",
         "filters": {"dateRange": date_range, "groupBy": group_by},
         "kpis": [
-            _kpi("sku_count", "SKU", str(filtered_summary.get("skuCount") or 0)),
-            _kpi("orders", "Заказы", str(filtered_summary.get("ordersCount") or 0)),
-            _kpi("orders_revenue", "Выручка", str(filtered_summary.get("ordersKopecks") or 0)),
-            _kpi("profit", "Прибыль", str(filtered_summary.get("profitKopecks") or 0)),
+            _kpi("sku_count", "SKU", metric_text(filtered_summary.get("skuCount"))),
+            _kpi("orders", "Заказы", metric_text(filtered_summary.get("ordersCount"))),
+            _kpi("orders_revenue", "Выручка", metric_text(filtered_summary.get("ordersKopecks"))),
+            _kpi("profit", "Прибыль", metric_text(filtered_summary.get("profitKopecks"))),
         ],
         "chart": {
             "title": "Чистая прибыль по SKU",
             "valueLabel": "Чистая прибыль, коп",
             "points": [
-                {"label": str(row.get("sku") or row.get("label") or index + 1), "value": int(row.get("netTotalKopecks") or row.get("profitKopecks") or 0)}
+                {"label": str(row.get("sku") or row.get("label") or index + 1), "value": int(row.get("netTotalKopecks") if row.get("netTotalKopecks") is not None else row.get("profitKopecks"))}
                 for index, row in enumerate(abc_rows[:20])
-                if isinstance(row, dict)
+                if isinstance(row, dict) and (row.get("netTotalKopecks") is not None or row.get("profitKopecks") is not None)
             ],
         },
-        "columns": [
-            {"key": "sku", "label": "Артикул", "sticky": True},
-            {"key": "nmId", "label": "WB"},
-            {"key": "abcCode", "label": "ABC", "format": "abc", "align": "center"},
-            {"key": "productStatus", "label": "Статус"},
-            {"key": "manager", "label": "Менеджер"},
-            {"key": "brand", "label": "Бренд"},
-            {"key": "category", "label": "Категория"},
-            {"key": "clicks", "label": "Переходы WB", "format": "number", "align": "right"},
-            {"key": "baskets", "label": "Корзины", "format": "number", "align": "right"},
-            {"key": "basketsDeltaPct", "label": "Дин. корзин", "format": "percent", "align": "right"},
-            {"key": "cartCrPct", "label": "CR корзин", "format": "percent", "align": "right"},
-            {"key": "ordersComposite", "label": "Заказы шт/руб/динамика", "align": "right"},
-            {"key": "salesComposite", "label": "Продажи шт/руб/динамика", "align": "right"},
-            {"key": "netTotalKopecks", "label": "Чистая прибыль", "format": "currency", "align": "right"},
-            {"key": "marginPct", "label": "Маржа", "format": "percent", "align": "right"},
-            {"key": "adSpendKopecks", "label": "Реклама", "format": "currency", "align": "right"},
-            {"key": "wbStockUnits", "label": "Остаток WB", "format": "number", "align": "right"},
-            {"key": "logisticsCostPct", "label": "% логистика", "format": "percent", "align": "right"},
-            {"key": "commissionCostPct", "label": "% комиссия", "format": "percent", "align": "right"},
-            {"key": "storageCostPct", "label": "% хранение", "format": "percent", "align": "right"},
-        ],
+        "columns": _abc_report_columns(),
         "rows": abc_rows,
         "sourceStatus": source_status,
         "confidence": confidence,
@@ -3288,14 +3361,58 @@ BACKGROUND_REPORT_JOB_STALE_AFTER = timedelta(minutes=15)
 BACKGROUND_REPORT_QUEUED_STALE_AFTER = timedelta(seconds=30)
 DIGEST_CACHE_TTL = timedelta(hours=24)
 REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
-ABC_REPORT_PAYLOAD_VERSION = "v14"
+ABC_REPORT_PAYLOAD_VERSION = "v16"
 PNL_REPORT_PAYLOAD_VERSION = "v1"
 RNP_REPORT_PAYLOAD_VERSION = "v3"
 STOCK_REPORT_PAYLOAD_VERSION = "v5"
 WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v2"
 
 
-def _report_cache_key(report_id: str, date_from: date, date_to: date, group_by: str, source: str) -> str:
+def _abc_economics_version(organization_id: int) -> str:
+    runtime = load_runtime_state(organization_id) or {}
+    rules = load_active_profile(organization_id)
+    algorithm = load_algorithm_settings(organization_id) or {}
+    payload = {
+        "algorithm": {
+            key: algorithm.get(key)
+            for key in (
+                "cogsByGarmentRub",
+                "cogsByGarmentHistory",
+                "taxPct",
+                "otherExpensePricePct",
+                "otherExpensePerSaleRub",
+            )
+        },
+        "skuSettingsOverrides": {
+            sku: {
+                key: settings.get(key)
+                for key in ("cogsKopecks", "taxPct", "otherExpensePricePct", "otherExpensePerSaleKopecks")
+            }
+            for sku, settings in (runtime.get("skuSettingsOverrides") or {}).items()
+            if isinstance(settings, dict)
+        },
+        "skuMetaOverrides": {
+            sku: {key: meta.get(key) for key in ("status", "managerId", "managerName", "brand")}
+            for sku, meta in (runtime.get("skuMetaOverrides") or {}).items()
+            if isinstance(meta, dict)
+        },
+        "cogsHistory": runtime.get("cogsHistory") or {},
+        "rulesProfile": {"id": rules.profileId, "version": rules.version, "config": rules.config.model_dump(mode="json")},
+    }
+    return sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()[:12]
+
+
+def _report_cache_key(
+    report_id: str,
+    date_from: date,
+    date_to: date,
+    group_by: str,
+    source: str,
+    *,
+    organization_id: int | None = None,
+) -> str:
+    if report_id == "abc" and organization_id is not None:
+        return f"reports_payload_abc_{ABC_REPORT_PAYLOAD_VERSION}_{_abc_economics_version(organization_id)}_org{organization_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}"
     return f"reports_payload_{report_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}"
 
 
@@ -3391,7 +3508,7 @@ def _rnp_report_cache_has_funnel_signal(cache: dict[str, Any]) -> bool:
     return not (funnel_rows == 0 and (ads_rows > 0 or has_ads_only_rows))
 
 
-def _report_payload_cache_is_usable(report_id: str, cache: dict[str, Any]) -> bool:
+def _report_payload_cache_is_usable(report_id: str, cache: dict[str, Any], *, organization_id: int | None = None) -> bool:
     if not _report_payload_cache_is_fresh(cache):
         return False
     if report_id == "rnp" and not _rnp_report_cache_has_funnel_signal(cache):
@@ -3407,6 +3524,8 @@ def _report_payload_cache_is_usable(report_id: str, cache: dict[str, Any]) -> bo
     if report_id == "abc":
         report = cache.get("report") if isinstance(cache.get("report"), dict) else {}
         if report.get("cacheVersion") != ABC_REPORT_PAYLOAD_VERSION:
+            return False
+        if organization_id is not None and report.get("economicsVersion") != _abc_economics_version(organization_id):
             return False
     if report_id == "pnl":
         report = cache.get("report") if isinstance(cache.get("report"), dict) else {}
@@ -3446,13 +3565,19 @@ def _save_exact_report_payload_cache(
     report: dict[str, Any],
 ) -> dict[str, Any]:
     report = _normalize_report_basket_fields(report)
+    if report_id == "abc":
+        report["economicsVersion"] = _abc_economics_version(organization_id)
     cache = {
         "report": report,
         "dateFrom": date_from.isoformat(),
         "dateTo": date_to.isoformat(),
         "completedAt": _utc_now_iso(),
     }
-    save_source_cache(organization_id, _report_cache_key(report_id, date_from, date_to, group_by, source), cache)
+    save_source_cache(
+        organization_id,
+        _report_cache_key(report_id, date_from, date_to, group_by, source, organization_id=organization_id),
+        cache,
+    )
     return cache
 
 
@@ -3534,6 +3659,8 @@ def _parse_report_payload_cache_key(source_key: str, report_id: str) -> tuple[da
     if not source_key.startswith(prefix):
         return None, None, None, None
     tail = source_key[len(prefix):]
+    if report_id == "abc":
+        tail = re.sub(rf"^{re.escape(ABC_REPORT_PAYLOAD_VERSION)}_[0-9a-f]+_org\d+_", "", tail)
     match = re.match(r"(?P<date_from>\d{4}-\d{2}-\d{2})_(?P<date_to>\d{4}-\d{2}-\d{2})_(?P<group_by>[^_]+)_(?P<source>.+)$", tail)
     if not match:
         return None, None, None, None
@@ -3562,10 +3689,17 @@ def _latest_report_payload_cache(
     if requested_from is not None and requested_to is not None:
         exact = get_source_cache(
             organization_id,
-            _report_cache_key(report_id, requested_from, requested_to, group_by, source),
+            _report_cache_key(
+                report_id,
+                requested_from,
+                requested_to,
+                group_by,
+                source,
+                organization_id=organization_id,
+            ),
             slim=False,
         ) or {}
-        if _report_payload_cache_is_usable(report_id, exact):
+        if _report_payload_cache_is_usable(report_id, exact, organization_id=organization_id):
             return exact, requested_from, requested_to
         return None
     for cache in list_source_cache_by_prefix(organization_id, f"reports_payload_{report_id}_", limit=50, slim=False):
@@ -3573,7 +3707,7 @@ def _latest_report_payload_cache(
         fallback_from, fallback_to, cached_group_by, cached_source = _parse_report_payload_cache_key(source_key, report_id)
         if cached_group_by != group_by or cached_source != source:
             continue
-        if not _report_payload_cache_is_usable(report_id, cache):
+        if not _report_payload_cache_is_usable(report_id, cache, organization_id=organization_id):
             continue
         cached_from, cached_to, _date_range = _date_range_from_report_cache(cache, fallback_from, fallback_to)
         if cached_from is None or cached_to is None:
@@ -3620,9 +3754,16 @@ def _rule_metrics_from_row(row: dict[str, Any]) -> dict[str, Any]:
     return metrics
 
 
-def _apply_report_rules_to_payload(payload: dict[str, Any], organization_id: int) -> dict[str, Any]:
+def _apply_report_rules_to_payload(
+    payload: dict[str, Any],
+    organization_id: int,
+    *,
+    compact_abc: bool | None = None,
+) -> dict[str, Any]:
     profile = load_active_profile(organization_id)
     result = _normalize_report_basket_fields(payload)
+    if compact_abc is None:
+        compact_abc = isinstance(result.get("meta"), dict) and result["meta"].get("id") == "abc"
     rows = result.get("rows") if isinstance(result.get("rows"), list) else []
     decorated: list[Any] = []
     oos_count = 0
@@ -3635,7 +3776,10 @@ def _apply_report_rules_to_payload(payload: dict[str, Any], organization_id: int
         evaluation = evaluate_metrics(_rule_metrics_from_row(row), profile).model_dump(mode="json")
         if evaluation["status"] == "risk":
             attention_count += 1
-        row["ruleEvaluation"] = evaluation
+        if compact_abc:
+            row["ruleStatusCode"] = evaluation["status"]
+        else:
+            row["ruleEvaluation"] = evaluation
         row["ruleStatus"] = {"unknown": "Недостаточно данных", "risk": "Риск", "opportunity": "Возможность", "normal": "Норма"}.get(evaluation["status"], evaluation["status"])
         row["ruleReasons"] = " · ".join(evaluation.get("statusReasons") or []) or "Пороговых рекомендаций нет"
         row["ruleRecommendation"] = ", ".join(
@@ -3644,17 +3788,7 @@ def _apply_report_rules_to_payload(payload: dict[str, Any], organization_id: int
         reasons = {item.get("reason") for item in evaluation.get("recommendedActions", []) if isinstance(item, dict)}
         if "oos" in reasons:
             oos_count += 1
-        if "loss" in reasons:
-            row["productStatus"] = "loss"
-        elif "oos" in reasons:
-            row["productStatus"] = "OOS риск"
-        elif "highDrr" in reasons:
-            row["productStatus"] = "выше порога ДРР"
-        elif reasons & {"badCr", "cWeak"}:
-            row["productStatus"] = "неликвид"
-        elif "aaGood" in reasons:
-            row["productStatus"] = "локомотив"
-        decorated.append(row)
+        decorated.append({key: value for key, value in row.items() if value is not None} if compact_abc else row)
     result["rows"] = decorated
     result["rulesProfileVersion"] = profile.version
     result["rulesProfile"] = {"name": profile.name, "preset": profile.preset}
@@ -4268,7 +4402,7 @@ def get_reports_latest_cache(
         raise HTTPException(status_code=404, detail="REPORT_LATEST_CACHE_MISSING")
     date_range = {"preset": "custom", "from": date_from.isoformat(), "to": date_to.isoformat()}
     job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {}
-    payload = _apply_report_rules_to_payload(report, actor.organization_id) if report_id == "abc" else dict(report)
+    payload = _apply_report_rules_to_payload(report, actor.organization_id, compact_abc=False) if report_id == "abc" else dict(report)
     payload["cache"] = _report_payload_cache_meta(cache, date_range, "latest")
     payload["reportJob"] = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cache, job)
     return payload
@@ -4498,18 +4632,33 @@ def get_reports_by_id(
         }
         return _map_cash_flow_to_expenses_response(cash_flow, date_range, groupBy, job)
 
+    if report_id == "abc":
+        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
+        cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
+        report = cached.get("report") if isinstance(cached.get("report"), dict) else None
+        if report is not None and _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
+            job = get_source_cache(
+                actor.organization_id,
+                _report_job_cache_key(report_id, date_from, date_to, groupBy, source),
+                slim=False,
+            ) or {}
+            payload = dict(report)
+            payload["cache"] = _report_payload_cache_meta(cached, date_range)
+            payload["reportJob"] = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
+            return payload
+
     if report_id == "week-over-week":
-        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source)
+        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
         cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
         report = cached.get("report") if isinstance(cached.get("report"), dict) else None
         job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {
             "state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy,
         }
         if report is not None:
-            if not _report_payload_cache_is_usable(report_id, cached):
+            if not _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
                 return _empty_background_report(report_id, date_range, groupBy, _report_job_for_response(job))
             job = _report_job_for_response(job)
-            if _report_payload_cache_is_usable(report_id, cached):
+            if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
                 job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
                 save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), job)
             payload = _apply_report_rules_to_payload(report, actor.organization_id)
@@ -4523,17 +4672,17 @@ def get_reports_by_id(
         return _empty_background_report(report_id, date_range, groupBy, job)
 
     if report_id == "pnl":
-        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source)
+        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
         cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
         report = cached.get("report") if isinstance(cached.get("report"), dict) else None
         job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {
             "state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy,
         }
         if report is not None:
-            if not _report_payload_cache_is_usable(report_id, cached):
+            if not _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
                 return _empty_background_report(report_id, date_range, groupBy, _report_job_for_response(job))
             job = _report_job_for_response(job)
-            if _report_payload_cache_is_usable(report_id, cached):
+            if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
                 job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
                 save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), job)
             payload = _apply_report_rules_to_payload(report, actor.organization_id)
@@ -4653,35 +4802,14 @@ def get_reports_by_id(
                     if isinstance(row, dict)
                 ],
             },
-            "columns": [
-                {"key": "sku", "label": "Артикул", "sticky": True},
-                {"key": "nmId", "label": "WB"},
-                {"key": "abcCode", "label": "ABC", "format": "abc", "align": "center"},
-                {"key": "productStatus", "label": "Статус"},
-                {"key": "manager", "label": "Менеджер"},
-                {"key": "brand", "label": "Бренд"},
-                {"key": "category", "label": "Категория"},
-                {"key": "clicks", "label": "Переходы WB", "format": "number", "align": "right"},
-                {"key": "baskets", "label": "Корзины", "format": "number", "align": "right"},
-                {"key": "basketsDeltaPct", "label": "Дин. корзин", "format": "percent", "align": "right"},
-                {"key": "cartCrPct", "label": "CR корзин", "format": "percent", "align": "right"},
-                {"key": "ordersComposite", "label": "Заказы шт/руб/динамика", "align": "right"},
-                {"key": "salesComposite", "label": "Продажи шт/руб/динамика", "align": "right"},
-                {"key": "netTotalKopecks", "label": "Чистая прибыль", "format": "currency", "align": "right"},
-                {"key": "marginPct", "label": "Маржа", "format": "percent", "align": "right"},
-                {"key": "adSpendKopecks", "label": "Реклама", "format": "currency", "align": "right"},
-                {"key": "wbStockUnits", "label": "Остаток WB", "format": "number", "align": "right"},
-                {"key": "logisticsCostPct", "label": "% логистика", "format": "percent", "align": "right"},
-                {"key": "commissionCostPct", "label": "% комиссия", "format": "percent", "align": "right"},
-                {"key": "storageCostPct", "label": "% хранение", "format": "percent", "align": "right"},
-            ],
+            "columns": _abc_report_columns(),
             "rows": abc_rows,
             "sourceStatus": source_status,
             "confidence": confidence,
             "blockerIds": blocker_ids,
             "sourceEvidence": [item.model_dump(mode="json") for item in abc_payload.sourceEvidence],
             "filteredSummary": filtered_summary,
-        }, actor.organization_id)
+        }, actor.organization_id, compact_abc=True)
         _save_exact_report_payload_cache(organization_id=actor.organization_id, report_id=report_id, date_from=date_from, date_to=date_to, group_by=groupBy, source=source, report=payload)
         return payload
     if report_id == "pnl":
@@ -4720,12 +4848,12 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
     assert_permission_or_audit(actor=actor, permission="settings:read", action="reports.bff.job.start", object_type="wb_report", object_id=report_id, reason="actor cannot refresh report")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
     key = _report_job_cache_key(report_id, date_from, date_to, groupBy, source)
-    cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source)
+    cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
     cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
     current = get_source_cache(actor.organization_id, key, slim=False) or {}
     if _report_job_is_active_refresh(current):
         return {**current, "reused": True}
-    if _report_payload_cache_is_usable(report_id, cached):
+    if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
         payload = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, current)
         save_source_cache(actor.organization_id, key, payload)
         return payload
@@ -4824,8 +4952,12 @@ def get_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pn
         return _report_job_for_response({**job, "reused": True})
     if _report_job_is_finished_refresh(job):
         return _report_job_for_response({**job, "reused": True})
-    cached = get_source_cache(actor.organization_id, _report_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {}
-    if _report_payload_cache_is_usable(report_id, cached):
+    cached = get_source_cache(
+        actor.organization_id,
+        _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id),
+        slim=False,
+    ) or {}
+    if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
         payload = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
         save_source_cache(actor.organization_id, key, payload)
         return payload

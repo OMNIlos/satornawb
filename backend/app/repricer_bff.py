@@ -10,6 +10,7 @@ from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 from math import ceil, floor
 from typing import Any, Callable, Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
@@ -30,6 +31,8 @@ from app.wb_api.client import (
 from app.wb_api.price_units import wb_goods_price_to_kopecks
 
 logger = logging.getLogger(__name__)
+
+_MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 _PROMOTION_LIST_PAGE_SIZE = 100
 _PROMOTION_NOMENCLATURES_PAGE_SIZE = 1000
@@ -686,12 +689,25 @@ def _days_between(target: datetime, now: datetime) -> int:
 
 
 def _article_type(article_id: str) -> str:
-    first = (article_id[:1] or "F").upper()
-    return {
+    normalized = article_id.strip().upper()
+    first = normalized[:1] or "F"
+    markers = {
         "Л": "L",
         "Ф": "F",
         "Х": "H",
-    }.get(first, first)
+        "L": "L",
+        "F": "F",
+        "H": "H",
+    }
+    if first in markers:
+        return markers[first]
+    for marker in normalized:
+        if marker in "ЛФХ":
+            return markers[marker]
+    for index, marker in enumerate(normalized):
+        if marker in "LFH" and (index == 0 or not normalized[index - 1].isalpha()):
+            return marker
+    return first
 
 
 ARTICLE_TYPE_FALLBACK_SUBJECTS: dict[str, str] = {
@@ -2807,7 +2823,13 @@ def fetch_period_stats_aggregates(
     daily_result: dict[str, dict[str, dict[str, Any]]] = {}
 
     for item in orders:
-        item_date = _date_from_any(item.get("date") or item.get("lastChangeDate") or item.get("dt"))
+        cancelled = _is_cancelled_order(item)
+        cancel_date = _date_from_any(item.get("cancelDate") or item.get("cancelDt") or item.get("cancel_date"))
+        item_date = (
+            cancel_date
+            if cancelled and cancel_date and cancel_date.year > 2001
+            else _date_from_any(item.get("date") or item.get("lastChangeDate") or item.get("dt"))
+        )
         if item_date is not None and (item_date < start_date or item_date > end_date):
             continue
         nm_id = int(item.get("nmId") or item.get("nmID") or 0)
@@ -2857,7 +2879,7 @@ def fetch_period_stats_aggregates(
         if order_unit_key:
             order_unit_keys = row["_orderUnitKeys"]
             if order_unit_key in order_unit_keys:
-                if _is_cancelled_order(item):
+                if cancelled:
                     cancelled_order_unit_keys = row.setdefault("_cancelledOrderUnitKeys", set())
                     if order_unit_key not in cancelled_order_unit_keys:
                         row["cancelledOrdersUnits"] += 1
@@ -2871,7 +2893,7 @@ def fetch_period_stats_aggregates(
             order_unit_keys.add(order_unit_key)
             if day_row is not None:
                 day_row["_orderUnitKeys"].add(order_unit_key)
-        if _is_cancelled_order(item):
+        if cancelled:
             if order_unit_key:
                 cancelled_order_unit_keys = row.setdefault("_cancelledOrderUnitKeys", set())
                 if order_unit_key not in cancelled_order_unit_keys:
@@ -3037,19 +3059,29 @@ def _sales_funnel_metrics(source: dict[str, Any]) -> dict[str, Any]:
     buyout_pct = conversions.get("buyoutPercent")
     if buyout_pct is None and order_count > 0 and buyout_count >= 0:
         buyout_pct = round((buyout_count / order_count) * 100, 1)
-    impressions = int(
-        _first_number(source, "viewCount", "viewCountTotal", "views", "viewsCount", "impressions", "showCount", "showCountTotal", "impressionCount")
-        or 0
+    impressions = _first_number(
+        source,
+        "viewCount",
+        "viewCountTotal",
+        "views",
+        "viewsCount",
+        "impressions",
+        "showCount",
+        "showCountTotal",
+        "impressionCount",
     )
     return {
         "cartCount": int(_first_number(source, "cartCount", "addToCartCount", "addToCart") or 0),
         "orderCount": order_count,
         "orderSumKopecks": _first_kopecks(source, "orderSum", "ordersSumRub", "ordersSum"),
         "openCount": int(_first_number(source, "openCount", "openCardCount", "openCard") or 0),
-        "impressions": impressions,
+        "impressions": int(impressions) if impressions is not None else None,
         "buyoutCount": buyout_count,
         "buyoutSumKopecks": _first_kopecks(source, "buyoutSum", "buyoutsSumRub", "buyoutsSum"),
         "buyoutPct": buyout_pct,
+        "atcrPct": _first_number(conversions, "addToCartPercent"),
+        "cartToOrderPct": _first_number(conversions, "cartToOrderPercent"),
+        "localizationPct": _first_number(source, "localizationPercent"),
     }
 
 
@@ -3061,12 +3093,26 @@ def _merge_sales_funnel_products(result: dict[str, dict[str, Any]], products: li
         nm_id = int(product.get("nmId") or product.get("nmID") or 0)
         if nm_id <= 0:
             continue
+        stocks = product.get("stocks") or {}
+        wb_stock_units = _first_number(stocks, "wb")
         statistic = item.get("statistic") or {}
         selected = statistic.get("selected") or {}
         previous = statistic.get("past") or statistic.get("previous") or statistic.get("pastPeriod") or {}
+        comparison = statistic.get("comparison") or {}
         result[str(nm_id)] = {
             **_sales_funnel_metrics(selected),
             "previous": _sales_funnel_metrics(previous) if isinstance(previous, dict) and previous else {},
+            "openCountDeltaPct": _first_number(comparison, "openCountDynamic", "openCardCountDynamic", "openCardDynamic"),
+            "cartCountDeltaPct": _first_number(comparison, "cartCountDynamic", "addToCartCountDynamic", "addToCartDynamic"),
+            "orderCountDeltaPct": _first_number(comparison, "orderCountDynamic", "ordersCountDynamic", "ordersDynamic"),
+            "orderSumDeltaPct": _first_number(comparison, "orderSumDynamic"),
+            "buyoutCountDeltaPct": _first_number(comparison, "buyoutCountDynamic", "buyoutsCountDynamic"),
+            "buyoutSumDeltaPct": _first_number(comparison, "buyoutSumDynamic", "buyoutsSumDynamic"),
+            "productName": product.get("title"),
+            "vendorCode": product.get("vendorCode"),
+            "brand": product.get("brandName"),
+            "category": product.get("subjectName"),
+            "wbStockUnits": int(wb_stock_units) if wb_stock_units is not None else None,
             "source": "sales_funnel_products",
         }
 
@@ -3393,6 +3439,8 @@ def fetch_finance_report_aggregates(
     request_date_to = date_to
     fields = [
         "rrdId",
+        "reportId",
+        "reportType",
         "docTypeName",
         "sellerOperName",
         "bonusTypeName",
@@ -3427,6 +3475,8 @@ def fetch_finance_report_aggregates(
     limit = 100_000
     rrd_id = 0
     rows: list[dict[str, Any]] = []
+    seen_rrd_ids: set[int] = set()
+    duplicate_rows_skipped = 0
     pages_loaded = 0
     while True:
         payload = _request_or_raise_finance_report(
@@ -3449,7 +3499,14 @@ def fetch_finance_report_aggregates(
         if not page_rows:
             break
 
-        rows.extend(page_rows)
+        for item in page_rows:
+            item_rrd_id = int(_number_or_none(item.get("rrdId") or item.get("rrd_id")) or 0)
+            if item_rrd_id > 0 and item_rrd_id in seen_rrd_ids:
+                duplicate_rows_skipped += 1
+                continue
+            if item_rrd_id > 0:
+                seen_rrd_ids.add(item_rrd_id)
+            rows.append(item)
         pages_loaded += 1
         if len(page_rows) < limit:
             break
@@ -3476,6 +3533,8 @@ def fetch_finance_report_aggregates(
                 "returnsUnits": 0,
                 "netSalesUnits": 0,
                 "revenueGrossKopecks": 0,
+                "grossSalesKopecks": 0,
+                "returnsKopecks": 0,
                 "buyerRevenueKopecks": 0,
                 "sellerRevenueKopecks": 0,
                 "sellerRevenueRows": 0,
@@ -3551,6 +3610,7 @@ def fetch_finance_report_aggregates(
             row["buyerRevenueKopecks"] += buyer_revenue_kopecks
             row["sellerRevenueKopecks"] += seller_revenue_kopecks
             row["revenueGrossKopecks"] += seller_revenue_kopecks
+            row["grossSalesKopecks"] += seller_revenue_kopecks
             if commission_pct is not None:
                 row["commissionFormulaKopecks"] += round(seller_revenue_kopecks * commission_pct / 100)
         elif doc_type_name == "возврат":
@@ -3564,6 +3624,7 @@ def fetch_finance_report_aggregates(
             row["buyerRevenueKopecks"] -= buyer_revenue_kopecks
             row["sellerRevenueKopecks"] -= seller_revenue_kopecks
             row["revenueGrossKopecks"] -= seller_revenue_kopecks
+            row["returnsKopecks"] += seller_revenue_kopecks
             if commission_pct is not None:
                 row["commissionFormulaKopecks"] -= round(seller_revenue_kopecks * commission_pct / 100)
         if doc_type_name in {"продажа", "возврат"} and (buyer_revenue_kopecks or seller_revenue_kopecks):
@@ -3698,6 +3759,8 @@ def fetch_finance_report_aggregates(
                 "returnsUnits": 0,
                 "netSalesUnits": 0,
                 "revenueGrossKopecks": 0,
+                "grossSalesKopecks": 0,
+                "returnsKopecks": 0,
                 "buyerRevenueKopecks": 0,
                 "sellerRevenueKopecks": 0,
                 "sellerRevenueRows": 0,
@@ -3728,6 +3791,8 @@ def fetch_finance_report_aggregates(
                 "_payableRows": 0,
                 "_settlementRows": 0,
                 "source": "finance_sales_reports_detailed",
+                "_saleUnitKeys": set(),
+                "_returnUnitKeys": set(),
             },
         )
         if not row.get("vendorCode"):
@@ -3745,22 +3810,37 @@ def fetch_finance_report_aggregates(
             is not None
         )
         doc_type_name = str(item.get("docTypeName") or item.get("doc_type_name") or "").strip().lower()
+        unit_key = _finance_unit_key(item)
         commission_pct = _first_number(item, "commission_percent", "commissionPercent")
         if doc_type_name in {"продажа", "возврат"}:
             row["sellerRevenueRows"] += int(seller_revenue_available)
             row["sellerRevenueMissingRows"] += int(not seller_revenue_available)
         if doc_type_name == "продажа":
-            row["salesUnits"] += max(1, quantity)
+            if unit_key:
+                sale_unit_keys = row["_saleUnitKeys"]
+                if unit_key not in sale_unit_keys:
+                    sale_unit_keys.add(unit_key)
+                    row["salesUnits"] += max(1, quantity)
+            else:
+                row["salesUnits"] += quantity
             row["buyerRevenueKopecks"] += buyer_revenue_kopecks
             row["sellerRevenueKopecks"] += seller_revenue_kopecks
             row["revenueGrossKopecks"] += seller_revenue_kopecks
+            row["grossSalesKopecks"] += seller_revenue_kopecks
             if commission_pct is not None:
                 row["commissionFormulaKopecks"] += round(seller_revenue_kopecks * commission_pct / 100)
         elif doc_type_name == "возврат":
-            row["returnsUnits"] += max(1, quantity)
+            if unit_key:
+                return_unit_keys = row["_returnUnitKeys"]
+                if unit_key not in return_unit_keys:
+                    return_unit_keys.add(unit_key)
+                    row["returnsUnits"] += max(1, quantity)
+            else:
+                row["returnsUnits"] += quantity
             row["buyerRevenueKopecks"] -= buyer_revenue_kopecks
             row["sellerRevenueKopecks"] -= seller_revenue_kopecks
             row["revenueGrossKopecks"] -= seller_revenue_kopecks
+            row["returnsKopecks"] += seller_revenue_kopecks
             if commission_pct is not None:
                 row["commissionFormulaKopecks"] -= round(seller_revenue_kopecks * commission_pct / 100)
         if doc_type_name in {"продажа", "возврат"} and (buyer_revenue_kopecks or seller_revenue_kopecks):
@@ -3824,6 +3904,8 @@ def fetch_finance_report_aggregates(
                 int(row.get("sellerRevenueKopecks") or 0) - int(row.get("buyerRevenueKopecks") or 0),
             )
             row["netSalesUnits"] = int(row.get("salesUnits") or 0) - int(row.get("returnsUnits") or 0)
+            row["unitKeyedSalesCount"] = len(row.pop("_saleUnitKeys", set()))
+            row["unitKeyedReturnsCount"] = len(row.pop("_returnUnitKeys", set()))
 
     return {
         "aggregates": result,
@@ -3838,10 +3920,11 @@ def fetch_finance_report_aggregates(
         ),
         "count": len(result),
         "rowsCount": len(rows),
+        "duplicateRowsSkipped": duplicate_rows_skipped,
         "pagesLoaded": pages_loaded,
         "requestedFields": fields,
         "revenueBasis": "retailAmount",
-        "financeSchemaVersion": "v2",
+        "financeSchemaVersion": "v3",
         "dateFrom": date_from.date().isoformat(),
         "dateTo": date_to.date().isoformat(),
     }
@@ -6320,20 +6403,23 @@ def _date_from_any(raw: Any) -> date | None:
     if raw is None:
         return None
     if isinstance(raw, datetime):
-        return raw.date()
+        value = raw if raw.tzinfo is not None else raw.replace(tzinfo=_MOSCOW_TZ)
+        return value.astimezone(_MOSCOW_TZ).date()
     if isinstance(raw, date):
         return raw
     text = str(raw).strip()
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text[:10]).date()
+        value = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
-        pass
-    parsed = _parse_iso(text)
-    if parsed is not None:
-        return parsed.date()
-    return None
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=_MOSCOW_TZ)
+    return value.astimezone(_MOSCOW_TZ).date()
 
 
 def _hour_from_any(raw: Any) -> int | None:

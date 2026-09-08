@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from io import BytesIO
+import logging
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 
@@ -77,7 +78,7 @@ def test_live_avito_orders_client_gets_order_management_orders_and_normalizes_ro
     assert result.orders[0].availableActions[0].required is True
 
 
-def test_live_avito_orders_client_returns_raw_diagnostics_on_avito_error():
+def test_live_avito_orders_client_returns_safe_diagnostics_on_avito_error():
     http_client = RecordingAvitoOrdersHttpClient(({"error": {"message": "forbidden"}}, 403))
     client = LiveAvitoOrdersClient(access_token="token", base_url="https://api.avito.ru")
 
@@ -89,7 +90,39 @@ def test_live_avito_orders_client_returns_raw_diagnostics_on_avito_error():
     assert result.diagnostics is not None
     assert result.diagnostics["status"] == 403
     assert result.diagnostics["requestUrl"] == "https://api.avito.ru/order-management/1/orders"
-    assert result.diagnostics["bodyPreview"] == {"error": {"message": "forbidden"}}
+    assert "bodyPreview" not in result.diagnostics
+
+
+def test_live_avito_orders_client_does_not_log_order_body(caplog):
+    http_client = RecordingAvitoOrdersHttpClient(
+        {
+            "orders": [
+                {
+                    "id": "private-order-id",
+                    "buyer": {"name": "private-buyer-name", "phone": "+79991234567"},
+                    "delivery": {"address": "private-delivery-address"},
+                    "privateMarker": "private-nested-value",
+                }
+            ]
+        }
+    )
+    client = LiveAvitoOrdersClient(access_token="token", base_url="https://api.avito.ru")
+
+    with caplog.at_level(logging.WARNING, logger="app.avito.orders"):
+        result = client.fetch_orders(AvitoOrdersFetchRequest(), http_client=http_client)
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert result.orders[0].buyerName == "private-buyer-name"
+    assert result.diagnostics is not None
+    assert "bodyPreview" not in result.diagnostics
+    assert "private-nested-value" not in str(result.diagnostics)
+    assert "[AVITO_ORDERS_STATUS] 200" in messages
+    assert "[AVITO_ORDERS_COUNT] 1" in messages
+    assert "[AVITO_ORDERS_BODY]" not in messages
+    assert "private-buyer-name" not in messages
+    assert "+79991234567" not in messages
+    assert "private-delivery-address" not in messages
+    assert "private-nested-value" not in messages
 
 
 def test_live_avito_orders_client_parses_avito_prices_delivery_and_schedule_shape():

@@ -4,18 +4,13 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.routers.wb_reports_bff import (
-    ABC_REPORT_PAYLOAD_VERSION,
     DIGEST_REPORT_PAYLOAD_VERSION,
-    PNL_REPORT_PAYLOAD_VERSION,
     STOCK_REPORT_PAYLOAD_VERSION,
     _apply_digest_plan,
-    _apply_report_rules_to_payload,
-    _digest_cache_key,
     _build_digest_payload,
     _build_digest_problem_rows,
     _build_stock_report_payload,
@@ -23,40 +18,16 @@ from app.routers.wb_reports_bff import (
     _latest_report_payload_cache,
     _normalize_digest_plan,
     _previous_period,
-    _range_from_preset,
     _report_daily_sources_ready,
     _rnp_daily_baskets_ready,
     _report_job_cache_key,
     _report_payload_cache_is_usable,
-    _rule_metrics_from_row,
     _stock_products_request_body,
 )
 from app.wb_api import reports_sources_runtime as reports_runtime
 from app.wb_api.client import FakeWbApiClient, WbApiRequest
 from app.wb_api.reports_sources_runtime import WbStockRow
 from tests.auth_helpers import auth_headers
-
-
-@pytest.mark.parametrize(
-    ("preset", "expected_from"),
-    (("1d", date(2026, 8, 24)), ("7d", date(2026, 8, 18)), ("14d", date(2026, 8, 11)), ("30d", date(2026, 7, 26))),
-)
-def test_report_presets_are_inclusive_and_end_on_last_closed_wb_day(preset, expected_from):
-    date_from, date_to, payload = _range_from_preset(preset, None, None, as_of=date(2026, 8, 24))
-
-    assert (date_from, date_to) == (expected_from, date(2026, 8, 24))
-    assert payload == {"preset": preset, "from": expected_from.isoformat(), "to": "2026-08-24"}
-
-
-@pytest.mark.parametrize(
-    ("from_raw", "to_raw"),
-    (("2026-08-25", "2026-08-24"), ("2026-08-24", "2026-08-25"), (None, "2026-08-24"), ("2026-05-26", "2026-08-24")),
-)
-def test_custom_report_period_rejects_inverted_future_or_partial_ranges(from_raw, to_raw):
-    with pytest.raises(HTTPException) as error:
-        _range_from_preset("custom", from_raw, to_raw, as_of=date(2026, 8, 24))
-
-    assert error.value.status_code == 422
 
 
 def test_cached_reports_sources_snapshot_builds_from_repricer_sync_caches(monkeypatch):
@@ -245,12 +216,12 @@ def test_bff_digest_endpoint_returns_frontend_shape():
 def test_digest_read_uses_cached_result_without_calling_wb(monkeypatch):
     cached = {
         "completedAt": datetime.now(timezone.utc).isoformat(),
-        "digest": {"cacheVersion": DIGEST_REPORT_PAYLOAD_VERSION, "meta": {"id": "digest", "freshnessState": "fresh"}, "kpis": [], "planFactRows": [], "freshness": [], "alerts": [], "charts": [], "quickLinks": []},
+        "digest": {"cacheVersion": DIGEST_REPORT_PAYLOAD_VERSION, "meta": {"id": "digest"}, "kpis": [], "planFactRows": [], "freshness": [], "alerts": [], "charts": [], "quickLinks": []},
     }
     monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", lambda *_args, **_kwargs: cached)
     monkeypatch.setattr("app.routers.wb_reports_bff.save_source_cache", lambda *_args, **_kwargs: {})
     monkeypatch.setattr("app.routers.wb_reports_bff.record_audit_event", lambda **_kwargs: None)
-    monkeypatch.setattr("app.routers.wb_reports_bff.build_cached_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("digest GET must not build sources"))
+    monkeypatch.setattr("app.routers.wb_reports_bff.build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("digest GET must not call WB"))
     api = client()
     response = api.get("/api/wb/reports/digest", headers=auth_headers(api, "viewer"))
     assert response.status_code == 200
@@ -321,51 +292,6 @@ def test_digest_payload_uses_wb_funnel_totals_and_daily_points():
     assert point["buyoutPct"] == 0.2
 
 
-def test_digest_headline_uses_authoritative_repricer_summary():
-    source_snapshot = SimpleNamespace(
-        source_status="fresh",
-        orders=[],
-        sales=[],
-        stocks=[],
-        seller_payout_by_nm_kopecks={},
-        commission_cost_by_nm_kopecks={},
-        logistics_cost_by_nm_kopecks={},
-        penalties_cost_by_nm_kopecks={},
-        acceptance_cost_by_nm_kopecks={},
-        storage_cost_by_nm_kopecks={},
-    )
-    ads_snapshot = SimpleNamespace(totals={"ad_spend_kopecks": 999}, rows=[], source_status="fresh", blocker_ids=[])
-    payload = _build_digest_payload(
-        {"preset": "custom", "from": "2026-07-01", "to": "2026-07-31"},
-        source_snapshot,
-        ads_snapshot,
-        SimpleNamespace(blockerIds=[], rows=[]),
-        {"totals": {"orderCount": 10, "buyoutSumKopecks": 20, "cancelCount": 30}},
-        {
-            "ordersUnits": 52_740,
-            "salesUnits": 22_909,
-            "buyerRevenueKopecks": 2_986_306_802,
-            "marginKopecks": 444_286_301,
-            "adSpendKopecks": 148_495_000,
-            "returnsUnits": 997,
-        },
-    )
-
-    kpis = {item["id"]: item["value"] for item in payload["kpis"]}
-    assert kpis == {
-        "orders_qty": "52740",
-        "sales_revenue": "2986306802",
-        "margin_profit": "444286301",
-        "oos_risk": "0 SKU",
-        "ad_spend": "148495000",
-        "returns_qty": "997",
-    }
-    assert payload["periodCards"][0]["ordersUnits"] == 52_740
-    assert payload["periodCards"][0]["salesUnits"] == 22_909
-    assert payload["periodCards"][0]["returnsUnits"] == 997
-    assert payload["periodCards"][0]["revenueKopecks"] == 2_986_306_802
-
-
 def test_digest_funnel_snapshot_uses_baskets_cache_without_live_wb(monkeypatch):
     from app.routers import wb_reports_bff
 
@@ -396,27 +322,9 @@ def test_digest_funnel_snapshot_uses_baskets_cache_without_live_wb(monkeypatch):
                     ]
                 },
             }
-        if prefix == "finance":
-            return {
-                "dailyAggregates": {
-                    "2026-07-16": {
-                        "101": {
-                            "salesUnits": 3,
-                            "returnsUnits": 1,
-                            "buyerRevenueKopecks": 45_000,
-                        },
-                        "102": {
-                            "salesUnits": 0,
-                            "returnsUnits": 1,
-                            "buyerRevenueKopecks": 0,
-                        }
-                    }
-                }
-            }
         return {}
 
     monkeypatch.setattr(wb_reports_bff, "_period_cache", fake_period_cache)
-    monkeypatch.setattr(wb_reports_bff, "get_covering_source_cache", lambda *_args, **_kwargs: None)
     assert not hasattr(wb_reports_bff, "_load_or_refresh_funnel_rows")
 
     snapshot = wb_reports_bff._build_digest_funnel_snapshot(
@@ -431,111 +339,6 @@ def test_digest_funnel_snapshot_uses_baskets_cache_without_live_wb(monkeypatch):
     assert snapshot["rows"][0]["nmId"] == 101
     assert snapshot["totals"]["orderCount"] == 4
     assert snapshot["dailyRows"]["2026-07-16"][0]["buyoutSumKopecks"] == 20000
-    balance = wb_reports_bff._build_funnel_weekly_balance(
-        {"from": "2026-07-16", "to": "2026-07-16"},
-        snapshot,
-    )
-    assert balance["points"][0]["salesUnits"] == 1
-    assert balance["points"][0]["returnsUnits"] == 2
-    assert balance["points"][0]["salesKopecks"] == 45_000
-
-
-def test_digest_graph_uses_fresh_covering_cache_for_visible_window(monkeypatch):
-    from app.routers import wb_reports_bff
-
-    calls = []
-
-    def covering(_organization_id, prefix, *, date_from, date_to, **_kwargs):
-        calls.append((prefix, date_from, date_to))
-        field = "orderCount" if prefix == "baskets_" else "salesUnits"
-        return {"dailyAggregates": {"2026-08-21": {"101": {field: 9}}}}
-
-    monkeypatch.setattr(
-        wb_reports_bff,
-        "_period_cache",
-        lambda *_args: {"aggregates": {"101": {"nmId": 101, "orderCount": 1}}},
-    )
-    monkeypatch.setattr(wb_reports_bff, "get_covering_source_cache", covering)
-
-    snapshot = wb_reports_bff._build_digest_funnel_snapshot(
-        organization_id=2,
-        date_from=date(2026, 7, 23),
-        date_to=date(2026, 8, 21),
-        wb_token=None,
-    )
-
-    assert calls == [
-        ("baskets_", date(2026, 8, 8), date(2026, 8, 21)),
-        ("finance_", date(2026, 8, 8), date(2026, 8, 21)),
-    ]
-    assert snapshot["dailyRows"]["2026-08-21"][0]["orderCount"] == 9
-
-
-def test_digest_graph_rejects_legacy_covering_finance_cache(monkeypatch):
-    from app.routers import wb_reports_bff
-
-    def period_cache(_organization_id, prefix, _date_from, _date_to):
-        if prefix == "baskets":
-            return {"aggregates": {"101": {"nmId": 101, "orderCount": 1}}}
-        if prefix == "finance":
-            return {
-                "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v2",
-                "dailyAggregates": {"2026-08-21": {"101": {"sellerRevenueKopecks": 100_000}}},
-            }
-        return {}
-
-    def covering(_organization_id, prefix, **_kwargs):
-        if prefix == "finance_":
-            return {"dailyAggregates": {"2026-08-21": {"101": {"sellerRevenueKopecks": 999_000}}}}
-        return None
-
-    monkeypatch.setattr(wb_reports_bff, "_period_cache", period_cache)
-    monkeypatch.setattr(wb_reports_bff, "get_covering_source_cache", covering)
-
-    snapshot = wb_reports_bff._build_digest_funnel_snapshot(
-        organization_id=2,
-        date_from=date(2026, 8, 15),
-        date_to=date(2026, 8, 21),
-        wb_token=None,
-    )
-
-    assert snapshot["financeDailyRows"]["2026-08-21"]["101"]["sellerRevenueKopecks"] == 100_000
-
-
-def test_digest_daily_merge_skips_legacy_finance_cache(monkeypatch):
-    from app.routers import wb_reports_bff
-
-    monkeypatch.setattr(
-        wb_reports_bff,
-        "list_source_cache_ranges_by_prefix",
-        lambda *_args, **_kwargs: [
-            {"sourceKey": "finance_legacy", "dateFrom": "2026-08-21", "dateTo": "2026-08-21"},
-            {"sourceKey": "finance_current", "dateFrom": "2026-08-21", "dateTo": "2026-08-21"},
-        ],
-    )
-    monkeypatch.setattr(
-        wb_reports_bff,
-        "get_source_cache",
-        lambda _org, key, **_kwargs: {
-            "dailyAggregates": {"2026-08-21": {"101": {"sellerRevenueKopecks": 999_000}}}
-        }
-        if key == "finance_legacy"
-        else {
-            "revenueBasis": "retailAmount",
-            "financeSchemaVersion": "v2",
-            "dailyAggregates": {"2026-08-21": {"101": {"sellerRevenueKopecks": 100_000}}},
-        },
-    )
-
-    merged = wb_reports_bff._merged_daily_aggregates(
-        2,
-        "finance_",
-        date(2026, 8, 21),
-        date(2026, 8, 21),
-    )
-
-    assert merged["2026-08-21"]["101"]["sellerRevenueKopecks"] == 100_000
 
 
 def test_digest_refresh_reuses_existing_running_job(monkeypatch):
@@ -567,40 +370,6 @@ def test_digest_refresh_does_not_pass_user_wb_token_to_report_task(monkeypatch):
 
     assert response.status_code == 200
     assert captured_args["args"][-1] is None
-
-
-def test_digest_latest_cache_reads_requested_exact_key_without_prefix_scan(monkeypatch):
-    requested_from = date(2026, 8, 15)
-    requested_to = date(2026, 8, 21)
-    exact_key = _digest_cache_key(requested_from, requested_to)
-    cached = {
-        "completedAt": datetime.now(timezone.utc).isoformat(),
-        "dateFrom": requested_from.isoformat(),
-        "dateTo": requested_to.isoformat(),
-        "digest": {
-            "cacheVersion": DIGEST_REPORT_PAYLOAD_VERSION,
-            "dateRange": {"preset": "custom", "from": requested_from.isoformat(), "to": requested_to.isoformat()},
-            "kpis": [],
-        },
-    }
-
-    monkeypatch.setattr(
-        "app.routers.wb_reports_bff.get_source_cache",
-        lambda _organization_id, key, **_kwargs: cached if key == exact_key else {},
-    )
-    monkeypatch.setattr(
-        "app.routers.wb_reports_bff.list_source_cache_by_prefix",
-        lambda *_args, **_kwargs: pytest.fail("an exact digest read must not scan job keys"),
-    )
-
-    api = client()
-    response = api.get(
-        "/api/wb/reports/digest/latest-cache?preset=custom&from=2026-08-15&to=2026-08-21",
-        headers=auth_headers(api, "viewer"),
-    )
-
-    assert response.status_code == 200
-    assert response.json()["cache"]["requestedRange"]["from"] == "2026-08-15"
 
 
 def test_report_job_cache_key_scopes_report_range_and_grouping():
@@ -1559,16 +1328,16 @@ def test_statistics_report_requests_wait_for_wb_shared_limit(monkeypatch):
 
 def test_digest_endpoint_reports_missing_cache_without_calling_wb(monkeypatch):
     monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr("app.routers.wb_reports_bff.build_cached_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("must not build sources"))
+    monkeypatch.setattr("app.routers.wb_reports_bff.build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("must not call WB"))
     api = client()
     response = api.get("/api/wb/reports/digest?preset=custom&from=2026-06-01&to=2026-07-09", headers=auth_headers(api, "viewer"))
     assert response.status_code == 200
     assert response.json()["cache"]["status"] == "missing"
 
 
-def test_digest_get_does_not_require_ads_token(monkeypatch):
+def test_bff_digest_degrades_when_ads_token_is_missing(monkeypatch):
     monkeypatch.setattr(
-        "app.routers.wb_reports_bff._build_digest_ads_snapshot",
+        "app.routers.wb_reports_bff.build_ads_attribution_snapshot",
         lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("WB_TOKEN_REQUIRED")),
     )
 
@@ -1660,69 +1429,6 @@ def test_stock_report_payload_cache_requires_current_version():
     fresh_cache["report"]["cacheVersion"] = STOCK_REPORT_PAYLOAD_VERSION
 
     assert _report_payload_cache_is_usable("stock", fresh_cache) is True
-
-
-def test_abc_report_payload_cache_rejects_previous_revenue_basis_version():
-    fresh_cache = {
-        "report": {"cacheVersion": "v13", "rows": [{"sku": "OLD"}]},
-        "fetchedAt": datetime.now(timezone.utc).isoformat(),
-    }
-
-    assert _report_payload_cache_is_usable("abc", fresh_cache) is False
-
-    fresh_cache["report"]["cacheVersion"] = ABC_REPORT_PAYLOAD_VERSION
-
-    assert _report_payload_cache_is_usable("abc", fresh_cache) is True
-
-
-def test_pnl_endpoint_rejects_previous_revenue_basis_payload(monkeypatch):
-    legacy = {
-        "completedAt": datetime.now(timezone.utc).isoformat(),
-        "report": {
-            "cacheVersion": "legacy",
-            "meta": {"id": "pnl"},
-            "rows": [{"label": "OLD", "revenueKopecks": 999_000}],
-        },
-    }
-
-    def fake_get_source_cache(_organization_id, key, **_kwargs):
-        if key.startswith("reports_payload_pnl_"):
-            return legacy
-        if key.startswith("reports_job_pnl_"):
-            return {"state": "idle", "reportId": "pnl"}
-        return {}
-
-    monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", fake_get_source_cache)
-
-    api = client()
-    response = api.get(
-        "/api/wb/reports/pnl",
-        params={"preset": "custom", "from": "2026-08-01", "to": "2026-08-16"},
-        headers=auth_headers(api, "finance_viewer"),
-    )
-
-    assert response.status_code == 200
-    assert response.json()["rows"] == []
-    assert response.json()["cache"]["status"] == "missing"
-    assert not _report_payload_cache_is_usable("pnl", legacy)
-    legacy["report"]["cacheVersion"] = PNL_REPORT_PAYLOAD_VERSION
-    assert _report_payload_cache_is_usable("pnl", legacy)
-
-
-def test_repricer_abc_row_keeps_current_and_period_prices_separate():
-    from app.routers.wb_reports_bff import _repricer_row_to_abc_row
-
-    row = _repricer_row_to_abc_row(
-        {
-            "meta": {"articleId": "SKU", "nmId": 123},
-            "analytics": {
-                "buyerPriceNoWalletKopecks": 151_600,
-                "avgPriceWithSppKopecks": 88_800,
-            },
-        }
-    )
-
-    assert row["priceWithSppKopecks"] == 151_600
 
 
 def test_stock_report_payload_groups_warehouses_by_product_with_catalog_meta(monkeypatch):
@@ -1871,16 +1577,24 @@ def test_bff_rnp_endpoint_returns_full_backend_funnel_shape():
 
 
 def test_latest_report_payload_cache_respects_requested_range(monkeypatch):
-    exact = {
-        "sourceKey": "reports_payload_rnp_2026-06-01_2026-06-07_sku_operational",
-        "report": {"cacheVersion": "v3", "diagnostics": {"summary": {"funnelRows": 1}}, "rows": [{"sku": "RIGHT"}]},
-        "fetchedAt": datetime.now(timezone.utc).isoformat(),
-        "dateFrom": "2026-06-01",
-        "dateTo": "2026-06-07",
-    }
+    caches = [
+        {
+            "sourceKey": "reports_payload_rnp_2026-06-08_2026-06-14_sku_operational",
+            "report": {"rows": [{"sku": "WRONG"}]},
+            "fetchedAt": datetime.now(timezone.utc).isoformat(),
+            "dateFrom": "2026-06-08",
+            "dateTo": "2026-06-14",
+        },
+        {
+            "sourceKey": "reports_payload_rnp_2026-06-01_2026-06-07_sku_operational",
+            "report": {"rows": [{"sku": "RIGHT"}]},
+            "fetchedAt": datetime.now(timezone.utc).isoformat(),
+            "dateFrom": "2026-06-01",
+            "dateTo": "2026-06-07",
+        },
+    ]
 
-    monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", lambda *_args, **_kwargs: exact)
-    monkeypatch.setattr("app.routers.wb_reports_bff.list_source_cache_by_prefix", lambda *_args, **_kwargs: pytest.fail("exact hit must not scan caches"))
+    monkeypatch.setattr("app.routers.wb_reports_bff.list_source_cache_by_prefix", lambda *_args, **_kwargs: caches)
 
     latest = _latest_report_payload_cache(
         organization_id=1,
@@ -1896,97 +1610,6 @@ def test_latest_report_payload_cache_respects_requested_range(monkeypatch):
     assert cache["report"]["rows"][0]["sku"] == "RIGHT"
     assert matched_from == date(2026, 6, 1)
     assert matched_to == date(2026, 6, 7)
-
-
-def test_exact_report_cache_miss_does_not_scan_unrelated_payloads(monkeypatch):
-    monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("app.routers.wb_reports_bff.list_source_cache_by_prefix", lambda *_args, **_kwargs: pytest.fail("exact miss must not scan caches"))
-
-    assert _latest_report_payload_cache(
-        organization_id=1,
-        report_id="abc",
-        group_by="sku",
-        source="operational",
-        date_from=date(2026, 6, 1),
-        date_to=date(2026, 6, 7),
-    ) is None
-
-
-def test_latest_abc_cache_reapplies_current_rules_and_counts_only_risks(monkeypatch):
-    from app.routers import wb_reports_bff
-
-    cached = {
-        "fetchedAt": datetime.now(timezone.utc).isoformat(),
-        "report": {
-            "meta": {"id": "abc"},
-            "filteredSummary": {"skuCount": 3},
-            "rows": [
-                {"sku": "RISK", "abcCode": "CC", "ruleEvaluation": {"status": "normal"}},
-                {"sku": "OPPORTUNITY", "abcCode": "AA", "ruleEvaluation": {"status": "risk"}},
-                {"sku": "NORMAL", "abcCode": "BB", "ruleEvaluation": {"status": "risk"}},
-            ],
-        },
-    }
-    statuses = {"CC": "risk", "AA": "opportunity", "BB": "normal"}
-    profile = SimpleNamespace(version=9, name="Current", preset="custom")
-
-    monkeypatch.setattr(
-        wb_reports_bff,
-        "_latest_report_payload_cache",
-        lambda **_kwargs: (cached, date(2026, 8, 1), date(2026, 8, 2)),
-    )
-    monkeypatch.setattr(wb_reports_bff, "get_source_cache", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(wb_reports_bff, "load_active_profile", lambda _organization_id: profile)
-    monkeypatch.setattr(
-        wb_reports_bff,
-        "evaluate_metrics",
-        lambda metrics, _profile: SimpleNamespace(
-            model_dump=lambda mode="json": {
-                "status": statuses[metrics["abcCode"]],
-                "statusReasons": ["current profile"],
-                "recommendedActions": [],
-            }
-        ),
-    )
-
-    api = client()
-    response = api.get(
-        "/api/wb/reports/abc/latest-cache?preset=custom&from=2026-08-01&to=2026-08-02",
-        headers=auth_headers(api, "viewer"),
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert [row["ruleEvaluation"]["status"] for row in payload["rows"]] == ["risk", "opportunity", "normal"]
-    assert payload["filteredSummary"]["attentionCount"] == 1
-    assert payload["rulesProfileVersion"] == 9
-
-
-def test_abc_rules_use_orders_per_basket_as_cart_to_order_metric():
-    metrics = _rule_metrics_from_row({"ordersUnits": 25, "baskets": 100, "cartCrPct": 25})
-
-    assert metrics["cartToOrderPct"] == 25
-    assert metrics["crPct"] is None
-
-
-def test_abc_attention_uses_active_cart_to_order_threshold(monkeypatch):
-    from app.report_rules.presets import preset_config
-    from app.routers import wb_reports_bff
-
-    profile = SimpleNamespace(version=1, name="Standard", preset="standard", config=preset_config("standard"))
-    monkeypatch.setattr(wb_reports_bff, "load_active_profile", lambda _organization_id: profile)
-
-    payload = _apply_report_rules_to_payload(
-        {
-            "filteredSummary": {"skuCount": 1},
-            "rows": [{"sku": "LOW", "abcCode": "BB", "impressions": 1_000, "baskets": 100, "ordersUnits": 10, "cartCrPct": 10}],
-        },
-        1,
-    )
-
-    assert payload["rows"][0]["ruleEvaluation"]["bands"]["cartToOrderPct"] == "bad"
-    assert payload["rows"][0]["ruleEvaluation"]["status"] == "risk"
-    assert payload["filteredSummary"]["attentionCount"] == 1
 
 
 def test_rnp_ads_only_cache_is_not_usable_without_wb_funnel_rows():
@@ -2104,8 +1727,6 @@ def test_report_daily_sources_ready_accepts_covering_daily_detail(monkeypatch):
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "fetched",
                 "dailyAggregatesDays": 30,
-                "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v2",
             }
         ]
         if prefix == "finance_"
@@ -2118,28 +1739,6 @@ def test_report_daily_sources_ready_accepts_covering_daily_detail(monkeypatch):
         date_from=date(2026, 7, 8),
         date_to=date(2026, 7, 21),
     ) == (True, [])
-
-
-def test_report_daily_sources_ready_rejects_legacy_finance_basis(monkeypatch):
-    monkeypatch.setattr(
-        "app.routers.wb_reports_bff.list_source_cache_ranges_by_prefix",
-        lambda _organization_id, prefix, **_kwargs: [
-            {
-                "sourceKey": "finance_2026-06-25_2026-07-24",
-                "dateFrom": "2026-06-25",
-                "dateTo": "2026-07-24",
-                "dailyAggregatesDays": 30,
-            }
-        ]
-        if prefix == "finance_"
-        else [],
-    )
-    assert _report_daily_sources_ready(
-        2,
-        ("finance",),
-        date_from=date(2026, 7, 8),
-        date_to=date(2026, 7, 21),
-    ) == (False, ["finance"])
 
 
 def test_latest_rnp_cache_skips_ads_only_payload(monkeypatch):

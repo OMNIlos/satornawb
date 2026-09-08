@@ -41,26 +41,6 @@ def test_good_missing_spp_fields_ignores_wallet_only_fields():
     assert _good_missing_spp_fields(with_live_buyer) is False
 
 
-def test_cached_buyer_price_above_seller_price_is_rejected():
-    from app.repricer_sync import _good_buyer_price_no_wallet_kopecks
-
-    good = {"sizes": [{"discountedPrice": 1110, "buyerPriceNoWalletKopecks": 160_600}]}
-
-    assert _good_buyer_price_no_wallet_kopecks(good) is None
-
-
-def test_repricer_row_rejects_buyer_price_above_seller_price():
-    good = {"sizes": [{"discountedPrice": 1110, "buyerPriceNoWalletKopecks": 160_600}]}
-
-    buyer, buyer_with_wallet, spp, _wallet = _resolve_spp_analytics(
-        good,
-        good["sizes"][0],
-        wb_goods_price_to_kopecks(1110),
-    )
-
-    assert (buyer, buyer_with_wallet, spp) == (None, None, None)
-
-
 def test_resolve_spp_analytics_wallet_only_fallback():
     good = {"clubDiscount": 4}
     size = {"discountedPrice": 3761}

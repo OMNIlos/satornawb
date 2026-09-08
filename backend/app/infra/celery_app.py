@@ -4,6 +4,7 @@ from datetime import timedelta
 from functools import lru_cache
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.config import get_settings
 
@@ -20,6 +21,12 @@ def get_celery_app() -> Celery:
         backend=settings.celery_result_backend,
     )
     beat_schedule = {}
+    if settings.canonical_shadow_collection_enabled:
+        beat_schedule["canonical-collect-shadow-daily"] = {
+            "task": "canonical.collect_shadow_all_orgs",
+            "schedule": crontab(hour=3, minute=30),
+            "options": {"queue": "vella.canonical-shadow"},
+        }
     if settings.repricer_wb_sync_enabled:
         beat_schedule["repricer-sync-wb-data"] = {
             "task": "repricer.sync_wb_data_all_orgs",
@@ -73,6 +80,9 @@ def get_celery_app() -> Celery:
         enable_utc=True,
         timezone="UTC",
         beat_schedule=beat_schedule,
+        task_routes={
+            "canonical.collect_shadow_for_org": {"queue": "vella.canonical-shadow"}
+        },
     )
     return app
 
@@ -82,6 +92,7 @@ celery_app = get_celery_app()
 import app.repricer_tasks  # noqa: F401, E402
 import app.review_tasks  # noqa: F401, E402
 import app.avito.returns_tasks  # noqa: F401, E402
+import app.canonical_shadow_tasks  # noqa: F401, E402
 
 
 @celery_app.task(name="infra.ping")

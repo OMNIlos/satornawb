@@ -26,6 +26,27 @@ Read first in the product repo:
 
 ## Local checks
 
+One non-destructive local release gate runs the backend/frontend suites, exact
+legacy-failure comparison, single-head check, migration roundtrip and existing
+contract checks:
+
+```bash
+.venv/bin/python ops/release_gate.py
+```
+
+The frontend is discovered at the canonical workspace path; set
+`SATORNA_FRONTEND_DIR` only for another checkout. Docker must be running with
+`postgres:16-alpine` available. The runner creates one uniquely named
+`satorna-gate-*` PostgreSQL container/database, prints its exact recovery
+command, and removes only that container. It preserves the frontend generated
+snapshot and never prints inherited secrets or environment values.
+
+The empty migration chain has the documented legacy `0019` duplicate-column
+defect. The gate upgrades to `0018`, proves `ai_prompt` already exists from
+`0017`, explicitly stamps `0019`, then performs `upgrade head → downgrade -1 →
+upgrade head`. The final line is `SATORNA_GATE_SUMMARY=<json>`; any baseline ID
+change, new failure, interrupted check or cleanup failure returns non-zero.
+
 From this repo root (Windows PowerShell):
 
 ```powershell

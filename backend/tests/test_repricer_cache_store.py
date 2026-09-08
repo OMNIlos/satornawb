@@ -3,8 +3,6 @@ from datetime import date, datetime, timezone
 from app.repricer_cache.store import (
     _source_cache_metadata,
     cached_goods_meta,
-    finance_cache_uses_current_revenue_basis,
-    get_covering_source_cache,
     list_source_cache_ranges_by_prefix,
     save_source_cache,
     slim_source_cache_payload,
@@ -13,19 +11,10 @@ from app.repricer_cache.orm import WbRepricerSourceCacheRow
 from sqlalchemy.exc import IntegrityError
 
 
-def test_finance_cache_requires_current_expense_schema():
-    assert not finance_cache_uses_current_revenue_basis({"revenueBasis": "retailAmount"})
-    assert finance_cache_uses_current_revenue_basis(
-        {"revenueBasis": "retailAmount", "financeSchemaVersion": "v2"}
-    )
-
-
 def test_source_cache_metadata_is_derived_without_mutating_payload():
     payload = {
         "dateFrom": "2026-07-11",
         "dateTo": "2026-08-09",
-        "revenueBasis": "retailAmount",
-        "financeSchemaVersion": "v2",
         "dailyDetailStatus": "partial",
         "dailyDetailError": "часть запросов не загрузилась",
         "dailyDetailRequestsCompleted": 10,
@@ -42,8 +31,6 @@ def test_source_cache_metadata_is_derived_without_mutating_payload():
     assert metadata == {
         "range_date_from": date(2026, 7, 11),
         "range_date_to": date(2026, 8, 9),
-        "revenue_basis": "retailAmount",
-        "finance_schema_version": "v2",
         "daily_detail_status": "partial",
         "daily_detail_error": "часть запросов не загрузилась",
         "daily_detail_deferred_at": None,
@@ -60,7 +47,7 @@ def test_source_cache_metadata_is_derived_without_mutating_payload():
     assert payload == original
 
 
-def test_list_source_cache_ranges_avoids_full_payload_and_parses_metadata(monkeypatch):
+def test_list_source_cache_ranges_avoids_payload_and_parses_legacy_key(monkeypatch):
     class FakeResult:
         def mappings(self):
             return self
@@ -84,8 +71,6 @@ def test_list_source_cache_ranges_avoids_full_payload_and_parses_metadata(monkey
                         "daily_detail_requests_completed": None,
                         "daily_detail_requests_total": None,
                         "daily_aggregate_dates": None,
-                        "revenue_basis": "retailAmount",
-                        "finance_schema_version": "v2",
                         "fetched_at": datetime(2026, 8, 10, 16, 10, tzinfo=timezone.utc),
                     }
                 ]
@@ -111,26 +96,6 @@ def test_list_source_cache_ranges_avoids_full_payload_and_parses_metadata(monkey
     assert result[0]["dateTo"] == "2026-08-09"
     assert result[0]["dailyAggregateDates"] == []
     assert result[0]["dailyAggregatesDays"] is None
-    assert result[0]["revenueBasis"] == "retailAmount"
-    assert result[0]["financeSchemaVersion"] == "v2"
-
-
-def test_covering_source_cache_skips_empty_daily_aggregates(monkeypatch):
-    class FakeSession:
-        def scalar(self, statement):
-            sql = str(statement)
-            assert "jsonb_typeof((payload::jsonb)->'dailyAggregates') = 'object'" in sql
-            assert "(payload::jsonb)->'dailyAggregates' <> '{}'::jsonb" in sql
-            return None
-
-    monkeypatch.setattr("app.repricer_cache.store._run_db", lambda db_fn: db_fn(FakeSession()))
-
-    assert get_covering_source_cache(
-        2,
-        "baskets_",
-        date_from=date(2026, 8, 21),
-        date_to=date(2026, 8, 21),
-    ) is None
 
 
 def test_slim_finance_source_cache_drops_raw_rows():

@@ -10,6 +10,7 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
@@ -41,11 +42,18 @@ from app.repricer_cache.store import (
     save_source_cache,
 )
 from app.notifications import record_wb_sync_notification
+from app.platform.advertising.service import (
+    shadow_ingest_legacy_advertising_payload,
+)
+from app.platform.finance.service import shadow_ingest_legacy_finance_payload
 
 try:
     import httpx
 except Exception:  # pragma: no cover - httpx is a runtime dependency, kept defensive for import safety
     httpx = None  # type: ignore[assignment]
+
+
+_MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 SYNC_STATUS_KEY = "wb_sync_status"
@@ -383,7 +391,10 @@ def _normalize_period_range(
     date_to: date | None = None,
     now: datetime | None = None,
 ) -> tuple[datetime, datetime, int]:
-    resolved_today = (now or _utc_now()).date()
+    resolved_now = now or _utc_now()
+    if resolved_now.tzinfo is None:
+        resolved_now = resolved_now.replace(tzinfo=_MOSCOW_TZ)
+    resolved_today = resolved_now.astimezone(_MOSCOW_TZ).date()
     end = date_to or resolved_today
     start = date_from or (end - timedelta(days=max(1, int(period_days)) - 1))
     if start > end:
@@ -1390,6 +1401,11 @@ def refresh_wb_data_sources(
             step = start_step("finance")
             try:
                 finance_payload = fetch_finance_report_aggregates(scenario, wb_token=wb_token, date_from=range_start, date_to=range_end)
+                canonical_snapshot = shadow_ingest_legacy_finance_payload(
+                    organization_id,
+                    finance_payload,
+                    observed_at=_utc_now(),
+                )
                 finance_aggregates = finance_payload.get("aggregates") if isinstance(finance_payload.get("aggregates"), dict) else {}
                 cached_goods_nm_ids = {str(nm_id) for nm_id in _nm_ids_from_goods(list_cached_goods(organization_id))}
                 matched_cached_goods_nm_ids = len(set(finance_aggregates.keys()) & cached_goods_nm_ids)
@@ -1398,12 +1414,27 @@ def refresh_wb_data_sources(
                     f"finance_{period_suffix}",
                     {
                         **finance_payload,
+                        "canonicalSnapshot": canonical_snapshot,
                         "periodDays": resolved_period_days,
                         "cachedGoodsNmIds": len(cached_goods_nm_ids),
                         "matchedCachedGoodsNmIds": matched_cached_goods_nm_ids,
                     },
                 )
-                finish_step(step, _step_ok("finance", count=int(finance_payload.get("count") or 0), matchedCachedGoodsNmIds=matched_cached_goods_nm_ids))
+                advertising_snapshot = shadow_ingest_legacy_advertising_payload(
+                    organization_id,
+                    finance_payload,
+                    source_kind="finance_promotion",
+                    observed_at=_utc_now(),
+                )
+                finish_step(
+                    step,
+                    _step_ok(
+                        "finance",
+                        count=int(finance_payload.get("count") or 0),
+                        matchedCachedGoodsNmIds=matched_cached_goods_nm_ids,
+                        canonicalAdvertisingSnapshot=advertising_snapshot,
+                    ),
+                )
             except Exception as exc:
                 finish_step(step, _step_error("finance", exc))
 
@@ -1445,7 +1476,21 @@ def refresh_wb_data_sources(
                         "periodDays": resolved_period_days,
                     },
                 )
-                finish_step(step, _step_ok("ads", count=int(ads_payload.get("count") or 0), campaignCount=ads_payload.get("campaignCount")))
+                advertising_snapshot = shadow_ingest_legacy_advertising_payload(
+                    organization_id,
+                    ads_payload,
+                    source_kind="ads_fullstats",
+                    observed_at=_utc_now(),
+                )
+                finish_step(
+                    step,
+                    _step_ok(
+                        "ads",
+                        count=int(ads_payload.get("count") or 0),
+                        campaignCount=ads_payload.get("campaignCount"),
+                        canonicalAdvertisingSnapshot=advertising_snapshot,
+                    ),
+                )
             except Exception as exc:
                 finish_step(step, _step_error("ads", exc))
 

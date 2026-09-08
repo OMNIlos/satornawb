@@ -1,0 +1,124 @@
+{
+  "period": {
+    "dateFrom": "2026-09-02",
+    "dateTo": "2026-09-03"
+  },
+  "pages": [
+    {
+      "request": {
+        "selectedPeriod": {
+          "start": "2026-09-02",
+          "end": "2026-09-03"
+        },
+        "nmIds": [
+          1001,
+          1002
+        ],
+        "skipDeletedNm": false,
+        "aggregationLevel": "day"
+      },
+      "payload": {
+        "data": [
+          {
+            "product": {
+              "nmId": 1001,
+              "title": "Synthetic product A",
+              "vendorCode": "SYN-A",
+              "brandName": "Synthetic",
+              "subjectId": 10,
+              "subjectName": "Fixture"
+            },
+            "history": [
+              {
+                "date": "2026-09-02",
+                "openCount": 10,
+                "cartCount": 2,
+                "orderCount": 1,
+                "orderSum": 12.34,
+                "buyoutCount": 1,
+                "buyoutSum": 12.34,
+                "buyoutPercent": 100,
+                "addToCartConversion": 20,
+                "cartToOrderConversion": 50,
+                "addToWishlistCount": 0
+              },
+              {
+                "date": "2026-09-03",
+                "openCount": 0,
+                "cartCount": 0,
+                "orderCount": 0,
+                "orderSum": 0,
+                "buyoutCount": 0,
+                "buyoutSum": 0,
+                "buyoutPercent": 0,
+                "addToCartConversion": 0,
+                "cartToOrderConversion": 0
+              }
+            ],
+            "currency": "RUB"
+          },
+          {
+            "product": {
+              "nmId": 1002,
+              "title": "Synthetic product B",
+              "vendorCode": "SYN-B",
+              "brandName": "Synthetic",
+              "subjectId": 10,
+              "subjectName": "Fixture"
+            },
+            "history": [
+              {
+                "date": "2026-09-02",
+                "openCount": 3,
+                "cartCount": 0,
+                "orderCount": 0,
+                "orderSum": 0,
+                "buyoutCount": 0,
+                "buyoutSum": 0,
+                "buyoutPercent": 0,
+                "addToCartConversion": 0,
+                "cartToOrderConversion": 0,
+                "addToWishlistCount": 1
+              },
+              {
+                "date": "2026-09-03",
+                "openCount": 4,
+                "cartCount": 1,
+                "orderCount": 1,
+                "orderSum": 20,
+                "buyoutCount": 0,
+                "buyoutSum": 0,
+                "buyoutPercent": 0,
+                "addToCartConversion": 25,
+                "cartToOrderConversion": 100,
+                "addToWishlistCount": 0
+              }
+            ],
+            "currency": "RUB"
+          }
+        ]
+      }
+    }
+  ],
+  "manifest": [
+    {
+      "endpoint": "POST /api/analytics/v3/sales-funnel/products/history",
+      "request": {
+        "selectedPeriod": {
+          "start": "2026-09-02",
+          "end": "2026-09-03"
+        },
+        "nmIds": [
+          1001,
+          1002
+        ],
+        "skipDeletedNm": false,
+        "aggregationLevel": "day"
+      },
+      "statusCode": 200,
+      "ok": true,
+      "wbRequestId": "sanitized-request",
+      "responseChecksum": "1e9fde452435a46537d236c1d48cf54f1b78aa03a0f85d7d6368af188e502162"
+    }
+  ]
+}

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 import secrets
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from hmac import compare_digest
 from typing import Any
 
 from fastapi import HTTPException
@@ -35,7 +37,9 @@ from app.cabinet.schemas import (
     UserWbTokenView,
     UserPreferencesView,
 )
-from app.infra.db import get_engine, get_session_factory
+from app.infra.db import get_engine, get_session_factory, set_tenant_context
+from app.platform.identity.orm import IamMembershipRow
+from app.platform.integrations.wb_credentials import invalidate_wb_credential_bindings
 
 
 @dataclass(frozen=True)
@@ -169,6 +173,35 @@ def _default_export_settings() -> dict[str, Any]:
         "includeFinance": True,
         "autoExportSchedule": "disabled",
     }
+
+
+def _sync_membership(
+    session: Session, user: LkUserRow, permissions: Iterable[str]
+) -> None:
+    set_tenant_context(session, user.organization_id)
+    membership = session.scalar(
+        select(IamMembershipRow).where(
+            IamMembershipRow.organization_id == user.organization_id,
+            IamMembershipRow.user_id == user.user_id,
+        )
+    )
+    resolved_permissions = sorted(permissions)
+    if membership is None:
+        session.add(
+            IamMembershipRow(
+                organization_id=user.organization_id,
+                user_id=user.user_id,
+                role=user.permission_profile,
+                permissions=resolved_permissions,
+                scope_mode="all",
+                allowed_account_ids=[],
+                is_active=user.is_active,
+            )
+        )
+        return
+    membership.role = user.permission_profile
+    membership.permissions = resolved_permissions
+    membership.is_active = user.is_active
 
 
 def _team_user_view(
@@ -315,6 +348,7 @@ def _ensure_defaults(session: Session | None = None) -> None:
             session.flush()
             for permission in permissions_from_profile(profile):
                 session.add(LkUserPermissionRow(user_id=user.user_id, permission=permission))
+            _sync_membership(session, user, permissions_from_profile(profile))
             session.add(
                 LkUserPreferenceRow(
                     user_id=user.user_id,
@@ -440,6 +474,7 @@ def register_organization_owner(*, email: str, password_hash: str, full_name: st
 
         for permission in permissions:
             session.add(LkUserPermissionRow(user_id=user.user_id, permission=permission))
+        _sync_membership(session, user, permissions)
 
         session.add(
             LkUserPreferenceRow(
@@ -1195,6 +1230,7 @@ def create_team_user(
         session.execute(delete(LkUserPermissionRow).where(LkUserPermissionRow.user_id == user.user_id))
         for permission in permissions:
             session.add(LkUserPermissionRow(user_id=user.user_id, permission=permission))
+        _sync_membership(session, user, permissions)
 
         session.add(
             LkUserPreferenceRow(
@@ -1304,6 +1340,7 @@ def update_team_user_permission_profile(
         session.execute(delete(LkUserPermissionRow).where(LkUserPermissionRow.user_id == user.user_id))
         for permission in new_permissions:
             session.add(LkUserPermissionRow(user_id=user.user_id, permission=permission))
+        _sync_membership(session, user, new_permissions)
         session.commit()
         session.refresh(user)
         view = _team_user_view(
@@ -1815,8 +1852,10 @@ def upsert_user_wb_token(
         raise HTTPException(status_code=400, detail="WB_TOKEN_TOO_SHORT")
     now = _utc_now()
     masked = _mask_wb_token(normalized)
+    invalidated_bindings = 0
 
     def _db(session: Session) -> UserWbTokenView:
+        nonlocal invalidated_bindings
         user = session.get(LkUserRow, user_id)
         if user is None or user.organization_id != organization_id:
             raise HTTPException(status_code=404, detail="USER_NOT_FOUND")
@@ -1836,6 +1875,10 @@ def upsert_user_wb_token(
             )
             session.add(row)
         else:
+            if not compare_digest(row.wb_token.encode(), normalized.encode()):
+                invalidated_bindings = invalidate_wb_credential_bindings(
+                    session, organization_id, row.token_id
+                )
             row.wb_token = normalized
             row.token_masked = masked
             row.updated_by_user_id = actor_user_id
@@ -1854,6 +1897,7 @@ def upsert_user_wb_token(
             action="integration.wb_token.upsert",
             object_type="lk_user_wb_token",
             object_id=user_id,
+            details={"credentialBindingsInvalidated": invalidated_bindings},
             before_state=before_state,
             after_state=view.model_dump(mode="json"),
             reason=reason or "wb token created or updated",
@@ -1905,9 +1949,10 @@ def delete_user_wb_token(
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> UserWbTokenView:
-    now = _utc_now()
+    invalidated_bindings = 0
 
     def _db(session: Session) -> UserWbTokenView:
+        nonlocal invalidated_bindings
         user = session.get(LkUserRow, user_id)
         if user is None or user.organization_id != organization_id:
             raise HTTPException(status_code=404, detail="USER_NOT_FOUND")
@@ -1915,6 +1960,9 @@ def delete_user_wb_token(
         row = session.scalar(select(LkUserWbTokenRow).where(LkUserWbTokenRow.user_id == user_id))
         before_state = {"hasToken": row is not None, "tokenMasked": row.token_masked if row else None}
         if row is not None:
+            invalidated_bindings = invalidate_wb_credential_bindings(
+                session, organization_id, row.token_id
+            )
             session.delete(row)
             session.commit()
         after_state = UserWbTokenView(userId=user_id, hasToken=False, tokenMasked=None, updatedAt=None)
@@ -1924,6 +1972,7 @@ def delete_user_wb_token(
             action="integration.wb_token.delete",
             object_type="lk_user_wb_token",
             object_id=user_id,
+            details={"credentialBindingsInvalidated": invalidated_bindings},
             before_state=before_state,
             after_state=after_state.model_dump(mode="json"),
             reason=reason or "wb token deleted",

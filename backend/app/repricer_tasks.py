@@ -48,7 +48,7 @@ from app.wb_sync_plan import WbSyncProfile, historical_sync_as_of, nightly_baske
 
 REPORT_SOURCE_REFRESH_PLANS: dict[str, dict[str, Any]] = {
     "digest": {"sources": ("period-stats", "finance", "ads", "baskets"), "baskets_include_daily_detail": True},
-    "abc": {"sources": ("finance", "ads", "baskets"), "baskets_include_daily_detail": True},
+    "abc": {"sources": ("period-stats", "finance", "ads", "baskets"), "baskets_include_daily_detail": True},
     "rnp": {"sources": ("baskets", "ads"), "baskets_include_daily_detail": True},
     "pnl": {"sources": ("finance", "ads"), "baskets_include_daily_detail": False},
     "ads": {"sources": ("ads",), "baskets_include_daily_detail": False},
@@ -296,7 +296,14 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
     date_to = date_type.fromisoformat(date_to_iso)
     date_range = {"preset": "custom", "from": date_from_iso, "to": date_to_iso}
     job_key = reports._report_job_cache_key(report_id, date_from, date_to, group_by, source)
-    cache_key = reports._report_cache_key(report_id, date_from, date_to, group_by, source)
+    cache_key = reports._report_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        group_by,
+        source,
+        organization_id=organization_id,
+    )
     started_at = reports._utc_now_iso()
     def progress(stage: str, label: str, percent: int, state: str = "running") -> None:
         reports.save_source_cache(organization_id, job_key, {"state": state, "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "stage": stage, "label": label, "percent": percent, "startedAt": started_at, "updatedAt": reports._utc_now_iso()})
@@ -481,6 +488,16 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
         else:
             raise ValueError(f"Unsupported background report: {report_id}")
         report = reports._apply_report_rules_to_payload(report, organization_id)
+        if report_id == "abc":
+            report["economicsVersion"] = reports._abc_economics_version(organization_id)
+            cache_key = reports._report_cache_key(
+                report_id,
+                date_from,
+                date_to,
+                group_by,
+                source,
+                organization_id=organization_id,
+            )
         cached_report = {"report": report, "completedAt": reports._utc_now_iso()}
         reports.save_source_cache(organization_id, cache_key, cached_report)
         persisted_report = reports.get_source_cache(organization_id, cache_key, slim=False)
@@ -955,7 +972,7 @@ RANGED_SYNC_SOURCE_PREFIXES: dict[str, str] = {
 
 
 REPORT_DAILY_SOURCES_BY_ID: dict[str, tuple[str, ...]] = {
-    "abc": ("finance", "ads", "baskets"),
+    "abc": ("period-stats", "finance", "ads", "baskets"),
     "rnp": ("baskets", "ads"),
     "ads": ("ads",),
     "stock": ("period-stats", "finance"),

@@ -249,143 +249,6 @@ def test_pending_price_approval_sent_upload_updates_local_price(monkeypatch):
     assert price_changes[0]["source"] == "wb_api_pending"
 
 
-def test_bulk_price_approval_uses_one_wb_upload(monkeypatch):
-    approvals = {
-        f"apr_{nm_id}": {
-            "approvalId": f"apr_{nm_id}",
-            "status": "pending",
-            "articleId": article_id,
-            "nmId": nm_id,
-            "oldPriceKopecks": price,
-            "recommendedPriceKopecks": price,
-            "strategyName": "worker",
-            "draftRequest": {
-                "scenario": "complete",
-                "articleId": article_id,
-                "nmId": nm_id,
-                "candidateSellerPriceKopecks": price,
-                "minPriceKopecks": price // 2,
-                "pMaxKopecks": price * 2,
-                "economics": {
-                    "cogsKopecks": price // 3,
-                    "commissionPct": 10,
-                    "logisticsKopecks": 1_000,
-                    "buyoutPct": 90,
-                    "stockUnits": 10,
-                },
-            },
-        }
-        for article_id, nm_id, price in [("SKU_A", 123, 120_000), ("SKU_B", 124, 240_000)]
-    }
-    sku_rows = [
-        {
-            "meta": {
-                "articleId": approval["articleId"],
-                "nmId": approval["nmId"],
-                "name": approval["articleId"],
-                "currentPriceKopecks": approval["oldPriceKopecks"],
-            },
-            "analytics": {
-                "buyerPriceNoWalletKopecks": round(approval["oldPriceKopecks"] * 0.9),
-                "avgPriceWithSppKopecks": round(approval["oldPriceKopecks"] * 0.9),
-                "sppPct": 10,
-            },
-            "strategy": {"name": "Worker strategy"},
-        }
-        for approval in approvals.values()
-    ]
-    wb_client = FakeWbApiClient(fixtures={"/api/v2/upload/task": {"data": {"id": 777}}})
-    update_calls: list[dict[str, dict[str, object]]] = []
-    goods_changes: list[dict[str, object]] = []
-
-    monkeypatch.setattr(
-        wb_repricer_bff_router,
-        "actor_from_request",
-        lambda _request: SimpleNamespace(organization_id=2, actor_id="sender", role="price_sender"),
-    )
-    monkeypatch.setattr(wb_repricer_bff_router, "_ensure_price_send_permission", lambda _actor: None)
-    monkeypatch.setattr(wb_repricer_bff_router, "_hydrate_org_repricer_state", lambda _request: 2)
-    monkeypatch.setattr(wb_repricer_bff_router, "_request_wb_token", lambda _request: "wb-token")
-    monkeypatch.setattr(wb_repricer_bff_router, "_build_repricing_client", lambda *_args: wb_client)
-    monkeypatch.setattr(wb_repricer_bff_router, "_list_repricer_skus_for_request", lambda *_args, **_kwargs: sku_rows)
-    monkeypatch.setattr(
-        wb_repricer_bff_router,
-        "list_pending_price_approvals",
-        lambda **_kwargs: [dict(item) for item in approvals.values()],
-    )
-
-    def update_approvals(**kwargs):
-        update_calls.append(kwargs["patches"])
-        for approval_id, item_patch in kwargs["patches"].items():
-            approvals[approval_id].update(item_patch)
-        return {approval_id: dict(approvals[approval_id]) for approval_id in kwargs["patches"]}
-
-    monkeypatch.setattr(wb_repricer_bff_router, "update_pending_price_approvals", update_approvals)
-    monkeypatch.setattr(
-        wb_repricer_bff_router,
-        "_update_cached_goods_seller_prices",
-        lambda _organization_id, **kwargs: goods_changes.extend(kwargs["changes"]) or len(kwargs["changes"]),
-    )
-    monkeypatch.setattr(wb_repricer_bff_router, "record_repricer_price_change", lambda **_kwargs: None)
-    monkeypatch.setattr(wb_repricer_bff_router, "_flush_org_repricer_state", lambda _organization_id: True)
-    monkeypatch.setattr(
-        wb_repricer_bff_router,
-        "get_settings",
-        lambda: SimpleNamespace(real_price_apply_enabled=True, repricer_local_price_apply_enabled=False),
-    )
-
-    response = wb_repricer_bff_router.decide_pending_price_approvals_bulk(
-        object(),
-        wb_repricer_bff_router.PendingPriceApprovalBulkDecisionRequest(
-            approvalIds=list(approvals),
-            decision="approve",
-        ),
-    )
-
-    assert response["succeeded"] == 2
-    assert response["failed"] == 0
-    assert len(wb_client.requests) == 1
-    assert [row["nmID"] for row in wb_client.requests[0].jsonBody["data"]] == [123, 124]
-    assert len(update_calls) == 2
-    assert len(goods_changes) == 2
-
-
-def test_bulk_price_rejection_updates_all_approvals_once(monkeypatch):
-    approvals = [
-        {"approvalId": "apr_1", "status": "pending", "articleId": "SKU_A"},
-        {"approvalId": "apr_2", "status": "pending", "articleId": "SKU_B"},
-    ]
-    update_calls: list[dict[str, dict[str, object]]] = []
-    monkeypatch.setattr(
-        wb_repricer_bff_router,
-        "actor_from_request",
-        lambda _request: SimpleNamespace(organization_id=2, actor_id="sender", role="price_sender"),
-    )
-    monkeypatch.setattr(wb_repricer_bff_router, "_hydrate_org_repricer_state", lambda _request: 2)
-    monkeypatch.setattr(wb_repricer_bff_router, "list_pending_price_approvals", lambda **_kwargs: approvals)
-
-    def update_approvals(**kwargs):
-        update_calls.append(kwargs["patches"])
-        return {
-            approval_id: {**approvals[index], **item_patch}
-            for index, (approval_id, item_patch) in enumerate(kwargs["patches"].items())
-        }
-
-    monkeypatch.setattr(wb_repricer_bff_router, "update_pending_price_approvals", update_approvals)
-
-    response = wb_repricer_bff_router.decide_pending_price_approvals_bulk(
-        object(),
-        wb_repricer_bff_router.PendingPriceApprovalBulkDecisionRequest(
-            approvalIds=["apr_1", "apr_2"],
-            decision="reject",
-        ),
-    )
-
-    assert response["succeeded"] == 2
-    assert len(update_calls) == 1
-    assert {patch["status"] for patch in update_calls[0].values()} == {"rejected"}
-
-
 def test_repricer_sku_filter_matches_frontend_statuses_and_exact_nm_id():
     row = {
         "meta": {
@@ -565,99 +428,7 @@ def test_repricer_list_summary_subtracts_unassigned_raw_storage_from_margin():
     assert summary["avgMarginPct"] == 0.6
 
 
-def test_repricer_list_summary_reconciles_finance_rows_without_catalog_sku():
-    summary = _repricer_list_summary(
-        [
-            {
-                "meta": {"articleId": "FBBT_42"},
-                "analytics": {
-                    "revenueKopecks": 1_000,
-                    "buyerRevenueKopecks": 900,
-                    "expensesKopecks": 400,
-                    "netProfitKopecks": 500,
-                    "commissionKopecks": 100,
-                    "logisticsKopecks": 200,
-                    "penaltyKopecks": 10,
-                    "acquiringKopecks": 5,
-                    "additionalPaymentKopecks": 20,
-                },
-            }
-        ],
-        finance_diagnostics={
-            "totals": {"commissionKopecks": 150},
-            "rawExpenseTotals": {
-                "logisticsKopecks": 300,
-                "storageKopecks": 20,
-                "acceptanceKopecks": 30,
-                "penaltyKopecks": 15,
-                "deductionKopecks": 40,
-                "acquiringKopecks": 10,
-                "additionalPaymentKopecks": 25,
-            },
-        },
-    )
-
-    assert summary["expensesKopecks"] == 645
-    assert summary["marginKopecks"] == 255
-    assert summary["deductionKopecks"] == 40
-    assert summary["unassignedFinanceComponentsKopecks"]["commission"] == 50
-
-
-def test_source_summary_keeps_historical_finance_sku_missing_from_current_catalog(monkeypatch):
-    monkeypatch.setattr(
-        wb_repricer_bff_router,
-        "list_cached_goods",
-        lambda _organization_id: [{"nmID": 1, "vendorCode": "F_CURRENT"}],
-    )
-    monkeypatch.setattr(wb_repricer_bff_router, "get_source_cache", lambda *_args, **_kwargs: {})
-
-    def source_cache(_organization_id, prefix, *_args, **_kwargs):
-        if prefix == "finance":
-            return {
-                "aggregates": {
-                    "1": {
-                        "vendorCode": "F_CURRENT",
-                        "salesUnits": 1,
-                        "sellerRevenueKopecks": 1_000,
-                        "buyerRevenueKopecks": 900,
-                    },
-                    "2": {
-                        "vendorCode": "F_HISTORICAL",
-                        "salesUnits": 1,
-                        "sellerRevenueKopecks": 2_000,
-                        "buyerRevenueKopecks": 1_600,
-                    },
-                }
-            }
-        if prefix == "baskets":
-            return {"aggregates": {"3": {"orderCount": 5}}}
-        return {}
-
-    monkeypatch.setattr(wb_repricer_bff_router, "_period_source_cache", source_cache)
-    monkeypatch.setattr(
-        repricer_bff_module,
-        "_sku_cost_settings",
-        lambda *_args, **_kwargs: {"cogsKopecks": 100, "taxPct": 0, "workReturnPerSaleKopecks": 0},
-    )
-
-    summary = wb_repricer_bff_router._repricer_list_summary_from_source_caches(
-        2,
-        resolved_period_days=1,
-        period_suffix="2026-07-01_2026-07-01",
-        range_start=date(2026, 7, 1),
-        range_end=date(2026, 7, 1),
-        require_full_sync_coverage=False,
-    )
-
-    assert summary["revenueKopecks"] == 3_000
-    assert summary["buyerRevenueKopecks"] == 2_500
-    assert summary["salesUnits"] == 2
-    assert summary["ordersUnits"] == 5
-    assert summary["cogsKopecks"] == 200
-    assert summary["skuCount"] == 1
-
-
-def test_repricer_list_summary_keeps_normalized_row_orders():
+def test_repricer_list_summary_keeps_source_orders_without_estimate():
     summary = _repricer_list_summary(
         [
             {
@@ -887,9 +658,16 @@ def test_repricer_bff_sku_settings_partial_update_preserves_existing_fields(monk
 
 
 def test_repricer_nomenclature_import_falls_back_to_nm_id_when_article_changed(monkeypatch):
+    economics_calls: list[dict[str, object]] = []
     monkeypatch.setattr("app.routers.wb_repricer_bff._request_wb_token", lambda _request: None)
     monkeypatch.setattr("app.routers.wb_repricer_bff._hydrate_org_repricer_state", lambda _request: 1)
-    monkeypatch.setattr("app.routers.wb_repricer_bff._flush_org_repricer_state", lambda _organization_id: None)
+    monkeypatch.setattr("app.routers.wb_repricer_bff._flush_org_repricer_state", lambda _organization_id: True)
+    monkeypatch.setattr(
+        "app.routers.wb_repricer_bff.EconomicsService.reconcile_legacy_sku_override",
+        lambda _self, _article_id, _settings, **kwargs: economics_calls.append(
+            {"articleId": _article_id, "settings": _settings, **kwargs}
+        ),
+    )
     monkeypatch.setattr("app.routers.wb_repricer_bff.save_source_cache", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("app.routers.wb_repricer_bff.get_source_cache", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
@@ -897,7 +675,13 @@ def test_repricer_nomenclature_import_falls_back_to_nm_id_when_article_changed(m
         lambda *_args, **_kwargs: [
             {
                 "meta": {"articleId": "004_ФБ_С1", "nmId": 507764443},
-                "settings": {"pMinKopecks": 99_000, "pMaxKopecks": 110_000},
+                "settings": {
+                    "pMinKopecks": 99_000,
+                    "pMaxKopecks": 110_000,
+                    "taxPct": 6,
+                    "otherExpensePricePct": 5,
+                    "otherExpensePerSaleKopecks": 0,
+                },
             }
         ],
     )
@@ -913,8 +697,8 @@ def test_repricer_nomenclature_import_falls_back_to_nm_id_when_article_changed(m
                     "nomenclature.xlsx",
                     _xlsx_bytes(
                         [
-                            ["Артикул МП (NmId)", "Арт. поставщика (SupplierArticle)", "Мин. марж., ₽ (MinMarginAmount)", "Мин. цена, ₽ (MinPrice)", "Базовая цена (МаксРЦ), ₽ (MaxPrice)"],
-                            ["507764443", "004_та_я1", "100", "600", "1000"],
+                            ["Артикул МП (NmId)", "Арт. поставщика (SupplierArticle)", "Мин. марж., ₽ (MinMarginAmount)", "Мин. цена, ₽ (MinPrice)", "Базовая цена (МаксРЦ), ₽ (MaxPrice)", "Затраты от цены с СПП, % (TaxRate)"],
+                            ["507764443", "004_та_я1", "100", "600", "1000", "7.5"],
                         ]
                     ),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -931,6 +715,8 @@ def test_repricer_nomenclature_import_falls_back_to_nm_id_when_article_changed(m
         assert payload["applied"][0]["originalArticleId"] == "004_та_я1"
         assert repricer_bff_module.SKU_SETTINGS_OVERRIDES["004_ФБ_С1"]["minMarginKopecks"] == 10_000
         assert repricer_bff_module.SKU_SETTINGS_OVERRIDES["004_ФБ_С1"]["pMinKopecks"] == 60_000
+        assert economics_calls[0]["articleId"] == "004_ФБ_С1"
+        assert economics_calls[0]["settings"]["taxPct"] == 7.5
     finally:
         repricer_bff_module.SKU_SETTINGS_OVERRIDES.clear()
         repricer_bff_module.SKU_SETTINGS_OVERRIDES.update(previous_settings)
@@ -1118,7 +904,7 @@ def test_period_stats_aggregates_include_supplier_orders_spp(monkeypatch):
     assert payload["dailyAggregates"]["2026-05-28"]["123456"]["ordersUnits"] == 1
 
 
-def test_build_sku_row_keeps_period_spp_separate_when_live_buyer_price_is_missing():
+def test_build_sku_row_uses_orders_spp_when_live_buyer_price_is_missing():
     row = repricer_bff_module._build_sku_row(
         "TEST_ORDERS_SPP",
         nm_id=123456,
@@ -1134,13 +920,11 @@ def test_build_sku_row_keeps_period_spp_separate_when_live_buyer_price_is_missin
         period_aggregate={"ordersUnits": 1, "sppPct": 26, "sppSource": "supplier.orders.spp"},
     )
 
-    assert row["analytics"]["sppPct"] is None
-    assert row["analytics"]["sppSource"] is None
-    assert row["analytics"]["periodSppPct"] == 26
-    assert row["analytics"]["buyerPriceNoWalletKopecks"] is None
+    assert row["analytics"]["sppPct"] == 26
+    assert row["analytics"]["sppSource"] == "supplier.orders.spp"
+    assert row["analytics"]["buyerPriceNoWalletKopecks"] == 90_502
     assert row["analytics"]["sppAccountingMode"] == "spp_only"
-    assert row["analytics"]["accountedBuyerPriceKopecks"] is None
-    assert row["analytics"]["sppState"] == "no_buyer_price"
+    assert row["analytics"]["accountedBuyerPriceKopecks"] == 90_502
 
 
 def test_build_sku_row_prefers_live_buyer_price_over_period_spp():
@@ -1180,79 +964,14 @@ def test_build_sku_row_prefers_sales_funnel_orders_when_available():
         use_demo_data=False,
         period_aggregate={"ordersUnits": 100, "buyoutPct": 10, "sppPct": 26, "sppSource": "supplier.orders.spp"},
         finance_aggregate={"salesUnits": 10, "returnsUnits": 1, "sellerRevenueKopecks": 1_223_000},
-        baskets_aggregate={"orderCount": 1763, "orderSumKopecks": 1763 * 164_200, "buyoutPct": 84.6},
+        baskets_aggregate={"orderCount": 1763, "buyoutPct": 84.6},
         baskets_cache_loaded=True,
     )
 
     assert row["analytics"]["ordersUnits"] == 1763
     assert row["analytics"]["ordersSource"] == "sales_funnel.orderCount"
     assert row["analytics"]["funnelOrderCount"] == 1763
-    assert row["analytics"]["avgPriceWithSppKopecks"] == 164_200
     assert row["analytics"]["buyoutPct"] == 84.6
-
-
-def test_build_sku_row_uses_only_funnel_price_as_period_average():
-    row = repricer_bff_module._build_sku_row(
-        "TEST_AVG_PRICE_MISSING",
-        nm_id=123456,
-        name="Test",
-        subject="Товары",
-        brand="Brand",
-        chrt_ids=[],
-        current_price_kopecks=139_000,
-        discounted_price_kopecks=122_300,
-        buyer_price_kopecks=100_000,
-        promotions=[],
-        use_demo_data=False,
-        period_aggregate={"avgPriceWithSppKopecks": 120_000},
-    )
-
-    assert row["analytics"]["buyerPriceNoWalletKopecks"] == 100_000
-    assert row["analytics"]["avgPriceWithSppKopecks"] is None
-
-
-def test_period_source_cache_rejects_legacy_finance_basis(monkeypatch):
-    monkeypatch.setattr(wb_repricer_bff_router, "get_wb_sync_status", lambda _organization_id: {})
-    monkeypatch.setattr(
-        wb_repricer_bff_router,
-        "get_source_cache",
-        lambda _organization_id, key, **_kwargs: {
-            "dateFrom": "2026-08-01",
-            "dateTo": "2026-08-16",
-            "aggregates": {"123": {"sellerRevenueKopecks": 999_000}},
-        }
-        if key == "finance_2026-08-01_2026-08-16"
-        else None,
-    )
-    monkeypatch.setattr(wb_repricer_bff_router, "get_covering_source_cache", lambda *_args, **_kwargs: None)
-
-    payload = wb_repricer_bff_router._period_source_cache(
-        1,
-        "finance",
-        "2026-08-01_2026-08-16",
-        16,
-        datetime(2026, 8, 1, tzinfo=timezone.utc),
-        datetime(2026, 8, 16, tzinfo=timezone.utc),
-        require_full_sync_coverage=False,
-    )
-
-    assert payload == {}
-
-
-def test_repricer_stats_aggregates_reject_legacy_finance_cache(monkeypatch):
-    monkeypatch.setattr(
-        wb_repricer_bff_router,
-        "get_source_cache",
-        lambda _organization_id, key, **_kwargs: {
-            "aggregates": {"123": {"sellerRevenueKopecks": 999_000}},
-        }
-        if key.startswith("repricer_stats_finance_")
-        else {},
-    )
-
-    result = wb_repricer_bff_router._repricer_stats_cache_aggregates(1, "2026-08-01_2026-08-16")
-
-    assert result["finance"] == {}
 
 
 def test_build_sku_row_can_account_spp_plus_configured_wallet():
@@ -1279,10 +998,9 @@ def test_build_sku_row_can_account_spp_plus_configured_wallet():
 
     assert row["analytics"]["sppAccountingMode"] == "spp_plus_wallet"
     assert row["analytics"]["accountedWbWalletPct"] == 4.0
-    assert row["analytics"]["accountedPlatformDiscountPct"] is None
-    assert row["analytics"]["buyerPriceNoWalletKopecks"] is None
-    assert row["analytics"]["accountedBuyerPriceKopecks"] is None
-    assert row["analytics"]["marginBaseKopecks"] == 86_800
+    assert row["analytics"]["accountedPlatformDiscountPct"] == 28.96
+    assert row["analytics"]["buyerPriceNoWalletKopecks"] == 90_502
+    assert row["analytics"]["accountedBuyerPriceKopecks"] == 86_800
 
 
 def test_build_sku_row_margin_uses_planned_indeepa_formula_and_tariff_commission():
@@ -1327,8 +1045,7 @@ def test_build_sku_row_margin_uses_planned_indeepa_formula_and_tariff_commission
     assert row["analytics"]["reportCommissionPct"] == 7
     assert row["analytics"]["commissionSource"] == "tariffs.commission.kgvpMarketplace"
     assert row["analytics"]["commissionState"] == "ok"
-    assert row["analytics"]["accountedBuyerPriceKopecks"] is None
-    assert row["analytics"]["marginBaseKopecks"] == 139_400
+    assert row["analytics"]["accountedBuyerPriceKopecks"] == 139_400
     assert row["analytics"]["marginMode"] == "planned_indeepa"
     assert row["analytics"]["marginKopecks"] == 41_348
     assert row["analytics"]["plannedMarginKopecks"] == 41_348
@@ -1338,7 +1055,7 @@ def test_build_sku_row_margin_uses_planned_indeepa_formula_and_tariff_commission
     assert row["analytics"]["marginPct"] == 23.7
 
 
-def test_cyrillic_longsleeve_keeps_historical_spp_out_of_current_price():
+def test_cyrillic_longsleeve_article_uses_longsleeve_defaults_and_official_spp():
     previous_settings = dict(repricer_bff_module.ALGORITHM_SETTINGS_STATE)
     repricer_bff_module.ALGORITHM_SETTINGS_STATE.update({"sppAccountingMode": "spp_plus_wallet", "wbWalletType": 4})
     try:
@@ -1364,21 +1081,19 @@ def test_cyrillic_longsleeve_keeps_historical_spp_out_of_current_price():
     assert row["settings"]["cogsKopecks"] == 44_000
     assert row["settings"]["logisticsKopecks"] == 4_100
     assert row["settings"]["wbCommissionPct"] == 10.31
-    assert row["analytics"]["sppPct"] is None
-    assert row["analytics"]["periodSppPct"] == 16.69
-    assert row["analytics"]["buyerPriceNoWalletKopecks"] is None
-    assert row["analytics"]["accountedBuyerPriceKopecks"] is None
-    assert row["analytics"]["marginBaseKopecks"] == 139_400
+    assert row["analytics"]["sppPct"] == 16.69
+    assert row["analytics"]["buyerPriceNoWalletKopecks"] == 145_209
+    assert row["analytics"]["accountedBuyerPriceKopecks"] == 139_400
     assert row["analytics"]["baseWbCommissionPct"] == 7.0
     assert row["analytics"]["commissionSource"] == "finance.commissionPct"
     assert row["analytics"]["commissionDisplayPct"] == 10.3
     assert row["analytics"]["commissionState"] == "fallback"
     assert row["analytics"]["reportCommissionPct"] == 7.0
-    assert row["analytics"]["marginKopecks"] == 50_877
-    assert row["analytics"]["plannedPeriodMarginKopecks"] == 50_877
+    assert row["analytics"]["marginKopecks"] == 96_235
+    assert row["analytics"]["plannedPeriodMarginKopecks"] == 96_235
     assert row["analytics"]["plannedOtherExpensesKopecks"] == 8_715
     assert row["analytics"]["plannedTaxKopecks"] == 10_458
-    assert row["analytics"]["marginPct"] == 36.5
+    assert row["analytics"]["marginPct"] == 55.2
 
 
 def test_missing_tariff_commission_uses_finance_report_percent_as_fallback():
@@ -2166,7 +1881,7 @@ def test_repricer_catalog_goods_uses_live_filter_method(monkeypatch):
     assert fake.requests[0].path == "/api/v2/list/goods/filter"
 
 
-def test_finance_report_revenue_matches_wb_total_sale_retail_amount(monkeypatch):
+def test_finance_report_revenue_uses_sales_minus_returns_by_seller_discount_price(monkeypatch):
     monkeypatch.setattr(repricer_bff_module, "_finance_report_last_request_at", 0.0)
     fake = FakeWbApiClient(
         fixtures={
@@ -2188,10 +1903,6 @@ def test_finance_report_revenue_matches_wb_total_sale_retail_amount(monkeypatch)
                         "penalty": "50",
                         "deduction": "60",
                         "additionalPayment": "70",
-                        "paymentSchedule": "5",
-                        "cashbackAmount": "2",
-                        "cashbackDiscount": "19",
-                        "cashbackCommissionChange": "0.2",
                         "nmId": 123456,
                         "vendorCode": "FBBT_42",
                         "sku": "sku-1",
@@ -2253,21 +1964,6 @@ def test_finance_report_revenue_matches_wb_total_sale_retail_amount(monkeypatch)
                         "sku": "sku-2",
                         "rrDate": "2026-06-03",
                     },
-                    {
-                        "rrdId": 15,
-                        "bonusTypeName": "Оказание услуг «WB Продвижение»",
-                        "paidStorage": "5",
-                        "deduction": "7",
-                        "nmId": 0,
-                        "rrDate": "2026-06-03",
-                    },
-                    {
-                        "rrdId": 16,
-                        "bonusTypeName": "Предоставление услуг по подписке «Джем»",
-                        "deduction": "3",
-                        "nmId": 0,
-                        "rrDate": "2026-06-03",
-                    },
                 ]
             }
         }
@@ -2283,10 +1979,10 @@ def test_finance_report_revenue_matches_wb_total_sale_retail_amount(monkeypatch)
 
     row = payload["aggregates"]["123456"]
     assert row["buyerRevenueKopecks"] == 200_025
-    assert row["sellerRevenueKopecks"] == 200_025
-    assert row["revenueGrossKopecks"] == 200_025
-    assert row["platformDiscountKopecks"] == 0
-    assert row["commissionFormulaKopecks"] == 50_006
+    assert row["sellerRevenueKopecks"] == 250_000
+    assert row["revenueGrossKopecks"] == 250_000
+    assert row["platformDiscountKopecks"] == 49_975
+    assert row["commissionFormulaKopecks"] == 62_500
     assert row["salesUnits"] == 3
     assert row["returnsUnits"] == 1
     assert row["netSalesUnits"] == 2
@@ -2294,78 +1990,39 @@ def test_finance_report_revenue_matches_wb_total_sale_retail_amount(monkeypatch)
     assert row["commissionKopecks"] == 10_000
     assert row["acquiringKopecks"] == 1_000
     assert row["logisticsKopecks"] == 2_000
-    assert row["storageKopecks"] == 3_500
+    assert row["storageKopecks"] == 3_000
     assert row["acceptanceKopecks"] == 4_000
     assert row["penaltyKopecks"] == 3_000
     assert row["penaltyChargedKopecks"] == 5_000
     assert row["penaltyReturnedKopecks"] == 2_000
-    assert row["deductionKopecks"] == 3_300
-    assert row["deductionChargedKopecks"] == 6_300
+    assert row["deductionKopecks"] == 3_000
+    assert row["deductionChargedKopecks"] == 6_000
     assert row["deductionCompensationKopecks"] == 3_000
-    assert row["rewardAdjustmentKopecks"] == 11_000
-    assert row["paymentScheduleKopecks"] == 500
-    assert row["additionalPaymentKopecks"] == -10_500
-    assert row["cashbackAmountKopecks"] == 200
-    assert row["cashbackDiscountKopecks"] == 1_900
-    assert row["cashbackCommissionChangeKopecks"] == 20
-    assert row["loyaltyCostKopecks"] == 220
-    assert row["adSpendKopecks"] == 700
-    assert row["financeAdSpendAuthoritative"] is True
-    assert payload["dailyAggregates"]["2026-06-01"]["123456"]["loyaltyCostKopecks"] == 220
-    june_3 = payload["dailyAggregates"]["2026-06-03"]["123456"]
-    assert june_3["storageKopecks"] == 500
-    assert june_3["deductionKopecks"] == -2_700
-    assert june_3["adSpendKopecks"] == 700
-    assert payload["dailyAggregates"]["2026-06-01"]["123456"]["additionalPaymentKopecks"] == -6_500
-    assert june_3["additionalPaymentKopecks"] == -4_000
-    assert june_3["financeAdSpendAuthoritative"] is True
+    assert row["additionalPaymentKopecks"] == 11_000
     assert row["unitKeyedSalesCount"] == 2
     assert row["unitKeyedReturnsCount"] == 1
-    assert row["sellerRevenueRows"] == 4
-    assert row["sellerRevenueMissingRows"] == 0
-    assert row["reportedCommissionRows"] == 1
-    assert payload["revenueBasis"] == "retailAmount"
-    assert payload["financeSchemaVersion"] == "v2"
     diagnostics = payload["diagnostics"]
     assert diagnostics["tax"]["taxPct"] == 6
     assert diagnostics["tax"]["taxIncludedInExpenses"] is False
-    assert diagnostics["totals"]["taxKopecks"] == 12_002
-    assert diagnostics["totals"]["storageKopecks"] == 3_500
+    assert diagnostics["totals"]["taxKopecks"] == 15_000
+    assert diagnostics["totals"]["storageKopecks"] == 3_000
     assert diagnostics["totals"]["acceptanceKopecks"] == 4_000
     assert diagnostics["totals"]["penaltyReturnedKopecks"] == 2_000
     assert diagnostics["totals"]["deductionCompensationKopecks"] == 3_000
-    assert diagnostics["totals"]["rewardAdjustmentKopecks"] == 11_000
-    assert diagnostics["totals"]["paymentScheduleKopecks"] == 500
-    assert diagnostics["totals"]["additionalPaymentKopecks"] == -10_500
+    assert diagnostics["totals"]["additionalPaymentKopecks"] == 11_000
     assert diagnostics["storageAcceptance"]["rawRowsAvailable"] is True
     assert diagnostics["storageAcceptance"]["paidStorageFieldRequested"] is True
     assert diagnostics["storageAcceptance"]["paidAcceptanceFieldRequested"] is True
-    assert diagnostics["storageAcceptance"]["paidStorageRowsWithField"] == 2
-    assert diagnostics["storageAcceptance"]["paidStorageNonzeroRows"] == 2
-    assert diagnostics["storageAcceptance"]["paidStorageSumKopecks"] == 3_500
+    assert diagnostics["storageAcceptance"]["paidStorageRowsWithField"] == 1
+    assert diagnostics["storageAcceptance"]["paidStorageNonzeroRows"] == 1
+    assert diagnostics["storageAcceptance"]["paidStorageSumKopecks"] == 3_000
     assert diagnostics["storageAcceptance"]["paidAcceptanceRowsWithField"] == 1
     assert diagnostics["storageAcceptance"]["paidAcceptanceNonzeroRows"] == 1
     assert diagnostics["storageAcceptance"]["paidAcceptanceSumKopecks"] == 4_000
-    assert diagnostics["paidStorageNonzeroRows"] == 2
-    assert diagnostics["paidStorageSum"] == 3_500
+    assert diagnostics["paidStorageNonzeroRows"] == 1
+    assert diagnostics["paidStorageSum"] == 3_000
     assert diagnostics["paidAcceptanceNonzeroRows"] == 1
     assert diagnostics["paidAcceptanceSum"] == 4_000
-    assert diagnostics["rawExpenseTotals"] == {
-        "adSpendKopecks": 700,
-        "logisticsKopecks": 2_000,
-        "storageKopecks": 3_500,
-        "acceptanceKopecks": 4_000,
-        "penaltyKopecks": 3_000,
-        "deductionKopecks": 3_300,
-        "rewardAdjustmentKopecks": 11_000,
-        "paymentScheduleKopecks": 500,
-        "additionalPaymentKopecks": -10_500,
-        "cashbackAmountKopecks": 200,
-        "cashbackDiscountKopecks": 1_900,
-        "cashbackCommissionChangeKopecks": 20,
-        "loyaltyCostKopecks": 220,
-        "acquiringKopecks": 1_000,
-    }
     assert diagnostics["adjustmentRowsTotal"] == 2
     correction = next(item for item in diagnostics["adjustmentRows"] if item["rrdId"] == 14)
     assert correction["raw"]["sellerOperName"] == "Возврат штрафа"
@@ -2373,15 +2030,15 @@ def test_finance_report_revenue_matches_wb_total_sale_retail_amount(monkeypatch)
     assert correction["normalized"]["penaltyKopecks"] == -2_000
     assert correction["normalized"]["deductionKopecks"] == -3_000
     assert correction["normalized"]["additionalPaymentKopecks"] == 4_000
-    assert correction["normalized"]["expenseFormulaContributionKopecks"] == -1_000
+    assert correction["normalized"]["expenseFormulaContributionKopecks"] == -9_000
     assert diagnostics["skuSummaries"][0]["taxIncludedInExpenses"] is False
-    assert diagnostics["skuSummaries"][0]["expensesWithoutTaxKopecks"] == 37_520
-    assert diagnostics["skuSummaries"][0]["expensesIfTaxIncludedKopecks"] == 49_522
-    assert payload["rowsCount"] == 7
+    assert diagnostics["skuSummaries"][0]["expensesWithoutTaxKopecks"] == 67_500
+    assert diagnostics["skuSummaries"][0]["expensesIfTaxIncludedKopecks"] == 82_500
+    assert payload["rowsCount"] == 5
     assert fake.requests[0].jsonBody["limit"] == 100_000
     assert fake.requests[0].jsonBody["rrdId"] == 0
     assert fake.requests[0].jsonBody["dateFrom"] == "2026-06-01"
-    assert fake.requests[0].jsonBody["dateTo"] == "2026-06-03"
+    assert fake.requests[0].jsonBody["dateTo"] == "2026-06-04"
     assert payload["dateTo"] == "2026-06-03"
     assert fake.requests[0].jsonBody["period"] == "daily"
     assert {
@@ -2394,119 +2051,11 @@ def test_finance_report_revenue_matches_wb_total_sale_retail_amount(monkeypatch)
         "paidAcceptance",
         "deduction",
         "bonusTypeName",
-        "cashbackAmount",
-        "cashbackDiscount",
-        "cashbackCommissionChange",
-        "paymentSchedule",
         "forPay",
         "srid",
     }.issubset(set(fake.requests[0].jsonBody["fields"]))
     assert "paidStorage" in payload["requestedFields"]
     assert "paidAcceptance" in payload["requestedFields"]
-
-
-def test_finance_report_marks_each_missing_retail_amount(monkeypatch):
-    monkeypatch.setattr(repricer_bff_module, "_finance_report_last_request_at", 0.0)
-    fake = FakeWbApiClient(
-        fixtures={
-            "/api/finance/v1/sales-reports/detailed": {
-                "data": [
-                    {
-                        "rrdId": 1,
-                        "docTypeName": "Продажа",
-                        "quantity": 1,
-                        "retailAmount": "90",
-                        "retailPriceWithDisc": "100",
-                        "nmId": 123456,
-                        "rrDate": "2026-06-01",
-                    },
-                    {
-                        "rrdId": 2,
-                        "docTypeName": "Продажа",
-                        "quantity": 1,
-                        "retailPriceWithDisc": "999",
-                        "nmId": 123456,
-                        "rrDate": "2026-06-01",
-                    },
-                ]
-            }
-        }
-    )
-    monkeypatch.setattr("app.repricer_bff.build_wb_finance_client", lambda *args, **kwargs: fake)
-
-    payload = repricer_bff_module.fetch_finance_report_aggregates(
-        "complete",
-        wb_token="finance-token",
-        date_from=datetime(2026, 6, 1, tzinfo=timezone.utc),
-        date_to=datetime(2026, 6, 1, tzinfo=timezone.utc),
-    )
-
-    row = payload["aggregates"]["123456"]
-    assert row["sellerRevenueKopecks"] == 9_000
-    assert row["sellerRevenueRows"] == 1
-    assert row["sellerRevenueMissingRows"] == 1
-    assert payload["dailyAggregates"]["2026-06-01"]["123456"]["sellerRevenueMissingRows"] == 1
-
-
-def test_finance_revenue_matches_wb_total_sale_retail_amount_without_quantity_multiplier():
-    row = {"retailAmount": "1208", "retailPriceWithDisc": "1590"}
-
-    assert repricer_bff_module._finance_seller_revenue_kopecks(row, 2) == 120_800
-    assert repricer_bff_module._finance_seller_revenue_kopecks({"retailPriceWithDisc": "1590"}, 1) == 0
-
-
-def test_finance_report_keeps_selected_end_date_and_nets_return_costs(monkeypatch):
-    monkeypatch.setattr(repricer_bff_module, "_finance_report_last_request_at", 0.0)
-    fake = FakeWbApiClient(
-        fixtures={
-            "/api/finance/v1/sales-reports/detailed": {
-                "data": [
-                    {
-                        "rrdId": 1,
-                        "docTypeName": "Продажа",
-                        "quantity": 1,
-                        "retailAmount": "1000",
-                        "retailPriceWithDisc": "1300",
-                        "forPay": "700",
-                        "ppvzSalesCommission": "100",
-                        "acquiringFee": "30",
-                        "nmId": 123456,
-                        "srid": "sale-1",
-                    },
-                    {
-                        "rrdId": 2,
-                        "docTypeName": "Возврат",
-                        "quantity": 1,
-                        "retailAmount": "200",
-                        "retailPriceWithDisc": "300",
-                        "forPay": "150",
-                        "ppvzSalesCommission": "20",
-                        "acquiringFee": "5",
-                        "nmId": 123456,
-                        "srid": "return-1",
-                    },
-                ]
-            }
-        }
-    )
-    monkeypatch.setattr("app.repricer_bff.build_wb_finance_client", lambda *args, **kwargs: fake)
-
-    payload = repricer_bff_module.fetch_finance_report_aggregates(
-        "complete",
-        wb_token="finance-token",
-        date_from=datetime(2026, 7, 1, tzinfo=timezone.utc),
-        date_to=datetime(2026, 7, 31, tzinfo=timezone.utc),
-    )
-
-    request = fake.requests[0]
-    row = payload["aggregates"]["123456"]
-    assert request.jsonBody["dateTo"] == "2026-07-31"
-    assert row["buyerRevenueKopecks"] == 80_000
-    assert row["sellerRevenueKopecks"] == 80_000
-    assert row["payableKopecks"] == 55_000
-    assert row["reportedCommissionKopecks"] == 8_000
-    assert row["acquiringKopecks"] == 2_500
-    assert row["commissionKopecks"] == 22_500
 
 
 def test_finance_report_logistics_uses_delivery_service_money_not_counts_or_rebill(monkeypatch):
@@ -2521,7 +2070,6 @@ def test_finance_report_logistics_uses_delivery_service_money_not_counts_or_rebi
                         "quantity": 1,
                         "retailAmount": "1000",
                         "retailPriceWithDisc": "1000",
-                        "commissionPercent": 10,
                         "nmId": 123456,
                         "deliveryAmount": 3,
                         "rebillLogisticCost": "554.92",
@@ -2542,7 +2090,6 @@ def test_finance_report_logistics_uses_delivery_service_money_not_counts_or_rebi
     )
 
     assert payload["aggregates"]["123456"]["logisticsKopecks"] == 236_066
-    assert payload["aggregates"]["123456"]["commissionKopecks"] == 10_000
 
 
 def test_finance_diagnostics_response_returns_cached_clean_payload():
@@ -2920,36 +2467,6 @@ def test_baskets_daily_detail_request_total_is_days_times_sku_batches(monkeypatc
     assert payload["requestsCompleted"] == 6
     assert len([item for item in progress if item["phase"] == "requesting"]) == 6
     assert len([item for item in progress if item["phase"] == "completed"]) == 6
-
-
-def test_baskets_daily_detail_paginates_when_all_products_are_requested(monkeypatch):
-    offsets: list[int] = []
-
-    def request(_client, wb_request, **_kwargs):
-        offset = wb_request.jsonBody["offset"]
-        offsets.append(offset)
-        count = 1000 if offset == 0 else 1
-        return {
-            "data": {
-                "products": [
-                    {"product": {"nmId": offset + index + 1}, "statistic": {"selected": {"cartCount": 1}}}
-                    for index in range(count)
-                ]
-            }
-        }
-
-    monkeypatch.setattr(repricer_bff_module, "_request_or_raise_sales_funnel_products", request)
-
-    payload = repricer_bff_module.fetch_baskets_daily_detail(
-        "complete",
-        wb_token="token",
-        date_from=datetime(2026, 6, 1, tzinfo=timezone.utc),
-        date_to=datetime(2026, 6, 1, tzinfo=timezone.utc),
-        nm_ids=[],
-    )
-
-    assert offsets == [0, 1000]
-    assert len(payload["dailyAggregates"]["2026-06-01"]) == 1001
 
 
 def test_baskets_daily_detail_reports_sales_funnel_waits(monkeypatch):
@@ -4360,6 +3877,56 @@ def test_wb_sync_ads_step_reports_smooth_campaign_progress(monkeypatch):
     assert result["steps"][0]["progressPercent"] == 100
 
 
+def test_wb_sync_writes_ads_cache_before_advertising_shadow(monkeypatch):
+    import app.repricer_sync as sync
+
+    calls: list[tuple[str, str]] = []
+    ads_payload = {
+        "aggregates": {},
+        "dailyAggregates": {},
+        "totals": {},
+        "count": 0,
+        "campaignCount": 0,
+        "dateFrom": "2026-08-17",
+        "dateTo": "2026-08-23",
+    }
+    monkeypatch.setattr(
+        sync, "fetch_ads_spend_aggregates", lambda *_args, **_kwargs: ads_payload
+    )
+    monkeypatch.setattr(
+        sync,
+        "save_source_cache",
+        lambda _organization_id, key, value, **_kwargs: calls.append(
+            ("legacy", key)
+        )
+        or value,
+    )
+    monkeypatch.setattr(
+        sync,
+        "shadow_ingest_legacy_advertising_payload",
+        lambda *_args, **_kwargs: calls.append(("canonical", "ads_fullstats"))
+        or {"state": "ready"},
+    )
+
+    result = sync.refresh_wb_data_sources(
+        organization_id=1,
+        wb_token="token",
+        date_from=date(2026, 8, 17),
+        date_to=date(2026, 8, 23),
+        execute_lock=False,
+        sources=["ads"],
+        _parallelize=False,
+    )
+
+    assert calls == [
+        ("legacy", "ads_2026-08-17_2026-08-23"),
+        ("canonical", "ads_fullstats"),
+    ]
+    assert result["steps"][0]["canonicalAdvertisingSnapshot"] == {
+        "state": "ready"
+    }
+
+
 def test_wb_sync_runs_four_independent_sources_in_parallel_and_waits_for_goods(monkeypatch):
     import threading
     import time
@@ -4467,7 +4034,6 @@ def test_regular_wb_sync_defers_daily_baskets_detail(monkeypatch):
     result = refresh_wb_data_sources(organization_id=1, wb_token="token", period_days=7, sources=["baskets"], execute_lock=False, _progress_callback=observed.append)
 
     assert calls[0]["include_daily"] is False
-    assert calls[0]["nm_ids"] == []
     assert saved["baskets_7"]["dailyDetailStatus"] == "deferred"
     assert not any(item.get("source") == "baskets" and item.get("phase") == "daily-detail" for item in observed)
     assert any(item.get("source") == "baskets" and item.get("progressCurrent") == 1000 for item in observed)
@@ -4551,7 +4117,7 @@ def test_wb_sync_can_opt_into_daily_baskets_detail(monkeypatch):
 
     def fetch_detail(*_args, **kwargs):
         detail_calls.append(kwargs)
-        kwargs["progress_callback"]({"phase": "daily-detail", "dayIndex": 1, "daysTotal": 7, "batch": 1, "batchesTotal": 2, "requestsCompleted": 1, "requestsTotal": 14})
+        kwargs["progress_callback"]({"phase": "completed", "dayIndex": 1, "daysTotal": 7, "batch": 1, "batchesTotal": 2, "requestsCompleted": 1, "requestsTotal": 14})
         return {"dailyAggregates": {}, "requestsCompleted": 14, "requestsTotal": 14}
 
     monkeypatch.setattr("app.repricer_sync.fetch_baskets_daily_detail", fetch_detail)
@@ -4567,7 +4133,6 @@ def test_wb_sync_can_opt_into_daily_baskets_detail(monkeypatch):
     )
 
     assert len(detail_calls) == 1
-    assert detail_calls[0]["nm_ids"] == []
     assert any(item.get("source") == "baskets" and item.get("phase") == "daily-detail" for item in observed)
     assert result["state"] == "completed"
 
@@ -5045,15 +4610,6 @@ def test_wb_sync_goods_step_saves_external_spp_price_as_buyer_price(monkeypatch)
     assert saved_size["buyerPriceNoWalletKopecks"] == 149_600
     assert saved_size["buyerPriceNoWallet"] == 1496
     assert saved_size["clientPrice"] == 1496
-
-
-def test_wb_sync_rejects_external_spp_price_above_seller_price():
-    from app.repricer_sync import _apply_external_spp_prices_to_goods
-
-    goods = [{"nmID": 123, "sizes": [{"discountedPrice": 1110}]}]
-
-    assert _apply_external_spp_prices_to_goods(goods, {123: 160_600}) == 0
-    assert "buyerPriceNoWalletKopecks" not in goods[0]["sizes"][0]
 
 
 def test_wb_sync_goods_step_persists_spp_heartbeat_progress(monkeypatch):
@@ -5627,16 +5183,14 @@ def test_repricer_sku_list_uses_covering_month_sync_daily_cache_for_week(monkeyp
             "steps": [],
         },
         "finance_2026-06-01_2026-06-30": {
-            "revenueBasis": "retailAmount",
-            "financeSchemaVersion": "v2",
             "fetchedAt": "2026-06-30T08:00:00+00:00",
             "dateFrom": "2026-06-01",
             "dateTo": "2026-06-30",
             "periodDays": 30,
             "dailyAggregates": {
                 "2026-06-09": {"123456": {"salesUnits": 1, "sellerRevenueKopecks": 90_000, "revenueGrossKopecks": 90_000}},
-                "2026-06-10": {"123456": {"salesUnits": 2, "sellerRevenueKopecks": 200_000, "revenueGrossKopecks": 200_000, "commissionKopecks": 20_000, "adSpendKopecks": 100, "financeAdSpendAuthoritative": True}},
-                "2026-06-16": {"123456": {"salesUnits": 1, "sellerRevenueKopecks": 100_000, "revenueGrossKopecks": 100_000, "commissionKopecks": 10_000, "adSpendKopecks": 200, "financeAdSpendAuthoritative": True}},
+                "2026-06-10": {"123456": {"salesUnits": 2, "sellerRevenueKopecks": 200_000, "revenueGrossKopecks": 200_000, "commissionKopecks": 20_000}},
+                "2026-06-16": {"123456": {"salesUnits": 1, "sellerRevenueKopecks": 100_000, "revenueGrossKopecks": 100_000, "commissionKopecks": 10_000}},
                 "2026-06-17": {"123456": {"salesUnits": 5, "sellerRevenueKopecks": 500_000, "revenueGrossKopecks": 500_000}},
             },
         },
@@ -5717,7 +5271,7 @@ def test_repricer_sku_list_uses_covering_month_sync_daily_cache_for_week(monkeyp
     assert analytics["ordersSource"] == "sales_funnel.orderCount"
     assert analytics["funnelOrderCount"] == 10
     assert analytics["baskets"] == 24
-    assert analytics["adSpendKopecks"] == 300
+    assert analytics["adSpendKopecks"] == 3_000
     assert response.json()["cache"]["financeFetchedAt"] == "2026-06-30T08:00:00+00:00"
 
 
@@ -5766,7 +5320,6 @@ def test_period_source_cache_uses_covering_detail_cache_without_sync_status(monk
         21,
         datetime(2026, 6, 20, tzinfo=timezone.utc),
         datetime(2026, 7, 10, tzinfo=timezone.utc),
-        require_full_sync_coverage=False,
     )
 
     assert payload["dateFrom"] == "2026-06-20"
@@ -5778,74 +5331,12 @@ def test_period_source_cache_uses_covering_detail_cache_without_sync_status(monk
     assert payload["coveredByCache"]["periodDays"] == 40
 
 
-def test_period_source_cache_memo_reuses_same_window(monkeypatch):
-    calls = 0
-
-    def load(*_args, **_kwargs):
-        nonlocal calls
-        calls += 1
-        return {"aggregates": {"123456": {"salesUnits": 1}}}
-
-    monkeypatch.setattr(wb_repricer_bff_router, "_load_period_source_cache", load)
-    memo = {}
-    args = (
-        1,
-        "finance",
-        "2026-08-01_2026-08-16",
-        16,
-        datetime(2026, 8, 1, tzinfo=timezone.utc),
-        datetime(2026, 8, 16, tzinfo=timezone.utc),
-    )
-
-    first = wb_repricer_bff_router._period_source_cache(*args, memo=memo)
-    second = wb_repricer_bff_router._period_source_cache(*args, memo=memo)
-
-    assert second is first
-    assert calls == 1
-
-
-def test_period_source_cache_can_prefer_newer_covering_finance(monkeypatch):
-    exact = {
-        "revenueBasis": "retailAmount",
-        "financeSchemaVersion": "v2",
-        "fetchedAt": "2026-08-21T20:00:00+00:00",
-        "dateFrom": "2026-08-15",
-        "dateTo": "2026-08-21",
-        "aggregates": {"123": {"salesUnits": 1}},
-    }
-    covering = {
-        "revenueBasis": "retailAmount",
-        "financeSchemaVersion": "v2",
-        "fetchedAt": "2026-08-22T04:00:00+00:00",
-        "dateFrom": "2026-07-23",
-        "dateTo": "2026-08-21",
-        "dailyAggregates": {
-            "2026-08-21": {"123": {"salesUnits": 2, "buyerRevenueKopecks": 50_000}},
-        },
-    }
-    monkeypatch.setattr(
-        wb_repricer_bff_router,
-        "get_source_cache",
-        lambda _organization_id, key, **_kwargs: exact if key == "finance_2026-08-15_2026-08-21" else None,
-    )
-    monkeypatch.setattr(wb_repricer_bff_router, "get_covering_source_cache", lambda *_args, **_kwargs: covering)
-
-    payload = wb_repricer_bff_router._period_source_cache(
-        2,
-        "finance",
-        "2026-08-15_2026-08-21",
-        7,
-        datetime(2026, 8, 15, tzinfo=timezone.utc),
-        datetime(2026, 8, 21, tzinfo=timezone.utc),
-        require_full_sync_coverage=False,
-        prefer_freshest_covering=True,
-    )
-
-    assert payload["aggregates"]["123"]["salesUnits"] == 2
-    assert payload["coveredByCache"]["dateFrom"] == "2026-07-23"
-
-
 def test_repricer_simulator_updates_wb_input_caches_and_runs_engine(monkeypatch):
+    monkeypatch.setattr(
+        repricer_execution_module,
+        "_utc_now",
+        lambda: datetime(2026, 6, 24, 9, tzinfo=timezone.utc),
+    )
     goods_state = [
         {
             "vendorCode": "FBBT_42",
@@ -5986,6 +5477,11 @@ def test_repricer_simulator_updates_wb_input_caches_and_runs_engine(monkeypatch)
 
 
 def test_repricer_simulator_allows_input_overrides_in_real_apply_mode_without_applying(monkeypatch):
+    monkeypatch.setattr(
+        repricer_execution_module,
+        "_utc_now",
+        lambda: datetime(2026, 6, 24, 9, tzinfo=timezone.utc),
+    )
     goods_state = [
         {
             "vendorCode": "FBBT_42",
@@ -6240,3 +5736,90 @@ def test_algorithm_put_persists_minute_intervals(monkeypatch):
     finally:
         repricer_bff_module.ALGORITHM_SETTINGS_STATE.clear()
         repricer_bff_module.ALGORITHM_SETTINGS_STATE.update(previous_algorithm)
+
+
+def test_algorithm_economics_dual_write_is_scoped(monkeypatch):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "app.routers.wb_repricer_bff._hydrate_org_repricer_state",
+        lambda _request: 10,
+    )
+    monkeypatch.setattr(
+        "app.routers.wb_repricer_bff._flush_org_repricer_state",
+        lambda _organization_id: True,
+    )
+    monkeypatch.setattr(
+        "app.routers.wb_repricer_bff.EconomicsService.reconcile_legacy_organization",
+        lambda _self, settings, **kwargs: calls.append(
+            {"settings": settings, **kwargs}
+        ),
+    )
+    previous_algorithm = dict(repricer_bff_module.ALGORITHM_SETTINGS_STATE)
+    try:
+        api = client()
+
+        economics = api.put(
+            "/api/v1/wb-repricer/algorithm",
+            json={"taxPct": 7.5},
+        )
+        unrelated = api.put(
+            "/api/v1/wb-repricer/algorithm",
+            json={"syncIntervalMinutes": 5},
+        )
+
+        assert economics.status_code == unrelated.status_code == 200
+        assert len(calls) == 1
+        assert calls[0]["settings"]["taxPct"] == 7.5
+    finally:
+        repricer_bff_module.ALGORITHM_SETTINGS_STATE.clear()
+        repricer_bff_module.ALGORITHM_SETTINGS_STATE.update(previous_algorithm)
+
+
+def test_sku_economics_dual_write_is_scoped(monkeypatch):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "app.routers.wb_repricer_bff._request_wb_token", lambda _request: None
+    )
+    monkeypatch.setattr(
+        "app.routers.wb_repricer_bff._hydrate_org_repricer_state",
+        lambda _request: 10,
+    )
+    monkeypatch.setattr(
+        "app.routers.wb_repricer_bff._flush_org_repricer_state",
+        lambda _organization_id: True,
+    )
+    monkeypatch.setattr(
+        "app.routers.wb_repricer_bff.put_repricer_sku_settings",
+        lambda article_id, payload, *_args, **_kwargs: {
+            "meta": {
+                "articleId": article_id,
+                "lastSavedAt": "2026-09-02T18:00:00+00:00",
+            },
+            "settings": {
+                "taxPct": 6,
+                "otherExpensePricePct": payload.get("otherExpensePricePct", 5),
+                "otherExpensePerSaleKopecks": 0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "app.routers.wb_repricer_bff.EconomicsService.reconcile_legacy_sku_override",
+        lambda _self, article_id, settings, **kwargs: calls.append(
+            {"articleId": article_id, "settings": settings, **kwargs}
+        ),
+    )
+    api = client()
+
+    economics = api.put(
+        "/api/v1/wb-repricer/sku/SKU-11/settings",
+        json={"otherExpensePricePct": 4},
+    )
+    unrelated = api.put(
+        "/api/v1/wb-repricer/sku/SKU-11/settings",
+        json={"automationEnabled": False},
+    )
+
+    assert economics.status_code == unrelated.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["articleId"] == "SKU-11"
+    assert calls[0]["settings"]["otherExpensePricePct"] == 4

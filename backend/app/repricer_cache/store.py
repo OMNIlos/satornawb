@@ -17,7 +17,7 @@ from app.repricer_cache.orm import WbRepricerGoodsCacheRow, WbRepricerSourceCach
 _REDIS_CACHE_TTL_SECONDS = 45
 _REDIS_DISABLED_UNTIL = 0.0
 FINANCE_REVENUE_BASIS = "retailAmount"
-FINANCE_SCHEMA_VERSION = "v2"
+FINANCE_SCHEMA_VERSION = "v3"
 
 
 def finance_cache_uses_current_revenue_basis(payload: dict[str, Any]) -> bool:

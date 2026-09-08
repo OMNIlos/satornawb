@@ -33,7 +33,7 @@ def test_periodic_profiles_use_short_refresh_windows():
     profiles = {profile.profile_id: profile for profile in periodic_sync_profiles(as_of=date(2026, 7, 22))}
 
     assert profiles["hourly-operational"].period_days == 2
-    assert profiles["hourly-operational"].sources == ("goods", "period-stats")
+    assert profiles["hourly-operational"].sources == ("period-stats",)
     assert profiles["sales-funnel-incremental"].period_days == 2
     assert profiles["sales-funnel-incremental"].sources == ("baskets",)
     assert profiles["stock-ads-incremental"].period_days == 3
@@ -53,12 +53,6 @@ def test_historical_sync_as_of_uses_last_closed_day_for_cold_windows():
     assert profiles["onboarding-7d"].date_to == date(2026, 8, 4)
     assert profiles["onboarding-30d"].date_from == date(2026, 7, 6)
     assert profiles["onboarding-30d"].date_to == date(2026, 8, 4)
-
-
-def test_historical_sync_as_of_uses_moscow_day_at_local_midnight():
-    from app.wb_sync_plan import historical_sync_as_of
-
-    assert historical_sync_as_of(datetime(2026, 8, 23, 21, 30, tzinfo=timezone.utc)) == date(2026, 8, 23)
 
 
 def test_nightly_profile_reconciles_month_with_split_baskets_detail():

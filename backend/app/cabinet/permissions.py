@@ -29,6 +29,7 @@ PROFILE_PERMISSIONS: dict[PermissionProfile, frozenset[str]] = {
             "sessions:read",
             "integrations:read",
             "preferences:read",
+            "catalog:read",
         }
     ),
     "settings_editor": frozenset(
@@ -47,6 +48,8 @@ PROFILE_PERMISSIONS: dict[PermissionProfile, frozenset[str]] = {
             "integrations:read",
             "preferences:read",
             "preferences:write",
+            "catalog:read",
+            "catalog:write",
         }
     ),
     "price_sender": frozenset(
@@ -62,6 +65,7 @@ PROFILE_PERMISSIONS: dict[PermissionProfile, frozenset[str]] = {
             "integrations:read",
             "preferences:read",
             "preferences:write",
+            "catalog:read",
         }
     ),
     "finance_viewer": frozenset(
@@ -76,6 +80,8 @@ PROFILE_PERMISSIONS: dict[PermissionProfile, frozenset[str]] = {
             "sessions:read",
             "integrations:read",
             "preferences:read",
+            "catalog:read",
+            "costs:read",
         }
     ),
     "admin": frozenset(
@@ -104,6 +110,10 @@ PROFILE_PERMISSIONS: dict[PermissionProfile, frozenset[str]] = {
             "integrations:write",
             "preferences:read",
             "preferences:write",
+            "catalog:read",
+            "catalog:write",
+            "costs:read",
+            "costs:write",
         }
     ),
     "custom": frozenset(),

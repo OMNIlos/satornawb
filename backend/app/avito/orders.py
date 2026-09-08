@@ -391,7 +391,6 @@ class LiveAvitoOrdersClient:
             "endpoint": "GET /order-management/1/orders",
             "requestUrl": request_url,
             "requestParams": request_params,
-            "bodyPreview": payload,
             "payloadKeys": sorted(payload.keys()) if isinstance(payload, dict) else [],
             "resultKeys": sorted(result.keys()) if isinstance(result, dict) else [],
             "ordersCount": len(rows),
@@ -404,7 +403,6 @@ class LiveAvitoOrdersClient:
         logger.warning("[AVITO_ORDERS_STATUS] %s", diagnostics.get("status"))
         logger.warning("[AVITO_ORDERS_REQUEST_URL] %s", diagnostics.get("requestUrl"))
         logger.warning("[AVITO_ORDERS_REQUEST_PARAMS] %s", diagnostics.get("requestParams"))
-        logger.warning("[AVITO_ORDERS_BODY] %s", str(diagnostics.get("bodyPreview"))[:12000])
         logger.warning("[AVITO_ORDERS_COUNT] %s", diagnostics.get("ordersCount"))
         logger.warning("[AVITO_ORDERS_REASON] %s", diagnostics.get("reason"))
 

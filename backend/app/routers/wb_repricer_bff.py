@@ -12,13 +12,21 @@ from typing import Any, Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy.orm import Session
 
 from app.cabinet.store import get_organization_wb_token_secret, get_user_wb_token_secret, list_team_users, record_audit_event
 from app.config import get_settings
 from app.control_plane.auth import actor_from_request, has_permission
+from app.infra.db import get_db_session
+from app.platform.economics.policies import (
+    EconomicsNotFoundError,
+    EconomicsService,
+    EconomicsValidationError,
+)
+from app.platform.finance.service import shadow_ingest_legacy_finance_payload
 from app.promotion_excel import ParsedPromotionExcel, normalized_filename, parse_promotion_excel
 from app.repricer_nomenclature_excel import (
     build_repricer_nomenclature_xlsx,
@@ -131,6 +139,12 @@ from app.wb_import_excel import parse_cost_excel, parse_stock_excel
 router = APIRouter(tags=["wb-repricer-bff"])
 logger = logging.getLogger(__name__)
 _WB_TOKEN_NOT_PROVIDED = object()
+_ALGORITHM_ECONOMICS_FIELDS = frozenset(
+    {"taxPct", "otherExpensePricePct", "otherExpensePerSaleRub"}
+)
+_SKU_ECONOMICS_FIELDS = frozenset(
+    {"taxPct", "otherExpensePricePct", "otherExpensePerSaleKopecks"}
+)
 
 LEGACY_REPRICER_MANAGERS: dict[str, str] = {
     "manager-maria-dudina": "Мария Дудина",
@@ -333,6 +347,22 @@ def _positive_int_or_none(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _economics_source_reference(prefix: str, *parts: object) -> str:
+    reference = ":".join((prefix, *(str(part) for part in parts)))
+    return (
+        reference
+        if len(reference) <= 255
+        else f"{prefix}:{hashlib.sha256(reference.encode('utf-8')).hexdigest()}"
+    )
+
+
+def _raise_invalid_economics(exc: EconomicsValidationError) -> None:
+    raise HTTPException(
+        status_code=422,
+        detail={"code": "INVALID_ECONOMICS_SETTINGS", "message": str(exc)},
+    ) from exc
 
 
 def _repricer_period_context(
@@ -919,11 +949,13 @@ def _load_period_source_cache(
         elif not _period_suffix_requires_range(period_suffix):
             return exact
     day_key = f"{prefix}_{resolved_period_days}"
-    if day_key == exact_key:
-        return {}
-    fallback = _compatible_period_source_cache(
-        prefix,
-        get_source_cache(organization_id, day_key, slim=slim) or {},
+    fallback = (
+        _compatible_period_source_cache(
+            prefix,
+            get_source_cache(organization_id, day_key, slim=slim) or {},
+        )
+        if day_key != exact_key
+        else {}
     )
     if fallback and _cache_matches_range(fallback, range_start, range_end):
         return fallback
@@ -965,7 +997,81 @@ def _load_period_source_cache(
         )
         if rolled:
             return rolled
+
+    # Nothing stored spans the whole range.  Each profile writes its own
+    # window, so a long custom range routinely straddles two of them; summing
+    # the cached days keeps it from resolving to nothing and reporting zeros.
+    stitched = _stitched_period_cache_from_days(
+        organization_id, prefix, range_start.date(), range_end.date()
+    )
+    if stitched:
+        stitched.update(
+            {
+                "periodDays": resolved_period_days,
+                "dateFrom": range_start.date().isoformat(),
+                "dateTo": range_end.date().isoformat(),
+                "source": "stitched_daily_aggregates",
+            }
+        )
+        return stitched
     return {}
+
+
+def _stitched_period_cache_from_days(
+    organization_id: int,
+    prefix: str,
+    date_from: date,
+    date_to: date,
+) -> dict[str, Any]:
+    """Build a period cache by summing whatever daily aggregates are stored."""
+    wanted = {
+        (date_from + timedelta(days=offset)).isoformat()
+        for offset in range((date_to - date_from).days + 1)
+    }
+    seen: set[str] = set()
+    totals: dict[str, dict[str, Any]] = {}
+    daily: dict[str, Any] = {}
+    candidates: list[tuple[int, str]] = []
+    for meta in list_source_cache_ranges_by_prefix(organization_id, f"{prefix}_", limit=100):
+        if not isinstance(meta, dict):
+            continue
+        source_key = str(meta.get("sourceKey") or "")
+        if not source_key or "detail_status" in source_key or source_key.endswith("detail_active"):
+            continue
+        meta_from = _parse_cache_date(meta.get("dateFrom"))
+        meta_to = _parse_cache_date(meta.get("dateTo"))
+        if meta_from and meta_to:
+            if meta_to < date_from or meta_from > date_to:
+                continue
+            overlap = (min(meta_to, date_to) - max(meta_from, date_from)).days + 1
+        else:
+            overlap = 0
+        candidates.append((overlap, source_key))
+
+    for _overlap, source_key in sorted(candidates, key=lambda item: item[0], reverse=True):
+        if not wanted - seen:
+            break
+        cache = get_source_cache(organization_id, source_key, slim=False) or {}
+        raw_daily = cache.get("dailyAggregates")
+        if not isinstance(raw_daily, dict):
+            continue
+        for raw_day, rows in raw_daily.items():
+            day = str(raw_day)
+            if day not in wanted or day in seen or not isinstance(rows, dict):
+                continue
+            seen.add(day)
+            daily[day] = rows
+            for nm_id, row in rows.items():
+                if not isinstance(row, dict):
+                    continue
+                accumulated = totals.setdefault(str(nm_id), {})
+                for field, value in row.items():
+                    if isinstance(value, bool) or not isinstance(value, (int, float)):
+                        continue
+                    accumulated[field] = _int_or_zero(accumulated.get(field)) + _int_or_zero(value)
+    if not totals:
+        return {}
+    return {"aggregates": totals, "dailyAggregates": daily, "count": len(totals)}
 
 
 def _period_source_cache(
@@ -1355,6 +1461,11 @@ def _save_finance_source_cache(
     period_suffix: str,
 ) -> tuple[dict[str, Any], dict[str, Any], int, int]:
     payload = fetch_finance_report_aggregates(scenario, wb_token=wb_token, date_from=range_start, date_to=range_end)
+    canonical_snapshot = shadow_ingest_legacy_finance_payload(
+        organization_id,
+        payload,
+        observed_at=_utc_now(),
+    )
     finance_aggregates = payload.get("aggregates") if isinstance(payload.get("aggregates"), dict) else {}
     cached_goods_nm_ids = {str(nm_id) for nm_id in _nm_ids_from_goods(list_cached_goods(organization_id))}
     matched_cached_goods_nm_ids = len(set(finance_aggregates.keys()) & cached_goods_nm_ids)
@@ -1363,6 +1474,7 @@ def _save_finance_source_cache(
         f"finance_{period_suffix}",
         {
             **payload,
+            "canonicalSnapshot": canonical_snapshot,
             "periodDays": resolved_period_days,
             "cachedGoodsNmIds": len(cached_goods_nm_ids),
             "matchedCachedGoodsNmIds": matched_cached_goods_nm_ids,
@@ -4143,6 +4255,7 @@ def export_sku_nomenclature_xlsx(
 async def import_sku_nomenclature_xlsx(
     request: Request,
     scenario: str = Query(default="complete"),
+    session: Session = Depends(get_db_session),
 ) -> dict[str, Any]:
     actor = actor_from_request(request)
     _ensure_import_permission(actor)
@@ -4170,6 +4283,7 @@ async def import_sku_nomenclature_xlsx(
     applied: list[dict[str, Any]] = []
     unmatched: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    economics_updates: dict[str, dict[str, Any]] = {}
     imported_at = datetime.now(timezone.utc).isoformat()
 
     for item in parsed.items:
@@ -4200,6 +4314,8 @@ async def import_sku_nomenclature_xlsx(
 
         if settings_changed:
             repricer_bff_module.SKU_SETTINGS_OVERRIDES[article_id] = next_settings
+            if _SKU_ECONOMICS_FIELDS.intersection(settings_changed):
+                economics_updates[article_id] = next_settings
             repricer_bff_module.SKU_AUDIT_EVENTS.setdefault(article_id, []).append(
                 {
                     "id": f"audit-{article_id}-nomenclature-import-{len(repricer_bff_module.SKU_AUDIT_EVENTS.get(article_id, [])) + 1}",
@@ -4268,7 +4384,42 @@ async def import_sku_nomenclature_xlsx(
                 }
             )
 
-    _flush_org_repricer_state(organization_id)
+    saved = _flush_org_repricer_state(organization_id)
+    if economics_updates:
+        if not saved:
+            raise HTTPException(status_code=500, detail="SKU_SETTINGS_NOT_SAVED")
+        effective_from = _parse_utc_datetime(imported_at)
+        if effective_from is None:
+            raise HTTPException(status_code=500, detail="SKU_SETTINGS_TIMESTAMP_MISSING")
+        economics_service = EconomicsService(session, organization_id)
+        unmapped: list[str] = []
+        for article_id, settings in economics_updates.items():
+            try:
+                economics_service.reconcile_legacy_sku_override(
+                    article_id,
+                    settings,
+                    effective_from=effective_from,
+                    source="legacy_nomenclature_import",
+                    source_reference=_economics_source_reference(
+                        "nomenclature",
+                        parsed.file_hash,
+                        article_id,
+                        effective_from.isoformat(),
+                    ),
+                )
+            except EconomicsNotFoundError:
+                unmapped.append(article_id)
+            except EconomicsValidationError as exc:
+                _raise_invalid_economics(exc)
+        if unmapped:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "ECONOMICS_SKU_MAPPING_MISSING",
+                    "message": "Canonical catalog mapping is missing",
+                    "articleIds": unmapped,
+                },
+            )
     history_entry = {
         "filename": filename,
         "fileHash": parsed.file_hash,
@@ -5632,10 +5783,41 @@ def get_sku_settings(request: Request, articleId: str, scenario: str = Query(def
 
 
 @router.put("/api/v1/wb-repricer/sku/{articleId}/settings")
-def put_sku_settings(request: Request, articleId: str, payload: dict[str, Any], scenario: str = Query(default="complete")) -> dict[str, Any]:
+def put_sku_settings(
+    request: Request,
+    articleId: str,
+    payload: dict[str, Any],
+    scenario: str = Query(default="complete"),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
     organization_id = _hydrate_org_repricer_state(request)
     result = put_repricer_sku_settings(articleId, payload, scenario, wb_token=_request_wb_token(request))
-    _flush_org_repricer_state(organization_id)
+    saved = _flush_org_repricer_state(organization_id)
+    if _SKU_ECONOMICS_FIELDS.intersection(payload):
+        if not saved:
+            raise HTTPException(status_code=500, detail="SKU_SETTINGS_NOT_SAVED")
+        effective_from = _parse_utc_datetime((result.get("meta") or {}).get("lastSavedAt"))
+        if effective_from is None:
+            raise HTTPException(status_code=500, detail="SKU_SETTINGS_TIMESTAMP_MISSING")
+        try:
+            EconomicsService(session, organization_id).reconcile_legacy_sku_override(
+                articleId,
+                dict(result.get("settings") or {}),
+                effective_from=effective_from,
+                source_reference=_economics_source_reference(
+                    "sku-settings", articleId, effective_from.isoformat()
+                ),
+            )
+        except EconomicsNotFoundError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "ECONOMICS_SKU_MAPPING_MISSING",
+                    "message": str(exc),
+                },
+            ) from exc
+        except EconomicsValidationError as exc:
+            _raise_invalid_economics(exc)
     return result
 
 
@@ -7009,11 +7191,29 @@ def get_algorithm(request: Request) -> dict[str, Any]:
 
 
 @router.put("/api/v1/wb-repricer/algorithm")
-def put_algorithm(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+def put_algorithm(
+    request: Request,
+    payload: dict[str, Any],
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
     organization_id = _hydrate_org_repricer_state(request)
     response = put_repricer_algorithm(payload)
     if not _flush_org_repricer_state(organization_id):
         raise HTTPException(status_code=500, detail="ALGORITHM_SETTINGS_NOT_SAVED")
+    if _ALGORITHM_ECONOMICS_FIELDS.intersection(payload):
+        effective_from = _parse_utc_datetime(response.get("savedAt"))
+        if effective_from is None:
+            raise HTTPException(status_code=500, detail="ALGORITHM_SETTINGS_TIMESTAMP_MISSING")
+        try:
+            EconomicsService(session, organization_id).reconcile_legacy_organization(
+                response,
+                effective_from=effective_from,
+                source_reference=_economics_source_reference(
+                    "algorithm", effective_from.isoformat()
+                ),
+            )
+        except EconomicsValidationError as exc:
+            _raise_invalid_economics(exc)
     return response
 
 

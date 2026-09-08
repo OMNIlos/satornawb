@@ -55,6 +55,12 @@ class Settings:
     repricer_wb_sync_enabled: bool = True
     repricer_wb_sync_interval_minutes: int = 40
     repricer_wb_sync_period_days: int = 30
+    finance_shadow_ingest_enabled: bool = False
+    finance_shadow_ingest_organization_ids: tuple[int, ...] = ()
+    advertising_shadow_ingest_enabled: bool = False
+    advertising_shadow_ingest_organization_ids: tuple[int, ...] = ()
+    canonical_shadow_collection_enabled: bool = False
+    canonical_shadow_collection_organization_ids: tuple[int, ...] = ()
     avito_repricer_worker_enabled: bool = True
     avito_repricer_price_apply_enabled: bool = False
     avito_repricer_execute_interval_minutes: int = 60
@@ -151,6 +157,22 @@ def get_settings() -> Settings:
         repricer_wb_sync_enabled=os.getenv("VELLA_REPRICER_WB_SYNC_ENABLED", "true").lower() == "true",
         repricer_wb_sync_interval_minutes=int(os.getenv("VELLA_REPRICER_WB_SYNC_INTERVAL_MINUTES", "40")),
         repricer_wb_sync_period_days=int(os.getenv("VELLA_REPRICER_WB_SYNC_PERIOD_DAYS", "30")),
+        finance_shadow_ingest_enabled=_parse_bool_env("VELLA_FINANCE_SHADOW_INGEST_ENABLED", False),
+        finance_shadow_ingest_organization_ids=_parse_int_csv_env(
+            os.getenv("VELLA_FINANCE_SHADOW_INGEST_ORGANIZATION_IDS")
+        ),
+        advertising_shadow_ingest_enabled=_parse_bool_env(
+            "VELLA_ADVERTISING_SHADOW_INGEST_ENABLED", False
+        ),
+        advertising_shadow_ingest_organization_ids=_parse_int_csv_env(
+            os.getenv("VELLA_ADVERTISING_SHADOW_INGEST_ORGANIZATION_IDS")
+        ),
+        canonical_shadow_collection_enabled=_parse_bool_env(
+            "VELLA_CANONICAL_SHADOW_COLLECTION_ENABLED", False
+        ),
+        canonical_shadow_collection_organization_ids=_parse_int_csv_env(
+            os.getenv("VELLA_CANONICAL_SHADOW_COLLECTION_ORGANIZATION_IDS")
+        ),
         avito_repricer_worker_enabled=os.getenv("VELLA_AVITO_REPRICER_WORKER_ENABLED", "true").lower() == "true",
         avito_repricer_price_apply_enabled=os.getenv("VELLA_AVITO_REPRICER_PRICE_APPLY_ENABLED", "false").lower() == "true",
         avito_repricer_execute_interval_minutes=int(os.getenv("VELLA_AVITO_REPRICER_EXECUTE_INTERVAL_MINUTES", "60")),
