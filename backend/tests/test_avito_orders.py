@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import logging
+import xml.etree.ElementTree as ET
 from datetime import date
 from io import BytesIO
-import logging
 from zipfile import ZipFile
-import xml.etree.ElementTree as ET
 
 from fastapi.testclient import TestClient
 
@@ -646,6 +646,13 @@ def test_avito_orders_extension_token_regeneration_revokes_previous_token(monkey
 
 
 def test_avito_orders_picking_list_xlsx_matches_avito_order_rows(monkeypatch):
+    monkeypatch.setattr(
+        "app.routers.avito_orders._listing_dicts_from_cache",
+        lambda *_args: [{
+            "itemId": "8098482225", "size": "M", "color": "черный",
+            "imageUrl": "https://synthetic.invalid/item.png",
+        }],
+    )
     recording_client: RecordingOrdersClient | None = None
 
     def build_client(*_args, **kwargs):
@@ -814,7 +821,8 @@ def test_avito_orders_endpoint_ignores_blocked_cache_and_refetches(monkeypatch):
     monkeypatch.setattr("app.routers.avito_orders.resolve_user_avito_access_token", lambda **_kwargs: "avito-bearer-token")
     monkeypatch.setattr(
         "app.routers.avito_orders.get_source_cache",
-        lambda *_args, **_kwargs: {
+        lambda _org, source_key, **_kwargs: None
+        if source_key == "avito_orders_browser_snapshot" else {
             "status": "blocked",
             "period": {"dateFrom": "2026-07-15", "days": 15},
             "filters": {"statuses": [], "page": 1, "limit": 20},

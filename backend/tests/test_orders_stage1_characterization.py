@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from itertools import permutations
 from pathlib import Path
 
 import pytest
@@ -8,6 +10,7 @@ import pytest
 from app.modules.orders import (
     CanonicalOrderStatus,
     ExternalOrderIdentity,
+    ExternalOrderItemIdentity,
     MappingState,
     Marketplace,
     OrderContractValidationError,
@@ -38,9 +41,7 @@ def test_avito_shared_ids_remain_distinct_across_orgs_and_accounts() -> None:
     rows = _stage1("avito_orders_synthetic.json")["scopedOrders"][:3]
     identities = {_order_identity(row, Marketplace.AVITO) for row in rows}
 
-    assert {row["externalOrderId"] for row in rows} == {
-        "synthetic-order-cross-scope"
-    }
+    assert {row["externalOrderId"] for row in rows} == {"synthetic-order-cross-scope"}
     assert {(row["organizationId"], row["marketplaceAccountId"]) for row in rows} == {
         (101, 1001),
         (101, 1002),
@@ -143,7 +144,8 @@ def test_wb_statistics_rows_characterize_cancellation_without_readiness() -> Non
 
 
 @pytest.mark.parametrize(
-    "fixture_name", ["avito_orders_synthetic.json", "wb_statistics_orders_synthetic.json"]
+    "fixture_name",
+    ["avito_orders_synthetic.json", "wb_statistics_orders_synthetic.json"],
 )
 def test_partial_page_manifest_never_marks_absent_orders_cancelled(
     fixture_name: str,
@@ -152,9 +154,7 @@ def test_partial_page_manifest_never_marks_absent_orders_cancelled(
 
     assert pagination["manifestState"] == "partial"
     assert pagination["isComplete"] is False
-    assert pagination["absentOrderIds"] == [
-        "synthetic-order-absent-from-partial-page"
-    ]
+    assert pagination["absentOrderIds"] == ["synthetic-order-absent-from-partial-page"]
     assert pagination["absenceMeansCancellation"] is False
 
 
@@ -186,3 +186,56 @@ def test_reordering_preserves_identity_while_source_change_is_observable(
     assert reordered == original
     assert set(changed) == set(original)
     assert changed != original
+
+
+def _item_identity(order, item):
+    return ExternalOrderItemIdentity(
+        _order_identity(order, Marketplace.AVITO),
+        make_avito_source_line_key(
+            order["externalOrderId"],
+            item["externalItemId"],
+            item["occurrenceIndex"],
+            item.get("stableOrderLineId"),
+        ),
+        item["externalItemId"],
+        item["occurrenceIndex"],
+    )
+
+
+def test_explicit_occurrences_survive_every_multi_item_permutation():
+    order = _stage1("avito_orders_synthetic.json")["scopedOrders"][0]
+    original = {_item_identity(order, item) for item in order["items"]}
+    assert len(original) == 3
+    for reordered in permutations(order["items"]):
+        assert {_item_identity(order, item) for item in reordered} == original
+
+
+def test_quantity_and_description_changes_do_not_create_new_line_identity():
+    order = _stage1("avito_orders_synthetic.json")["scopedOrders"][0]
+    original = order["items"][0]
+    changed = deepcopy(original)
+    changed.update(quantity=7, title="synthetic-changed-title", color="synthetic-color")
+    assert _item_identity(order, changed) == _item_identity(order, original)
+
+
+def test_repeated_listing_cannot_acquire_occurrence_from_missing_input():
+    order = _stage1("avito_orders_synthetic.json")["scopedOrders"][0]
+    item = order["items"][0]
+    with pytest.raises(OrderContractValidationError):
+        make_avito_source_line_key(
+            order["externalOrderId"], item["externalItemId"], None
+        )
+
+
+def test_wb_shared_units_remain_distinct_in_same_org_different_accounts():
+    rows = _stage1("wb_statistics_orders_synthetic.json")["scopedOrders"][:3]
+    identities = {
+        ExternalOrderItemIdentity(
+            _order_identity(row, Marketplace.WB),
+            make_wb_source_line_key(row["stableUnitId"]),
+            None,
+            0,
+        )
+        for row in rows
+    }
+    assert len(identities) == 3
