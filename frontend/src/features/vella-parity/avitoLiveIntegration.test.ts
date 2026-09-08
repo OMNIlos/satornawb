@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router-dom'
+import { NotificationsToolbarIsland } from './VellaHtmlParityPage'
 
 const sourceRoot = path.resolve(__dirname, '../..')
 const paritySource = fs.readFileSync(path.join(sourceRoot, 'features/vella-parity/VellaHtmlParityPage.tsx'), 'utf8')
@@ -8,6 +12,15 @@ const settingsBackendSource = fs.readFileSync(path.join(sourceRoot, 'features/se
 const productionHtml = fs.readFileSync(path.resolve(sourceRoot, '../public/vella-production.html'), 'utf8')
 
 describe('Avito live integration wiring', () => {
+  it('renders refresh and read-all controls on the Avito notifications toolbar', () => {
+    const html = renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: ['/avito/notifications'] },
+      createElement(NotificationsToolbarIsland)))
+    expect(html).toContain('data-vella-island="notifications-toolbar"')
+    expect(html).toContain('Прочитать всё')
+    expect(html).toContain('Обновить данные')
+    expect(html).toContain('data-tip="Обновить данные Авито"')
+    expect(html).toContain('avito-action-btn is-refresh')
+  })
   it('loads and saves Avito credentials from profile settings backend', () => {
     expect(settingsBackendSource).toContain('/api/v1/cabinet/avito-credentials')
     expect(settingsBackendSource).toContain('upsertCurrentUserAvitoCredentials')
@@ -242,7 +255,6 @@ describe('Avito live integration wiring', () => {
     expect(notificationsSource).toContain('AVITO_NOTIFICATION_RULES.splice')
     expect(notificationsSource).toContain('AVITO_NOTIFICATION_CHANNELS.splice')
     expect(notificationsSource).toContain('refreshAvitoNotifications')
-    expect(notificationsSource).toContain('Обновить Avito')
     expect(notificationsSource).not.toContain("id:'av-001'")
     expect(notificationsSource).not.toContain('Кошелёк Avito ниже порога')
   })

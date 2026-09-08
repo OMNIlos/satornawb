@@ -48,3 +48,27 @@ missing digest chart items, strategy editor expectation and Reviews timeout.
 They need individual behavioral diagnosis. No claim yet whether each is a stale
 fixture or a real defect. Canonical Reviews/Orders/Production and runtime proxy,
 session and readiness integration still wait for actual committed contracts.
+
+## Avito notification toolbar correction
+
+Independent review identified the obsolete `Обновить Avito` source assertion.
+The actual toolbar already renders the shared `AvitoRefreshButton`, whose label
+is `Обновить данные` and tooltip is `Обновить данные Авито`. Its existing callback
+still invokes the Avito notification refresh bridge.
+
+Replaced only the obsolete literal with a real toolbar SSR test under MemoryRouter
+at `/avito/notifications`, checking the refresh control and read-all control.
+Other backend/action/no-static-mock assertions remain. The island receives a named
+export for direct rendering; runtime behavior and callbacks do not change.
+Original selected checks: 1 failed / 1 passed. Mutation removing the actual refresh
+component: the new rendering test fails; restored component has no behavioral diff.
+This is toolbar-render evidence, not an executed read-all/refresh action, session
+integration, provider call or durable receipt proof. No external action was invoked.
+
+After restoring the component: selected notifications checks 2 passed (the `-t`
+selection excludes unrelated cases, not committed skips). Typecheck: exit 0.
+Independent scoped critic: PASS. Fresh full suite, including both safe marking
+cleanup slices: **274 passed / 26 failed / 0 pending**, exit 1; versus the preceding
+266/27 report, **0 new failure IDs, 1 resolved**. New cases account for the additional
+passes. Report: `/tmp/satorna-t4-notifications-after.json`. The next SKU browser
+fixture was created after this full run began and is verified separately.
