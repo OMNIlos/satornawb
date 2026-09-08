@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -256,6 +257,20 @@ def _parts(raw_bearer: str) -> tuple[str, str, str, str]:
     return prefix, organization_id, token_id, secret
 
 
+def _wait_for_postgres_lock(owner_engine, backend_pid: int) -> None:
+    deadline = time.monotonic() + 5
+    with owner_engine.connect() as monitor:
+        while time.monotonic() < deadline:
+            wait_event_type = monitor.scalar(
+                text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :pid"),
+                {"pid": backend_pid},
+            )
+            if wait_event_type == "Lock":
+                return
+            time.sleep(0.01)
+    pytest.fail("worker did not enter a PostgreSQL lock wait")
+
+
 def _assert_invalid(raw_bearer: object) -> None:
     with pytest.raises(ingestion_tokens.IngestionTokenStoreError) as caught:
         ingestion_tokens.verify_ingestion_token(raw_bearer)  # type: ignore[arg-type]
@@ -422,6 +437,7 @@ def test_verify_returns_exact_owner_and_updates_last_used_only_on_success(
         "sat1.01.00000000000040008000000000000000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "sat1.0.00000000000040008000000000000000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "sat1.9223372036854775808.00000000000040008000000000000000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "sat1.2147483648.00000000000040008000000000000000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "sat1.1.0000000000004000800000000000000A.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "sat1.1.00000000-0000-4000-8000-000000000000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "sat1.1.00000000000040008000000000000000.short",
@@ -512,7 +528,7 @@ def test_expired_and_revoked_tokens_are_uniform_and_do_not_update_last_used(
 @pytest.mark.parametrize(
     "status", ["disconnected", "disabled", "inactive", "error", ""]
 )
-def test_every_nonconnected_account_state_is_rejected_consistently(
+def test_nonconnected_account_blocks_issue_and_verify_but_can_revoke_permanently(
     token_store, status: str
 ) -> None:
     issued = ingestion_tokens.issue_ingestion_token(
@@ -527,16 +543,33 @@ def test_every_nonconnected_account_state_is_rejected_consistently(
             {"status": status},
         )
     _assert_invalid(raw_bearer)
-    for operation in (
-        lambda: ingestion_tokens.issue_ingestion_token(
+    with pytest.raises(ingestion_tokens.IngestionTokenStoreError) as caught:
+        ingestion_tokens.issue_ingestion_token(
             _owner(), expires_at=NOW + timedelta(hours=1)
-        ),
-        lambda: ingestion_tokens.revoke_ingestion_tokens(_owner(), "operator_revoked"),
-        lambda: ingestion_tokens.get_ingestion_token_status(_owner()),
-    ):
-        with pytest.raises(ingestion_tokens.IngestionTokenStoreError) as caught:
-            operation()
-        assert caught.value.code == "ingestion_token_account_unavailable"
+        )
+    assert caught.value.code == "ingestion_token_account_unavailable"
+
+    lifecycle = ingestion_tokens.get_ingestion_token_status(_owner())
+    assert lifecycle is not None
+    assert lifecycle.status == "active"
+    revoked = ingestion_tokens.revoke_ingestion_tokens(
+        _owner(), "account_disconnected", actor_user_id="actor-1"
+    )
+    assert len(revoked) == 1
+    assert revoked[0].status == "revoked"
+    assert revoked[0].revocation_reason_code == "account_disconnected"
+    lifecycle = ingestion_tokens.get_ingestion_token_status(_owner())
+    assert lifecycle is not None
+    assert lifecycle.status == "revoked"
+
+    with token_store["owner_engine"].begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE marketplace_accounts SET status = 'connected' "
+                "WHERE marketplace_account_id = 101"
+            )
+        )
+    _assert_invalid(raw_bearer)
 
 
 def test_owner_expiry_and_reason_contracts_fail_before_database_access(
@@ -559,6 +592,14 @@ def test_owner_expiry_and_reason_contracts_fail_before_database_access(
         ),
         lambda: ingestion_tokens.issue_ingestion_token(
             _owner(organization_id=True), expires_at=NOW + timedelta(hours=1)
+        ),
+        lambda: ingestion_tokens.issue_ingestion_token(
+            _owner(organization_id=2_147_483_648),
+            expires_at=NOW + timedelta(hours=1),
+        ),
+        lambda: ingestion_tokens.issue_ingestion_token(
+            _owner(account_id=2_147_483_648),
+            expires_at=NOW + timedelta(hours=1),
         ),
         lambda: ingestion_tokens.issue_ingestion_token(
             _owner(), expires_at=NOW.replace(tzinfo=None)
@@ -644,6 +685,136 @@ def test_concurrent_issue_serializes_rotation_to_one_active_token(token_store) -
         else:
             outcomes.append("valid")
     assert sorted(outcomes) == ["ingestion_token_invalid", "valid"]
+
+
+def test_verify_refreshes_expiry_after_waiting_for_account_lock(token_store) -> None:
+    issued = ingestion_tokens.issue_ingestion_token(
+        _owner(), expires_at=NOW + timedelta(minutes=1)
+    )
+    raw_bearer = issued.reveal()
+    locator_read = threading.Event()
+    worker_pid: list[int] = []
+
+    def observe_locator_read(
+        _connection, _cursor, statement, _parameters, _context, _executemany
+    ) -> None:
+        normalized = statement.upper()
+        if (
+            threading.current_thread().name.startswith("verify-expiry")
+            and "MARKETPLACE_ACCOUNT_INGESTION_TOKENS" in normalized
+            and normalized.lstrip().startswith("SELECT")
+            and "FOR UPDATE" not in normalized
+        ):
+            worker_pid.append(_connection.connection.driver_connection.info.backend_pid)
+            locator_read.set()
+
+    lock_connection = token_store["owner_engine"].connect()
+    lock_transaction = lock_connection.begin()
+    lock_connection.execute(
+        text(
+            "SELECT marketplace_account_id FROM marketplace_accounts "
+            "WHERE marketplace_account_id = 101 FOR UPDATE"
+        )
+    )
+    event.listen(
+        token_store["runtime_engine"], "after_cursor_execute", observe_locator_read
+    )
+    try:
+        with ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="verify-expiry"
+        ) as pool:
+            future = pool.submit(ingestion_tokens.verify_ingestion_token, raw_bearer)
+            assert locator_read.wait(timeout=5)
+            _wait_for_postgres_lock(token_store["owner_engine"], worker_pid[0])
+            token_store["clock"].value = NOW + timedelta(minutes=2)
+            lock_transaction.commit()
+            with pytest.raises(ingestion_tokens.IngestionTokenStoreError) as caught:
+                future.result(timeout=5)
+            assert caught.value.code == "ingestion_token_invalid"
+    finally:
+        if lock_transaction.is_active:
+            lock_transaction.rollback()
+        lock_connection.close()
+        event.remove(
+            token_store["runtime_engine"],
+            "after_cursor_execute",
+            observe_locator_read,
+        )
+    status = ingestion_tokens.get_ingestion_token_status(_owner())
+    assert status is not None
+    assert status.status == "expired"
+    assert status.last_used_at is None
+
+
+def test_issue_rechecks_expiry_after_lock_and_preserves_prior_token(
+    token_store,
+) -> None:
+    prior = ingestion_tokens.issue_ingestion_token(
+        _owner(), expires_at=NOW + timedelta(hours=1)
+    )
+    prior_raw = prior.reveal()
+    lock_attempted = threading.Event()
+    worker_pid: list[int] = []
+
+    def observe_account_lock(
+        _connection, _cursor, statement, _parameters, _context, _executemany
+    ) -> None:
+        normalized = statement.upper()
+        if (
+            threading.current_thread().name.startswith("issue-expiry")
+            and "MARKETPLACE_ACCOUNTS" in normalized
+            and normalized.lstrip().startswith("SELECT")
+            and "FOR UPDATE" in normalized
+        ):
+            worker_pid.append(_connection.connection.driver_connection.info.backend_pid)
+            lock_attempted.set()
+
+    lock_connection = token_store["owner_engine"].connect()
+    lock_transaction = lock_connection.begin()
+    lock_connection.execute(
+        text(
+            "SELECT marketplace_account_id FROM marketplace_accounts "
+            "WHERE marketplace_account_id = 101 FOR UPDATE"
+        )
+    )
+    event.listen(
+        token_store["runtime_engine"], "before_cursor_execute", observe_account_lock
+    )
+    try:
+        with ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="issue-expiry"
+        ) as pool:
+            future = pool.submit(
+                ingestion_tokens.issue_ingestion_token,
+                _owner(),
+                expires_at=NOW + timedelta(minutes=1),
+            )
+            assert lock_attempted.wait(timeout=5)
+            _wait_for_postgres_lock(token_store["owner_engine"], worker_pid[0])
+            token_store["clock"].value = NOW + timedelta(minutes=2)
+            lock_transaction.commit()
+            with pytest.raises(ingestion_tokens.IngestionTokenStoreError) as caught:
+                future.result(timeout=5)
+            assert caught.value.code == "ingestion_token_contract_invalid"
+    finally:
+        if lock_transaction.is_active:
+            lock_transaction.rollback()
+        lock_connection.close()
+        event.remove(
+            token_store["runtime_engine"],
+            "before_cursor_execute",
+            observe_account_lock,
+        )
+
+    verified = ingestion_tokens.verify_ingestion_token(prior_raw)
+    assert verified.token_id == prior.metadata.token_id
+    with token_store["owner_engine"].connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT token_id, revoked_at FROM marketplace_account_ingestion_tokens"
+            )
+        ).all()
+    assert rows == [(prior.metadata.token_id, None)]
 
 
 def test_verify_rechecks_revocation_after_account_lock_before_success(

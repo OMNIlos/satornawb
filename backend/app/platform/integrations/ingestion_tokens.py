@@ -25,11 +25,13 @@ from app.platform.integrations.orm import (
 
 INGESTION_TOKEN_SCOPE = "avito.browser_snapshot.write"
 _TOKEN_PREFIX = "sat1"
-_MAX_ORGANIZATION_ID = (1 << 63) - 1
+_MAX_POSTGRES_INTEGER = (1 << 31) - 1
 _SECRET_BYTES = 32
 _SECRET_LENGTH = 43
 _MIN_BEARER_LENGTH = len(_TOKEN_PREFIX) + 3 + 1 + 32 + _SECRET_LENGTH
-_MAX_BEARER_LENGTH = len(_TOKEN_PREFIX) + 3 + 19 + 32 + _SECRET_LENGTH
+_MAX_BEARER_LENGTH = (
+    len(_TOKEN_PREFIX) + 3 + len(str(_MAX_POSTGRES_INTEGER)) + 32 + _SECRET_LENGTH
+)
 _UUID_HEX = re.compile(r"[0-9a-f]{32}\Z", re.ASCII)
 _URLSAFE_SECRET = re.compile(r"[A-Za-z0-9_-]{43}\Z", re.ASCII)
 _REVOCATION_REASONS = frozenset(
@@ -138,8 +140,8 @@ def _validate_owner(owner: MarketplaceAccountCredentialOwner) -> None:
         not isinstance(owner, MarketplaceAccountCredentialOwner)
         or not _positive_int(owner.organization_id)
         or not _positive_int(owner.marketplace_account_id)
-        or owner.organization_id > _MAX_ORGANIZATION_ID
-        or owner.marketplace_account_id > _MAX_ORGANIZATION_ID
+        or owner.organization_id > _MAX_POSTGRES_INTEGER
+        or owner.marketplace_account_id > _MAX_POSTGRES_INTEGER
         or owner.provider != "avito"
     ):
         raise IngestionTokenStoreError("ingestion_token_contract_invalid")
@@ -177,13 +179,13 @@ def _parse_bearer(raw_bearer: str) -> tuple[int, UUID, str]:
         or not organization_text.isascii()
         or not organization_text.isdecimal()
         or organization_text.startswith("0")
-        or len(organization_text) > 19
+        or len(organization_text) > len(str(_MAX_POSTGRES_INTEGER))
         or _UUID_HEX.fullmatch(token_text) is None
         or _URLSAFE_SECRET.fullmatch(secret) is None
     ):
         raise IngestionTokenStoreError("ingestion_token_invalid")
     organization_id = int(organization_text)
-    if organization_id < 1 or organization_id > _MAX_ORGANIZATION_ID:
+    if organization_id < 1 or organization_id > _MAX_POSTGRES_INTEGER:
         raise IngestionTokenStoreError("ingestion_token_invalid")
     return organization_id, UUID(hex=token_text), secret
 
@@ -240,6 +242,18 @@ def _require_connected_account(
             else "ingestion_token_account_unavailable"
         )
         raise IngestionTokenStoreError(code)
+    return account
+
+
+def _require_existing_account(
+    session: Session,
+    owner: MarketplaceAccountCredentialOwner,
+    *,
+    lock: bool,
+) -> MarketplaceAccountRow:
+    account = _account(session, owner, lock=lock)
+    if account is None:
+        raise IngestionTokenStoreError("ingestion_token_account_unavailable")
     return account
 
 
@@ -372,13 +386,14 @@ def issue_ingestion_token(
     actor_user_id: str | None = None,
 ) -> IssuedIngestionToken:
     _validate_owner(owner)
-    now = _utc_now()
-    normalized_expiry = _validate_expiry(expires_at, now)
+    _validate_expiry(expires_at, _utc_now())
     session = _new_session()
     try:
         set_tenant_context(session, owner.organization_id)
         _require_connected_account(session, owner, lock=True)
         current_rows = _owner_rows(session, owner, active_only=True, lock=True)
+        now = _utc_now()
+        normalized_expiry = _validate_expiry(expires_at, now)
         for current in current_rows:
             current.revoked_at = now
             current.revocation_reason_code = "token_rotated"
@@ -424,7 +439,6 @@ def issue_ingestion_token(
 
 def verify_ingestion_token(raw_bearer: str) -> VerifiedIngestionToken:
     organization_id, token_id, secret = _parse_bearer(raw_bearer)
-    now = _utc_now()
     candidate_verifier = hashlib.sha256(secret.encode("ascii")).digest()
     session = _new_session()
     try:
@@ -457,6 +471,7 @@ def verify_ingestion_token(raw_bearer: str) -> VerifiedIngestionToken:
             or int(row.marketplace_account_id) != owner.marketplace_account_id
         ):
             raise IngestionTokenStoreError("ingestion_token_invalid")
+        now = _utc_now()
         stored_verifier = bytes(row.verifier)
         secret_matches = hmac.compare_digest(stored_verifier, candidate_verifier)
         expires_at = _as_utc(row.expires_at)
@@ -500,7 +515,7 @@ def revoke_ingestion_tokens(
     session = _new_session()
     try:
         set_tenant_context(session, owner.organization_id)
-        _require_connected_account(session, owner, lock=True)
+        _require_existing_account(session, owner, lock=True)
         rows = _owner_rows(session, owner, active_only=True, lock=True)
         for row in rows:
             row.revoked_at = now
@@ -534,7 +549,7 @@ def get_ingestion_token_status(
     session = _new_session()
     try:
         set_tenant_context(session, owner.organization_id)
-        _require_connected_account(session, owner, lock=False)
+        _require_existing_account(session, owner, lock=False)
         row = _latest_owner_row(session, owner)
         if row is None:
             return None
