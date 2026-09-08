@@ -23032,7 +23032,7 @@ function NotificationModeSwitchIsland() {
   )
 }
 
-function NotificationsToolbarIsland() {
+export function NotificationsToolbarIsland() {
   const location = useLocation()
   const isAvitoNotificationsRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'avito-notifications'
   if (isAvitoNotificationsRoute) {
