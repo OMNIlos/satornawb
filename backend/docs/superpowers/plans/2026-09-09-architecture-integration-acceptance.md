@@ -97,3 +97,26 @@ policy or permission to activate production.
   does not require decrypting or possessing an active marketplace credential.
 - Worker delegation is a separate contract; no fabricated admin principal or
   implicit worker authorization is allowed.
+
+## Combined integration checks so far
+
+The integrated tree includes ready T1 through `1514425`, T2 through `6ee8485`,
+T3 through `4374bb5`, and T4 through `1d0700d`. Ordinary merges preserved the
+existing `filipp` lineage; no remote publication has occurred.
+
+- Combined selected backend checks at `95aef72`: 888 passed, two dependency
+  warnings, natural exit 0. OS network denial plus the Orders audit fence;
+  synthetic fixtures only. This is not the full backend suite.
+- Earlier combined attempt used the repricer-specific in-memory-only SQLite
+  fence with an Avito test that intentionally creates a disposable temporary
+  SQLite file. That harness mismatch failed once; using the appropriate
+  network fence passed without changing product code or tests.
+- Frontend at `a9e7601`: ten focused files, 96 tests passed; application and
+  tooling TypeScript checks passed independently, with build-info outside the
+  shared dependency directory.
+- Independent complete bounded frontend review through `8d68560`: 86 focused
+  tests passed, no blocking regression found. The owner's 27 remaining full
+  frontend failures are still open and have not been waived.
+
+Actual domain repositories, shared authorization fencing, subsequent schemas
+and full release checks remain in progress.
