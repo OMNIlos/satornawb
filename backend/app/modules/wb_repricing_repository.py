@@ -10,7 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from app.modules.wb_repricing_dispatch import (
+        ApplyAttempt, ApplyOutcome, AttemptResult, CanonicalApplyRequest,
+    )
 
 from app.modules.wb_repricing import (
     ApprovalStatus,
@@ -211,7 +216,13 @@ class ApprovalOutcomeCommand:
 
 @runtime_checkable
 class PriceApprovalRepository(Protocol):
-    """Minimum durable owner contract; no UUID-only operation is permitted."""
+    """Durable owner contract, including dispatch amendment (2026-09-09).
+
+    Every mutation includes the specified audit in one transaction. Returned
+    writes are committed; failed commit is an explicit exception, never fallback.
+    Real adapters use trusted transaction time and fresh authorization, not
+    client timestamps/membership claims. No UUID-only operation is permitted.
+    """
 
     def get(
         self,
@@ -229,7 +240,12 @@ class PriceApprovalRepository(Protocol):
         catalog_sku_id: int | None,
         snapshot: PriceApprovalSnapshot,
     ) -> PriceApprovalSnapshot:
-        """Insert one immutable, identity-bridged approval snapshot."""
+        """Backfill-only: preserve snapshot + imported audit, request_format=legacy.
+
+        No reserve/dispatch of legacy imports in this wave. Identical replay
+        returns stored value without audit; changed immutable content conflicts.
+        New actionable intents must use create_intent.
+        """
 
         ...
 
@@ -241,7 +257,11 @@ class PriceApprovalRepository(Protocol):
         actor: AuthenticatedApprovalActor,
         now: datetime,
     ) -> PriceApprovalSnapshot:
-        """Atomically claim pending approval using one scoped CAS write."""
+        """One scoped pending/version CAS + actor audit; require bound v1 intent.
+
+        Updates approval V -> V+1. Closed/legacy/stale rows cannot be claimed.
+        A claim is not permission to call a provider.
+        """
 
         ...
 
@@ -251,8 +271,80 @@ class PriceApprovalRepository(Protocol):
         scope: ApprovalRepositoryScope,
         command: ApprovalOutcomeCommand,
     ) -> PriceApprovalSnapshot:
-        """Atomically persist an attempt and its versioned safe outcome."""
+        """Deprecated compatibility boundary; no direct arbitrary outcome write.
 
+        Delegate to record_attempt_outcome at attempt version 1 only, requiring
+        scoped dispatched attempt, complete immutable/actor snapshot equality,
+        and new outcome allowlist. Cannot finalize reserved or imported rows.
+        """
+
+        ...
+
+    def create_intent(
+        self, *, scope: ApprovalRepositoryScope, request: CanonicalApplyRequest,
+        actor: AuthenticatedApprovalActor, now: datetime,
+    ) -> PriceApprovalSnapshot:
+        """Create pending version 0, canonical bytes/hash/key + created audit.
+
+        Scope must equal request.scope. Exact byte-for-byte replay returns the
+        current snapshot with no write/audit; changed request under same scoped
+        approval or action key conflicts, even when hashes claim equality.
+        """
+        ...
+
+    def reserve_attempt(
+        self, *, scope: ApprovalRepositoryScope, expected_version: int,
+        actor: AuthenticatedApprovalActor, now: datetime,
+    ) -> ApplyAttempt:
+        """Reserve one attempt per approval + audit; approval stays applying.
+
+        Repository generates UUID4 once for insert winner; caller/queue cannot
+        supply it. Return existing reserved attempt on exact retry, no new audit;
+        dispatched/closed/stale/differently bound attempts conflict. Actor must
+        match original claim and remain authorized. Attempt starts at version 0.
+        """
+        ...
+
+    def mark_dispatch(
+        self, *, scope: ApprovalRepositoryScope, attempt_id: str,
+        expected_version: int, expected_attempt_version: int,
+        actor: AuthenticatedApprovalActor, now: datetime,
+    ) -> ApplyAttempt:
+        """Exclusive scoped reserved/0 -> dispatched/1 marker + audit commit.
+
+        Match approval applying/version/claim actor, immutable request/key,
+        attempt identity/claim_version/version and NULL marker in one atomic
+        transaction. Only the first committed winner returns success. Replay,
+        zero matched rows, or uncertain commit returns error, never permission.
+        No lock may span the subsequent provider call. Approval version unchanged.
+        """
+        ...
+
+    def record_attempt_outcome(
+        self, *, scope: ApprovalRepositoryScope, attempt_id: str,
+        expected_version: int, expected_attempt_version: int,
+        outcome: ApplyOutcome, now: datetime,
+    ) -> AttemptResult:
+        """Worker-only: scoped attempt/result + approval V+1 + audit transaction.
+
+        Apply finish_attempt rules. Match applying approval/version and attempt
+        binding/version; all terminal replays conflict and append nothing.
+        Worker audit membership is NULL; original approval claimant is retained.
+        """
+        ...
+
+    def reject(
+        self, *, scope: ApprovalRepositoryScope, expected_version: int,
+        actor: AuthenticatedApprovalActor, reason_code: str, now: datetime,
+    ) -> PriceApprovalSnapshot:
+        """Scoped pending/version CAS + membership decision audit, V -> V+1."""
+        ...
+
+    def block(
+        self, *, scope: ApprovalRepositoryScope, expected_version: int,
+        actor: AuthenticatedApprovalActor, safe_blocker_code: str, now: datetime,
+    ) -> PriceApprovalSnapshot:
+        """Scoped pending/version CAS + membership blocker audit, V -> V+1."""
         ...
 
 
