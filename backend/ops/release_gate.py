@@ -121,17 +121,31 @@ def cleanup_container(
 
 
 def safe_environment() -> dict[str, str]:
-    markers = ("TOKEN", "SECRET", "PASSWORD", "COOKIE", "API_KEY")
+    # A denylist misses broker URLs, keyring paths, rollout flags and new secrets.
+    # Inherit only process-launch essentials; task services are supplied explicitly.
+    inherited_names = {"PATH", "TMPDIR", "TMP", "TEMP", "SYSTEMROOT", "COMSPEC", "PATHEXT"}
     environment = {
         key: value
         for key, value in os.environ.items()
-        if not any(marker in key.upper() for marker in markers)
-        and not key.upper().endswith("DATABASE_URL")
+        if key in inherited_names
     }
     environment.update(
         {
             "CI": "1",
             "PYTHONUNBUFFERED": "1",
+            "LC_ALL": "C",
+            "VELLA_DATABASE_URL": (
+                "postgresql+psycopg://satorna_gate:satorna_gate@127.0.0.1:1/unreachable"
+            ),
+            "VELLA_REDIS_URL": "redis://127.0.0.1:1/0",
+            "VELLA_CELERY_BROKER_URL": "redis://127.0.0.1:1/0",
+            "VELLA_CELERY_RESULT_BACKEND": "redis://127.0.0.1:1/0",
+            # Defense in depth only: clients can bypass proxy environment variables.
+            # This is not a substitute for an OS/container network boundary.
+            "HTTP_PROXY": "http://127.0.0.1:1",
+            "HTTPS_PROXY": "http://127.0.0.1:1",
+            "ALL_PROXY": "http://127.0.0.1:1",
+            "NO_PROXY": "127.0.0.1,localhost,::1",
             "VELLA_WB_API_MODE": "fake",
             "VELLA_AVITO_API_MODE": "fake",
             "VELLA_REAL_PRICE_APPLY_ENABLED": "false",
@@ -154,7 +168,7 @@ def frontend_directory() -> Path:
     candidate = (
         Path(configured).expanduser()
         if configured
-        else ROOT.parents[1] / "frontend" / "frontend"
+        else ROOT.parent / "frontend"
     )
     if (
         not (candidate / "package.json").is_file()
