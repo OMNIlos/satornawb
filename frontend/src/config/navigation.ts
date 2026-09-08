@@ -12,7 +12,6 @@ import {
   Wallet,
   ClipboardList,
   QrCode,
-  Ticket,
   Settings,
   Bell,
   History,
@@ -118,7 +117,6 @@ export const NAVIGATION: NavGroup[] = [
     label: 'ПРОИЗВОДСТВО',
     items: [
       { id: 'orders', label: 'Лист печати', icon: ClipboardList, path: '/orders', requiredRole: ['production', 'manager', 'admin'] },
-      { id: 'orders-kiz', label: 'КИЗ (интеграция позже)', icon: Ticket, path: '/orders/kiz', badge: 'soon', requiredRole: ['production', 'admin'] },
       { id: 'orders-returns', label: 'QR-возвраты', icon: QrCode, path: '/orders/returns', badge: 'soon', requiredRole: ['production', 'manager', 'admin'] },
     ],
   },

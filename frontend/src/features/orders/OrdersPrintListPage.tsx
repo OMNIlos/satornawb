@@ -11,7 +11,6 @@ type PrintOrder = {
   size: string
   qty: number
   sticker: string
-  kiz: string
 }
 
 const ORDERS: PrintOrder[] = [
@@ -25,7 +24,6 @@ const ORDERS: PrintOrder[] = [
     size: 'M',
     qty: 2,
     sticker: 'стикер WB готов',
-    kiz: 'поле под внешний код',
   },
   {
     id: 'WB-184918',
@@ -37,7 +35,6 @@ const ORDERS: PrintOrder[] = [
     size: 'XL',
     qty: 1,
     sticker: 'стикер WB готов',
-    kiz: 'поле под внешний код',
   },
   {
     id: 'WB-184944',
@@ -49,7 +46,6 @@ const ORDERS: PrintOrder[] = [
     size: 'L',
     qty: 1,
     sticker: 'стикер WB готов',
-    kiz: 'поле под внешний код',
   },
   {
     id: 'WB-184951',
@@ -61,7 +57,6 @@ const ORDERS: PrintOrder[] = [
     size: 'S',
     qty: 3,
     sticker: 'ожидает WB-стикер',
-    kiz: 'поле под внешний код',
   },
 ]
 
@@ -152,7 +147,6 @@ export function OrdersPrintListPage() {
                         <th className="px-3 py-2 font-medium">Размер</th>
                         <th className="px-3 py-2 text-right font-medium">Кол-во</th>
                         <th className="px-3 py-2 font-medium">Стикер</th>
-                        <th className="px-3 py-2 font-medium">КИЗ</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y bg-background">
@@ -165,7 +159,6 @@ export function OrdersPrintListPage() {
                           <td className="px-3 py-3">{order.size}</td>
                           <td className="px-3 py-3 text-right font-semibold">{order.qty}</td>
                           <td className="px-3 py-3 text-muted-foreground">{order.sticker}</td>
-                          <td className="px-3 py-3 text-muted-foreground">{order.kiz}</td>
                         </tr>
                       ))}
                     </tbody>
