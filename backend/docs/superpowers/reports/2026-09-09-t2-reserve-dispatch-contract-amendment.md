@@ -317,3 +317,20 @@ Runtime flow, flags, P&L formulas, migrations, DB/Redis/provider calls не ме
 До принятия approvals DDL independently доступны точные price/stock manifest contracts,
 safe source adapters и source/economics test debt. Orders DDL не разблокирует repricer.
 Никакой ready-for-production или all-stages-complete статус этой таблицей не заявлен.
+# PostgreSQL text amendment — 2026-09-09
+
+All approval/kernel/scope/request/outcome text must be PostgreSQL UTF-8 representable:
+U+0000 and U+D800..U+DFFF are rejected before action-key/request hashing or transition.
+No normalization, stripping, replacement, truncation or new business length limit.
+Ordinary Cyrillic, combining characters and supplementary Unicode remain exact;
+existing valid canonical bytes/checksums/action keys are unchanged. Existing request
+4096-byte and machine-code grammar limits remain unchanged. Invalid legacy identities
+stay blocked; never sanitize then recompute their hash to force an import.
+
+Attempt UUID4 uses exact lowercase canonical lexical validation before parsing can
+echo malformed input. Validation errors contain no supplied text or chained parser
+exception. This protects build_dispatch_key, reserve/hydration and audit boundaries.
+New regression `tests/test_wb_repricing_postgres_text.py`: 50 expected failures /6pass
+before text fix; critic UUID regression16fail/56pass; final72 tests pass, combined
+kernel/repository/dispatch227pass. Ruff, compileall and diff checks exit0. These are
+pure validation checks, not PostgreSQL migration/persistence acceptance.

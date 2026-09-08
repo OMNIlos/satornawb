@@ -12,7 +12,6 @@ import re
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
-from uuid import UUID
 
 from app.modules.wb_repricing import (
     SAFE_APPLY_ERROR_CODES,
@@ -20,6 +19,7 @@ from app.modules.wb_repricing import (
     ApprovalStatus,
     ApprovalValidationError,
     PriceApprovalSnapshot,
+    _require_postgres_text,
     build_action_key,
     record_apply_failure,
     record_apply_success,
@@ -40,6 +40,7 @@ def _integer(value: object, minimum: int = 0) -> None:
 def _text(value: object) -> None:
     if type(value) is not str or not value or value.strip() != value:
         raise ApprovalValidationError("exact nonblank text required")
+    _require_postgres_text(value)
 
 
 def _hash(value: object) -> None:
@@ -60,11 +61,10 @@ def _time(value: datetime, previous: datetime | None = None) -> None:
 
 
 def _uuid4(value: str) -> None:
-    try:
-        parsed = UUID(value)
-    except (ValueError, TypeError, AttributeError) as exc:
-        raise ApprovalValidationError("canonical UUID4 required") from exc
-    if str(parsed) != value or parsed.version != 4:
+    # Validate canonical spelling before a parser can echo untrusted input.
+    if type(value) is not str or re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", value
+    ) is None:
         raise ApprovalValidationError("canonical UUID4 required")
 
 
