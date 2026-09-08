@@ -170,3 +170,26 @@ verified. Ruff import-order corrected before commit. This closes the stale-paren
 storage gate, not yet authoritative source/high-watermark selection in service.
 Known0062 long-key B-tree defect remains separate T1 amendment prerequisite; no
 arbitrary cap or hash-as-identity introduced in domain.
+
+## Parent projection CAS primitive
+
+`app/orders/projection_repository.py` set_parent(run_id,observation_id,expected_version)
+uses the caller transaction/tenant context, staging-run FOR UPDATE, exact scoped
+membership, stored observation decoder/checksum/source binding and SQL
+`UPDATE ... WHERE org/account/order/version ... RETURNING version`.
+Updates raw/canonical/mapping fields, effective source time and last-seen run;
+no observed_at ordering, no provider/raw body, no own commit or session.
+
+This is a repository primitive, NOT a source progression decision: trusted service
+must classify replay/out-of-order/reconciliation before calling it, authorize under
+T1 guard and atomically commit all publication effects. Calling this primitive for
+an arbitrary older fact would be misuse; it does not claim automatic lifecycle
+monotonicity. No route calls it. Item projections/status-history/coverage/final-run
+publication remain separate unfinished service work.
+
+TDD RED missing module ->3PGGREEN including two real sessions competing for one
+parent version (one winner/one conflict); combined evidence/snapshot/CAS13PASS16.22s.
+Added caller-rollback regression: focused4PGPASS5.34s. Fresh random disposable DB,
+runtime role and cleanup verified, Unix-only sandbox. Ruff/compileall exit0.
+Self-review checked exact scoped joins and that incoming request cannot override
+stored status. Full auth/revocation/source-progression/long-key gates not claimed.
