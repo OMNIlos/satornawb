@@ -52,5 +52,26 @@ python -m compileall -q app/orders/serialization.py tests/test_orders_decoding.p
 
 SQL candidate не является installed migration. Ни application DB, ни Redis,
 provider, production, реальные print/export, deploy или push не использовались.
-Следующий независимый slice: отдельный fail-closed fix invalid XML text в XLSX.
+## XLSX invalid-character rule change
+
+Отдельное явное изменение legacy behavior в `app/avito/orders_picking_xlsx.py`:
+`_cell` отклоняет запрещённые XML 1.0 codepoints до создания ZIP: NUL/недопустимые
+controls, surrogate range, U+FFFE/U+FFFF. Разрешённые tab/LF/CR и Unicode ranges
+не очищаются и не нормализуются. ValueError содержит постоянное сообщение без
+исходного текста. Это не новый renderer и не schema work.
+
+TDD: 4 RED failures (XML parse errors/Unicode encoding error вместо predictable
+rejection), затем GREEN. Старые characterization assertions повреждённого XML
+заменены на acceptance безопасного отказа; исторический отчёт `f4d6d55` остаётся
+доказательством предыдущего поведения. Количества/layout/headers/inline formulas
+не менялись. HTTP error envelope не меняется здесь: T1 router owner должен
+согласовать отображение renderer ValueError перед UI activation. Без такого
+binding запрос может завершиться generic 500, но не успешным corrupt XLSX.
+Rollback возможен отдельным revert этого fix; он вернёт известный corrupt-output
+риск, поэтому не рекомендуется как способ продолжить печать malformed данных.
+Все проверки только synthetic in-memory rendering, без physical print/export.
+Combined offline regression после изменения: **234 passed, 2 прежних warnings**,
+exit0. Ruff/compileall проверены для renderer и characterization file. Полный
+visual XLSX/Excel layout acceptance не заявляется.
+
 После exact T1 ready commit приоритет переключается на Orders persistence.

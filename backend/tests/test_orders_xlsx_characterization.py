@@ -144,8 +144,15 @@ def test_thousand_units_have_contiguous_rows_and_complete_text():
         assert value(cells, f"D{row}") == "Синтетический товар"
 
 
-@pytest.mark.parametrize("text", ["synthetic\x00text", "synthetic\x0btext"])
-def test_legacy_renderer_emits_invalid_xml_for_forbidden_control_characters(text):
-    # Known legacy defect, not a canonical renderer acceptance criterion.
-    with pytest.raises(ET.ParseError):
+@pytest.mark.parametrize(
+    "text",
+    [
+        "synthetic\x00text",
+        "synthetic\x0btext",
+        "synthetic\ud800text",
+        "synthetic\ufffetext",
+    ],
+)
+def test_renderer_rejects_forbidden_xml_characters_without_echoing_text(text):
+    with pytest.raises(ValueError, match="^Invalid XML character in XLSX text$"):
         render([AvitoOrderItem(title=text)])
