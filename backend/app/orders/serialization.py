@@ -134,3 +134,100 @@ def serialize_read_row(row: OrderReadRow) -> dict:
     if type(row) is not OrderReadRow:
         raise OrderContractValidationError("Exact frozen read row required")
     return {"payload_schema_version": READ_PAYLOAD_SCHEMA_VERSION, "row": _encode(row)}
+
+
+_NESTED = {
+    (ExternalOrderItemIdentity, "order_identity"): ExternalOrderIdentity,
+    (ObservedOrderItem, "identity"): ExternalOrderItemIdentity,
+    (OrderObservation, "identity"): ExternalOrderIdentity,
+    (OrderObservation, "status"): MappedMarketplaceStatus,
+    (OrderReadRow, "observation"): OrderObservation,
+    (OrderReadRow, "item_identity"): ExternalOrderItemIdentity,
+    (OrderReadRow, "resolution"): CatalogResolution,
+}
+_LISTS = {
+    (OrderObservation, "items"): ObservedOrderItem,
+    (OrderReadRow, "deadlines"): DeadlineEvidence,
+    (OrderReadRow, "readiness_blockers"): str,
+}
+_DATES = {
+    (OrderObservation, "effective_at"),
+    (OrderObservation, "observed_at"),
+    (DeadlineEvidence, "source_at"),
+    (DeadlineEvidence, "computed_at"),
+    (DeadlineEvidence, "observed_at"),
+}
+
+
+def _object(value, keys):
+    if type(value) is not dict or set(value) != set(keys):
+        raise OrderContractValidationError("Stored object has unexpected fields")
+
+
+def _decode(model, value):
+    _object(value, _FIELDS[model])
+    arguments = {}
+    for name, field in value.items():
+        key = (model, name)
+        if key in _NESTED:
+            arguments[name] = _decode(_NESTED[key], field)
+        elif key in _LISTS:
+            if type(field) is not list:
+                raise OrderContractValidationError("Stored array required")
+            element = _LISTS[key]
+            if element is str:
+                if any(type(item) is not str for item in field):
+                    raise OrderContractValidationError("Stored text array required")
+                arguments[name] = tuple(field)
+            else:
+                arguments[name] = tuple(_decode(element, item) for item in field)
+        elif key in _DATES and field is not None:
+            if type(field) is not str:
+                raise OrderContractValidationError("Stored instant string required")
+            try:
+                instant = datetime.fromisoformat(field)
+            except ValueError as exc:
+                raise OrderContractValidationError("Invalid stored instant") from exc
+            if _encode(instant) != field:
+                raise OrderContractValidationError("Noncanonical stored instant")
+            arguments[name] = instant
+        else:
+            if field is not None and type(field) not in (str, int, bool):
+                raise OrderContractValidationError("Invalid stored scalar")
+            arguments[name] = field
+    try:
+        result = model(**arguments)
+    except (TypeError, ValueError) as exc:
+        raise OrderContractValidationError("Invalid stored domain object") from exc
+    if _encode(result) != value:
+        raise OrderContractValidationError("Stored payload is not canonical")
+    return result
+
+
+def _envelope(payload, version_key, version, value_key, model):
+    _object(payload, (version_key, value_key))
+    if type(payload[version_key]) is not int or payload[version_key] != version:
+        raise OrderContractValidationError("Unsupported stored payload version")
+    return _decode(model, payload[value_key])
+
+
+def deserialize_observation(payload: dict) -> OrderObservation:
+    """Validate a JSONB object; never infer omitted fields or upgrade unknown versions."""
+    return _envelope(
+        payload,
+        "evidence_schema_version",
+        EVIDENCE_SCHEMA_VERSION,
+        "observation",
+        OrderObservation,
+    )
+
+
+def deserialize_read_row(payload: dict) -> OrderReadRow:
+    """Reconstruct a frozen historical row without reading current Catalog state."""
+    return _envelope(
+        payload,
+        "payload_schema_version",
+        READ_PAYLOAD_SCHEMA_VERSION,
+        "row",
+        OrderReadRow,
+    )
