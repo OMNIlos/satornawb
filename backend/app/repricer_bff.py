@@ -2472,7 +2472,9 @@ def _merge_good_spp_fields(target: dict[str, Any], source: dict[str, Any]) -> No
     ):
         if source_size.get(key) is not None:
             target_size[key] = source_size.get(key)
-    target["sizes"] = [target_size]
+    # Preserve source size grain; enrichment of the first legacy row must not
+    # discard the remaining offers or copy buyer/Club fields onto them.
+    target["sizes"] = [target_size, *target_sizes[1:]]
 
 
 def _enrich_goods_page_spp_fields(
