@@ -87,3 +87,36 @@ exit0. Ruff/compileall проверены для renderer и characterization fi
 visual XLSX/Excel layout acceptance не заявляется.
 
 После exact T1 ready commit приоритет переключается на Orders persistence.
+
+## Orders evidence repository / accepted dependency
+
+Merged exact verified T1 schema `f9c7401d946063465e0576a689eb247c368eed73`
+with its prerequisite lineage, no merge conflicts or manual shared-file edits.
+Active0062 dependency accepted by root; не запускалась против application DB.
+
+`app/orders/evidence_repository.py` now implements transaction-participating
+order-level fact storage via parameterized SQLAlchemy Session queries. It checks
+scope and current tenant context, locks run FOR UPDATE, rejects terminal/source
+binding drift, creates scoped order identity, stores immutable normalized evidence
+with semantic replay check, and links receipt to run membership. Same run/different
+evidence is rejected. New run replay returns original persisted observation receipt.
+No commit, provider, secret access, authorization helper, snapshot publication,
+item projection, cancellation inference or route registration in this repository.
+Caller must roll back on errors and hold fresh auth/account locks.
+
+TDD RED missing repository import, then5 actual PostgreSQL tests PASS: rollback,
+terminal/source drift, same-run changed fact/scope rejection, cross-run replay,
+two simultaneous sessions/Barrier yielding one immutable fact. Fresh random
+disposable DB and runtime NOSUPERUSER/NOBYPASSRLS role; reused T1 bounded fixture
+with deliberately broad DML grants (tests trigger defense, not exact final ACL).
+Network denied by sandbox except local Unix PG socket. Fixture verified DB/role
+cleanup. No working DB table read, only maintenance metadata/create/drop own DB.
+Ruff/compileall passed; DB08/revocation and full publication remain NOT_RUN.
+
+Root fixed trusted service permission decision: user-initiated publish requires
+`sync:run`; persisted reads require `cabinet:read` and live scope. These are service
+constants, never request strings. Existing membership+profile union retained;
+worker denied. Guard implementation is T1-owned, still awaited for service wiring.
+
+Production schema dependency separately committed `8a8722f`:3relations with CAS,
+successful receipt and immutable assignment audit; does not require renderer source.
