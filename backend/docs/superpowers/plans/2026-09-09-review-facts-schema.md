@@ -63,6 +63,8 @@ Write focused tests for all four forced-RLS flags and no/wrong-org CRUD, owner/p
 
 Additional RED→GREEN: canonical normalizer accepts long incompressible valid ASCII/Unicode IDs but ordinary B-tree UNIQUE fails. Both run-source and external-review identity must survive exact insert/read after amendment; two concurrent exact duplicates leave one row and no partial facts. Distinct values must remain distinct. If a digest optimization is used, force equal lookup buckets in a disposable-only test and prove exact comparison permits distinct values; no production collision shortcut or identity normalization.
 
+Chosen minimal physical implementation uses no hash: exact owner-local scan with existing owner-leading indexes and canonical account lock. The two INSERT triggers explicitly require `transaction_isolation = 'read committed'`, otherwise safeSQLSTATE25000 before write; a REPEATABLE READ snapshot could otherwise miss the winner committed during the lock wait. Test RR refusal and RC two-session uniqueness. Document this transaction contract, including synthetic imports; do not mutate account data to manufacture serialization conflicts. No additional isolation restriction on other tables.
+
 - [ ] **Step 2: Run RED using the explicitly safe local PostgreSQL profile.**
 
 ```sh
