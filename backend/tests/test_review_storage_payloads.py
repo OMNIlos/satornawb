@@ -4,31 +4,34 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from app.reviews.storage_payloads import (
-    StoragePayloadError, encode_review_policy, encode_review_generation, encode_review_send,
+    StoragePayloadError,
+    encode_review_generation,
+    encode_review_policy,
+    encode_review_send,
 )
 
 ID = "00000000-0000-4000-8000-000000000001"
 
 
 def policy():
-    return dict(schemaVersion="review-policy-v1", organizationId=1, marketplaceAccountId=11,
-                marketplace="wb", policyId=ID, version=1, approvalMode="manual",
-                templateVersion="test-template", modelVersion="fake-model")
+    return {"schemaVersion": "review-policy-v1", "organizationId": 1, "marketplaceAccountId": 11,
+                "marketplace": "wb", "policyId": ID, "version": 1, "approvalMode": "manual",
+                "templateVersion": "test-template", "modelVersion": "fake-model"}
 
 
 def generation():
-    return dict(schemaVersion="review-generation-v1", generationId=ID,
-                sourceObservationId=ID, sourceChecksum="a" * 64, policyId=ID, policyVersion=1,
-                policyChecksum="b" * 64, templateVersion="test-template", modelVersion="fake-model",
-                mode="fake", actorMembershipId=1, startedAt="2026-09-09T00:00:00.000000Z",
-                completedAt="2026-09-09T00:00:01.000000Z")
+    return {"schemaVersion": "review-generation-v1", "generationId": ID,
+                "sourceObservationId": ID, "sourceChecksum": "a" * 64, "policyId": ID, "policyVersion": 1,
+                "policyChecksum": "b" * 64, "templateVersion": "test-template", "modelVersion": "fake-model",
+                "mode": "fake", "actorMembershipId": 1, "startedAt": "2026-09-09T00:00:00.000000Z",
+                "completedAt": "2026-09-09T00:00:01.000000Z"}
 
 
 def send():
-    return dict(schemaVersion="review-send-request-v1", operationKind="review.answer.create.v1",
-                organizationId=1, marketplaceAccountId=11, marketplace="avito",
-                externalReviewId="test-review-001", draftId=ID, draftRevision=1, decisionId=ID,
-                bindingChecksum="c" * 64, textChecksum="d" * 64)
+    return {"schemaVersion": "review-send-request-v1", "operationKind": "review.answer.create.v1",
+                "organizationId": 1, "marketplaceAccountId": 11, "marketplace": "avito",
+                "externalReviewId": "test-review-001", "draftId": ID, "draftRevision": 1, "decisionId": ID,
+                "bindingChecksum": "c" * 64, "textChecksum": "d" * 64}
 
 
 def test_policy_bytes_match_hand_written_contract_and_digest():
@@ -84,11 +87,11 @@ def test_send_bytes_preserve_complete_binding_for_replay():
     assert actual.checksum == hashlib.sha256(expected).hexdigest()
 
 
-@pytest.mark.parametrize("change", [dict(organizationId=True), dict(organizationId=0),
-    dict(marketplaceAccountId=1.5), dict(version="1"), dict(marketplace="WB"),
-    dict(policyId="00000000-0000-0000-0000-000000000000"), dict(policyId="private-value"),
-    dict(approvalMode="automatic"), dict(templateVersion=""), dict(modelVersion="unsafe model"),
-    dict(schemaVersion="review-policy-v2"), dict(extra="synthetic-private")])
+@pytest.mark.parametrize("change", [{"organizationId": True}, {"organizationId": 0},
+    {"marketplaceAccountId": 1.5}, {"version": "1"}, {"marketplace": "WB"},
+    {"policyId": "00000000-0000-0000-0000-000000000000"}, {"policyId": "private-value"},
+    {"approvalMode": "automatic"}, {"templateVersion": ""}, {"modelVersion": "unsafe model"},
+    {"schemaVersion": "review-policy-v2"}, {"extra": "synthetic-private"}])
 def test_invalid_policy_cannot_be_encoded(change):
     with pytest.raises(StoragePayloadError) as error:
         encode_review_policy(dict(policy(), **change))
@@ -106,21 +109,21 @@ def test_generation_requires_exact_time_format_and_manual_edit_parent():
         encode_review_generation(dict(base, previousDraftId=ID))
 
 
-@pytest.mark.parametrize("change", [dict(startedAt="2026-09-09T00:00:00Z"),
-    dict(startedAt="٢٠٢٦-09-09T00:00:00.000000Z"),
-    dict(startedAt="2026-09-09T00:00:00.000000+00:00"), dict(startedAt="2026-09-09T00:00:02.000000Z"),
-    dict(completedAt="2026-02-30T00:00:00.000000Z"), dict(mode="real_llm"),
-    dict(actorMembershipId=False), dict(policyChecksum="B" * 64), dict(sourceChecksum="bad"),
-    dict(prompt="synthetic-private")])
+@pytest.mark.parametrize("change", [{"startedAt": "2026-09-09T00:00:00Z"},
+    {"startedAt": "٢٠٢٦-09-09T00:00:00.000000Z"},
+    {"startedAt": "2026-09-09T00:00:00.000000+00:00"}, {"startedAt": "2026-09-09T00:00:02.000000Z"},
+    {"completedAt": "2026-02-30T00:00:00.000000Z"}, {"mode": "real_llm"},
+    {"actorMembershipId": False}, {"policyChecksum": "B" * 64}, {"sourceChecksum": "bad"},
+    {"prompt": "synthetic-private"}])
 def test_invalid_generation_cannot_be_encoded(change):
     with pytest.raises(StoragePayloadError):
         encode_review_generation(dict(generation(), **change))
 
 
-@pytest.mark.parametrize("change", [dict(organizationId=2), dict(marketplaceAccountId=12),
-    dict(marketplace="wb"), dict(externalReviewId="other-review"), dict(draftRevision=2),
-    dict(decisionId="00000000-0000-4000-8000-000000000002"), dict(textChecksum="e" * 64),
-    dict(bindingChecksum="f" * 64)])
+@pytest.mark.parametrize("change", [{"organizationId": 2}, {"marketplaceAccountId": 12},
+    {"marketplace": "wb"}, {"externalReviewId": "other-review"}, {"draftRevision": 2},
+    {"decisionId": "00000000-0000-4000-8000-000000000002"}, {"textChecksum": "e" * 64},
+    {"bindingChecksum": "f" * 64}])
 def test_send_binding_changes_produce_different_replay_bytes(change):
     first = encode_review_send(send())
     changed = encode_review_send(dict(send(), **change))
@@ -128,10 +131,10 @@ def test_send_binding_changes_produce_different_replay_bytes(change):
     assert first.checksum != changed.checksum
 
 
-@pytest.mark.parametrize("change", [dict(operationKind="review.answer.delete.v1"),
-    dict(externalReviewId=123), dict(externalReviewId=""), dict(externalReviewId="  test-review-001 "),
-    dict(draftRevision=True), dict(textChecksum=None), dict(token="synthetic-private"),
-    dict(approved=True), dict(text="synthetic-answer")])
+@pytest.mark.parametrize("change", [{"operationKind": "review.answer.delete.v1"},
+    {"externalReviewId": 123}, {"externalReviewId": ""}, {"externalReviewId": "  test-review-001 "},
+    {"draftRevision": True}, {"textChecksum": None}, {"token": "synthetic-private"},
+    {"approved": True}, {"text": "synthetic-answer"}])
 def test_send_rejects_unbound_inputs_and_unsupported_actions(change):
     with pytest.raises(StoragePayloadError) as error:
         encode_review_send(dict(send(), **change))

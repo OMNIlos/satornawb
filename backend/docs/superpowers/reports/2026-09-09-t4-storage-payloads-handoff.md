@@ -40,3 +40,12 @@ Coordinator reports T1 accepted `9284fe0`/`b17638f` and closed the five local/se
 contract gaps. Actual committed DDL and PostgreSQL verification remain prerequisites
 for persistence integration. Next independent work: classify and remediate frontend
 failures against behavior, without inventing missing canonical HTTP contracts.
+
+## Root review follow-up
+
+Root independently reproduced 231 passing tests and reported Ruff violations on
+`4b349ec`. Imports and 42 test-only `dict(keyword=...)` constructors were mechanically
+fixed; timestamp comparison now explicitly attaches UTC after strict ASCII `Z`
+validation. Accepted bytes and checksums are unchanged. Ruff using
+`/tmp/satorna-backend-verify-20260908/bin/python -m ruff check` on both new Python
+files: exit 0. Fresh combined tests after follow-up: 231 passed, exit 0.

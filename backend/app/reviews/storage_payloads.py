@@ -4,11 +4,11 @@ These serializers validate representation, not FK ownership, policy activation,
 approval or idempotency uniqueness. The repository must compare immutable bytes
 as well as checksums and revalidate scoped bindings inside its transaction.
 """
-from dataclasses import dataclass, field
-from datetime import datetime
 import hashlib
 import json
 import re
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from uuid import UUID
 
 from app.reviews.canonical_contract import ExternalReviewIdentity
@@ -65,7 +65,7 @@ def _owner(payload):
 def _timestamp(value):
     _require(isinstance(value, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z", value))
     try:
-        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
     except ValueError:
         raise StoragePayloadError() from None
 
