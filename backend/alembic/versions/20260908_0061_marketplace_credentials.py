@@ -167,4 +167,3 @@ def downgrade() -> None:
         op.execute(f"DROP POLICY IF EXISTS tenant_isolation_{table} ON {table}")
         op.drop_table(table)
     op.drop_constraint(PARENT_PROVIDER_UNIQUE, "marketplace_accounts", type_="unique")
-

@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from app.security.marketplace_credentials import CredentialCryptoError, CredentialKeyring
+
 
 def _parse_csv_env(value: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
     if value is None:
@@ -41,6 +43,30 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     return raw.strip().lower() == "true"
 
 
+def _parse_positive_int_env(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _parse_key_versions_env(name: str) -> tuple[int, ...]:
+    raw = os.getenv(name)
+    if raw is None:
+        return ()
+    try:
+        values = tuple(int(item.strip()) for item in raw.split(",") if item.strip())
+    except ValueError:
+        return ()
+    if not values or any(value < 1 for value in values) or len(values) != len(set(values)):
+        return ()
+    return values
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "Vella WB Backend"
@@ -61,6 +87,10 @@ class Settings:
     advertising_shadow_ingest_organization_ids: tuple[int, ...] = ()
     canonical_shadow_collection_enabled: bool = False
     canonical_shadow_collection_organization_ids: tuple[int, ...] = ()
+    marketplace_credentials_enabled: bool = False
+    marketplace_credential_keyring_dir: str | None = None
+    marketplace_credential_current_key_version: int | None = None
+    marketplace_credential_key_versions: tuple[int, ...] = ()
     avito_repricer_worker_enabled: bool = True
     avito_repricer_price_apply_enabled: bool = False
     avito_repricer_execute_interval_minutes: int = 60
@@ -173,6 +203,18 @@ def get_settings() -> Settings:
         canonical_shadow_collection_organization_ids=_parse_int_csv_env(
             os.getenv("VELLA_CANONICAL_SHADOW_COLLECTION_ORGANIZATION_IDS")
         ),
+        marketplace_credentials_enabled=_parse_bool_env(
+            "VELLA_MARKETPLACE_CREDENTIALS_ENABLED", False
+        ),
+        marketplace_credential_keyring_dir=os.getenv(
+            "VELLA_MARKETPLACE_CREDENTIAL_KEYRING_DIR"
+        ),
+        marketplace_credential_current_key_version=_parse_positive_int_env(
+            "VELLA_MARKETPLACE_CREDENTIAL_CURRENT_KEY_VERSION"
+        ),
+        marketplace_credential_key_versions=_parse_key_versions_env(
+            "VELLA_MARKETPLACE_CREDENTIAL_KEY_VERSIONS"
+        ),
         avito_repricer_worker_enabled=os.getenv("VELLA_AVITO_REPRICER_WORKER_ENABLED", "true").lower() == "true",
         avito_repricer_price_apply_enabled=os.getenv("VELLA_AVITO_REPRICER_PRICE_APPLY_ENABLED", "false").lower() == "true",
         avito_repricer_execute_interval_minutes=int(os.getenv("VELLA_AVITO_REPRICER_EXECUTE_INTERVAL_MINUTES", "60")),
@@ -266,7 +308,32 @@ def get_settings() -> Settings:
     )
 
 
+def load_marketplace_credential_keyring(settings: Settings) -> CredentialKeyring:
+    directory = settings.marketplace_credential_keyring_dir
+    current = settings.marketplace_credential_current_key_version
+    versions = settings.marketplace_credential_key_versions
+    if (
+        not settings.marketplace_credentials_enabled
+        or directory is None
+        or current is None
+        or not versions
+        or current not in versions
+        or not os.path.isabs(directory)
+    ):
+        raise RuntimeError("marketplace_credential_keyring_invalid")
+    try:
+        return CredentialKeyring.from_directory(
+            directory,
+            current_key_version=current,
+            required_key_versions=versions,
+        )
+    except CredentialCryptoError:
+        raise RuntimeError("marketplace_credential_keyring_invalid") from None
+
+
 def validate_security_settings(settings: Settings) -> None:
+    if settings.marketplace_credentials_enabled:
+        load_marketplace_credential_keyring(settings)
     if _is_non_production(settings.environment):
         return
     if len(settings.auth_secret) < 32 or settings.auth_secret == "change-this-secret":

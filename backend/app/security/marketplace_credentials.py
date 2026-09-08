@@ -327,4 +327,3 @@ def decrypt_credential(
     except (TypeError, ValueError):
         raise CredentialCryptoError("credential_auth_failed") from None
     return DecryptedCredential(_decode_payload(identity, plaintext))
-

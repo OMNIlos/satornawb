@@ -150,4 +150,3 @@ def test_migration_is_additive_and_downgrade_never_restores_plaintext() -> None:
         assert legacy_name not in source
     assert "ENABLE ROW LEVEL SECURITY" in source
     assert "FORCE ROW LEVEL SECURITY" in source
-

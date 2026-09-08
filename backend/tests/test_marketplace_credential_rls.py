@@ -193,6 +193,17 @@ def test_no_context_and_wrong_org_cannot_read_update_or_delete(disposable_postgr
         connection.execute(INSERT_CREDENTIAL, values)
     with runtime.begin() as connection:
         assert connection.scalar(text("SELECT count(*) FROM marketplace_account_credentials")) == 0
+        assert connection.execute(text("UPDATE marketplace_account_credentials SET generation = generation + 1")).rowcount == 0
+        assert connection.execute(text("DELETE FROM marketplace_account_credentials")).rowcount == 0
+    no_context = _credential_values(
+        credential_id="15000000-0000-4000-8000-000000000001",
+        organization_id=1,
+        account_id=101,
+        provider="wb",
+    )
+    with pytest.raises(DBAPIError):
+        with runtime.begin() as connection:
+            connection.execute(INSERT_CREDENTIAL, no_context)
     with runtime.begin() as connection:
         connection.execute(text("SELECT set_config('app.organization_id', '2', true)"))
         assert connection.scalar(text("SELECT count(*) FROM marketplace_account_credentials")) == 0
@@ -275,9 +286,44 @@ def test_ingestion_tokens_are_tenant_scoped(disposable_postgres) -> None:
         )
     with runtime.begin() as connection:
         assert connection.scalar(text("SELECT count(*) FROM marketplace_account_ingestion_tokens")) == 0
+        assert connection.execute(text("UPDATE marketplace_account_ingestion_tokens SET last_used_at = CURRENT_TIMESTAMP")).rowcount == 0
+        assert connection.execute(text("DELETE FROM marketplace_account_ingestion_tokens")).rowcount == 0
+    with pytest.raises(DBAPIError):
+        with runtime.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO marketplace_account_ingestion_tokens
+                        (token_id, organization_id, marketplace_account_id, provider,
+                         verifier, scope, issued_at, expires_at)
+                    VALUES ('55000000-0000-4000-8000-000000000005', 2, 202, 'avito',
+                            :verifier, 'avito.browser_snapshot.write', CURRENT_TIMESTAMP,
+                            CURRENT_TIMESTAMP + INTERVAL '1 hour')
+                    """
+                ),
+                {"verifier": b"w" * 32},
+            )
     with runtime.begin() as connection:
         connection.execute(text("SELECT set_config('app.organization_id', '1', true)"))
         assert connection.scalar(text("SELECT count(*) FROM marketplace_account_ingestion_tokens")) == 0
+        assert connection.execute(text("UPDATE marketplace_account_ingestion_tokens SET last_used_at = CURRENT_TIMESTAMP")).rowcount == 0
+        assert connection.execute(text("DELETE FROM marketplace_account_ingestion_tokens")).rowcount == 0
+    with pytest.raises(DBAPIError):
+        with runtime.begin() as connection:
+            connection.execute(text("SELECT set_config('app.organization_id', '1', true)"))
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO marketplace_account_ingestion_tokens
+                        (token_id, organization_id, marketplace_account_id, provider,
+                         verifier, scope, issued_at, expires_at)
+                    VALUES ('56000000-0000-4000-8000-000000000005', 2, 202, 'avito',
+                            :verifier, 'avito.browser_snapshot.write', CURRENT_TIMESTAMP,
+                            CURRENT_TIMESTAMP + INTERVAL '1 hour')
+                    """
+                ),
+                {"verifier": b"x" * 32},
+            )
     with runtime.begin() as connection:
         connection.execute(text("SELECT set_config('app.organization_id', '2', true)"))
         assert connection.scalar(text("SELECT count(*) FROM marketplace_account_ingestion_tokens")) == 1
