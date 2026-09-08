@@ -11,6 +11,7 @@ from vella_wb_19_05.models import Confidence, SourceEvidence, SourceStatus, utc_
 from app.config import get_settings
 from app.wb_api.client import (
     RateLimitedWbApiClient,
+    WbApiError,
     WbApiRequest,
     WbApiResponseEnvelope,
     build_wb_analytics_client,
@@ -371,10 +372,31 @@ def _load_stock_report_wb_warehouses(
         if not envelope.ok:
             return envelope, rows
 
-        page = _extract_items(_payload(envelope.data))
-        for item in page:
-            item.setdefault("stockType", stock_type)
-        rows.extend(page)
+        node = _payload(envelope.data)
+        if envelope.statusCode == 204 and node is None:
+            node = []
+        if isinstance(node, dict):
+            for key in ("items", "data", "rows", "report"):
+                if key in node:
+                    node = node[key]
+                    break
+            else:
+                node = [node] if "nmId" in node or "nmID" in node else None
+        # Filtering malformed elements would shorten a full page and falsely
+        # satisfy the terminal-page condition. Reject the whole page instead.
+        if not isinstance(node, list) or any(not isinstance(item, dict) for item in node):
+            return envelope.model_copy(update={
+                "ok": False,
+                "error": WbApiError(
+                    statusCode=envelope.statusCode,
+                    code="STOCK_REPORT_INVALID_PAGE",
+                    message="Stock report page has an invalid response shape",
+                    retryable=False,
+                ),
+            }), rows
+        page = node
+        # Preserve raw provider payload for checksums/provenance.
+        rows.extend({"stockType": stock_type, **item} for item in page)
         if len(page) < page_limit:
             break
         offset += page_limit

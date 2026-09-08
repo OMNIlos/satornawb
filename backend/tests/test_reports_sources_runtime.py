@@ -114,8 +114,9 @@ def test_stock_report_wb_warehouses_keeps_rows_when_next_page_is_rate_limited():
     envelope, rows = _load_stock_report_wb_warehouses(fake, limit=1000, sleeper=lambda _seconds: None)
 
     assert envelope.statusCode == 429
+    assert envelope.ok is False
     assert len(rows) == 1000
-    assert fake.offsets == [0, 1000]
+    assert fake.offsets == [0, 1000, 1000, 1000, 1000]
 
 
 def test_reports_sources_snapshot_uses_partial_stock_page_when_next_page_is_rate_limited(monkeypatch):
