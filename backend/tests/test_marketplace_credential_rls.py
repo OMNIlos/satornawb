@@ -14,7 +14,6 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
-
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROLE = "satorna_credential_test_runtime"
 

@@ -3,24 +3,24 @@
 # ruff: noqa: SIM117
 
 import getpass
-from contextlib import contextmanager
-from types import SimpleNamespace
 import os
 import shutil
 import socket
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Barrier
+from types import SimpleNamespace
 from uuid import uuid4
 
 import psycopg
 import pytest
 from alembic.config import Config
-from alembic.script import ScriptDirectory
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 

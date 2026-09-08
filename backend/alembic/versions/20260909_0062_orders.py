@@ -1,7 +1,7 @@
 """Install the reviewed Orders schema in the canonical migration chain."""
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "20260909_0062"
 down_revision = "20260908_0061"
