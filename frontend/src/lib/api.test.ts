@@ -118,4 +118,29 @@ describe('apiRequest auth refresh', () => {
     expect(refreshCalls).toBe(1)
     expect(readStoredAccessToken()).toBe('new-access')
   })
+
+  it('rejects a successful HTML response instead of treating it as empty JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<!doctype html><title>SPA fallback</title>', {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    })))
+
+    await expect(apiRequest('/api/v2/wb/reports/abc-pnl')).rejects.toMatchObject({
+      status: 502,
+      code: 'INVALID_API_RESPONSE',
+    })
+  })
+
+  it('accepts JSON-compatible media types and empty successful responses', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/problem+json; charset=utf-8' },
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(apiRequest('/api/problem-json')).resolves.toEqual({ ok: true })
+    await expect(apiRequest('/api/no-content')).resolves.toBeNull()
+  })
 })

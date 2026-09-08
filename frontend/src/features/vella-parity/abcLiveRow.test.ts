@@ -113,6 +113,127 @@ describe('ABC live row', () => {
     expect(html).toContain('<div class="stat-val">2</div>')
   })
 
+  it('renders canonical sales class and preliminary profit without inventing final values', () => {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        reportSkuOpenAttrs: () => '',
+        reportThumb: () => '',
+        abcBadgeClass: () => 'neutral',
+        pairMetricCell: (value: string) => value,
+      },
+    })
+    const unavailable = mapBackendAbcRowToParity({
+      sku: 'FBBT_11',
+      nmId: 111,
+      salesClass: 'A',
+      abcCode: null,
+      profitAfterLoyaltyKopecks: null,
+      adSpendKopecks: 0,
+      canonicalSourceState: 'partial',
+      blockerIds: ['WB_PNL_COST_ASSUMED'],
+      salesComposite: { units: 1, kopecks: 10_000, deltaPct: null },
+    })
+
+    expect(unavailable).toMatchObject({
+      abc: 'A·—',
+      net: '—',
+      netCls: '',
+      status: 'нет данных',
+      action: 'нет данных',
+      orders: '—',
+      ordersKnown: false,
+      profitKnown: false,
+      adsKnown: true,
+    })
+    expect(renderAbcRowHtml(unavailable, 0)).toContain('не финальная чистая прибыль')
+
+    const zero = mapBackendAbcRowToParity({
+      salesClass: null,
+      abcCode: null,
+      profitAfterLoyaltyKopecks: 0,
+      canonicalSourceState: 'ready',
+    })
+    expect(zero).toMatchObject({ abc: '—', net: '0 ₽', profitKnown: true })
+  })
+
+  it('uses canonical no-access copy only while the canonical rollout is active', async () => {
+    function installWindow() {
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        value: Object.assign(new EventTarget(), {
+          location: { pathname: '/wb/reports/abc', search: '', origin: 'http://localhost' },
+          localStorage: { getItem: () => null, setItem: () => undefined },
+          setTimeout: (callback: () => void) => { callback(); return 0 },
+          __vellaReportPeriods: {
+            abc: { days: 7, fromIso: '2026-09-01', toIso: '2026-09-07', label: '7 дней', mode: 'custom' as const },
+          },
+          __vellaPublishAbcRowsSnapshot: () => undefined,
+        }),
+      })
+    }
+
+    const deniedResponse = () => new Response(JSON.stringify({ detail: 'legacy forbidden' }), {
+      status: 403,
+      headers: { 'content-type': 'application/json' },
+    })
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    installWindow()
+    const canonicalFetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => deniedResponse())
+    vi.stubGlobal('fetch', canonicalFetch)
+    installAbcLiveDataBridge('token', { organizationId: 7, marketplaceAccountId: 31 })
+    await window.__vellaLoadLiveAbcReport?.()
+    expect(String(canonicalFetch.mock.calls[0]?.[0])).toContain('/api/v2/wb/reports/abc-pnl?')
+    expect(window.__vellaAbcLiveAccessDenied).toBe(true)
+    expect(window.__vellaAbcLiveError).toContain('canonical ABC/P&L')
+
+    installWindow()
+    const legacyFetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => deniedResponse())
+    vi.stubGlobal('fetch', legacyFetch)
+    installAbcLiveDataBridge('token')
+    await window.__vellaLoadLiveAbcReport?.()
+    expect(String(legacyFetch.mock.calls[0]?.[0])).toContain('/api/wb/reports/abc/latest-cache?')
+    expect(window.__vellaAbcLiveAccessDenied).toBe(false)
+    expect(window.__vellaAbcLiveError).toBe('legacy forbidden')
+
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('publishes canonical loading and generic error states without inventing no-access', async () => {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: Object.assign(new EventTarget(), {
+        location: { pathname: '/wb/reports/abc', search: '', origin: 'http://localhost' },
+        localStorage: { getItem: () => null, setItem: () => undefined },
+        setTimeout: (callback: () => void) => { callback(); return 0 },
+        __vellaReportPeriods: {
+          abc: { days: 7, fromIso: '2026-09-01', toIso: '2026-09-07', label: '7 дней', mode: 'custom' as const },
+        },
+        __vellaPublishAbcRowsSnapshot: () => undefined,
+      }),
+    })
+    let rejectRequest!: (reason: Error) => void
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((_resolve, reject) => {
+      rejectRequest = reject
+    })))
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    installAbcLiveDataBridge('token', { organizationId: 7, marketplaceAccountId: 31 })
+    const load = window.__vellaLoadLiveAbcReport?.()
+    expect(window.__vellaAbcLiveLoading).toBe(true)
+    rejectRequest(new Error('network down'))
+    await load
+
+    expect(window.__vellaAbcLiveLoading).toBe(false)
+    expect(window.__vellaAbcLiveAccessDenied).toBe(false)
+    expect(window.__vellaAbcLiveError).toBe('network down')
+
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
   it('restores a previously visited period without another request', async () => {
     const periods = {
       first: { days: 7, fromIso: '2026-08-18', toIso: '2026-08-24', label: '7 дней', mode: 'custom' as const },

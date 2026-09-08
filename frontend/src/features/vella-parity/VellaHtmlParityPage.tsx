@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useLocation } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, FileSpreadsheet, FolderPlus, Settings, Sparkles, Upload, X } from 'lucide-react'
 import QRCode from 'qrcode'
-import { useAuth } from '@/features/auth/authContext'
+import { AuthContext, useAuth } from '@/features/auth/authContext'
 import { authorizationHeaders, type PermissionProfile } from '@/features/auth/authApi'
 import { applyAuthProfileToParity, bindParityLogout } from '@/features/auth/parityBridge'
 import {
@@ -35,11 +35,24 @@ import {
 } from '@/features/wb-reports/reportRulesApi'
 import { lastClosedWbDay, resolvePresetPeriodRange } from '@/features/wb-repricer/presetPeriodAnchor'
 import {
+  adaptCanonicalAbcReport,
+  adaptCanonicalPnlReport,
+  canonicalAbcPnlEmptyMessage,
+  canonicalPnlRowStatus,
+  fetchCanonicalAbcPnl,
+  resolveCanonicalAbcPnlRollout,
+  shouldUseCanonicalAbcPnl,
+  type CanonicalAbcPnlPage,
+  type CanonicalAbcPnlRollout,
+  type CanonicalCompatibilityMeta,
+} from '@/features/wb-finance/canonicalAbcPnl'
+import {
   describePnlReportJob,
   type PnlReportJobPayload,
   type PnlReportJobView,
 } from './pnlReportJob'
 import { shouldPollBackgroundReportJob } from './backgroundReportPolling'
+import { selectScopedReportState, type ScopedReportState } from './scopedReportState'
 import { avitoCooldownRemainingMs, avitoCooldownUntilFromPayload, formatAvitoRefreshCountdown } from './avitoCooldown'
 import { downloadAvitoOrdersPickingXlsx } from './avitoOrdersXlsx'
 import { clearVellaWindowProperty } from './windowGlobals'
@@ -4362,6 +4375,10 @@ type AbcBackendRow = {
   promotionId?: string | number | null
   promotionType?: string | null
   abcCode?: string | null
+  salesClass?: 'A' | 'B' | 'C' | null
+  profitAfterLoyaltyKopecks?: number | null
+  blockerIds?: string[] | null
+  canonicalSourceState?: CanonicalCompatibilityMeta['state'] | null
   buyoutPct?: number | null
   ruleEvaluation?: {
     status?: 'unknown' | 'risk' | 'opportunity' | 'normal' | null
@@ -4377,6 +4394,8 @@ type AbcBackendReport = {
   calculatedAt?: string | null
   warning?: string | null
   reportJob?: PnlReportJobPayload | null
+  canonical?: CanonicalCompatibilityMeta | null
+  canonicalSummary?: CanonicalAbcPnlPage['summary'] | null
 }
 type AbcLiveState = {
   loading: boolean
@@ -4384,6 +4403,7 @@ type AbcLiveState = {
   rows: AbcReportRow[]
   error: string | null
   authExpired: boolean
+  accessDenied: boolean
 }
 type AbcTextLookup = (key: string, fallback?: string) => string
 type AbcRowRenderContext = {
@@ -5599,7 +5619,8 @@ function abcFiltersForBackendRow(row: AbcBackendRow, statusLabel: string) {
   if (statusLabel.includes('нов')) filters.push('Новинки')
   if (statusLabel.includes('нелик')) filters.push('Неликвид')
   if (row.promotionStatus === 'yes') filters.push('В акции')
-  if ((asAbcNumber(row.netTotalKopecks) ?? 0) < 0) filters.push('Убыток')
+  const profit = row.canonicalSourceState ? row.profitAfterLoyaltyKopecks : row.netTotalKopecks
+  if ((asAbcNumber(profit) ?? 0) < 0) filters.push('Убыток')
   return filters
 }
 
@@ -5617,9 +5638,10 @@ function abcPromotionLabelFromBackend(row: AbcBackendRow) {
 }
 
 export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
-  const status = statusLabelFromBackend(row.productStatus)
-  const promo = abcPromotionLabelFromBackend(row)
-  const action = actionFromBackendAbc(row)
+  const isCanonical = !!row.canonicalSourceState
+  const status = isCanonical ? 'нет данных' : statusLabelFromBackend(row.productStatus)
+  const promo = isCanonical ? '—' : abcPromotionLabelFromBackend(row)
+  const action = isCanonical ? { action: 'нет данных', actionCls: 'neutral' } : actionFromBackendAbc(row)
   const managerName = row.manager || '—'
   const price = row.priceBeforeSppKopecks ?? row.priceKopecks
   const priceWithSpp = row.priceWithSppKopecks
@@ -5631,6 +5653,7 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
   const ctrPct = asAbcNumber(row.ctrPct)
   const clicksDelta = asAbcNumber(row.clicksDeltaPct)
   const ktrIndex = asAbcNumber(row.ktrIndex)
+  const displayedProfit = asAbcNumber(isCanonical ? row.profitAfterLoyaltyKopecks : row.netTotalKopecks)
   const netPerUnit = row.netPerUnitKopecks ?? (
     salesUnits > 0
       ? Math.round((asAbcNumber(row.netTotalKopecks) ?? 0) / salesUnits)
@@ -5643,8 +5666,8 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
     name: row.productName || [row.brand, row.category].filter(Boolean).join(' · ') || row.sku || 'Товар',
     photoUrl: row.photoUrl,
     status,
-    statusCls: statusClassFromLabel(status),
-    abc: String(row.abcCode ?? 'CC').toUpperCase(),
+    statusCls: isCanonical ? 'neutral' : statusClassFromLabel(status),
+    abc: isCanonical ? (row.salesClass ? `${row.salesClass}·—` : '—') : String(row.abcCode ?? 'CC').toUpperCase(),
     action: action.action,
     actionCls: action.actionCls,
     promo,
@@ -5656,29 +5679,34 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
     cogs: formatAbcKopecks(cogsPerUnit),
     type: abcSkuTypeFromBackend(row),
     margin: `${formatAbcKopecks(row.marginKopecks)} / ${marginPct === null ? '—' : formatAbcPct(marginPct)}`,
-    marginCls: marginPct !== null && marginPct < 0 ? 'metric-down' : 'metric-up',
+    marginCls: marginPct === null ? '' : marginPct < 0 ? 'metric-down' : 'metric-up',
     delta: formatAbcDeltaPct(row.marginDeltaPct, ' пп'),
     views: impressions === null ? '—' : Math.round(impressions).toLocaleString('ru-RU'),
     clicks: clicks === null ? '—' : Math.round(clicks).toLocaleString('ru-RU'),
     clicksSub: `CTR ${ctrPct === null ? '—' : formatAbcPct(ctrPct)}${clicksDelta === null ? '' : ` · ${formatAbcDeltaPct(clicksDelta)}`}`,
-    baskets: (asAbcNumber(row.baskets) ?? 0).toLocaleString('ru-RU'),
+    baskets: isCanonical ? '—' : (asAbcNumber(row.baskets) ?? 0).toLocaleString('ru-RU'),
     basketDelta: formatAbcDeltaPct(row.basketsDeltaPct),
     cr: formatAbcPct(asAbcNumber(row.cartCrPct) ?? Number.NaN),
-    orders: formatAbcMetricPair(row.ordersComposite),
+    orders: isCanonical ? '—' : formatAbcMetricPair(row.ordersComposite),
     sales: formatAbcMetricPair(row.salesComposite),
     ads: `${formatAbcKopecks(row.adSpendKopecks)} / ${formatAbcPct(asAbcNumber(row.drrSalesPct) ?? Number.NaN)}`,
-    net: formatAbcKopecks(row.netTotalKopecks),
-    netCls: (asAbcNumber(row.netTotalKopecks) ?? 0) < 0 ? 'metric-down' : 'metric-up',
-    netSub: netPerUnit === null ? 'на товар' : `${formatAbcKopecks(netPerUnit)}/шт`,
+    net: formatAbcKopecks(isCanonical ? row.profitAfterLoyaltyKopecks : row.netTotalKopecks),
+    netCls: displayedProfit === null ? '' : displayedProfit < 0 ? 'metric-down' : 'metric-up',
+    netSub: isCanonical ? 'не финальная прибыль' : netPerUnit === null ? 'на товар' : `${formatAbcKopecks(netPerUnit)}/шт`,
     costs: `${formatAbcPct(asAbcNumber(row.logisticsCostPct) ?? Number.NaN)} / ${formatAbcPct(asAbcNumber(row.commissionCostPct) ?? Number.NaN)} / ${formatAbcPct(asAbcNumber(row.storageCostPct) ?? Number.NaN)}`,
     costDeltas: `${formatAbcDeltaPct(row.logisticsDeltaPct, ' пп')} / ${formatAbcDeltaPct(row.commissionDeltaPct, ' пп')} / ${formatAbcDeltaPct(row.storageDeltaPct, ' пп')}`,
     warehouse: ktrIndex === null ? '—' : ktrIndex.toLocaleString('ru-RU'),
     warehouseCls: ktrIndex === null ? '' : ktrIndex > 1.5 ? 'metric-down' : 'metric-up',
     localization: formatAbcPct(asAbcNumber(row.localizationPct) ?? Number.NaN),
-    stock: `${(asAbcNumber(row.wbStockUnits) ?? 0).toLocaleString('ru-RU')} шт`,
+    stock: isCanonical ? '—' : `${(asAbcNumber(row.wbStockUnits) ?? 0).toLocaleString('ru-RU')} шт`,
     stockRub: formatAbcKopecks(row.wbStockKopecks),
     filters: abcFiltersForBackendRow(row, status),
     buyoutPct: row.buyoutPct,
+    canonical: isCanonical,
+    blockerIds: row.blockerIds,
+    ordersKnown: !isCanonical,
+    profitKnown: !isCanonical || asAbcNumber(row.profitAfterLoyaltyKopecks) !== null,
+    adsKnown: !isCanonical || asAbcNumber(row.adSpendKopecks) !== null,
   }
 }
 
@@ -5689,6 +5717,7 @@ function currentAbcLiveState(): AbcLiveState {
     rows: Array.isArray(window.__vellaAbcLiveRows) ? window.__vellaAbcLiveRows : [],
     error: window.__vellaAbcLiveError ?? null,
     authExpired: !!window.__vellaAbcLiveAuthExpired,
+    accessDenied: !!window.__vellaAbcLiveAccessDenied,
   }
 }
 
@@ -5706,21 +5735,40 @@ function emitAbcLiveStateUpdated() {
   window.dispatchEvent(new CustomEvent('vella:abc-live-updated'))
 }
 
+function currentScopedAbcLiveState() {
+  return {
+    scope: JSON.stringify([abcReportMemoryToken, abcReportMemoryRolloutKey, window.__vellaAbcLiveRequestKey]),
+    state: currentAbcLiveState(),
+  }
+}
+
 function useAbcLiveState() {
-  const [state, setState] = useState<AbcLiveState>(currentAbcLiveState)
+  const auth = useContext(AuthContext)
+  const [published, setPublished] = useState(currentScopedAbcLiveState)
 
   useEffect(() => {
-    const refresh = () => setState(currentAbcLiveState())
+    const refresh = () => setPublished(currentScopedAbcLiveState())
     window.addEventListener('vella:abc-live-updated', refresh)
     window.addEventListener('vella:abc-rows-updated', refresh)
+    window.addEventListener(REPORT_PERIOD_EVENT, refresh)
     refresh()
     return () => {
       window.removeEventListener('vella:abc-live-updated', refresh)
       window.removeEventListener('vella:abc-rows-updated', refresh)
+      window.removeEventListener(REPORT_PERIOD_EVENT, refresh)
     }
   }, [])
 
-  return state
+  // Standalone legacy renderers have no auth provider. In the application,
+  // compare the selected scope during render, before the bridge's effect runs.
+  if (!auth) return published.state
+  const rollout = resolveCanonicalAbcPnlRollout(auth.cabinetMe?.organization.organizationId)
+  const rolloutKey = rollout ? `canonical:${rollout.organizationId}:${rollout.marketplaceAccountId}` : 'legacy'
+  const period = readReportPeriodState('abc')
+  const requestKey = `${rolloutKey}:${period.fromIso}:${period.toIso}:sku`
+  return selectScopedReportState<AbcLiveState>(JSON.stringify([auth.accessToken, rolloutKey, requestKey]), published, {
+    loading: true, report: null, rows: [], error: null, authExpired: false, accessDenied: false,
+  })
 }
 
 function abcBackendSummaryNumber(report: AbcBackendReport | null, key: string) {
@@ -5764,6 +5812,7 @@ function abcLiveMeta(report: AbcBackendReport | null, hash: string) {
 const ABC_REPORT_MEMORY_TTL_MS = 5 * 60_000
 const abcReportMemoryCache = new Map<string, { report: AbcBackendReport; rows: AbcReportRow[]; cachedAt: number }>()
 let abcReportMemoryToken: string | null = null
+let abcReportMemoryRolloutKey = 'legacy'
 
 function cacheAbcReport(requestKey: string, report: AbcBackendReport, rows: AbcReportRow[]) {
   const now = Date.now()
@@ -5773,11 +5822,13 @@ function cacheAbcReport(requestKey: string, report: AbcBackendReport, rows: AbcR
   abcReportMemoryCache.set(requestKey, { report, rows, cachedAt: now })
 }
 
-export function installAbcLiveDataBridge(accessToken: string | null) {
-  if (abcReportMemoryToken !== accessToken) {
+export function installAbcLiveDataBridge(accessToken: string | null, canonicalRollout: CanonicalAbcPnlRollout | null = null) {
+  const rolloutKey = canonicalRollout ? `canonical:${canonicalRollout.organizationId}:${canonicalRollout.marketplaceAccountId}` : 'legacy'
+  if (abcReportMemoryToken !== accessToken || abcReportMemoryRolloutKey !== rolloutKey) {
     window.__vellaAbcLiveAbortController?.abort()
     abcReportMemoryCache.clear()
     abcReportMemoryToken = accessToken
+    abcReportMemoryRolloutKey = rolloutKey
     window.__vellaAbcLiveRequestKey = undefined
     window.__vellaAbcLiveRows = undefined
     window.__vellaAbcLiveReport = undefined
@@ -5786,10 +5837,7 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
     const activeTab = resolveParityRouteTarget(window.location.pathname, window.location.search).tab
     if (!shouldLoadPeriodSurface(activeTab, 'abc')) return null
     const period = readReportPeriodState('abc')
-    const requestKey = `${period.fromIso}:${period.toIso}:sku`
-    if (window.__vellaAbcLiveRequestKey === requestKey && Array.isArray(window.__vellaAbcLiveRows) && window.__vellaAbcLiveReport) {
-      return window.__vellaAbcLiveRows
-    }
+    const requestKey = `${rolloutKey}:${period.fromIso}:${period.toIso}:sku`
     const memoryEntry = abcReportMemoryCache.get(requestKey)
     if (memoryEntry && Date.now() - memoryEntry.cachedAt < ABC_REPORT_MEMORY_TTL_MS) {
       if (window.__vellaAbcLiveLoading && window.__vellaAbcLiveRequestKey !== requestKey) {
@@ -5798,6 +5846,7 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
       window.__vellaAbcLiveLoading = false
       window.__vellaAbcLiveError = undefined
       window.__vellaAbcLiveAuthExpired = false
+      window.__vellaAbcLiveAccessDenied = false
       window.__vellaAbcLiveRows = memoryEntry.rows
       window.__vellaAbcLiveReport = memoryEntry.report
       window.__vellaAbcLiveRequestKey = requestKey
@@ -5818,6 +5867,7 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
     window.__vellaAbcLiveReport = null
     window.__vellaAbcLiveError = undefined
     window.__vellaAbcLiveAuthExpired = false
+    window.__vellaAbcLiveAccessDenied = false
     window.__vellaPublishAbcRowsSnapshot?.()
     emitAbcLiveStateUpdated()
     if (!accessToken) {
@@ -5832,9 +5882,16 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
     const authToken = accessToken
     try {
       if (authToken) {
-        const latest = await loadLatestReportCache<AbcBackendReport>('abc', 'abc', authToken, 'sku', period, 'operational', {
-          signal: controller.signal,
-        })
+        const latest: AbcBackendReport | null = canonicalRollout && shouldUseCanonicalAbcPnl(canonicalRollout, 'abc')
+          ? adaptCanonicalAbcReport(await fetchCanonicalAbcPnl({
+              accessToken: authToken,
+              marketplaceAccountId: canonicalRollout.marketplaceAccountId,
+              period,
+              signal: controller.signal,
+            }))
+          : await loadLatestReportCache<AbcBackendReport>('abc', 'abc', authToken, 'sku', period, 'operational', {
+              signal: controller.signal,
+            })
         if (controller.signal.aborted || window.__vellaAbcLiveAbortController !== controller) return null
         if (latest) {
           const rows = Array.isArray(latest.rows)
@@ -5861,12 +5918,15 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
       if (isReportLoadAbort(error) || controller.signal.aborted || window.__vellaAbcLiveAbortController !== controller) return null
       console.warn('Failed to load live ABC report', error)
       const authExpired = isAbcAuthExpiredError(error)
+      const accessDenied = shouldUseCanonicalAbcPnl(canonicalRollout, 'abc') && error instanceof ApiError && error.status === 403
       window.__vellaAbcLiveAuthExpired = authExpired
+      window.__vellaAbcLiveAccessDenied = accessDenied
       window.__vellaAbcLiveRows = []
       window.__vellaAbcLiveReport = null
       window.__vellaAbcLiveError = authExpired
         ? 'Сессия истекла. Войдите снова, чтобы открыть ABC-отчет.'
-        : error instanceof Error ? error.message : 'Не удалось получить ABC-отчет'
+        : accessDenied ? 'Нет доступа к canonical ABC/P&L для выбранного аккаунта.'
+          : error instanceof Error ? error.message : 'Не удалось получить ABC-отчет'
       window.__vellaPublishAbcRowsSnapshot?.()
       emitAbcLiveStateUpdated()
       return window.__vellaAbcLiveRows ?? null
@@ -5988,6 +6048,9 @@ function abcRowMatchesFilter(row: HTMLElement, state: AbcFilterState) {
 }
 
 function updateAbcSummaryFromRows(rows: HTMLElement[], state: AbcFilterState) {
+  const ordersKnown = rows.every((row) => row.dataset.ordersKnown !== 'false')
+  const profitKnown = rows.every((row) => row.dataset.profitKnown !== 'false')
+  const adsKnown = rows.every((row) => row.dataset.adsKnown !== 'false')
   const orderCount = rows.reduce((sum, row) => sum + Number(row.dataset.ordersCount || 0), 0)
   const orderRub = rows.reduce((sum, row) => sum + Number(row.dataset.ordersRub || 0), 0)
   const profitRub = rows.reduce((sum, row) => sum + Number(row.dataset.profitRub || 0), 0)
@@ -6014,14 +6077,14 @@ function updateAbcSummaryFromRows(rows: HTMLElement[], state: AbcFilterState) {
   setText('abcFilteredTitle', `Выбранные товары: ${filterLabel}`)
   setText('abcFilteredMeta', abcLiveMeta(window.__vellaAbcLiveReport ?? null, hash))
   setText('abcFilteredSkuCount', rows.length.toLocaleString('ru-RU'))
-  setText('abcFilteredOrders', `${Math.round(orderCount).toLocaleString('ru-RU')} / ${formatAbcRub(orderRub)}`)
-  const profitEl = setText('abcFilteredProfit', formatAbcRub(profitRub))
-  profitEl?.classList.toggle('good', profitRub >= 0)
-  profitEl?.classList.toggle('bad', profitRub < 0)
+  setText('abcFilteredOrders', ordersKnown ? `${Math.round(orderCount).toLocaleString('ru-RU')} / ${formatAbcRub(orderRub)}` : '—')
+  const profitEl = setText('abcFilteredProfit', profitKnown ? formatAbcRub(profitRub) : '—')
+  profitEl?.classList.toggle('good', profitKnown && profitRub >= 0)
+  profitEl?.classList.toggle('bad', profitKnown && profitRub < 0)
   const marginEl = setText('abcFilteredMargin', formatAbcPct(marginPct))
   marginEl?.classList.toggle('good', Number.isFinite(marginPct) && marginPct >= 12)
   marginEl?.classList.toggle('bad', Number.isFinite(marginPct) && marginPct < 0)
-  setText('abcFilteredAdSpend', formatAbcRub(adsRub))
+  setText('abcFilteredAdSpend', adsKnown ? formatAbcRub(adsRub) : '—')
 }
 
 function applyAbcFilterFromDom(state: AbcFilterState = {}) {
@@ -6050,14 +6113,15 @@ function abcRowCell(cellName: string, content: string, leadingAttributes = '', t
 function renderAbcIdentityCells(ctx: AbcRowRenderContext) {
   const { row, text, sku, type, promo } = ctx
   const promoTip = promo !== 'нет' ? `Акция WB: ${promo}` : 'Не участвует в акции WB'
+  const abcTip = row.canonical ? 'Класс продаж A/B/C; класс прибыли и вторая буква не рассчитаны' : '1-я буква — продажи, 2-я — чистая прибыль'
   return [
     abcRowCell('abc-product-cell', `<div class="report-product-cell" ${window.reportSkuOpenAttrs?.(sku) ?? ''}>${window.reportThumb?.(type, row) ?? ''}<div><div class="sku">${sku}</div><span class="sub">${text('name')}</span></div></div>`, 'class="report-sticky"'),
     abcRowCell('abc-wb-cell', `<a class="report-link" href="https://www.wildberries.ru/catalog/${text('wb')}/detail.aspx" target="_blank" data-tip="Открыть карточку на WB в новой вкладке">${text('wb')}</a>`),
     abcRowCell('abc-status-cell', `<span class="report-tag ${text('statusCls')}" data-tip="Рабочий статус товара в отчёте">${text('status')}</span>`),
-    abcRowCell('abc-code-cell', `<span class="abc-badge ${window.abcBadgeClass?.(text('abc')) ?? 'cc'}" data-tip="1-я буква — продажи, 2-я — чистая прибыль">${text('abc')}</span>`),
+    abcRowCell('abc-code-cell', `<span class="abc-badge ${window.abcBadgeClass?.(text('abc')) ?? 'cc'}" data-tip="${abcTip}">${text('abc')}</span>`),
     abcRowCell('abc-action-cell', `<span class="action-chip ${text('actionCls')}" data-tip="Статус правила, действие не применяется автоматически">${text('action')}</span>`),
-    abcRowCell('abc-promo-cell', window.promoStateHTML?.(promo, promoTip) ?? ''),
-    abcRowCell('abc-manager-cell', text('managerId') ? window.managerCellHTML?.(row) ?? '' : '<span class="report-tag neutral">Без ответственного</span>', '', 'data-tip="Ответственный менеджер"'),
+    abcRowCell('abc-promo-cell', row.canonical ? '<span class="report-tag neutral">нет данных</span>' : window.promoStateHTML?.(promo, promoTip) ?? ''),
+    abcRowCell('abc-manager-cell', row.canonical ? '<span class="report-tag neutral">нет данных</span>' : text('managerId') ? window.managerCellHTML?.(row) ?? '' : '<span class="report-tag neutral">Без ответственного</span>', '', 'data-tip="Ответственный менеджер"'),
   ].join('\n    ')
 }
 
@@ -6081,12 +6145,13 @@ function renderAbcTrafficCells(ctx: AbcRowRenderContext) {
 }
 
 function renderAbcFinancialCells(ctx: AbcRowRenderContext) {
-  const { text } = ctx
+  const { row, text } = ctx
+  const profitTip = row.canonical ? 'Предварительная прибыль после рекламы и лояльности; не финальная чистая прибыль' : 'Чистая прибыль товара'
   return [
     abcRowCell('abc-orders-cell', window.pairMetricCell?.(text('orders'), 'Заказы за выбранный период', 'сумма/динамика') ?? '', 'class="num"'),
     abcRowCell('abc-sales-cell', window.pairMetricCell?.(text('sales'), 'Продажи из финансового отчёта WB (retailAmount)', 'сумма/динамика') ?? '', 'class="num"', 'data-tip="Продажи из финансового отчёта WB (retailAmount, возвраты со знаком)"'),
     abcRowCell('abc-ads-cell', text('ads'), 'class="num"', 'data-tip="Расход рекламы и ДРР"'),
-    abcRowCell('abc-net-cell', `<span class="${text('netCls')}" data-tip="Чистая прибыль товара">${text('net')}</span><span class="sub">${text('netSub')}</span>`, 'class="num"'),
+    abcRowCell('abc-net-cell', `<span class="${text('netCls')}" data-tip="${profitTip}">${text('net')}</span><span class="sub">${text('netSub')}</span>`, 'class="num"'),
   ].join('\n    ')
 }
 
@@ -6102,6 +6167,10 @@ function renderAbcWarehouseCells(ctx: AbcRowRenderContext) {
 }
 
 function renderAbcCommentCell(ctx: AbcRowRenderContext) {
+  if (ctx.row.canonical) {
+    const blockers = Array.isArray(ctx.row.blockerIds) ? ctx.row.blockerIds.map(String) : []
+    return abcRowCell('abc-comment-cell', blockers.length ? `<span class="report-tag warn">${escapeHtml(blockers.join(' · '))}</span>` : '<span class="report-tag good">canonical</span>')
+  }
   return abcRowCell('abc-comment-cell', window.reportCommentCell?.(ctx.row, 'ABC') ?? '')
 }
 
@@ -6132,7 +6201,7 @@ export function renderAbcRowHtml(row: AbcReportRow, originalIndex: number) {
     type,
   }
 
-  return `<tr data-report-row data-vella-island="abc-table-row" data-vella-island-status="react-row-renderer" data-vella-filter-owner="react" data-filter="${filter}" data-manager="${text('manager', '—')}" data-manager-id="${text('managerId', 'unassigned')}" data-status="${text('status')}" data-promo="${promo}" data-abc="${text('abc')}" data-search="${dataSearch}" data-orders-count="${ordersCount}" data-orders-rub="${ordersRub}" data-profit-rub="${profitRub}" data-ads-rub="${adsRub}">
+  return `<tr data-report-row data-vella-island="abc-table-row" data-vella-island-status="react-row-renderer" data-vella-filter-owner="react" data-filter="${filter}" data-manager="${text('manager', '—')}" data-manager-id="${text('managerId', 'unassigned')}" data-status="${text('status')}" data-promo="${promo}" data-abc="${text('abc')}" data-search="${dataSearch}" data-orders-count="${ordersCount}" data-orders-rub="${ordersRub}" data-orders-known="${row.ordersKnown !== false}" data-profit-rub="${profitRub}" data-profit-known="${row.profitKnown !== false}" data-ads-rub="${adsRub}" data-ads-known="${row.adsKnown !== false}">
     ${renderAbcIdentityCells(ctx)}
     ${renderAbcCommercialCells(ctx)}
     ${renderAbcTrafficCells(ctx)}
@@ -7795,8 +7864,13 @@ export function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }
   const state = useAbcLiveState()
   if (state.authExpired || state.loading || !state.report || !abcHasReportRows(state)) return null
   const rawRows = abcRawRows(state.report)
-  const salesKopecks = abcLiveRowsComposite(rawRows, 'salesComposite', 'kopecks')
-  const profitKopecks = abcBackendSummaryNumber(state.report, 'profitKopecks') || abcLiveRowsKopecks(rawRows, 'netTotalKopecks')
+  const isCanonical = !!state.report.canonical
+  const salesKopecks = isCanonical
+    ? state.report.canonicalSummary?.revenueKopecks ?? null
+    : abcLiveRowsComposite(rawRows, 'salesComposite', 'kopecks')
+  const profitKopecks = isCanonical
+    ? state.report.canonicalSummary?.profitAfterLoyaltyKopecks ?? null
+    : abcBackendSummaryNumber(state.report, 'profitKopecks') || abcLiveRowsKopecks(rawRows, 'netTotalKopecks')
   const ordersCount = abcBackendSummaryNumber(state.report, 'ordersCount') || abcLiveRowsComposite(rawRows, 'ordersComposite', 'units')
   const baskets = rawRows.reduce((sum, row) => sum + (asAbcNumber(row.baskets) ?? 0), 0)
   const blockers = Array.isArray(state.report?.blockerIds) ? state.report.blockerIds : []
@@ -7806,26 +7880,32 @@ export function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }
   const stats: AbcKpiStat[] = [
     {
       ...ABC_KPI_STATS[0],
+      label: isCanonical ? 'Продажи / после лояльности' : ABC_KPI_STATS[0].label,
+      help: isCanonical ? 'Вторая сумма — предварительная прибыль после рекламы и лояльности, не финальная чистая прибыль.' : ABC_KPI_STATS[0].help,
       value: `${formatAbcKopecks(salesKopecks)} / ${formatAbcKopecks(profitKopecks)}`,
       delta: statusText,
-      deltaClass: state.error ? 'down' : state.loading ? 'neutral' : profitKopecks < 0 ? 'down' : 'up',
+      deltaClass: state.error ? 'down' : state.loading || profitKopecks === null ? 'neutral' : profitKopecks < 0 ? 'down' : 'up',
     },
     {
       ...ABC_KPI_STATS[1],
+      label: isCanonical ? 'Прибыль после лояльности' : ABC_KPI_STATS[1].label,
+      help: isCanonical ? 'Финальная чистая прибыль недоступна, пока действуют blocker IDs canonical-контракта.' : ABC_KPI_STATS[1].help,
       value: formatAbcKopecks(profitKopecks),
       delta: `${rawRows.length.toLocaleString('ru-RU')} товаров в отчете`,
-      deltaClass: profitKopecks < 0 ? 'down' : 'up',
+      deltaClass: profitKopecks === null ? 'neutral' : profitKopecks < 0 ? 'down' : 'up',
     },
     {
       ...ABC_KPI_STATS[2],
-      value: `${Math.round(baskets).toLocaleString('ru-RU')} / ${Math.round(ordersCount).toLocaleString('ru-RU')}`,
-      delta: hasEmptyPeriodActivity ? 'нет заказов и продаж за период' : 'корзины / заказы',
+      value: isCanonical ? '— / —' : `${Math.round(baskets).toLocaleString('ru-RU')} / ${Math.round(ordersCount).toLocaleString('ru-RU')}`,
+      delta: isCanonical ? 'нет в canonical ABC/P&L' : hasEmptyPeriodActivity ? 'нет заказов и продаж за период' : 'корзины / заказы',
       deltaClass: 'neutral',
     },
     {
       ...ABC_KPI_STATS[3],
+      label: isCanonical ? 'Строки с blockers' : ABC_KPI_STATS[3].label,
+      help: isCanonical ? 'Количество строк, где canonical контракт сохранил хотя бы один blocker ID.' : ABC_KPI_STATS[3].help,
       value: attentionCount.toLocaleString('ru-RU'),
-      delta: 'по активным правилам алгоритма',
+      delta: isCanonical ? 'по canonical blocker IDs' : 'по активным правилам алгоритма',
       deltaClass: attentionCount > 0 ? 'down' : 'up',
     },
   ]
@@ -7852,8 +7932,22 @@ export function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }
 }
 
 function AbcSourceStateStripIsland({ replacementKey }: { replacementKey: string }) {
-  void replacementKey
-  return null
+  const state = useAbcLiveState()
+  const canonical = state.report?.canonical
+  if (!canonical) return null
+  const partial = canonical.state === 'partial'
+  return (
+    <div key={replacementKey} className="report-source-strip report-source-compact" data-vella-island="abc-canonical-source-state">
+      <div className={`source-state-card ${partial ? 'partial' : 'fresh'}`}>
+        <div>
+          <div className="source-state-kicker">canonical ABC/P&amp;L</div>
+          <div className="source-state-title">{partial ? 'Canonical расчет частичный' : `Canonical: ${canonical.state}`}</div>
+          <div className="source-state-meta">{canonical.formulaVersion} · реклама: {canonical.advertisingSource ?? 'нет источника'} / {canonical.advertisingEvidenceStatus ?? 'нет evidence'}{canonical.blockerIds.length ? ` · ${canonical.blockerIds.join(' · ')}` : ''}</div>
+        </div>
+        <span className={`source-state-action report-tag ${partial ? 'warn' : 'good'}`}>{canonical.blockerIds.length ? `${canonical.blockerIds.length} blockers` : 'готово'}</span>
+      </div>
+    </div>
+  )
 }
 
 function AbcToolbarIsland({ replacementKey }: { replacementKey: string }) {
@@ -9623,10 +9717,12 @@ type PnlBackendRow = {
   overheadKopecks?: number | null
   returnsPenaltyKopecks?: number | null
   netProfitKopecks?: number | null
+  profitAfterLoyaltyKopecks?: number | null
   marginPct?: number | null
   sourceStatus?: string | null
   confidence?: string | null
   comment?: string | null
+  blockerIds?: string[] | null
 }
 
 type PnlCashFlowRow = {
@@ -9668,6 +9764,8 @@ type PnlBackendReport = {
   rows?: PnlBackendRow[] | null
   cashFlow?: PnlCashFlowPayload | null
   reportJob?: PnlReportJobPayload | null
+  canonical?: CanonicalCompatibilityMeta | null
+  canonicalSummary?: CanonicalAbcPnlPage['summary'] | null
 }
 
 type PnlLiveState =
@@ -9747,11 +9845,21 @@ function PnlLiveSourceStripIsland({
   period: Pick<ProductsAnalyticsPeriodState, 'fromIso' | 'toIso'>
   source: BackgroundReportSource
 }) {
-  void replacementKey
-  void state
-  void period
-  void source
-  return null
+  if (state.status !== 'ready' || !state.report.canonical) return null
+  const canonical = state.report.canonical
+  const partial = canonical.state === 'partial'
+  return (
+    <div key={replacementKey} className="report-source-strip report-source-compact" data-vella-island="pnl-canonical-source-state">
+      <div className={`source-state-card ${partial ? 'partial' : 'fresh'}`}>
+        <div>
+          <div className="source-state-kicker">canonical WB finance</div>
+          <div className="source-state-title">{partial ? 'Canonical P&L частичный' : `Canonical P&L: ${canonical.state}`}</div>
+          <div className="source-state-meta">{period.fromIso} — {period.toIso} · {canonical.formulaVersion} · реклама: {canonical.advertisingSource ?? 'нет источника'} / {canonical.advertisingEvidenceStatus ?? 'нет evidence'}{canonical.blockerIds.length ? ` · ${canonical.blockerIds.join(' · ')}` : ''}</div>
+        </div>
+        <span className={`source-state-action report-tag ${partial ? 'warn' : 'good'}`}>{canonical.blockerIds.length ? `${canonical.blockerIds.length} blockers` : source}</span>
+      </div>
+    </div>
+  )
 }
 
 function FinanceOneCWaitingIsland({
@@ -10170,9 +10278,20 @@ function ReportProgressPanelIsland({
 function PnlLiveWorkbenchIsland({ replacementKey, state }: { replacementKey: string; state: PnlLiveState }) {
   const report = state.status === 'ready' ? state.report : {}
   const rows = getPnlRows(report)
-  const revenue = getPnlKpiValue(report, 'revenue') ?? formatPnlKopecks(sumPnlRows(rows, 'revenueKopecks'))
-  const netProfit = getPnlKpiValue(report, 'net_profit') ?? formatPnlKopecks(sumPnlRows(rows, 'netProfitKopecks'))
-  const margin = getPnlKpiValue(report, 'margin_pct') ?? formatPnlPercent(rows.length ? sumPnlRows(rows, 'netProfitKopecks') / Math.max(sumPnlRows(rows, 'revenueKopecks'), 1) * 100 : null)
+  const isCanonical = !!report.canonical
+  const revenue = isCanonical
+    ? formatPnlKopecks(report.canonicalSummary?.revenueKopecks)
+    : getPnlKpiValue(report, 'revenue') ?? formatPnlKopecks(sumPnlRows(rows, 'revenueKopecks'))
+  const displayedProfit = isCanonical
+    ? formatPnlKopecks(report.canonicalSummary?.profitAfterLoyaltyKopecks)
+    : getPnlKpiValue(report, 'net_profit') ?? formatPnlKopecks(sumPnlRows(rows, 'netProfitKopecks'))
+  const margin = isCanonical
+    ? 'нет данных'
+    : getPnlKpiValue(report, 'margin_pct') ?? formatPnlPercent(rows.length ? sumPnlRows(rows, 'netProfitKopecks') / Math.max(sumPnlRows(rows, 'revenueKopecks'), 1) * 100 : null)
+  const profitLabel = isCanonical ? 'Прибыль после лояльности' : 'Прибыль / маржа'
+  const profitTip = isCanonical
+    ? 'Предварительная прибыль после рекламы и компонентов лояльности. Это не финальная чистая прибыль: итоговая P&L-классификация заблокирована до подтверждения себестоимости и экономик.'
+    : 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы. Маржа = прибыль / выручка * 100%.'
   const flowItems = state.status === 'error'
     ? [
         ['Выручка', 'нет данных', 'pnl-flow-item', 'Выкупили на сумму за выбранный период. Это база для расчета прибыли.'],
@@ -10180,15 +10299,15 @@ function PnlLiveWorkbenchIsland({ replacementKey, state }: { replacementKey: str
         ['Комиссия', 'нет данных', 'pnl-flow-item cost', 'Комиссия WB по категории товара. Вычитается из выручки.'],
         ['Логистика', 'нет данных', 'pnl-flow-item cost', 'Логистика WB: доставка, возвраты и связанные логистические удержания, если источник их отдал.'],
         ['Хранение/штрафы', 'нет данных', 'pnl-flow-item cost', 'Хранение WB и штрафы/удержания, которые уменьшают прибыль.'],
-        ['Прибыль / маржа', 'нет данных', 'pnl-flow-item profit', 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы. Маржа = прибыль / выручка * 100%.'],
+        [profitLabel, 'нет данных', 'pnl-flow-item profit', profitTip],
       ]
     : [
         ['Выручка', state.status === 'loading' ? 'загрузка' : revenue, 'pnl-flow-item', 'Выкупили на сумму за выбранный период. Это база для расчета прибыли.'],
-        ['Себестоимость', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(sumPnlRows(rows, 'cogsKopecks')), 'pnl-flow-item cost', 'Закупка, печать, упаковка или другая себестоимость SKU из настроек.'],
-        ['Комиссия', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(sumPnlRows(rows, 'commissionKopecks')), 'pnl-flow-item cost', 'Комиссия WB по категории товара. Вычитается из выручки.'],
-        ['Логистика', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(sumPnlRows(rows, 'logisticsKopecks')), 'pnl-flow-item cost', 'Логистика WB: доставка, возвраты и связанные логистические удержания, если источник их отдал.'],
-        ['Хранение/штрафы', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(sumPnlRows(rows, 'storageKopecks') + sumPnlRows(rows, 'returnsPenaltyKopecks')), 'pnl-flow-item cost', 'Хранение WB и штрафы/удержания, которые уменьшают прибыль.'],
-        ['Прибыль / маржа', state.status === 'loading' ? 'загрузка' : `${netProfit} · ${margin}`, 'pnl-flow-item profit', 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы. Маржа = прибыль / выручка * 100%.'],
+        ['Себестоимость', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(isCanonical ? report.canonicalSummary?.cogsKopecks : sumPnlRows(rows, 'cogsKopecks')), 'pnl-flow-item cost', 'Закупка, печать, упаковка или другая себестоимость SKU из настроек.'],
+        ['Комиссия', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(isCanonical ? report.canonicalSummary?.commissionKopecks : sumPnlRows(rows, 'commissionKopecks')), 'pnl-flow-item cost', 'Комиссия WB по категории товара. Вычитается из выручки.'],
+        ['Логистика', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(isCanonical ? report.canonicalSummary?.logisticsKopecks : sumPnlRows(rows, 'logisticsKopecks')), 'pnl-flow-item cost', 'Логистика WB: доставка, возвраты и связанные логистические удержания, если источник их отдал.'],
+        ['Хранение/штрафы', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(isCanonical ? (report.canonicalSummary?.storageKopecks == null ? null : report.canonicalSummary.storageKopecks + report.canonicalSummary.penaltyKopecks + report.canonicalSummary.deductionKopecks) : sumPnlRows(rows, 'storageKopecks') + sumPnlRows(rows, 'returnsPenaltyKopecks')), 'pnl-flow-item cost', 'Хранение WB и штрафы/удержания, которые уменьшают прибыль.'],
+        [profitLabel, state.status === 'loading' ? 'загрузка' : isCanonical ? displayedProfit : `${displayedProfit} · ${margin}`, 'pnl-flow-item profit', profitTip],
       ]
   return (
     <div
@@ -12032,6 +12151,7 @@ function PnlLiveTableShellIsland({ replacementKey, state, mode = 'financial' }: 
   const renderWindow = useReportTableRenderLimit(rows.length)
   const visibleRows = rows.slice(0, renderWindow.limit)
   const showOneCColumns = mode === 'operational'
+  const isCanonical = state.status === 'ready' && !!state.report.canonical
   if (state.status !== 'ready' || rows.length === 0) return null
   return (
     <div
@@ -12061,8 +12181,8 @@ function PnlLiveTableShellIsland({ replacementKey, state, mode = 'financial' }: 
             <ReportHeaderCell className="num" label="Реклама" tip="Расход рекламы, связанный с товаром или кампанией. Уменьшает прибыль." />
             <ReportHeaderCell className="num" label="Налог" tip="Налог по настройкам организации. Вычитается при расчете чистой прибыли." />
             {showOneCColumns ? <ReportHeaderCell className="num" label="Опер. расходы" tip="Операционные расходы из 1С или настроек распределения. Например зарплата, аренда, сервисы." /> : null}
-            <ReportHeaderCell className="num" label="Прибыль" tip="Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы." />
-            <ReportHeaderCell className="num" label="Маржа" tip="Маржа = прибыль / выручка * 100%. Показывает, какая доля выручки остается после расходов." />
+            <ReportHeaderCell className="num" label={isCanonical ? 'Прибыль после лояльности' : 'Прибыль'} tip={isCanonical ? 'Предварительная прибыль после рекламы и лояльности. Финальная чистая прибыль пока не рассчитана.' : 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы.'} />
+            <ReportHeaderCell className="num" label={isCanonical ? 'Финальная маржа' : 'Маржа'} tip={isCanonical ? 'Не рассчитывается, пока финальная P&L-формула заблокирована.' : 'Маржа = прибыль / выручка * 100%. Показывает, какая доля выручки остается после расходов.'} />
             <ReportHeaderCell label="Статус" tip="Насколько строка готова к использованию: данные подтверждены, рассчитаны оперативно или требуют проверки." />
             <ReportHeaderCell label="Комментарий" tip="Пояснение к строке: почему сумма такая, чего не хватает или что нужно проверить." />
           </tr>
@@ -12095,9 +12215,9 @@ function PnlLiveTableShellIsland({ replacementKey, state, mode = 'financial' }: 
               <td className="num">{formatPnlKopecks(row.adSpendKopecks)}</td>
               <td className="num">{formatPnlKopecks(row.taxKopecks)}</td>
               {showOneCColumns ? <td className="num">{formatPnlKopecks(row.overheadKopecks)}</td> : null}
-              <td className="num">{formatPnlKopecks(row.netProfitKopecks)}</td>
+              <td className="num">{formatPnlKopecks(isCanonical ? row.profitAfterLoyaltyKopecks : row.netProfitKopecks)}</td>
               <td className="num">{formatPnlPercent(row.marginPct)}</td>
-              <td>{row.sourceStatus || row.confidence ? 'готово' : 'данные загружены'}</td>
+              <td>{isCanonical ? canonicalPnlRowStatus(row) : row.sourceStatus || row.confidence ? 'готово' : 'данные загружены'}</td>
               <td>{row.comment ?? ''}</td>
             </tr>
             )
@@ -12586,10 +12706,14 @@ function PnlReportIsland({ replacementKey }: { replacementKey: string }) {
 }
 
 function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
-  const { accessToken } = useAuth()
+  const { accessToken, cabinetMe } = useAuth()
+  const canonicalRollout = useMemo(
+    () => resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId),
+    [cabinetMe?.organization.organizationId],
+  )
   const activeTab = useContext(ActiveParityTabContext)
   const pnlReportActive = shouldLoadPeriodSurface(activeTab, 'pnl')
-  const [state, setState] = useState<PnlLiveState>({ status: 'loading' })
+  const [publishedState, setPublishedState] = useState<ScopedReportState<PnlLiveState> | null>(null)
   const [periodState, setPeriodState] = useState(() => readReportPeriodState('pnl'))
   // 1C is out of scope and disabled on the backend, so the operational P&L has
   // no source of data and only ever renders its "ждём 1С" placeholder.  Open on
@@ -12599,23 +12723,35 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
   const periodToIso = periodState.toIso
   const pnlSource: BackgroundReportSource = pnlMode === 'operational' ? 'operational' : 'financial'
   const isOperationalPnl = pnlMode === 'operational'
+  const canonicalPnlEnabled = shouldUseCanonicalAbcPnl(canonicalRollout, 'pnl', pnlMode)
+  // Session material stays in component memory only; never log or persist this key.
+  const requestScope = JSON.stringify([
+    accessToken, cabinetMe?.organization.organizationId, canonicalRollout?.marketplaceAccountId,
+    canonicalPnlEnabled, periodFromIso, periodToIso, pnlSource,
+  ])
+  const state = selectScopedReportState<PnlLiveState>(requestScope, publishedState, { status: 'loading' })
   const operationalCashFlowReady = isOperationalPnl && state.status === 'ready' && state.report.cashFlow?.status === 'ready'
   const operationalWaitingJob = state.status === 'ready'
     ? describePnlReportJob(state.report.reportJob ?? { state: operationalCashFlowReady ? 'completed' : 'waiting_1c', stage: operationalCashFlowReady ? 'completed' : 'waiting_1c', label: operationalCashFlowReady ? '1С ДДС готова' : 'Ждём 1С ДДС', percent: operationalCashFlowReady ? 100 : 20 })
     : state.job
   const pnlRows = state.status === 'ready' ? getPnlRows(state.report) : []
   const pnlHasRows = state.status === 'ready' && pnlRows.length > 0
+  const canonicalState = state.status === 'ready' ? state.report.canonical?.state : null
+  const accessDenied = state.status === 'error' && state.message.startsWith('Нет доступа')
   const pnlStateVariant = state.status === 'loading' ? 'loading' : state.status === 'error' ? 'error' : 'empty'
   const pnlStateTitle = state.status === 'loading'
     ? 'Загружаем P&L'
     : state.status === 'error'
-      ? 'Не удалось загрузить P&L'
-      : 'За выбранный период нет данных'
+      ? accessDenied ? 'Нет доступа к P&L' : 'Не удалось загрузить P&L'
+      : canonicalState === 'future' ? 'Выбран будущий период'
+        : canonicalState === 'missing' ? 'Canonical snapshot еще не создан'
+          : 'За выбранный период нет данных'
+  const canonicalEmptyMessage = canonicalAbcPnlEmptyMessage('pnl', canonicalState)
   const pnlStateMessage = state.status === 'loading'
     ? 'Собираем выручку, расходы, комиссии и прибыль. Таблица появится автоматически, когда отчет будет готов.'
     : state.status === 'error'
       ? cleanReportStateMessage(state.message) || 'Попробуйте обновить данные или выбрать другой период.'
-      : 'Мы не нашли финансовых строк за этот период. Попробуйте изменить даты или обновить данные отчета.'
+      : canonicalEmptyMessage ?? 'Мы не нашли финансовых строк за этот период. Попробуйте изменить даты или обновить данные отчета.'
 
   useEffect(() => {
     if (!pnlReportActive) return
@@ -12623,17 +12759,27 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
     const controller = new AbortController()
 
     async function loadPnlReportCache() {
+      const setState = (next: PnlLiveState) => {
+        if (!cancelled) setPublishedState({ scope: requestScope, state: next })
+      }
       if (!accessToken) {
         setState({ status: 'error', message: 'Сессия истекла. Войдите снова, чтобы открыть P&L.' })
         return
       }
       try {
-        const latest = await loadLatestReportCache<PnlBackendReport>('pnl', 'pnl', accessToken, 'sku', { fromIso: periodFromIso, toIso: periodToIso }, pnlSource, {
-          signal: controller.signal,
-          onJob: (job) => {
-            if (!cancelled) setState({ status: 'loading', job })
-          },
-        })
+        const latest: PnlBackendReport | null = canonicalPnlEnabled && canonicalRollout
+          ? adaptCanonicalPnlReport(await fetchCanonicalAbcPnl({
+              accessToken,
+              marketplaceAccountId: canonicalRollout.marketplaceAccountId,
+              period: { fromIso: periodFromIso, toIso: periodToIso },
+              signal: controller.signal,
+            }))
+          : await loadLatestReportCache<PnlBackendReport>('pnl', 'pnl', accessToken, 'sku', { fromIso: periodFromIso, toIso: periodToIso }, pnlSource, {
+              signal: controller.signal,
+              onJob: (job) => {
+                if (!cancelled) setState({ status: 'loading', job })
+              },
+            })
         if (latest && !cancelled) {
           setState({ status: 'ready', report: latest })
           return
@@ -12641,7 +12787,9 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
         if (!cancelled) setState({ status: 'ready', report: { rows: [] } })
       } catch (error) {
         if (cancelled || isReportLoadAbort(error)) return
-        const message = error instanceof ApiError ? error.message : 'Не удалось получить P&L из кэша'
+        const message = canonicalPnlEnabled && error instanceof ApiError && error.status === 403
+          ? 'Нет доступа к canonical ABC/P&L для выбранного аккаунта.'
+          : error instanceof ApiError ? error.message : 'Не удалось получить P&L из кэша'
         setState({ status: 'error', message })
       }
     }
@@ -12651,7 +12799,7 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       cancelled = true
       controller.abort()
     }
-  }, [accessToken, periodFromIso, periodToIso, pnlReportActive, pnlSource])
+  }, [accessToken, canonicalPnlEnabled, canonicalRollout, periodFromIso, periodToIso, pnlReportActive, pnlSource, requestScope])
 
   useEffect(() => {
     const render = (event: Event) => {
@@ -12927,10 +13075,7 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       <PnlToolbarIsland
         replacementKey={`${replacementKey}-toolbar`}
         mode={pnlMode}
-        onModeChange={(mode) => {
-          setPnlMode(mode)
-          setState({ status: 'loading' })
-        }}
+        onModeChange={setPnlMode}
       />
       <PnlLiveSourceStripIsland replacementKey={`${replacementKey}-source`} state={state} period={periodState} source={pnlSource} />
       {isOperationalPnl ? (
@@ -13556,6 +13701,7 @@ function WeekReportActiveIsland({ replacementKey }: { replacementKey: string }) 
 function AbcHelpRowIsland({ replacementKey }: { replacementKey: string }) {
   const state = useAbcLiveState()
   if (state.authExpired || state.loading || !state.report || !abcHasReportRows(state)) return null
+  const isCanonical = !!state.report.canonical
   return (
     <div
       key={replacementKey}
@@ -13565,15 +13711,21 @@ function AbcHelpRowIsland({ replacementKey }: { replacementKey: string }) {
       data-vella-runtime-binding="showHelp"
     >
       <div className="abc-help-row-copy">
-        <b>ABC-код</b>
-        <span className="abc-help-codes">
-          <span className="abc-badge aa">AA</span>
-          <span className="abc-badge ab">AB</span>
-          <span className="abc-badge ba">BA</span>
-          <span className="abc-badge bc">BC</span>
-          <span className="abc-badge cc">CC</span>
-        </span>
-        <span>1-я буква — продажи, 2-я — чистая прибыль. Порог фиксирован: 20/30/50.</span>
+        <b>{isCanonical ? 'Класс продаж' : 'ABC-код'}</b>
+        {isCanonical ? (
+          <span>Canonical API отдает только класс продаж A/B/C. Класс прибыли и итоговый ABC-код не рассчитаны; «·—» показывает отсутствующую вторую букву.</span>
+        ) : (
+          <>
+            <span className="abc-help-codes">
+              <span className="abc-badge aa">AA</span>
+              <span className="abc-badge ab">AB</span>
+              <span className="abc-badge ba">BA</span>
+              <span className="abc-badge bc">BC</span>
+              <span className="abc-badge cc">CC</span>
+            </span>
+            <span>1-я буква — продажи, 2-я — чистая прибыль. Порог фиксирован: 20/30/50.</span>
+          </>
+        )}
       </div>
       <button
         className="btn btn-default btn-sm"
@@ -13591,9 +13743,14 @@ function AbcProfitStatusPanelIsland({ replacementKey }: { replacementKey: string
   const state = useAbcLiveState()
   if (state.authExpired || state.loading || !state.report || !abcHasReportRows(state)) return null
   const rawRows = abcRawRows(state.report)
+  const isCanonical = !!state.report.canonical
+  if (isCanonical) return null
   const groups = ['Локомотивы', 'Новинки', 'Средний', 'Неликвид', 'Ликвидация'].map((label) => {
     const rows = rawRows.filter((row) => abcStatusGroupLabel(row.productStatus) === label)
-    const profit = abcLiveRowsKopecks(rows, 'netTotalKopecks')
+    const values = rows.map((row) => asAbcNumber(isCanonical ? row.profitAfterLoyaltyKopecks : row.netTotalKopecks))
+    const profit = isCanonical && values.some((value) => value === null)
+      ? null
+      : values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
     return { label, rows, profit }
   })
 
@@ -13607,7 +13764,7 @@ function AbcProfitStatusPanelIsland({ replacementKey }: { replacementKey: string
     >
       <div className="report-chart-head" style={{ marginBottom: '10px' }}>
         <div>
-          <div className="report-card-title">Чистая прибыль по статусам</div>
+          <div className="report-card-title">{isCanonical ? 'Прибыль после лояльности по статусам' : 'Чистая прибыль по статусам'}</div>
           <div className="report-card-note">
             {state.error ? 'Нет данных для среза' : 'Срез рассчитан по товарам в таблице'}
           </div>
@@ -13619,11 +13776,11 @@ function AbcProfitStatusPanelIsland({ replacementKey }: { replacementKey: string
           <div className="profit-status-card" key={group.label}>
             <div className="profit-status-title">{group.label}</div>
             <div className="profit-status-val">
-              <span className={group.profit < 0 ? 'metric-down' : 'metric-up'}>
+              <span className={group.profit === null ? '' : group.profit < 0 ? 'metric-down' : 'metric-up'}>
               {formatAbcKopecks(group.profit)}
               </span>
             </div>
-            <div className={group.profit < 0 ? 'profit-status-delta metric-down' : 'profit-status-delta metric-up'}>
+            <div className={group.profit !== null && group.profit < 0 ? 'profit-status-delta metric-down' : 'profit-status-delta metric-up'}>
               {`${group.rows.length.toLocaleString('ru-RU')} товаров`}
             </div>
           </div>
@@ -13638,6 +13795,8 @@ function SortArrow() {
 }
 
 function AbcTableHeaderIsland({ replacementKey }: { replacementKey: string }) {
+  const state = useAbcLiveState()
+  const isCanonical = !!state.report?.canonical
   return (
     <thead
       key={replacementKey}
@@ -13655,7 +13814,7 @@ function AbcTableHeaderIsland({ replacementKey }: { replacementKey: string }) {
             data-vella-column={`abc-${column.column}`}
             data-vella-ux-delta="explicit-abc-sort-key"
           >
-            {column.label} <span className="stat-tip abc-header-help" data-tip={column.help}>?</span> <SortArrow />
+            {isCanonical && column.column === 'net' ? 'Прибыль после лояльности' : isCanonical && column.column === 'abc' ? 'Класс продаж' : column.label} <span className="stat-tip abc-header-help" data-tip={isCanonical && column.column === 'net' ? 'Предварительная прибыль после рекламы и лояльности; не финальная чистая прибыль.' : isCanonical && column.column === 'abc' ? 'Класс продаж A/B/C. Класс прибыли пока не рассчитан.' : column.help}>?</span> <SortArrow />
           </th>
         ))}
       </tr>
@@ -31920,6 +32079,8 @@ function AbcReportIsland({ replacementKey, sourceElement }: { replacementKey: st
   const hasRows = rawRows.length > 0 || state.rows.length > 0
   const isPending = !state.authExpired && !state.error && (!state.report || state.loading)
   const isEmpty = !state.authExpired && !isPending && !hasRows
+  const canonicalState = state.report?.canonical?.state
+  const canonicalEmptyMessage = canonicalAbcPnlEmptyMessage('abc', canonicalState)
   return (
     <div
       id="tab-abc"
@@ -32035,8 +32196,8 @@ function AbcReportIsland({ replacementKey, sourceElement }: { replacementKey: st
       ) : isEmpty ? (
         <div className="abc-state-card" role="status">
           <div className="abc-state-head">
-            <div className="abc-state-title">Данных за выбранный период пока нет</div>
-            <div className="abc-state-copy">{state.error || reportCacheMissingMessage(periodState)}</div>
+            <div className="abc-state-title">{state.accessDenied ? 'Нет доступа к отчету' : 'Данных за выбранный период пока нет'}</div>
+            <div className="abc-state-copy">{state.error || canonicalEmptyMessage || reportCacheMissingMessage(periodState)}</div>
           </div>
         </div>
       ) : (
@@ -34583,6 +34744,10 @@ export function VellaHtmlParityPage() {
   const [activeParityTab, setActiveParityTab] = useState(routeTarget.tab)
   const effectiveActiveParityTab = routeTarget.tab || activeParityTab
   const productsTabActive = effectiveActiveParityTab === 'products' || isCanonicalProductsRoute(location.pathname)
+  const canonicalAbcPnlRollout = useMemo(
+    () => resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId),
+    [cabinetMe?.organization.organizationId],
+  )
 
   useEffect(() => {
     installLegacyHistoryNavigationBridge()
@@ -34719,7 +34884,6 @@ export function VellaHtmlParityPage() {
 	    installThresholdPreviewReactBridge()
 	    installTooltipUxGuard(root)
         installDigestLiveDataBridge(accessToken)
-        installAbcLiveDataBridge(accessToken)
         installAbcRowRendererBridge()
         window.enhanceReportsDemo?.()
         installAdsStickyIdentityColumns(root)
@@ -34750,10 +34914,10 @@ export function VellaHtmlParityPage() {
 
   useEffect(() => {
     installDigestLiveDataBridge(accessToken)
-    installAbcLiveDataBridge(accessToken)
+    installAbcLiveDataBridge(accessToken, canonicalAbcPnlRollout)
     if (effectiveActiveParityTab === 'digest') void window.__vellaLoadLiveDigestReport?.()
     if (effectiveActiveParityTab === 'abc') void window.__vellaLoadLiveAbcReport?.()
-  }, [accessToken, effectiveActiveParityTab])
+  }, [accessToken, canonicalAbcPnlRollout, effectiveActiveParityTab])
 
   useEffect(() => {
     if (!runtime) return
@@ -40264,6 +40428,7 @@ declare global {
     __vellaAbcLiveAbortController?: AbortController
     __vellaAbcLiveError?: string
     __vellaAbcLiveAuthExpired?: boolean
+    __vellaAbcLiveAccessDenied?: boolean
     __vellaAbcLivePeriodListenerInstalled?: boolean
     __vellaLoadLiveAbcReport?: () => Promise<AbcReportRow[] | null>
     __vellaDigestLiveReport?: DigestResponse | null
