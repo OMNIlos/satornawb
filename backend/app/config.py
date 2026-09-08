@@ -76,7 +76,7 @@ class Settings:
     real_price_apply_enabled: bool = False
     repricer_local_price_apply_enabled: bool = True
     repricer_preserve_local_price_overrides: bool = True
-    repricer_scheduler_enabled: bool = True
+    repricer_scheduler_enabled: bool = False
     repricer_execute_interval_minutes: int = 60
     repricer_wb_sync_enabled: bool = True
     repricer_wb_sync_interval_minutes: int = 40
@@ -182,7 +182,7 @@ def get_settings() -> Settings:
         real_price_apply_enabled=os.getenv("VELLA_REAL_PRICE_APPLY_ENABLED", "false").lower() == "true",
         repricer_local_price_apply_enabled=os.getenv("VELLA_REPRICER_LOCAL_PRICE_APPLY_ENABLED", "true").lower() == "true",
         repricer_preserve_local_price_overrides=os.getenv("VELLA_REPRICER_PRESERVE_LOCAL_PRICE_OVERRIDES", "true").lower() == "true",
-        repricer_scheduler_enabled=os.getenv("VELLA_REPRICER_SCHEDULER_ENABLED", "true").lower() == "true",
+        repricer_scheduler_enabled=os.getenv("VELLA_REPRICER_SCHEDULER_ENABLED", "false").lower() == "true",
         repricer_execute_interval_minutes=int(os.getenv("VELLA_REPRICER_EXECUTE_INTERVAL_MINUTES", "60")),
         repricer_wb_sync_enabled=os.getenv("VELLA_REPRICER_WB_SYNC_ENABLED", "true").lower() == "true",
         repricer_wb_sync_interval_minutes=int(os.getenv("VELLA_REPRICER_WB_SYNC_INTERVAL_MINUTES", "40")),
