@@ -3406,7 +3406,13 @@ def test_manual_cold_full_sync_enqueues_onboarding_task(monkeypatch):
             queued.append((organization_id, scenario))
             return SimpleNamespace(id="cold-sync-task-1")
 
+    def run_onboarding_stub(
+        organization_id: int, scenario: str, wb_token_override: str
+    ):
+        queued.append((organization_id, scenario))
+
     monkeypatch.setattr("app.repricer_tasks.sync_wb_onboarding_for_org", TaskStub)
+    monkeypatch.setattr("app.repricer_tasks.run_wb_onboarding_for_org", run_onboarding_stub)
 
     payload = wb_repricer_bff_router.post_repricer_sync_run(
         object(),
