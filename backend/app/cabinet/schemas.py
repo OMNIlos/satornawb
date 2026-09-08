@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from app.contracts.envelopes import UtcDateTime
 
@@ -166,6 +166,13 @@ class UserAvitoCredentialsUpsertRequest(BaseModel):
 
 class MarketplaceCredentialWriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unknown_fields(cls, value: object) -> object:
+        if isinstance(value, dict) and any(key not in cls.model_fields for key in value):
+            raise ValueError("CREDENTIAL_PAYLOAD_INVALID")
+        return value
 
     wbToken: SecretStr | None = Field(
         default=None,

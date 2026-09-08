@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+from email.parser import BytesParser
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tomllib
 import zipfile
+
+from packaging.requirements import Requirement
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -96,6 +100,13 @@ def _build_wheel(source: Path, wheelhouse: Path) -> Path:
     return wheels[0]
 
 
+def test_test_extra_declares_offline_wheel_build_requirements() -> None:
+    metadata = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
+    build_requirements = set(metadata["build-system"]["requires"])
+    test_requirements = set(metadata["project"]["optional-dependencies"]["test"])
+    assert build_requirements <= test_requirements
+
+
 def test_wheel_build_does_not_reuse_stale_build_output(tmp_path: Path) -> None:
     synthetic_source = tmp_path / "synthetic-source"
     synthetic_source.mkdir()
@@ -145,6 +156,20 @@ def test_built_wheel_contains_and_imports_runtime_packages(tmp_path: Path) -> No
     wheel = _build_wheel(PROJECT_ROOT, tmp_path / "wheelhouse")
     with zipfile.ZipFile(wheel) as archive:
         installed_files = set(archive.namelist())
+        metadata_path = next(
+            name for name in installed_files if name.endswith(".dist-info/METADATA")
+        )
+        metadata = BytesParser().parsebytes(archive.read(metadata_path))
+    requirements = [
+        Requirement(value) for value in metadata.get_all("Requires-Dist", [])
+    ]
+    for name, specifier in (("setuptools", ">=69"), ("wheel", "")):
+        requirement = next((item for item in requirements if item.name == name), None)
+        assert requirement is not None, f"test extra is missing {name}"
+        assert str(requirement.specifier) == specifier
+        assert requirement.marker is not None
+        assert requirement.marker.evaluate({"extra": "test"})
+        assert not requirement.marker.evaluate({"extra": ""})
     assert EXPECTED_RUNTIME_FILES <= installed_files, (
         "built wheel is missing runtime files: "
         f"{sorted(EXPECTED_RUNTIME_FILES - installed_files)}"

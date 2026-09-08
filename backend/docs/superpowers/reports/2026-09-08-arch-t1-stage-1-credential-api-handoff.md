@@ -81,10 +81,13 @@ The registered path is:
 - Active status is authenticated by a real decrypt. Corrupt ciphertext,
   expiry, a missing key/keyring or database failure returns a typed safe error;
   it never calls a legacy reader. Revoked rows remain redacted metadata.
-- Pydantic secret types and the global validation-error sanitizer keep request
-  values and validator context out of 422 responses. Responses and audit
-  details contain no plaintext, ciphertext, nonce, verifier, credential ID,
-  generation or key inventory.
+- Pydantic secret types, root-level rejection of unknown credential-body keys
+  and the global validation-error sanitizer keep request values, unknown keys
+  and validator context out of 422 responses. Credential API responses exclude
+  credential UUID and generation. Audit events use the credential UUID as
+  `object_id` and include safe `generation` metadata alongside credential kind,
+  account ID, operation, provider and result code. Neither surface contains
+  secret payloads, ciphertext, nonce, verifier, raw exception text or key inventory.
 
 The main safe API codes are `NO_ACCESS`, `MEMBERSHIP_INACTIVE`,
 `ACCOUNT_SCOPE_DENIED`, `MARKETPLACE_ACCOUNT_NOT_FOUND`,

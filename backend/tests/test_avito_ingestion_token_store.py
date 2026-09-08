@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
@@ -75,23 +76,25 @@ def disposable_postgres(tmp_path_factory: pytest.TempPathFactory):
         text=True,
     )
     options = f"-p {port} -h 127.0.0.1 -k /tmp -c fsync=off -c synchronous_commit=off"
-    subprocess.run(
-        [
-            binaries["pg_ctl"],
-            "-D",
-            str(data),
-            "-l",
-            str(log),
-            "-o",
-            options,
-            "-w",
-            "start",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    startup_completed = False
     try:
+        subprocess.run(
+            [
+                binaries["pg_ctl"],
+                "-D",
+                str(data),
+                "-l",
+                str(log),
+                "-o",
+                options,
+                "-w",
+                "start",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        startup_completed = True
         subprocess.run(
             [
                 binaries["createdb"],
@@ -200,12 +203,64 @@ def disposable_postgres(tmp_path_factory: pytest.TempPathFactory):
         }
         owner_engine.dispose()
     finally:
-        subprocess.run(
-            [binaries["pg_ctl"], "-D", str(data), "-m", "fast", "-w", "stop"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        # A failed readiness wait can still leave this exact cluster running.
+        # Stop it even after interruption; a never-started cluster returns nonzero.
+        try:
+            subprocess.run(
+                [binaries["pg_ctl"], "-D", str(data), "-m", "fast", "-w", "stop"],
+                check=startup_completed,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            if startup_completed:
+                raise
+            # Preserve the original startup error if cleanup cannot be invoked.
+
+
+@pytest.mark.parametrize(
+    ("interrupted", "stop_result"),
+    [(False, 0), (True, 1), (False, OSError("synthetic cleanup unavailable"))],
+    ids=["nonzero-partial-start", "interrupted-never-started", "cleanup-oserror"],
+)
+def test_disposable_postgres_cleans_up_failed_start_without_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrupted, stop_result
+) -> None:
+    root = tmp_path / "owned-cluster"
+    root.mkdir()
+    data = str(root / "data")
+    calls = []
+    startup_error = (
+        KeyboardInterrupt()
+        if interrupted
+        else subprocess.CalledProcessError(1, ["/mock/pg_ctl", "start"])
+    )
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[0] == "/mock/initdb":
+            assert command[1:3] == ["-D", data]
+            return subprocess.CompletedProcess(command, 0)
+        assert command[0] == "/mock/pg_ctl", "must not progress to createdb"
+        assert command[1:3] == ["-D", data]
+        if command[-1] == "start":
+            raise startup_error
+        assert command == ["/mock/pg_ctl", "-D", data, "-m", "fast", "-w", "stop"]
+        assert kwargs["check"] is False
+        if isinstance(stop_result, OSError):
+            raise stop_result
+        return subprocess.CompletedProcess(command, stop_result)
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/mock/{name}")
+    monkeypatch.setattr(f"{__name__}._free_loopback_port", lambda: 55432)
+    monkeypatch.setattr(subprocess, "run", run)
+    fixture_body = disposable_postgres.__wrapped__(
+        SimpleNamespace(mktemp=lambda _prefix: root)
+    )
+    with pytest.raises(type(startup_error)) as caught:
+        next(fixture_body)
+    assert caught.value is startup_error
+    assert [command[-1] for command, _ in calls] == ["UTF8", "start", "stop"]
 
 
 @dataclass

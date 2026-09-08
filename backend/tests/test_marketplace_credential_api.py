@@ -482,6 +482,27 @@ def test_corrupt_encrypted_row_fails_closed_without_legacy_reader(
     assert legacy_reader_called is False
 
 
+def test_unknown_credential_key_is_rejected_without_reflection(credential_api) -> None:
+    response = credential_api.client.put(
+        _path(201, "avito", "avito_oauth_client"),
+        json={"clientId": "synthetic-client", "clientSecret": CANARY, CANARY: CANARY},
+        headers=_headers("admin-all"),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert CANARY not in response.text
+    issues = response.json()["error"]["details"]["issues"]
+    assert len(issues) == 1
+    assert issues[0]["loc"] == ["body"]
+    assert issues[0]["msg"] == "Value error, CREDENTIAL_PAYLOAD_INVALID"
+    assert "input" not in issues[0]
+    assert "ctx" not in issues[0]
+    with credential_api.factory() as session:
+        assert session.scalars(select(MarketplaceAccountCredentialRow)).all() == []
+        assert session.scalars(select(LkAuditEventRow)).all() == []
+
+
 def test_validation_errors_and_openapi_hide_secret_values_and_storage_metadata(
     credential_api,
     monkeypatch: pytest.MonkeyPatch,
