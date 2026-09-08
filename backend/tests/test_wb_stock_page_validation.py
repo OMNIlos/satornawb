@@ -131,3 +131,57 @@ def test_report_consumer_marks_malformed_stock_run_partial(monkeypatch):
     assert snapshot.source_status == "partial"
     assert "WB-03" in snapshot.blocker_ids
     assert [(row.nm_id, row.quantity) for row in snapshot.stocks] == [(1, 3), (2, 4)]
+
+
+@pytest.mark.parametrize("reordered", [False, True])
+def test_repeated_full_page_is_partial_instead_of_duplicate_stock_or_infinite_fetch(reordered):
+    first = [{"nmId": 1, "quantity": 2}, {"nmId": 2, "quantity": 3}]
+    second = list(reversed(first)) if reordered else first
+    client = Pages([{"data": first}, {"data": second}, {"data": []}])
+    envelope, rows = runtime._load_stock_report_wb_warehouses(client, limit=2, sleeper=lambda _: None)
+    assert envelope.ok is False
+    assert envelope.error.code == "STOCK_REPORT_PAGINATION_STALLED"
+    assert [row["nmId"] for row in rows] == [1, 2]
+    assert [req.jsonBody["offset"] for req in client.requests] == [0, 2]
+
+
+def test_oversized_page_is_not_accepted_then_skipped_by_smaller_offset():
+    client = Pages([{"data": [{"nmId": 1}, {"nmId": 2}, {"nmId": 3}]}, {"data": []}])
+    envelope, rows = runtime._load_stock_report_wb_warehouses(client, limit=2, sleeper=lambda _: None)
+    assert envelope.ok is False
+    assert envelope.error.code == "STOCK_REPORT_INVALID_PAGE"
+    assert rows == []
+    assert len(client.requests) == 1
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5, "2"])
+def test_invalid_limit_fails_before_any_provider_request(limit):
+    client = Pages([{"data": []}])
+    with pytest.raises(ValueError):
+        runtime._load_stock_report_wb_warehouses(client, limit=limit, sleeper=lambda _: None)
+    assert client.requests == []
+
+
+def test_nonconsecutive_page_repetition_is_detected_before_append():
+    client=Pages([{"data":[{"nmId":1},{"nmId":2}]},
+                  {"data":[{"nmId":3},{"nmId":4}]},
+                  {"data":[{"nmId":2},{"nmId":1}]}])
+    envelope,rows=runtime._load_stock_report_wb_warehouses(client,limit=2,sleeper=lambda _:None)
+    assert envelope.error.code == "STOCK_REPORT_PAGINATION_STALLED"
+    assert [row["nmId"] for row in rows] == [1,2,3,4]
+
+
+def test_page_fingerprint_does_not_ignore_duplicate_multiplicity():
+    client=Pages([{"data":[{"nmId":1},{"nmId":1},{"nmId":2}]},
+                  {"data":[{"nmId":1},{"nmId":2},{"nmId":2}]}, {"data":[]}])
+    envelope,rows=runtime._load_stock_report_wb_warehouses(client,limit=3,sleeper=lambda _:None)
+    assert envelope.ok
+    assert len(rows) == 6  # Not source-grain deduplication; these page multisets differ.
+
+
+def test_non_json_full_page_fails_without_appending_or_printing_payload():
+    client=Pages([{"data":[{"nmId":1,"quantity":float("nan")}]}])
+    envelope,rows=runtime._load_stock_report_wb_warehouses(client,limit=1,sleeper=lambda _:None)
+    assert envelope.error.code == "STOCK_REPORT_INVALID_PAGE"
+    assert rows == []
+    assert "quantity" not in envelope.error.message
