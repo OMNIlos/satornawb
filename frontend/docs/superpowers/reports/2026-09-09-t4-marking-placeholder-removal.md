@@ -66,3 +66,21 @@ code fallback. It is not proven to be a backend execution gate. These are not
 safe targets for blind string deletion or automatic status conversion. Preserve
 historical fields/data and barcode fallback until a compatibility-tested removal
 of exposed controls is implemented. No additional marking service is required.
+
+## SKU future-gate removal with actual browser interaction
+
+Removed only the decorative marking row from `WbRepricerSkuPage` Orders tab.
+The regression builds the actual component into an in-memory test-only IIFE with
+existing Vite/React dependencies (`write:false`, `configFile:false`, `envFile:false`),
+mounts it in Playwright, and clicks the Orders tab. Browser requests are aborted;
+no auth, print/export, provider or backend action is invoked. Fixture remains under
+test sources and does not add an application route or endpoint.
+
+Harness initialization failures (`process`/JSX development-runtime mismatch) were
+diagnosed separately and are not counted as product RED. After matching the test
+runtime, the test failed specifically on the existing KIZ row; after its removal,
+27 focused cases passed, including the browser test. Independent review: scoped
+PASS. Positive assertions retain the estimate/time/deadline rows, not proof of
+their numeric business formula. Shared HTML fields/statuses remain unchanged.
+Direct typecheck: exit 0. Full suite last recorded before this browser slice:
+274 passed / 26 failed; no new full-suite result is inferred from focused checks.
