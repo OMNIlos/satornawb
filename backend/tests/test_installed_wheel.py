@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -30,6 +31,17 @@ REPRESENTATIVE_IMPORTS = (
     "vella_wb_19_05.models",
 )
 
+EXCLUDED_BUILD_PARTS = {
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "venv",
+}
+
 
 def _run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -41,8 +53,28 @@ def _run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_built_wheel_contains_and_imports_runtime_packages(tmp_path: Path) -> None:
-    wheelhouse = tmp_path / "wheelhouse"
+def _stage_build_source(source: Path, destination: Path) -> None:
+    destination.mkdir()
+    shutil.copy2(source / "pyproject.toml", destination / "pyproject.toml")
+    for relative_root in (
+        Path("app"),
+        Path("backend_contracts/vella_wb_19_05"),
+    ):
+        for source_file in sorted((source / relative_root).rglob("*.py")):
+            relative_file = source_file.relative_to(source)
+            if any(
+                part in EXCLUDED_BUILD_PARTS or part.endswith(".egg-info")
+                for part in relative_file.parts
+            ):
+                continue
+            staged_file = destination / relative_file
+            staged_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, staged_file)
+
+
+def _build_wheel(source: Path, wheelhouse: Path) -> Path:
+    clean_source = wheelhouse.parent / f"{wheelhouse.name}-source"
+    _stage_build_source(source, clean_source)
     wheelhouse.mkdir()
     _run(
         "-m",
@@ -56,12 +88,61 @@ def test_built_wheel_contains_and_imports_runtime_packages(tmp_path: Path) -> No
         "--no-index",
         "--no-cache-dir",
         "--disable-pip-version-check",
-        cwd=PROJECT_ROOT,
+        cwd=clean_source,
     )
 
     wheels = list(wheelhouse.glob("*.whl"))
     assert len(wheels) == 1
-    wheel = wheels[0]
+    return wheels[0]
+
+
+def test_wheel_build_does_not_reuse_stale_build_output(tmp_path: Path) -> None:
+    synthetic_source = tmp_path / "synthetic-source"
+    synthetic_source.mkdir()
+    shutil.copy2(PROJECT_ROOT / "pyproject.toml", synthetic_source / "pyproject.toml")
+    for source_root in (
+        PROJECT_ROOT / "app",
+        PROJECT_ROOT / "backend_contracts" / "vella_wb_19_05",
+    ):
+        for source_file in source_root.rglob("*.py"):
+            destination = synthetic_source / source_file.relative_to(PROJECT_ROOT)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, destination)
+
+    pyproject = synthetic_source / "pyproject.toml"
+    original_metadata = pyproject.read_text()
+    mutated_metadata = original_metadata.replace(', "app.wb_ads_cache"]', "]")
+    assert mutated_metadata != original_metadata
+    pyproject.write_text(mutated_metadata)
+
+    stale_file = synthetic_source / "build/lib/app/wb_ads_cache/__init__.py"
+    stale_file.parent.mkdir(parents=True)
+    stale_file.write_text('"""Stale build output must not reach the wheel."""\n')
+
+    excluded_files = (
+        synthetic_source / ".env",
+        synthetic_source / "app/operational-snapshot.json",
+        synthetic_source / "app/nested/build/leak.py",
+        synthetic_source / "app/nested/dist/leak.py",
+        synthetic_source / "app/nested/.venv/leak.py",
+        synthetic_source / "app/nested/.pytest_cache/leak.py",
+        synthetic_source / "app/nested/example.egg-info/leak.py",
+    )
+    for excluded_file in excluded_files:
+        excluded_file.parent.mkdir(parents=True, exist_ok=True)
+        excluded_file.write_text("synthetic test sentinel\n")
+
+    wheel = _build_wheel(synthetic_source, tmp_path / "synthetic-wheelhouse")
+    with zipfile.ZipFile(wheel) as archive:
+        assert "app/wb_ads_cache/__init__.py" not in archive.namelist()
+    clean_source = tmp_path / "synthetic-wheelhouse-source"
+    assert (clean_source / "app/wb_ads_cache/__init__.py").is_file()
+    for excluded_file in excluded_files:
+        assert not (clean_source / excluded_file.relative_to(synthetic_source)).exists()
+
+
+def test_built_wheel_contains_and_imports_runtime_packages(tmp_path: Path) -> None:
+    wheel = _build_wheel(PROJECT_ROOT, tmp_path / "wheelhouse")
     with zipfile.ZipFile(wheel) as archive:
         installed_files = set(archive.namelist())
     assert EXPECTED_RUNTIME_FILES <= installed_files, (
