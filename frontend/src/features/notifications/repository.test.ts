@@ -10,6 +10,12 @@ import {
 } from './repository.js'
 
 describe('notifications repository', () => {
+  it('preserves the order alert without an invented marking prerequisite', () => {
+    const alert = getNotifications().items.find((item) => item.id === 'orders-sla-001')
+    expect(alert?.route).toBe('/orders')
+    expect(alert?.severity).toBe('critical')
+    expect(alert?.blockedActions).toEqual(['Автоперенос в конец очереди'])
+  })
   // Fixtures describe this business day; the real filter must still use Date.now().
   beforeEach(() => {
     vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-05-08T10:00:00+05:00'))
