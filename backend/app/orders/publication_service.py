@@ -280,7 +280,7 @@ def _persist_orders_manifest(
     manifest: OrderManifest,
     account: ExpectedAccountBinding,
     source_run_key: str,
-    actor_user_id: str,
+    actor_user_id: str | None,
 ) -> OrdersPublicationResult:
     """Persist inside a caller-owned, already authorized physical transaction.
 
