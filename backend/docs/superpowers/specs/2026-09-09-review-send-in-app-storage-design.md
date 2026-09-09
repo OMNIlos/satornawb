@@ -96,6 +96,17 @@ Command request exactly matches unchanged T4 encode_review_send and actual draft
 decision, fact external identity, text/binding hashes. Preserve UTF-8 bytes,
 embedded NUL and exact positive integer NUMERIC versions beyond BIGINT. Use
 existing0071 strict UTF-8/canonical scalar helpers, not PostgreSQL JSONB re-encoding.
+Source-time compatibility ruling: T4 normalizer uses Python regex Unicode Nd and
+Python strip semantics; reviews-normalization-v1 does not pin a Unicode database.
+New SQL normalized-ID validation therefore uses literal Unicode14 Nd ranges,
+matching current backend/Dockerfile python:3.11 provenance, and exposes exact
+review_send_unicode_version() =14.0.0. Never generate ranges from whichever host
+interpreter executes Alembic. Static migration remains runnable on supported3.13;
+do not add an interpreter-version upgrade ban. New T4 send-writer activation must
+compare actual runtime normalization compatibility/version to this SQL marker and
+fail closed on mismatch. Existing legacy normalizer/routes are not rewritten or
+globally disabled. Full literal/Unicode parity is an unexecuted final gate; this
+explicit new platform contract is not a claim an earlier Unicode policy existed.
 New serializers have exact signatures and fixed safe errors. All nullable fields
 are explicit, floating-point/lossy cast/Unicode or whitespace normalization denied.
 Native PostgreSQL NUMERIC representability fails safely, never rounds intent.
