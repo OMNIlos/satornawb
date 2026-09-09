@@ -136,6 +136,12 @@ BEGIN
   IF NOT FOUND OR login.user_id<>NEW.initiator_user_id OR login.revoked_at IS NOT NULL OR login.expires_at<=clock_timestamp() THEN RAISE EXCEPTION 'repricing_origin_invalid'; END IF;
   PERFORM 1 FROM public.marketplace_accounts WHERE organization_id=NEW.organization_id AND marketplace_account_id=NEW.marketplace_account_id AND marketplace='wb' AND status='connected' FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'repricing_origin_invalid'; END IF;
+  -- Preserve metadata-before-domain order even for direct creation INSERTs.
+  -- The authority row subsequently captures and checks this exact active kind.
+  PERFORM credential_id FROM public.marketplace_account_credentials WHERE organization_id=NEW.organization_id
+   AND marketplace_account_id=NEW.marketplace_account_id AND provider='wb' AND credential_kind='wb_api'
+   AND revoked_at IS NULL AND payload_schema_version=1 AND expires_at IS NULL FOR SHARE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'repricing_authority_invalid'; END IF;
   SELECT * INTO a FROM public.wb_repricer_price_approvals WHERE organization_id=NEW.organization_id AND marketplace_account_id=NEW.marketplace_account_id AND approval_row_id=NEW.approval_row_id FOR UPDATE;
   IF NOT FOUND OR a.request_format<>'wb-price-apply/v1' OR a.status<>'pending'
     OR (a.action_key,a.request_checksum) IS DISTINCT FROM (NEW.action_key,NEW.request_checksum) THEN RAISE EXCEPTION 'repricing_job_invalid'; END IF;
