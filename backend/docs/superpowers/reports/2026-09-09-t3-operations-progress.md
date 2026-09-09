@@ -311,3 +311,35 @@ Uses existing project TypeScript parser, no installs/new dependencies. Node VM i
 test mechanism, not a security boundary; OS sandbox denies external networking and
 secret files. Physical print explicitly throws. Further canonical work proceeds
 independently; real format/barcode/render parity gates remain distinct.
+
+## Atomic normalized manifest service
+
+`publish_orders_manifest` owns one fresh caller-supplied Session transaction under
+fixed sync:run. Nonempty declared fetch authorities must match source type; the
+guard verifies exact live principal/account/credential or browser-token binding.
+No fetch inside transaction. Run-key lookup is exact/account serialized; replay
+checks immutable run metadata, semantic membership evidence and stored audit receipt.
+Run, immutable observations/statuses/lifecycle evidence, initial item/parent
+projections, coverage, terminal state and authenticated-user audit commit together.
+Partial manifests store evidence/status only, without changing current projections
+or deleting/cancelling absent orders. Request period bounds remain NULL, not an
+invented provider/date window. Item count counts observed lines, not unit quantity.
+
+Projection authority is deliberately bounded: the first complete normalized fact
+may establish a projection. Exact evidence replay is a no-op; every changed fact
+without a proven source ordering policy records reconciliation rather than regressing
+current state. Cancellation/return statuses produce immutable evidence events,
+never physical deletes. This is NOT yet automatic lifecycle progression or a
+Production eligibility decision; read assembly must expose reconciliation blockers.
+The complete-manifest assertion still requires a real adapter completeness contract;
+no live source handler or scheduler is activated. No missing field becomes ready.
+
+RED missing service import; initial GREEN exposed a test-fixture teardown column
+mistake (one test passed, four setup/teardown errors). Inspected actual credential
+schema, corrected to revocation_reason_code/operator_revoked, cleanup confirmed.
+Final focused9PASS3.59s; combined six Orders consumer files43PASS20.16s, no skips.
+Two actual sessions/PIDs publish one run/audit; same key/different manifest conflicts;
+rotated generation denies; final guard failure rolls back all publication effects;
+WB statistics raw/canonical NULL remains unmapped. Earlier8case combined42PASS18.16s.
+Ruff/compileall/diff exit0, all own disposable resources cleaned. No schema/routers,
+provider calls, real marketplace actions, external print/export or production writes.
