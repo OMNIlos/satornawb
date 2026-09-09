@@ -2,6 +2,13 @@
 
 ## Current checkpoint: dormant shadow composition after c125a54
 
+Historical binding request/witness1a3d344 supersedes any broader read readiness:
+actual1PGcase3.08s demonstrates oldbody after completedaccountrebind under freshguard.
+This is an OPEN defect, not safe-read PASS. T1 receives perrunimmutable binding and
+unbound/mixed/currenthead rules; publicreads and operationalactivation blocked until
+accepted persistence+consumer verification. SharedHTTP errors are error.code in
+app/main.py, not standalone detail.code; T1 owns real registration/envelope tests.
+
 Latest bounded result: canonical-only HTTP router/service/raw WB adapter ready for
 T1 default-off registration, NOT activation. Coordinator superseded unsafe legacy
 dualconsumer for this path: no legacy write/read/cache use. Actual signed auth,
