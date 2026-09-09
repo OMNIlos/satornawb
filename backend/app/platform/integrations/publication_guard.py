@@ -1,0 +1,383 @@
+"""Live user/session authorization held through a caller-owned root transaction.
+
+Trusted services construct the principal and fixed permissions; these values are
+not authentication tokens. Every authority used for fetch must be supplied by the
+service. Empty authorities mean a credential-independent operation. The guard
+cannot infer an unreported fetch. Acquire before domain locks and perform all
+provider I/O before acquiring. Callers roll back every failure.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from uuid import UUID
+from weakref import ref
+
+from sqlalchemy import Engine, event, func, select, text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
+from app.cabinet.orm import LkSessionRow, LkUserRow
+from app.cabinet.permissions import permissions_from_profile
+from app.infra.db import set_tenant_context
+from app.platform.identity.orm import IamMembershipRow
+from app.platform.integrations.orm import (
+    MarketplaceAccountCredentialRow,
+    MarketplaceAccountIngestionTokenRow,
+    MarketplaceAccountRow,
+)
+
+_CODES = frozenset({
+    "publication_context_invalid", "publication_access_denied", "publication_binding_changed",
+    "publication_authority_invalid", "publication_expired", "publication_persistence_failed",
+})
+_KINDS = {"wb_api": "wb", "avito_oauth_client": "avito", "avito_oauth_access": "avito"}
+_STATE = "_satorna_publication_guard"
+
+
+class PublicationGuardError(ValueError):
+    """Only an allowlisted code is exposed, including for malformed error inputs."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code if type(code) is str and code in _CODES else "publication_persistence_failed"
+        super().__init__(self.code)
+
+    def __repr__(self) -> str:
+        return f"PublicationGuardError(code={self.code!r})"
+
+
+def _integer(value: object, maximum: int = 2**31 - 1) -> bool:
+    return type(value) is int and 0 < value <= maximum
+
+
+def _text(value: object, limit: int) -> bool:
+    return (type(value) is str and 0 < len(value) <= limit and bool(value.strip())
+            and "\x00" not in value and not any(0xD800 <= ord(c) <= 0xDFFF for c in value))
+
+
+def _aware(value: object) -> bool:
+    return type(value) is datetime and value.tzinfo is not None and value.utcoffset() is not None
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class UserSessionPrincipal:
+    organization_id: int
+    user_id: str
+    membership_id: int
+    session_id: str
+
+    def __post_init__(self) -> None:
+        if not (_integer(self.organization_id) and _integer(self.membership_id)
+                and _text(self.user_id, 64) and _text(self.session_id, 64)):
+            raise PublicationGuardError("publication_context_invalid")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ExpectedAccountBinding:
+    marketplace_account_id: int
+    provider: str
+    external_account_id: str
+    credential_ref: str | None
+
+    def __post_init__(self) -> None:
+        if not (_integer(self.marketplace_account_id) and type(self.provider) is str
+                and self.provider in {"wb", "avito"} and _text(self.external_account_id, 128)
+                and (self.credential_ref is None or _text(self.credential_ref, 255))):
+            raise PublicationGuardError("publication_binding_changed")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ExpectedCredential:
+    marketplace_account_id: int
+    credential_id: UUID
+    kind: str
+    generation: int
+    payload_schema_version: int
+    expires_at: datetime | None
+
+    def __post_init__(self) -> None:
+        if not (_integer(self.marketplace_account_id) and type(self.credential_id) is UUID
+                and type(self.kind) is str and self.kind in _KINDS
+                and _integer(self.generation, 2**63 - 1)
+                and type(self.payload_schema_version) is int and self.payload_schema_version == 1
+                and (_aware(self.expires_at) if self.kind == "avito_oauth_access" else self.expires_at is None)):
+            raise PublicationGuardError("publication_authority_invalid")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ExpectedIngestionToken:
+    marketplace_account_id: int
+    token_id: UUID
+    scope: str
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        if not (_integer(self.marketplace_account_id) and type(self.token_id) is UUID
+                and type(self.scope) is str and self.scope == "avito.browser_snapshot.write"
+                and _aware(self.expires_at)):
+            raise PublicationGuardError("publication_authority_invalid")
+
+
+def _contracts(principal, required_permissions, accounts, authorities):
+    if type(principal) is not UserSessionPrincipal:
+        raise PublicationGuardError("publication_context_invalid")
+    principal.__post_init__()
+    if (type(required_permissions) is not frozenset or not required_permissions
+            or not all(_text(p, 64) for p in required_permissions)):
+        raise PublicationGuardError("publication_context_invalid")
+    if type(accounts) not in (tuple, list) or not accounts:
+        raise PublicationGuardError("publication_binding_changed")
+    account_map = {}
+    for account in accounts:
+        if type(account) is not ExpectedAccountBinding:
+            raise PublicationGuardError("publication_binding_changed")
+        account.__post_init__()
+        if account.marketplace_account_id in account_map:
+            raise PublicationGuardError("publication_binding_changed")
+        account_map[account.marketplace_account_id] = account
+    if type(authorities) not in (tuple, list):
+        raise PublicationGuardError("publication_authority_invalid")
+    seen, ids = set(), set()
+    for authority in authorities:
+        if type(authority) not in (ExpectedCredential, ExpectedIngestionToken):
+            raise PublicationGuardError("publication_authority_invalid")
+        authority.__post_init__()
+        account = account_map.get(authority.marketplace_account_id)
+        credential = type(authority) is ExpectedCredential
+        provider = _KINDS[authority.kind] if credential else "avito"
+        identity = authority.credential_id if credential else authority.token_id
+        key = (authority.marketplace_account_id, authority.kind if credential else identity)
+        if account is None or account.provider != provider or key in seen or identity in ids:
+            raise PublicationGuardError("publication_authority_invalid")
+        seen.add(key)
+        ids.add(identity)
+    return (tuple(sorted(account_map.values(), key=lambda a: a.marketplace_account_id)),
+            tuple(sorted((a for a in authorities if type(a) is ExpectedCredential),
+                         key=lambda a: (a.marketplace_account_id, a.kind, a.credential_id))),
+            tuple(sorted((a for a in authorities if type(a) is ExpectedIngestionToken),
+                         key=lambda a: (a.marketplace_account_id, a.token_id))))
+
+
+def _scope(membership, accounts, required_permissions):
+    permissions, ids = membership.permissions, membership.allowed_account_ids
+    if (type(permissions) is not list or not all(_text(p, 64) for p in permissions)
+            or type(ids) is not list or membership.scope_mode not in {"all", "selected", "restricted"}):
+        raise PublicationGuardError("publication_access_denied")
+    allowed = set()
+    for value in ids:
+        if _integer(value):
+            allowed.add(value)
+        elif (type(value) is str and value.isascii() and value.isdecimal()
+              and len(value.lstrip("0")) <= 10 and _integer(int(value.lstrip("0") or "0"))):
+            allowed.add(int(value.lstrip("0") or "0"))
+        else:
+            raise PublicationGuardError("publication_access_denied")
+    try:
+        effective = frozenset(permissions) | permissions_from_profile(membership.role)
+    except (AttributeError, TypeError, ValueError):
+        raise PublicationGuardError("publication_access_denied") from None
+    if not required_permissions <= effective or (membership.scope_mode != "all" and
+            not {a.marketplace_account_id for a in accounts} <= allowed):
+        raise PublicationGuardError("publication_access_denied")
+
+
+def _physical_connection(session):
+    # A joined Connection root can outlive Session.commit and its final check.
+    bind = session.get_bind()
+    if not isinstance(bind, Engine) or bind.dialect.name != "postgresql":
+        raise PublicationGuardError("publication_context_invalid")
+    connection = session.connection()
+    root = connection.get_transaction()
+    # Logical Session roots and READ COMMITTED do not rule out AUTOCOMMIT;
+    # Connection SAVEPOINTs also bypass Session nested-transaction events.
+    if (root is None or not root.is_active or connection.in_nested_transaction()
+            or getattr(connection.connection.dbapi_connection, "autocommit", None) is not False):
+        raise PublicationGuardError("publication_context_invalid")
+    return connection
+
+
+class PublicationGuard:
+    """Transaction-bound handle; no credential payloads or independent sessions."""
+
+    def __init__(self, session, principal, permissions, accounts, credentials, tokens):
+        self._session_ref = ref(session)
+        self._transaction = session.get_transaction()
+        self._principal = principal
+        self._permissions = permissions
+        self._accounts, self._credentials, self._tokens = accounts, credentials, tokens
+        self._failed = False
+        self._ended = False
+
+    def __repr__(self):
+        return "<PublicationGuard>"
+
+    def _context(self):
+        session = self._session_ref()
+        if (session is None or self._ended or self._failed or not session.is_active
+                or session.get_transaction() is not self._transaction
+                or not self._transaction.is_active or session.in_nested_transaction()
+                or getattr(session, _STATE, None) is not self):
+            raise PublicationGuardError("publication_context_invalid")
+        _physical_connection(session)
+        marker = (self._transaction, self._principal.organization_id)
+        if session.info.get("satorna_tenant_context") != marker:
+            raise PublicationGuardError("publication_context_invalid")
+        actual = session.execute(text(
+            "SELECT current_setting('app.organization_id', true), current_setting('transaction_isolation')"
+        )).one()
+        if actual != (str(self._principal.organization_id), "read committed"):
+            raise PublicationGuardError("publication_context_invalid")
+        return session
+
+    def revalidate_before_write(self) -> datetime:
+        """Refresh exact locked metadata and DB time; does not flush caller writes."""
+        try:
+            session = self._session_ref()
+            if session is None:
+                raise PublicationGuardError("publication_context_invalid")
+            with session.no_autoflush:
+                return self._validate()
+        except PublicationGuardError:
+            self._failed = True
+            raise
+        except SQLAlchemyError:
+            self._failed = True
+            raise PublicationGuardError("publication_persistence_failed") from None
+
+    def _validate(self):
+        session = self._context()
+        p = self._principal
+        user = session.execute(select(LkUserRow.user_id, LkUserRow.organization_id, LkUserRow.is_active).where(
+            LkUserRow.user_id == p.user_id).with_for_update(read=True)).one_or_none()
+        if user is None or user.organization_id != p.organization_id or user.is_active is not True:
+            raise PublicationGuardError("publication_access_denied")
+        m = IamMembershipRow
+        membership = session.execute(select(m.membership_id, m.organization_id, m.user_id, m.is_active,
+            m.role, m.permissions, m.scope_mode, m.allowed_account_ids).where(
+                m.membership_id == p.membership_id).with_for_update(read=True)).one_or_none()
+        if (membership is None or membership.organization_id != p.organization_id
+                or membership.user_id != p.user_id or membership.is_active is not True):
+            raise PublicationGuardError("publication_access_denied")
+        _scope(membership, self._accounts, self._permissions)
+        login = session.execute(select(LkSessionRow.session_id, LkSessionRow.user_id,
+            LkSessionRow.revoked_at, LkSessionRow.expires_at).where(
+                LkSessionRow.session_id == p.session_id).with_for_update(read=True)).one_or_none()
+        if login is None or login.user_id != p.user_id or login.revoked_at is not None:
+            raise PublicationGuardError("publication_access_denied")
+        expiries = [login.expires_at]
+        a = MarketplaceAccountRow
+        for expected in self._accounts:
+            account = session.execute(select(a.organization_id, a.marketplace, a.external_account_id,
+                a.credential_ref, a.status).where(a.marketplace_account_id == expected.marketplace_account_id
+                ).with_for_update()).one_or_none()
+            if account is None or tuple(account) != (p.organization_id, expected.provider,
+                    expected.external_account_id, expected.credential_ref, "connected"):
+                raise PublicationGuardError("publication_binding_changed")
+        c = MarketplaceAccountCredentialRow
+        for expected in self._credentials:
+            credential = session.execute(select(c.organization_id, c.marketplace_account_id, c.provider,
+                c.credential_kind, c.generation, c.payload_schema_version, c.expires_at, c.revoked_at).where(
+                    c.credential_id == expected.credential_id).with_for_update(read=True)).one_or_none()
+            if credential is None or tuple(credential) != (p.organization_id, expected.marketplace_account_id,
+                    _KINDS[expected.kind], expected.kind, expected.generation,
+                    expected.payload_schema_version, expected.expires_at, None):
+                raise PublicationGuardError("publication_authority_invalid")
+            if expected.expires_at is not None:
+                expiries.append(credential.expires_at)
+        t = MarketplaceAccountIngestionTokenRow
+        for expected in self._tokens:
+            token = session.execute(select(t.organization_id, t.marketplace_account_id, t.provider, t.scope,
+                t.expires_at, t.revoked_at).where(t.token_id == expected.token_id).with_for_update(read=True)).one_or_none()
+            if token is None or tuple(token) != (p.organization_id, expected.marketplace_account_id,
+                                                 "avito", expected.scope, expected.expires_at, None):
+                raise PublicationGuardError("publication_authority_invalid")
+            expiries.append(token.expires_at)
+        now = session.scalar(select(func.clock_timestamp()))
+        if any(not _aware(expiry) or expiry <= now for expiry in expiries):
+            raise PublicationGuardError("publication_expired")
+        return now
+
+
+def _before_commit(session):
+    guard = getattr(session, _STATE, None)
+    if guard is None:
+        return
+    try:
+        # Dispatch iteration is the effective class-then-instance call order,
+        # not registration time. No callback may run after final validation,
+        # even if its author intended a read-only observer. Inspect, never edit,
+        # the collection while SQLAlchemy is dispatching it.
+        if tuple(session.dispatch.before_commit)[-1:] != (_before_commit,):
+            raise PublicationGuardError("publication_context_invalid")
+        with session.no_autoflush:
+            guard._context()
+        session.flush()
+        # after_flush_postexec can queue another flush. Do not let SQLAlchemy's
+        # subsequent commit flush loop publish that work after our final check.
+        if session.new or session.dirty or session.deleted:
+            raise PublicationGuardError("publication_context_invalid")
+        guard.revalidate_before_write()
+        if session.new or session.dirty or session.deleted:
+            raise PublicationGuardError("publication_context_invalid")
+    except PublicationGuardError:
+        guard._failed = True
+        raise
+    except SQLAlchemyError:
+        guard._failed = True
+        raise PublicationGuardError("publication_persistence_failed") from None
+
+
+def _transaction_created(session, transaction):
+    guard = getattr(session, _STATE, None)
+    # Flush creates an internal, non-nested child transaction; SAVEPOINT does not
+    # belong to the publication protocol and must poison the root even if caught.
+    if guard is not None and transaction.nested:
+        guard._failed = True
+        raise PublicationGuardError("publication_context_invalid")
+
+
+def _transaction_ended(session, transaction):
+    guard = getattr(session, _STATE, None)
+    if guard is not None and transaction is guard._transaction:
+        guard._ended = True
+        guard._transaction = None
+        setattr(session, _STATE, None)
+
+
+def acquire_publication_guard(session: Session, *, principal: UserSessionPrincipal,
+                              required_permissions: frozenset[str], accounts, authorities) -> PublicationGuard:
+    """Acquire one metadata fence in an existing clean PostgreSQL RC transaction."""
+    accounts, credentials, tokens = _contracts(principal, required_permissions, accounts, authorities)
+    if (not isinstance(session, Session) or not session.in_transaction() or not session.is_active
+            or session.in_nested_transaction() or session.new or session.dirty or session.deleted
+            or getattr(session, _STATE, None) is not None):
+        raise PublicationGuardError("publication_context_invalid")
+    try:
+        with session.no_autoflush:
+            if _physical_connection(session).get_isolation_level() != "READ COMMITTED":
+                raise PublicationGuardError("publication_context_invalid")
+            transaction = session.get_transaction()
+            marker = session.info.get("satorna_tenant_context")
+            if marker is not None and (type(marker) is not tuple or len(marker) != 2):
+                raise PublicationGuardError("publication_context_invalid")
+            if marker is not None and marker[0] is transaction and marker != (transaction, principal.organization_id):
+                raise PublicationGuardError("publication_context_invalid")
+            current = session.scalar(text("SELECT current_setting('app.organization_id', true)"))
+            if current not in (None, "", str(principal.organization_id)):
+                raise PublicationGuardError("publication_context_invalid")
+            set_tenant_context(session, principal.organization_id)
+            guard = PublicationGuard(session, principal, required_permissions, accounts, credentials, tokens)
+            # Functions capture neither this transaction nor the session. Install
+            # once per Session; root completion clears state without modifying a
+            # listener collection during event dispatch or affecting other sessions.
+            for name, listener in (("before_commit", _before_commit),
+                                   ("after_transaction_create", _transaction_created),
+                                   ("after_transaction_end", _transaction_ended)):
+                if not event.contains(session, name, listener):
+                    event.listen(session, name, listener)
+            setattr(session, _STATE, guard)
+            guard.revalidate_before_write()
+            return guard
+    except SQLAlchemyError:
+        raise PublicationGuardError("publication_persistence_failed") from None

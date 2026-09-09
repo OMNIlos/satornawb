@@ -14,7 +14,6 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
-
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROLE = "satorna_credential_test_runtime"
 
@@ -88,9 +87,9 @@ def disposable_postgres(tmp_path_factory: pytest.TempPathFactory) -> Iterator[di
         config.set_main_option("sqlalchemy.url", owner_url)
         with patch.dict(os.environ, {"VELLA_DATABASE_URL": owner_url}):
             command.stamp(config, "20260905_0060")
-            command.upgrade(config, "head")
+            command.upgrade(config, "20260908_0061")
             command.downgrade(config, "20260905_0060")
-            command.upgrade(config, "head")
+            command.upgrade(config, "20260908_0061")
         with owner_engine.begin() as connection:
             connection.execute(text(f"CREATE ROLE {RUNTIME_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"))
             connection.execute(text(f"GRANT USAGE ON SCHEMA public TO {RUNTIME_ROLE}"))

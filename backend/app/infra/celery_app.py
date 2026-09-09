@@ -7,6 +7,7 @@ from celery import Celery
 from celery.schedules import crontab
 
 from app.config import get_settings
+from app.infra.heartbeat import install_process_heartbeat
 
 REPRICER_SCHEDULER_POLL_MINUTES = 5
 REPORT_SNAPSHOTS_REFRESH_MINUTES = 180
@@ -84,6 +85,7 @@ def get_celery_app() -> Celery:
             "canonical.collect_shadow_for_org": {"queue": "vella.canonical-shadow"}
         },
     )
+    install_process_heartbeat(app, settings)
     return app
 
 

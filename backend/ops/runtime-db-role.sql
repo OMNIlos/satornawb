@@ -1,5 +1,9 @@
 \set ON_ERROR_STOP on
 
+-- Run this script as a standalone psql input, not inside an outer transaction
+-- or with --single-transaction. Runtime must never see the broad grant interval.
+BEGIN;
+
 DO $$
 DECLARE
     insecure_tables text;
@@ -8,6 +12,21 @@ BEGIN
     INTO insecure_tables
     FROM (
         VALUES
+            ('review_sync_runs_v2'),
+            ('review_facts'),
+            ('review_observations'),
+            ('review_sync_run_items'),
+            ('order_sync_runs'),
+            ('marketplace_orders'),
+            ('marketplace_order_items'),
+            ('order_observations'),
+            ('order_status_observations'),
+            ('order_lifecycle_events'),
+            ('order_deadlines'),
+            ('order_sync_coverage'),
+            ('order_sync_memberships'),
+            ('order_read_snapshots'),
+            ('order_read_snapshot_rows'),
             ('catalog_cost_versions'),
             ('catalog_economics_override_versions'),
             ('catalog_skus'),
@@ -63,3 +82,92 @@ ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
     GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO :"runtime_role";
 
 REVOKE ALL ON TABLE public.alembic_version FROM :"runtime_role";
+
+-- Orders overrides must follow every broad runtime grant above.
+REVOKE ALL ON TABLE public.order_sync_runs, public.marketplace_orders,
+    public.marketplace_order_items, public.order_observations,
+    public.order_status_observations, public.order_lifecycle_events,
+    public.order_deadlines, public.order_sync_coverage, public.order_sync_memberships,
+    public.order_read_snapshots, public.order_read_snapshot_rows FROM :"runtime_role";
+GRANT SELECT, INSERT ON TABLE public.order_sync_runs, public.marketplace_orders,
+    public.marketplace_order_items, public.order_observations,
+    public.order_status_observations, public.order_lifecycle_events,
+    public.order_deadlines, public.order_sync_coverage, public.order_sync_memberships,
+    public.order_read_snapshots, public.order_read_snapshot_rows TO :"runtime_role";
+GRANT UPDATE ON TABLE public.order_sync_runs, public.marketplace_orders,
+    public.marketplace_order_items TO :"runtime_role";
+
+-- Only the identity sequences belonging to these Orders tables are narrowed.
+SELECT format('REVOKE ALL ON SEQUENCE %s FROM %I; GRANT USAGE ON SEQUENCE %s TO %I',
+    pg_get_serial_sequence(format('public.%I', c.relname), a.attname), :'runtime_role',
+    pg_get_serial_sequence(format('public.%I', c.relname), a.attname), :'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid AND a.attidentity<>''
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN (
+    'order_sync_runs','marketplace_orders','marketplace_order_items','order_observations',
+    'order_status_observations','order_lifecycle_events','order_deadlines','order_sync_coverage',
+    'order_sync_memberships','order_read_snapshots','order_read_snapshot_rows')
+\gexec
+
+-- Review Facts overrides also follow all broad grants within this transaction.
+REVOKE ALL ON TABLE public.review_sync_runs_v2, public.review_facts,
+    public.review_observations, public.review_sync_run_items FROM :"runtime_role";
+-- Explicitly clear column rights before reinstating the INSERT allowlist.
+SELECT format('REVOKE ALL (%I) ON TABLE public.review_sync_runs_v2 FROM %I',
+    a.attname, :'runtime_role')
+FROM pg_attribute a WHERE a.attrelid='public.review_sync_runs_v2'::regclass
+    AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, UPDATE ON TABLE public.review_sync_runs_v2 TO :"runtime_role";
+GRANT INSERT (sync_run_id, organization_id, marketplace_account_id, marketplace,
+    source_run_id, request_checksum, status, completeness, started_at, completed_at,
+    observed_count, manifest_checksum, coverage, error_code, source_run_id_utf8, coverage_utf8)
+    ON public.review_sync_runs_v2 TO :"runtime_role";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.review_facts TO :"runtime_role";
+GRANT SELECT, INSERT ON TABLE public.review_observations, public.review_sync_run_items
+    TO :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.review_strict_utf8(bytea),
+    public.review_coverage_json_object_utf8(bytea) TO :"runtime_role";
+SELECT format('REVOKE ALL ON SEQUENCE %s FROM %I; GRANT USAGE ON SEQUENCE %s TO %I',
+    pg_get_serial_sequence('public.review_sync_runs_v2','run_sequence'), :'runtime_role',
+    pg_get_serial_sequence('public.review_sync_runs_v2','run_sequence'), :'runtime_role')
+\gexec
+
+-- Repricer overrides follow all broad grants inside the same atomic transaction.
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM (VALUES ('wb_repricer_price_approvals'),
+        ('wb_repricer_price_apply_attempts'),('wb_repricer_price_approval_audit')) t(name)
+        LEFT JOIN pg_class c ON c.oid=to_regclass('public.'||t.name)
+        WHERE c.oid IS NULL OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
+    THEN RAISE EXCEPTION 'repricer_forced_rls_required'; END IF;
+END $$;
+REVOKE ALL ON TABLE public.wb_repricer_price_approvals,
+    public.wb_repricer_price_apply_attempts, public.wb_repricer_price_approval_audit
+    FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON TABLE public.%I FROM PUBLIC, %I',
+    a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+    ('wb_repricer_price_approvals','wb_repricer_price_apply_attempts','wb_repricer_price_approval_audit')
+    AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, INSERT, UPDATE ON TABLE public.wb_repricer_price_approvals,
+    public.wb_repricer_price_apply_attempts TO :"runtime_role";
+GRANT SELECT, INSERT ON TABLE public.wb_repricer_price_approval_audit TO :"runtime_role";
+REVOKE ALL ON FUNCTION public.repricer_account_lock(), public.repricer_row_guard(),
+    public.repricer_validate() FROM PUBLIC, :"runtime_role";
+REVOKE ALL ON FUNCTION public.repricer_exact_text(text),
+    public.repricer_integral_finite(numeric), public.repricer_safe_code(text),
+    public.repricer_ascii_json_string(text), public.repricer_integer_decimal(numeric),
+    public.repricer_request_bytes(integer,integer,text,integer,numeric,text,numeric,smallint,numeric,numeric),
+    public.repricer_action_key(integer,integer,text,text),
+    public.repricer_dispatch_key(integer,integer,text,text,uuid), public.repricer_context_id(text)
+    FROM PUBLIC, :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.repricer_exact_text(text),
+    public.repricer_integral_finite(numeric), public.repricer_safe_code(text),
+    public.repricer_ascii_json_string(text), public.repricer_integer_decimal(numeric),
+    public.repricer_request_bytes(integer,integer,text,integer,numeric,text,numeric,smallint,numeric,numeric),
+    public.repricer_action_key(integer,integer,text,text),
+    public.repricer_dispatch_key(integer,integer,text,text,uuid), public.repricer_context_id(text)
+    TO :"runtime_role";
+
+COMMIT;
