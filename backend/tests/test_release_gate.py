@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -93,6 +94,10 @@ def test_release_gate_does_not_inherit_runtime_connections_or_flags(monkeypatch)
         "PYTEST_ADDOPTS": "--synthetic-injected-option",
         "NODE_OPTIONS": "--require=/synthetic/injected",
         "HTTPS_PROXY": "http://synthetic.invalid:80",
+        "PIP_CONFIG_FILE": "/synthetic/pip.conf",
+        "PGPASSFILE": "/synthetic/pgpass",
+        "PGSERVICEFILE": "/synthetic/pgservice",
+        "NETRC": "/synthetic/netrc",
     }
     for key, value in inherited.items():
         monkeypatch.setenv(key, value)
@@ -128,6 +133,8 @@ def test_release_gate_defaults_do_not_target_working_local_services():
     assert environment["HTTPS_PROXY"] == "http://127.0.0.1:1"
     assert environment["ALL_PROXY"] == "http://127.0.0.1:1"
     assert environment["NO_PROXY"] == "127.0.0.1,localhost,::1"
+    for name in ("PIP_CONFIG_FILE", "PGPASSFILE", "PGSERVICEFILE", "NETRC"):
+        assert environment[name] == os.devnull
 
 
 def test_release_gate_finds_frontend_in_its_own_worktree(monkeypatch, tmp_path):
