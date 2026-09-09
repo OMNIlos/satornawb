@@ -94,8 +94,27 @@ def _binding_candidate(
         )
     )
     if lock:
-        account_query = account_query.with_for_update()
-        token_query = token_query.with_for_update()
+        # Locate only the owner first, then follow publication's user→account→
+        # token order. Reassignment while waiting must not change that owner.
+        expected_owner = session.scalar(
+            select(LkUserWbTokenRow.user_id).where(
+                LkUserWbTokenRow.token_id == token_id,
+                LkUserWbTokenRow.organization_id == organization_id,
+            )
+        )
+        if expected_owner is None:
+            raise WbCredentialBindingError()
+        user = session.execute(
+            select(LkUserRow.user_id, LkUserRow.organization_id, LkUserRow.is_active)
+            .where(LkUserRow.user_id == expected_owner)
+            .with_for_update(read=True)
+        ).one_or_none()
+        if user is None or user.organization_id != organization_id or not user.is_active:
+            raise WbCredentialBindingError()
+        account_query = account_query.with_for_update().execution_options(populate_existing=True)
+        token_query = token_query.where(
+            LkUserWbTokenRow.user_id == expected_owner,
+        ).with_for_update(of=LkUserWbTokenRow)
     account = session.scalar(account_query)
     secret = (session.scalar(token_query) or "").strip()
     if account is None or not secret:
