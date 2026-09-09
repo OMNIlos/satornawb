@@ -5,7 +5,7 @@ import { build } from 'vite'
 import react from '@vitejs/plugin-react'
 import { expect, it } from 'vitest'
 
-it.each(['success', 'error', 'logout', 'pagination', 'pagination-error'] as const)('ignores stale repricer statistics: %s', async scenario => {
+it.each(['success', 'error', 'logout', 'pagination', 'pagination-error', 'latest-error'] as const)('isolates repricer statistics and aggregates: %s', async scenario => {
   const paginated = scenario.startsWith('pagination')
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const result = await build({
@@ -32,35 +32,53 @@ it.each(['success', 'error', 'logout', 'pagination', 'pagination-error'] as cons
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       if (url.pathname === '/wb/repricer/stats') return route.fulfill({ contentType: 'text/html', body:
-        '<title>Synthetic repricer statistics</title><button id="reload">Reload filtered statistics</button><button id="logout">Clear test session</button><section id="tab-repricer-stats"><div class="search"><input></div><table><tbody id="repricerStatsBody"></tbody></table><div data-filter-summary><span></span></div></section>' })
+        '<title>Synthetic repricer statistics</title><button id="reload">Reload filtered statistics</button><button id="logout">Clear test session</button><section id="tab-repricer-stats"><div class="search"><input></div><div class="stats">' + Array.from({ length: 4 }, () => '<div class="stat"><span class="stat-val">STALE-KPI</span><span class="stat-delta up down neutral">STALE-DELTA</span></div>').join('') + '</div><table><tbody id="repricerStatsBody"></tbody></table><div data-filter-summary><span>STALE-SUMMARY</span></div></section>' })
       if (url.pathname === '/favicon.ico') return route.fulfill({ status: 204 })
       if (url.pathname !== '/api/v1/wb-repricer/stats') { unexpected.push(url.pathname); return route.abort() }
       const query = url.searchParams.get('q') ?? ''
       const pageNumber = Number(url.searchParams.get('page'))
       requests.push([query, pageNumber])
+      if (query && scenario === 'latest-error') return route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":{"code":"SYNTHETIC_ERROR"}}' })
       if (!query && (!paginated || pageNumber === 2)) await firstGate
       if (!query && (scenario === 'error' || scenario === 'pagination-error' && pageNumber === 2)) return route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":{"code":"SYNTHETIC_ERROR"}}' })
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
         items: [{ articleId: query ? 'NEWER-SKU' : 'OLDER-SKU', nmId: 101, name: 'Synthetic product',
           brand: 'Synthetic', managerName: '', metrics: {}, decision: {}, sources: {}, priceProtection: {}, flags: [] }],
         total: !query && paginated ? 501 : 1, itemsReturned: 1, page: pageNumber, pageSize: 500,
+        summary: { baskets: query ? 902 : 401, orders: 10 },
       }) })
     })
     await page.goto('http://satorna.test/wb/repricer/stats')
     await page.addScriptTag({ content: bundle.code })
     await expect.poll(() => requests.length).toBe(paginated ? 2 : 1)
+    if (!paginated) {
+      expect(await page.locator('.stat-val').allTextContents()).toEqual(['—', '—', '—', '—'])
+      expect(await page.locator('[data-filter-summary] span').innerText()).toBe('')
+    }
     await page.getByRole('button', { name: 'Reload filtered statistics', exact: true }).click()
-    await page.getByText('NEWER-SKU', { exact: true }).waitFor({ state: 'visible' })
+    if (scenario === 'latest-error') await page.getByText('Статистика репрайсера недоступна', { exact: false }).waitFor({ state: 'visible' })
+    else {
+      await page.getByText('NEWER-SKU', { exact: true }).waitFor({ state: 'visible' })
+      expect(await page.locator('.stat-val').first().innerText()).toBe('902')
+    }
     if (scenario === 'logout') await page.getByRole('button', { name: 'Clear test session', exact: true }).click()
     releaseFirst()
     await page.waitForFunction(() => document.body.dataset.firstSettled === 'true')
-    expect(await page.getByText('NEWER-SKU', { exact: true }).count()).toBe(scenario === 'logout' ? 0 : 1)
+    expect(await page.getByText('NEWER-SKU', { exact: true }).count()).toBe(scenario === 'logout' || scenario === 'latest-error' ? 0 : 1)
     expect(await page.getByText('OLDER-SKU', { exact: true }).count()).toBe(0)
+    if (scenario === 'latest-error' || scenario === 'logout') {
+      expect(await page.locator('.stat-val').allTextContents()).toEqual(['—', '—', '—', '—'])
+      expect(await page.locator('[data-filter-summary] span').innerText()).toBe('')
+    }
     expect(await page.title()).toBe('Synthetic repricer statistics')
     if (scenario === 'success') await page.screenshot({ path: '/tmp/satorna-t4-repricer-stats-race.png' })
     await page.getByRole('button', { name: 'Clear test session', exact: true }).click()
     expect(await page.getByText('NEWER-SKU', { exact: true }).count()).toBe(0)
     expect(await page.locator('#repricerStatsBody').innerText()).toContain('Статистика репрайсера недоступна')
+    expect(await page.locator('.stat-val').allTextContents()).toEqual(['—', '—', '—', '—'])
+    expect(await page.locator('.stat-delta').allTextContents()).toEqual(['', '', '', ''])
+    expect(await page.locator('.stat-delta.up, .stat-delta.down, .stat-delta.neutral').count()).toBe(0)
+    expect(await page.locator('[data-filter-summary] span').innerText()).toBe('')
     expect(requests).toEqual(paginated ? [['', 1], ['', 2], ['second', 1]] : [['', 1], ['second', 1]])
     expect(unexpected).toEqual([])
     expect(errors).toEqual([])

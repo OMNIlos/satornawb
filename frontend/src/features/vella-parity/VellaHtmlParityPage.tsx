@@ -2278,12 +2278,26 @@ function renderLiveRepricerStats(payload: LiveRepricerStatsResponse) {
   window.initTooltips?.()
 }
 
+function clearLiveRepricerStatsAggregates() {
+  const tab = document.getElementById('tab-repricer-stats')
+  if (!tab) return
+  tab.querySelectorAll<HTMLElement>('.stats .stat-val').forEach(value => { value.textContent = '—' })
+  tab.querySelectorAll<HTMLElement>('.stats .stat-delta').forEach(delta => {
+    delta.textContent = ''
+    delta.classList.remove('up', 'down', 'neutral')
+  })
+  const summary = tab.querySelector<HTMLElement>('[data-filter-summary] span')
+  if (summary) summary.textContent = ''
+}
+
 function renderLiveRepricerStatsLoading() {
+  clearLiveRepricerStatsAggregates()
   const body = document.getElementById('repricerStatsBody')
   if (body) body.innerHTML = '<tr data-report-row="1"><td colspan="13"><div class="report-empty-note visible">Загружаю статистику товаров...</div></td></tr>'
 }
 
 function renderLiveRepricerStatsError(error: unknown) {
+  clearLiveRepricerStatsAggregates()
   const body = document.getElementById('repricerStatsBody')
   const message = error instanceof Error ? error.message : 'Не удалось загрузить статистику репрайсера'
   if (body) body.innerHTML = `<tr data-report-row="1"><td colspan="13"><div class="report-empty-note visible">Статистика репрайсера недоступна: ${escapeHtml(message)}</div></td></tr>`
