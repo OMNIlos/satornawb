@@ -114,6 +114,13 @@ class ReviewFactSnapshot:
     source_order_state: str
     last_source_run_sequence: int
     current_observation_id: UUID
+    answered: bool
+    content_checksum: str
+    external_product_id: str | None
+    source_created_at: datetime
+    source_updated_at: datetime | None
+    source_schema_version: str
+    normalization_version: str
 
 
 class ReviewFactsRepository:
@@ -415,6 +422,13 @@ class ReviewFactsRepository:
                 row["source_order_state"],
                 row["last_source_run_sequence"],
                 row["current_observation_id"],
+                observation["answered"],
+                observation["content_checksum"],
+                observation["external_product_id"],
+                observation["source_created_at"],
+                observation["source_updated_at"],
+                observation["source_schema_version"],
+                observation["normalization_version"],
             )
 
     def ingest(

@@ -25,7 +25,8 @@ must perform the consolidated integration review; no independent final approval
 or shared-app registration is claimed here. Frontend430/0/0 is separate evidence.
 
 Historical-binding blocker at the end of this document is closed for repository
-and guarded ingestion by27c227e, not for an unimplemented public read endpoint.
+and guarded ingestion by27c227e; the later dormant single-fact read below also
+checks this boundary, but is not registered in the shared application.
 Real legacy shadow activation, production flags, live sends and deployments
 remain absent. Local draft/send/notification implementation must not be blocked
 merely by missing real production credentials or observation windows.
@@ -60,6 +61,58 @@ and no claim of automatic recovery. Root final independent integration review
 remains; the frozen77abab0 milestone input is not silently replaced by this work.
 
 ## Scope and registration request
+
+### Later canonical single-fact read (separate from frozen77abab0)
+
+T1 registration input: `app.reviews.canonical_read.router`,
+`GET /api/v2/reviews/wb/fact?marketplace_account_id=...&external_review_id=...`.
+This is a single WB fact, not a list/queue, Avito endpoint, frontend cutover or
+send capability. No shared registration/config/schema change by T4. It uses the
+existing default-off exact-pair Review selector and independently requires live
+`reviews:read`; ingestion's write permission does not substitute for read access.
+
+The Engine-owned PostgreSQL root discovers membership/account metadata only,
+then acquires the existing publication guard with no credential authorities.
+Current user, membership, session, account scope/status and binding are locked
+and revalidated before reading repository evidence and before root completion.
+No credential decryption/provider request, legacy repository access or domain
+write occurs. Guard metadata locks serialize with account changes; this is not
+a lock-free/high-throughput read claim. Actual shared authentication may update
+session `last_seen_at`, as with the sync route. The repository validates immutable
+historical binding and checksum before returning text; rebind returns conflict,
+never old text under the new binding.
+
+Response `schema_version=canonical-review-fact-v1`: organization/account IDs,
+marketplace `wb`, external Review ID, Review/observation UUIDs, version/revision
+as positive decimal strings (lossless for JavaScript), nullable exact text,
+answered/can_answer, source_order_state current/ambiguous, content checksum,
+external product ID, source created/updated timestamps and source/normalization
+versions. `can_answer` is source evidence, not authorization or send eligibility;
+ambiguous is not silently promoted to current. No freshness guarantee, pagination,
+rating/UI-detail parity or fabricated missing source metadata is claimed.
+
+Standalone errors use `detail.code`:401 REVIEW_READ_AUTHENTICATION_REQUIRED;
+403 REVIEW_READ_DENIED;409 REVIEW_READ_DISABLED/REVIEW_READ_CONFLICT;
+400 REVIEW_READ_INVALID;404 REVIEW_READ_NOT_FOUND;
+503 REVIEW_READ_STORAGE_UNAVAILABLE/REVIEW_READ_CONFIGURATION_INVALID.
+Query validation uses standard422. Shared app uses its existing error envelope
+and sanitized validation handler described below; its acceptance belongs to T1.
+
+Evidence: missing-module pure RED1FAIL -> disabled read GREEN1PASS with every
+network action denied. Final read14 + canonical HTTP21 + run-binding17 + shadow19
+= **71PASS,2warnings,18.28s**, naturalexit0, four owned disposable databases/roles
+verified absent after cleanup. Cases include signed bearer and live revocation,
+wrong provider/tenant denied before body query, rebind409, null/empty/NUL exactness,
+SQL capture with zero INSERT/UPDATE/DELETE and rv_review_* access, safe503/404/422.
+Large-version HTTP projection wraps a real validated repository snapshot with a
+synthetic BIGINT version; it does not claim billions of database CAS transitions.
+Two diagnostic runs failed only that new fixture: first its text-ID UPDATE matched
+no lossless BYTEA identity; then an exact-ID UPDATE was correctly rejected by the
+database monotonic-version guard. The final projection fixture preserves both
+constraints; no trigger or migration was weakened. Scoped Ruff/diff checks pass.
+Main-agent critical pass checked auth-before-body, historical provenance, transaction
+completion, wire precision, safe errors and these evidence limits. Root independent
+integration review remains. This addition does not silently move frozen77abab0.
 
 Coordinator explicitly approved canonical-only explicit-account sync. It must not
 feed the global legacy Review store. This supersedes dual-consumer shadow for this
