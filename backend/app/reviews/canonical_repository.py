@@ -16,6 +16,11 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.platform.integrations.orm import MarketplaceAccountRow
+from app.reviews.canonical_contract import (
+    ExternalReviewIdentity,
+    ReviewNormalizationError,
+    validate_review_source_run_id,
+)
 from app.reviews.canonical_orm import (
     CanonicalReviewFactRow,
     CanonicalReviewObservationRow,
@@ -125,11 +130,12 @@ class ReviewFactsRepository:
     def reserve_run(
         self, *, source_run_id: str, request_checksum: str, started_at: datetime
     ) -> ReviewRunReference:
+        try:
+            source_run_id = validate_review_source_run_id(source_run_id)
+        except ReviewNormalizationError:
+            raise ReviewRepositoryError() from None
         if (
-            not isinstance(source_run_id, str)
-            or not source_run_id
-            or source_run_id != source_run_id.strip()
-            or not isinstance(request_checksum, str)
+            not isinstance(request_checksum, str)
             or re.fullmatch("[0-9a-f]{64}", request_checksum) is None
         ):
             raise ReviewRepositoryError()
@@ -204,6 +210,15 @@ class ReviewFactsRepository:
     def get_fact(self, external_review_id: str) -> ReviewFactSnapshot | None:
         if not isinstance(external_review_id, str) or not external_review_id:
             raise ReviewRepositoryError()
+        try:
+            external_review_id = ExternalReviewIdentity(
+                self.owner.organization_id,
+                self.owner.marketplace_account_id,
+                self.owner.marketplace,
+                external_review_id,
+            ).external_review_id
+        except ReviewNormalizationError:
+            raise ReviewRepositoryError() from None
         with self._command():
             row = self._identity(external_review_id)
             if row is None:
