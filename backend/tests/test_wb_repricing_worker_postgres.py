@@ -127,8 +127,16 @@ def job(worker_db, monkeypatch, request):
     credential_store.put_marketplace_credential(
         account_owner, "wb_api", {"token": "synthetic-worker-token"}
     )
-    # Actual paired credential store on a dedicated login, never SET ROLE.
-    monkeypatch.setattr(credential_store, "get_session_factory", lambda: worker_factory)
+    # Dedicated adapter must never consult the public/global API factory.
+    def forbidden_global_factory():
+        raise AssertionError("executor-used-global-credential-factory")
+
+    monkeypatch.setattr(credential_store, "get_session_factory", forbidden_global_factory)
+    resolver = credential_store.make_executor_credential_resolver(
+        session_factory=worker_factory,
+        keyring_loader=lambda: CredentialKeyring(current_key_version=1, keys={1: b"s" * 32}),
+        identity=identity,
+    )
     login = uuid4().hex
     with owner.begin() as connection:
         connection.execute(
@@ -176,7 +184,7 @@ def job(worker_db, monkeypatch, request):
         executor_session_factory=worker_factory,
         identity=identity,
         policy=policy,
-        credential_resolver=credential_store.resolve_marketplace_credential_for_fetch,
+        credential_resolver=resolver,
     )
     calls, lock = [], Lock()
 
