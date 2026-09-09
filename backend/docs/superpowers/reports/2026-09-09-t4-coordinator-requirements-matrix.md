@@ -1,6 +1,33 @@
 # T4 — requirement → commit → evidence → remaining work
 
-## Current checkpoint: dormant shadow composition after c125a54
+## Current checkpoint: frontend response isolation; Review historical binding open
+
+Dormant Orders wire preparation (commit recorded in Git history with this matrix):
+canonicalOrders.ts strict typeddecoder and URLbuilder, nofetch/UIactivation/print
+inference. T3da7e017 wire unchanged throughab272ee, directlyconfirmed. ActualT3
+Pydantic JSON golden matches; independentcritic found2P2s, actual4RED fixed precise
+microseconds/WBmandatoryevidence. Additional Python/JSwhitespace mismatch2RED fixed
+without identitynormalization, critic independentlymatched Python Unicodewhitespace.
+Finalfocused115PASS(59Orders+56ABC), broadpre-whitespacefix345PASS/21samefailedIDs/0pending
+versus288/21. TypeScript/build passed pre-finaltextboundary; finaltsc exits0 as well.
+No activatedclient or queue; sharedregistration/historybinding/queryregistry/rollout
+and Productioncapabilities remain gates. Fullreport frontend/docs/superpowers/reports/
+2026-09-09-t4-orders-wire-adapter.md. No root per-slice message requested.
+
+Frontend311458a prevents stale Repricer first/page2 success/error from changing
+newer results after reload/disposal. Follow-up5256f77 clears stale KPI/deltas/filter
+summary during loading/error/logout. Actual browser RED→GREEN, final6focusedPASS;
+full288PASS/21samefailedIDs/0pending (previous282/21 before both slices), TypeScript
+and Vitebuild0, independentcriticPASS. Reports2026-09-09-t4-repricer-stats-response-isolation.md
+and2026-09-09-t4-repricer-stats-aggregate-clearing.md are under frontend/docs/superpowers/reports.
+Synthetic actualbridge tests, not wholeReact/auth lifecycle or production proof.
+Root requested local-matrix checkpoints only, no per-slice integration/messages.
+
+T3 accepted dormant read wire866d1a1 + bigint-string correctionda7e017:
+GET/api/v2/orders, snapshot_id and row_version decimal strings. T4 independently
+ran10pure wiretests. Typed frontend preparation may proceed without activation;
+public integration remains dependent on approved immutable sourcebinding service
+and single-owner rollout. No invented filtering/capability/print semantics.
 
 Historical binding request/witness1a3d344 supersedes any broader read readiness:
 actual1PGcase3.08s demonstrates oldbody after completedaccountrebind under freshguard.
