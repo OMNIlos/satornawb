@@ -9,9 +9,10 @@ not proof of unbounded-key storage.
 ## Evidence and choice
 
 Own disposable PostgreSQL16.15 reproduced SQLSTATE54000 for4096-byte incompressible
-synthetic external_order_id, source_line_key and source_run_key; the pure identities
-and SQL exact-text validator accept them. Six ordinary/ON CONFLICT inserts failed;
-rollback preserved all11table counts, three short-key insert/replay controls passed.
+synthetic external_order_id, source_line_key, source_run_key and source_event_key;
+the pure identities and SQL exact-text validator accept them. Eight ordinary/ON
+CONFLICT inserts failed; rollback preserved all11table counts, four short-key
+insert/replay controls passed.
 T3 `8f5603f47de305b0575cb5e65ed2e24f56485475:app/orders/evidence_repository.py:88`
 depends on the original raw external-order conflict target. Exact account lock
 visibility probe sees the prior winner after wait under RC, but not RR.
