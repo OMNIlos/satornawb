@@ -263,6 +263,8 @@ def test_nonempty_downgrade_refuses_before_destructive_ddl(populated, hidden):
     with owner.connect() as c:
         transaction = c.begin()
         try:
+            before_revision = c.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one()
+            before_rows = snapshot(c)
             if hidden:
                 for table in TABLES:
                     c.exec_driver_sql(f"ALTER TABLE {table} OWNER TO {runtime.url.username}")
@@ -279,7 +281,11 @@ def test_nonempty_downgrade_refuses_before_destructive_ddl(populated, hidden):
     with owner.connect() as c:
         for table in TABLES:
             assert c.execute(text("SELECT to_regclass(:t)"), {"t": table}).scalar_one() is not None
-        assert c.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == TARGET
+        # This calls the historical0071 downgrade directly inside a rolled-back
+        # root, not an Alembic chain downgrade. The actual-head fixture's version
+        # and data must remain exactly as observed, not be rewritten to0071.
+        assert c.exec_driver_sql("SELECT version_num FROM alembic_version").scalar_one() == before_revision
+        assert snapshot(c) == before_rows
 
 
 def test_unrelated_helper_overload_acl_survives_upgrade_and_runtime_script(cluster):
@@ -310,10 +316,20 @@ def test_unrelated_helper_overload_acl_survives_upgrade_and_runtime_script(clust
             assert result.returncode == 0, result.stderr
             with owner.connect() as c:
                 after_upgrade = snapshot(c)
+            # Preserve the exact0071 historical check, then install actual head
+            # before invoking today's fail-closed runtime grants. Missing future
+            # canonical tables at0071 are not evidence of a grants-script bug.
+            assert after_upgrade == before
+            result = candidate.migrate(database.url, "upgrade", "head")
+            assert result.returncode == 0, result.stderr
+            with owner.connect() as c:
+                after_head = snapshot(c)
             result = runtime_script(owner, runtime_role)
             assert result.returncode == 0, result.stderr
             with owner.connect() as c:
                 after_runtime = snapshot(c)
-            assert {"upgrade": after_upgrade, "runtime": after_runtime} == {"upgrade": before, "runtime": before}
+            assert {"upgrade": after_upgrade, "head": after_head, "runtime": after_runtime} == {
+                "upgrade": before, "head": before, "runtime": before,
+            }
         finally:
             owner.dispose()

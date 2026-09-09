@@ -1028,16 +1028,36 @@ def test_waited_account_change_is_rechecked_before_receipt_or_mutation(db, chang
     if operation != "UPDATE" or table not in HEADS
 ])
 def test_immutable_operations_reject_even_empty_statements(db, table, operation):
-    # All reciprocal FK participants must be named for PostgreSQL to reach the
-    # BEFORE STATEMENT trigger. Put the targeted table first, never use CASCADE.
-    truncation = ",".join((table, *(other for other in TABLES if other != table)))
-    sql = {"DELETE": f"DELETE FROM {table} WHERE false", "TRUNCATE": f"TRUNCATE {truncation}",
-           "UPDATE": f"UPDATE {table} SET organization_id=organization_id WHERE false"}[operation]
     with db[0].connect() as c:
         transaction = c.begin()
         try:
             scope(c)
             before = snapshot(c)
+            if operation == "TRUNCATE":
+                # The runtime fixture uses actual head:0074 adds referencing
+                # children outside the original0071 table list. Explicitly name
+                # its FK closure in this owned database to reach the TARGET's
+                # immutable trigger, not merely PostgreSQL's earlier FK denial.
+                # Keep23514/message assertions below; never use CASCADE or alter
+                # any constraint/trigger to make the test reach the guard.
+                relations = c.execute(text("""
+                    WITH RECURSIVE closure(oid) AS (
+                        SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                        WHERE n.nspname='public' AND c.relname=ANY(:tables)
+                        UNION
+                        SELECT fk.conrelid FROM pg_constraint fk JOIN closure parent
+                            ON fk.confrelid=parent.oid WHERE fk.contype='f'
+                    )
+                    SELECT format('%I.%I',n.nspname,c.relname)
+                    FROM closure JOIN pg_class c ON c.oid=closure.oid
+                    JOIN pg_namespace n ON n.oid=c.relnamespace
+                    ORDER BY (n.nspname='public' AND c.relname=:target) DESC,n.nspname,c.relname
+                """), {"tables": list(TABLES), "target": table}).scalars().all()
+                assert relations and relations[0] == f"public.{table}"
+                sql = "TRUNCATE " + ",".join(relations)
+            else:
+                sql = (f"DELETE FROM {table} WHERE false" if operation == "DELETE"
+                       else f"UPDATE {table} SET organization_id=organization_id WHERE false")
             with pytest.raises(DBAPIError) as caught:
                 c.exec_driver_sql(sql)
             assert caught.value.orig.sqlstate == "23514"
