@@ -22661,7 +22661,7 @@ function applyGenericReportFilter(tab){
   const manager = managerFilterValue(tab);
   const sku = skuFilterValue(tab);
   tab.querySelectorAll('tbody tr[data-report-row]').forEach(row => {
-    const searchText = (row.dataset.search || rowText(row)).toLowerCase();
+    const searchText = ((row.dataset.search || rowText(row)) + (tab.id === 'tab-week' ? ' ' + (row.dataset.productStatus || '') : '')).toLowerCase();
     const queryOk = !query || searchText.includes(query);
     const managerKey = row.dataset.managerId === 'unassigned' ? null : (row.dataset.managerId || managerIdFromCode(row.dataset.manager));
     const managerOk = managerFilterMatches(managerKey, manager);

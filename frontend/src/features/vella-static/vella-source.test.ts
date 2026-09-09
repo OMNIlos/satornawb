@@ -610,7 +610,7 @@ describe('vella source of truth', () => {
         { query: 'tab=digest&mode=period', expected: ['Бренды: Все', 'План-факт маржинальной прибыли', 'Выручка', 'Маржа'], absent: ['Воронка WB: путь от показа до денег', 'Состояние данных', 'Оперативный день', 'Детализация', 'Статусы ниже порогов', 'Критичные события и очередь действий', 'Оперативный монитор'] },
         { query: 'tab=abc', expected: ['ABC-анализ', 'Себестоимость', 'Чистая прибыль по статусам', 'Порог фиксирован: 20/30/50', '+12% к периоду'], absent: ['COGS', 'ОБЦ'] },
         { query: 'tab=rnp', expected: ['Ниже порога', 'Позиция', 'Комментарий', 'Правило', 'Добавить'], absent: ['Склад Казань', 'Комментарии SKU', 'Логи действий'] },
-        { query: 'tab=pnl', expected: ['Налоговая база', 'Себестоимость', 'Позиция', 'Комментарий'], absent: ['Финансовая логика ждёт подтверждения', 'ждёт подтверждения', 'COGS', 'ждём Максима', 'placeholder'] },
+        { query: 'tab=pnl', expected: ['Налог', 'Себестоимость', 'Позиция', 'Комментарий'], absent: ['Финансовая логика ждёт подтверждения', 'ждёт подтверждения', 'COGS', 'ждём Максима', 'placeholder'] },
         { query: 'tab=ads', expected: ['Все менеджеры', 'Все SKU', 'РК', 'Тип РК', 'Позиция', 'Комментарий', 'детализация до ключевых фраз'], absent: ['Поиск · Футболка', 'draft', 'API discovery'] },
         { query: 'tab=stock', expected: ['Остаток WB', 'От клиента', 'К клиенту', 'Доступно', 'Средний КТР', 'Позиция', 'Комментарий'], absent: ['Мария подтвердила', 'по таблице локализации Марии'] },
         { query: 'tab=week', expected: ['SKU ниже порогов', 'был ОС', 'Наличие 7 дней', 'Позиция', 'Комментарий'], absent: ['Неделя-к-неделе: включаемые метрики'] },
@@ -624,6 +624,7 @@ describe('vella source of truth', () => {
         const text = await page.locator('body').innerText()
         const normalized = text.toLocaleLowerCase('ru-RU')
         for (const expected of scenario.expected) expect(normalized).toContain(expected.toLocaleLowerCase('ru-RU'))
+        if (scenario.query === 'tab=pnl') expect((await page.locator('#tab-pnl thead').innerText()).toLocaleLowerCase('ru-RU')).toContain('налог')
         for (const absent of scenario.absent) expect(normalized).not.toContain(absent.toLocaleLowerCase('ru-RU'))
         for (const forbidden of ['Корзины и показы есть', 'просели', 'следим', 'динамика нормальная', 'разобрать маржу', 'требуют приоритета', 'поднять цену', 'в ликвидацию', 'стоп РК']) {
           expect(normalized).not.toContain(forbidden.toLocaleLowerCase('ru-RU'))

@@ -12349,7 +12349,7 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
         </thead>
         <tbody data-vella-island="week-table-body" data-vella-island-status="explicit-jsx" data-vella-row-count={rows.length}>
           {visibleRows.map((row, index) => (
-            <tr key={`${row.sku ?? 'sku'}-${index}`} data-report-row="week">
+            <tr key={`${row.sku ?? 'sku'}-${index}`} data-report-row="week" data-product-status={row.productStatus ?? undefined}>
               <td className="report-sticky">
                 <ReportProductCell
                   photoUrl={weekProductPhoto(row)}
