@@ -70,7 +70,7 @@ def _text(value, *, maximum=4096, optional=False):
 def _timestamp(value):
     _text(value, maximum=64)
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         parsed = None
     if parsed is None or parsed.utcoffset() is None:

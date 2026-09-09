@@ -7,6 +7,7 @@ from uuid import UUID
 
 import httpx
 import pytest
+
 from app.platform.integrations.credential_store import (
     CredentialFetchBinding,
     MarketplaceAccountCredentialOwner,
