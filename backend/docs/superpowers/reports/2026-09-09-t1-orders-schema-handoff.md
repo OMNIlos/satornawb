@@ -177,3 +177,29 @@ Self-review выполнен по исходному brief и реальным D
 глобальный preflight-critic SKILL.md отсутствует (поиск альтернатив не нашёл),
 поэтому проведён самостоятельный Critic Pass по checklist AGENTS.md; отдельного
 subagent/reviewer по поручению не запускали. Независимый review выполняет контроллер.
+
+## Controller acceptance, 2026-09-09
+
+Implementation `f9c7401d946063465e0576a689eb247c368eed73`; controller plan amendments
+`665bb71ff6c1ac1155e3af7a5d427976c1f6023b`; style-only followups
+`d5e990106007d7b8661e026b49b445b9b5289d39` and
+`1514425516d5f24b53e5956912e93da1e2682ede`. SQL constants remain byte-identical.
+
+Controller independently repeated the exact Unix-only command above: **101 passed
+in94.68s, exit0**, with exact allocated DB/role absence checks. Fresh independent
+committed-code/spec review `3ffb738..665bb71` found no Critical/Important defects.
+Separate coordinator independently reproduced101PASS145.64s at immutablef9c7401.
+These are schema gates only, not T3 repository/publication acceptance.
+
+Adjacent hermetic T1 checks (credential API/crypto/store, release/bootstrap/wheel,
+heartbeat/health/scheduler, OpenAPI/contracts, static runtime/migration) returned
+**272 passed,6warnings22.99s, exit0**, versus the preceding265-case set plus7static
+checks. No full-suite baseline claim. Four duplicate OpenAPI IDs remain an owned
+followup; two dependency deprecations are unchanged. Controller compileall
+app/tests/alembic/release_gate and diff-check returned0.
+
+The new server-issued Review Facts sequence, separate T2 three-table DDL and
+session-participating user/session/membership/account/credential publication guard
+are independent following prerequisites, not provided by0062. Worker delegation
+and domain publication permission must not be guessed. KIZ/matcher allocation is
+excluded by the latest explicit user scope; no unrelated deletion performed.

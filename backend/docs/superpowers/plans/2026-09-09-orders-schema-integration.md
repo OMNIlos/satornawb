@@ -27,6 +27,7 @@
 - Modify: `backend/app/platform/catalog/orm.py` (только три constraints кандидата).
 - Modify: `backend/ops/runtime-db-role.sql` (Orders FORCE RLS guard and explicit least-privilege overrides after existing broad grants).
 - Modify: `backend/tests/test_orders_schema_candidate.py` (сохранить acceptance scenarios, перенести их на actual revision, безопасный fixture cleanup).
+- Modify: `backend/tests/test_marketplace_credential_rls.py` (только два isolated-fixture upgrade targets: moving head → точный0061).
 - Create: `backend/tests/test_orders_schema_integration.py` (integration/ORM/grants/actual chain and populated synthetic Catalog tests).
 - Create: `backend/docs/superpowers/reports/2026-09-09-t1-orders-schema-handoff.md` (точные зависимости/доказательства/limits).
 
@@ -37,7 +38,10 @@
 - [ ] Step 1: Write RED for actual head/three ORM anchors/least-privilege grants. Example:
 
 ```python
-assert ScriptDirectory.from_config(config).get_heads() == ['20260909_0062']
+scripts = ScriptDirectory.from_config(config)
+assert len(scripts.get_heads()) == 1
+assert scripts.get_revision('20260909_0062').down_revision == '20260908_0061'
+assert '20260909_0062' in {r.revision for r in scripts.walk_revisions()}
 assert 'uq_orders_product_account' in {x.name for x in MarketplaceProductRow.__table__.constraints}
 assert 'fk_orders_offer_product_account' in {x.name for x in MarketplaceOfferRow.__table__.constraints}
 assert 'uq_orders_offer_product_account' in {x.name for x in MarketplaceOfferRow.__table__.constraints}
@@ -73,8 +77,26 @@ preexisting broad owner defaults immediately after upgrade, before runtime scrip
 add a selective-role no-widening regression. This is additive ACL hardening; the
 candidate structural DDL is unchanged.
 
+Runtime grant script also runs as one explicit transaction: BEGIN after
+ON_ERROR_STOP and COMMIT after all guards/grants/narrow revokes. This prevents
+intermediate broad grants becoming externally visible. Add a failure-rollback or
+two-session visibility regression using the actual script on a disposable DB.
+Document standalone psql invocation, not nesting in another transaction or -1.
+
 - [ ] Step 4: Adapt candidate tests from unregistered wrapper/standalone SQL to actual migration. Preserve all 39 original acceptance cases and cover actual active head from empty DB (no stamp), upgrade0061→0062 with populated synthetic Catalog, empty0062→0061→0062, nonempty+hidden-RLS downgrade refusal leaving version/schema/data intact, invalid preexisting Catalog pairing atomic upgrade failure, source/adapter/run and org/account FKs, immutable history, sealed snapshot payloads, two-session replay unique/CAS. Actual runtime role NOSUPERUSER/NOBYPASSRLS/NOINHERIT. Snapshot/provider semantics remain T3 obligations.
+
+Adjacent regression: isolated credential RLS fixture creates only two parent tables
+and stamps0060. Its two `command.upgrade(config, 'head')` calls must target0061,
+not new Orders/Catalog DDL. Preserve all credential assertions; focused target
+regression belongs in test_orders_schema_integration.py. This does not claim a
+native credential-cluster execution. Actual empty full-chain proof remains separate.
+
+Orders fixtures and feature roundtrips target the registered0062 revision, not
+moving head, so later independent migrations do not corrupt this bounded fixture.
+Graph test checks one actual head and0062 in its ancestry; record exact head at
+verification time (initially0062). Central release gate owns future moving-head
+empty chain testing. No temporary unregistered wrapper or stamp substitute.
 
 - [ ] Step 5: GREEN full scoped `tests/test_orders_schema_candidate.py tests/test_orders_schema_integration.py tests/test_orders_contract.py`, then compileall changed source/tests/alembic and diff check. Report exact invocation/env isolation, counts/exits, DB engine/server version (no application inspection), cleanup proof and limits. Do not run unrelated full suite with services or pretend package-wide baseline parity.
 
-- [ ] Step 6: Self-review and commit migration+anchors+grants+tests+handoff as a bounded schema commit. Controller independently reviews and reruns. T3 waits for coordinator acceptance; T2 still owes exact durable reserve/dispatch amendment, not enabled by Orders.
+- [ ] Step 6: Self-review and commit migration+anchors+grants+tests+handoff as a bounded schema commit. Controller independently reviews and reruns. T3 waits for coordinator acceptance. T2 exact durable reserve/dispatch amendment is now received at `ccaed3410e32c50b3604f02e5b1171fd7243ce49`; its separate DDL is not enabled by Orders.

@@ -10,12 +10,31 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 
-from tests import test_orders_schema_candidate as candidate
 from app.platform.catalog.orm import MarketplaceOfferRow, MarketplaceProductRow
+from tests import test_orders_schema_candidate as candidate
 
 cluster = candidate.cluster
-db = candidate.db
 MUTABLE = {"order_sync_runs", "marketplace_orders", "marketplace_order_items"}
+
+
+@pytest.fixture(scope="module")
+def db(cluster):
+    """Actual shared grant script uses latest schema; Orders feature stays 0062."""
+    role = "orders_script_" + uuid4().hex
+    with candidate.disposable_database(cluster, (role,)) as database:
+        result = candidate.migrate(database.url, "upgrade", "head")
+        assert result.returncode == 0, result.stderr
+        owner = create_engine(database.url)
+        runtime = create_engine(owner.url.set(username=role))
+        try:
+            with owner.begin() as c:
+                c.exec_driver_sql("INSERT INTO lk_organizations(organization_id,slug,name) VALUES (91001,'orders-script-one','Synthetic'),(91002,'orders-script-two','Synthetic')")
+                c.exec_driver_sql("""INSERT INTO marketplace_accounts(marketplace_account_id,organization_id,marketplace,external_account_id,status)
+                    VALUES (91101,91001,'avito','synthetic-a','connected'),(91102,91001,'avito','synthetic-b','connected'),(91201,91002,'wb','synthetic-c','connected')""")
+            yield owner, runtime
+        finally:
+            runtime.dispose()
+            owner.dispose()
 
 
 def runtime_script(owner, role, *, fail_after_broad=False):
@@ -38,15 +57,15 @@ def assert_narrow_privileges(connection, role):
     for table in candidate.TABLES:
         for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"):
             actual = connection.execute(text("SELECT has_table_privilege(:role,:table,:privilege)"),
-                                        dict(role=role, table=table, privilege=privilege)).scalar_one()
+                                        {"role": role, "table": table, "privilege": privilege}).scalar_one()
             assert actual == (privilege in {"SELECT", "INSERT"} or (privilege == "UPDATE" and table in MUTABLE)), (table, privilege)
         sequence = connection.execute(text("""SELECT pg_get_serial_sequence(:table, a.attname)
             FROM pg_attribute a WHERE a.attrelid=to_regclass(:table) AND a.attidentity<>''"""),
             {"table": table}).scalar_one()
         assert connection.execute(text("SELECT has_sequence_privilege(:role,:sequence,'USAGE')"),
-                                  dict(role=role, sequence=sequence)).scalar_one()
+                                  {"role": role, "sequence": sequence}).scalar_one()
         assert not connection.execute(text("SELECT has_sequence_privilege(:role,:sequence,'UPDATE')"),
-                                      dict(role=role, sequence=sequence)).scalar_one()
+                                      {"role": role, "sequence": sequence}).scalar_one()
 
 
 def test_runtime_script_limits_orders_privileges(db):
@@ -87,8 +106,8 @@ def test_upgrade_narrows_inherited_defaults_without_widening_select_only_role(cl
                 assert_narrow_privileges(c, broad)
                 for table in candidate.TABLES:
                     for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "SELECT WITH GRANT OPTION"):
-                        assert not c.execute(text("SELECT has_table_privilege(:role,:table,:privilege)"), dict(role=reader, table=table, privilege=privilege)).scalar_one()
-                    assert c.execute(text("SELECT has_table_privilege(:role,:table,'SELECT')"), dict(role=reader, table=table)).scalar_one()
+                        assert not c.execute(text("SELECT has_table_privilege(:role,:table,:privilege)"), {"role": reader, "table": table, "privilege": privilege}).scalar_one()
+                    assert c.execute(text("SELECT has_table_privilege(:role,:table,'SELECT')"), {"role": reader, "table": table}).scalar_one()
                 assert c.exec_driver_sql("SELECT defaclobjtype,defaclacl::text FROM pg_default_acl ORDER BY oid").all() == before
                 assert c.exec_driver_sql("SELECT relname,relacl::text FROM pg_class WHERE relname IN ('marketplace_products','marketplace_offers') ORDER BY relname").all() == catalog_before
                 assert c.execute(text("""SELECT count(*) FROM pg_class c, LATERAL aclexplode(c.relacl) a
@@ -96,7 +115,7 @@ def test_upgrade_narrows_inherited_defaults_without_widening_select_only_role(cl
                         SELECT d.objid FROM pg_depend d JOIN pg_class t ON t.oid=d.refobjid
                         WHERE t.relname=ANY(:tables) AND d.deptype='i' AND d.classid='pg_class'::regclass)
                     AND (a.grantee=0 OR a.grantee=(SELECT oid FROM pg_roles WHERE rolname=:reader))"""),
-                    dict(tables=list(candidate.TABLES), reader=reader)).scalar_one() == 0
+                    {"tables": list(candidate.TABLES), "reader": reader}).scalar_one() == 0
         finally:
             engine.dispose()
 
@@ -185,9 +204,11 @@ def test_partial_database_setup_always_removes_its_exact_resources(monkeypatch, 
             state["closed"] = True
 
     monkeypatch.setattr(candidate.psycopg, "connect", lambda **kwargs: Maintenance())
-    with pytest.raises(RuntimeError, match="injected"):
-        with candidate.disposable_database(({}, None, 5432, "synthetic_owner"), ("orders_fixture_" + uuid4().hex,)):
-            raise RuntimeError("injected body failure")
+    with (
+        pytest.raises(RuntimeError, match="injected"),
+        candidate.disposable_database(({}, None, 5432, "synthetic_owner"), ("orders_fixture_" + uuid4().hex,)),
+    ):
+        raise RuntimeError("injected body failure")
     assert databases == roles == set()
     assert state["closed"]
 
