@@ -2,6 +2,60 @@
 
 ## CURRENT — original requirements, local readiness and owners
 
+### Final foundation/P0 package — source handoff
+
+The root's `2026-09-09-architecture-foundation-delivery.md` now defines this
+delivery. The older stage table below inventories the original larger requirements,
+not additional P0 work or a claim they are complete. All recent source listed here
+is **IMPLEMENTED / UNVERIFIED**; no new gate count is implied by consolidation.
+
+P0 connections are in the domain branch ancestry:
+
+- Approval worker `722e791c64d44adb23fe90bdf41de10f5b3e8da6` composes exact T1 job
+  roots/markers/receipt/outcome; test composition `95246b1b7dfe0b8f8a9c62e09f3e218af542f1f4`
+  uses the concrete dedicated resolver. It has no actual provider transport,
+  registration or competing writer. Fifteen authored PG scenarios remain pending.
+- Account-state participant `168a61b9ad5af66dda59c95e38073e26b11e66a2` uses actual
+  0075 (`9960548b47021880f3a511d09facd508c9c7270c`): typed assignment/liquidation
+  revisions, replay, CAS and audit. It is not an authenticated committed workflow.
+- Current-source participant `28093f68196a75e0503253979290ff26f7991ef7` uses actual
+  0077 (`b21f2166886ade7637b1b9594b5b28c1e38d3e80`): immutable run/binding/page/facts,
+  finalize+publication root CAS and typed current/latest/page reads.
+- Daily participant `f01939c6fddf704f78fc0be068a173f02a6948fa` composes that current
+  source participant and actual 0078 (`eb079c6da56df5d90c3c6b7cbde86ab43ee87edd`):
+  eligible received parents, native full count-diff/evidence, terminal decision,
+  parent-linked daily revision/head CAS and typed history. No manual DB audit.
+- Existing immutable calculation context/service `5e6107687a7d148875775eece0881a0b5240d3ea`,
+  state command codecs `21d458039e419fbe6c8b407312a2570a88a75dea`, original approval
+  kernel and accepted bounded override service are retained, without formula or
+  current-writer rewiring.
+- Delegated shared credential source (already imported separately by T1) includes
+  dedicated resolver `00961055428365f83d7dd05bd07f46786709c975`, transaction primitives
+  `874782ddeed534e4f4bfd9024037853fb5197ac4`, active resolver `e2d51a5` plus required
+  timing fix `fb2ae0ec686aa59a2c8e69dc3fdf96dca753ee42`, and persisted readback
+  `59bf12b3c5e028ab1262f19f3709a0a363f190b2`. Shared store ownership is T1, not open
+  for further T2 edits. Preserve T1's later guarded-management ancestry.
+- Bounded Avito error source `1213202` and `7b32749ee39a26ffd824572a9f65bb95f652325c`
+  is included; no further standalone diagnostics work is proposed for P0.
+
+Real P0 remainder: root integration of these immutable source commits plus final
+T1 foundation ancestry (including inert0079), consolidated imports/migration/
+restricted-role/credential/CAS/replay/crash gates and fixes of actual failures.
+T2 has no active test process/reservation/cleanup and has not launched duplicate
+backend/PG runs. Recent modules still require central compile/lint and actual PG
+verification; earlier pure/PG counts elsewhere in this report do not verify them.
+
+P1 stays closed: org-settings authority; assignment/liquidation/read/review/apply
+permissions and negative-margin confirmation; source worker/publication authority
+where absent; daily self-review/invalidation/document safety; provider history and
+abandonment/recovery contracts; dated mapping/source/economic contexts and freshness;
+financial/KTR rules; operational writer retirement/cutover. No actual transport or
+public writer is registered where those contracts are missing. Final profit fields
+remain null. P2 Production assembly/printing and KIZ/matcher remain deferred/excluded.
+
+This is a foundation delivery handoff, not full original-TZ acceptance. No provider,
+production, operational role/flag, real credential, deploy or push action was taken.
+
 Dormant worker source now composes the exact T1 executor through `9b30eb2cb59b38d18e859773b9b9607406832bb5`
 (import merge `331c9f80ff7aecbfedf99dc8507d10ddaf8ce45e`). Both imported0073 and
 this composition are **IMPLEMENTED / UNVERIFIED**, not schema acceptance or Stage3
