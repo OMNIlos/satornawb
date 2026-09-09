@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.cabinet.orm import LkAuditEventRow, LkOrganizationRow
+from app.cabinet.orm import LkAuditEventRow, LkOrganizationRow, LkUserRow
 from app.config import Settings, validate_security_settings
 from app.infra.models import Base
 from app.platform.integrations import credential_store
@@ -41,7 +41,16 @@ def store_db(monkeypatch):
     def _sqlite_functions(dbapi_connection, _connection_record) -> None:
         dbapi_connection.create_function("octet_length", 1, lambda value: len(value) if value is not None else None)
 
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            LkOrganizationRow.__table__,
+            LkUserRow.__table__,
+            MarketplaceAccountRow.__table__,
+            MarketplaceAccountCredentialRow.__table__,
+            LkAuditEventRow.__table__,
+        ],
+    )
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     with factory() as session:
         session.add_all(
