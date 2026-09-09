@@ -16,6 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from app.config import Settings, get_settings
 from app.control_plane.auth import ActorContext, actor_from_request
 from app.infra.db import get_engine
+from app.reviews.local_history import read_local_review_history
 from app.reviews.local_repository import ReviewLocalError
 from app.reviews.local_service import execute_local_review, read_local_review_context
 
@@ -28,7 +29,8 @@ _STATUS = {
     "REVIEW_LOCAL_CONFIGURATION_INVALID": 503, "REVIEW_LOCAL_STORAGE_UNAVAILABLE": 503,
 }
 _VERSIONS = frozenset({"version", "policyVersion", "draftRevision", "headVersion", "revision",
-                      "expectedHeadVersion", "expectedDraftRevision", "expectedPolicyHeadVersion", "policyHeadVersion"})
+                      "expectedHeadVersion", "expectedDraftRevision", "expectedPolicyHeadVersion", "policyHeadVersion",
+                      "aggregateVersion", "throughVersion", "nextAfterVersion"})
 
 
 def _error(code):
@@ -120,6 +122,29 @@ async def local_review_command(request: Request,
     try:
         result = await run_in_threadpool(execute_local_review, engine, actor=actor, settings=settings, request=command)
         return _response(json.loads(result.canonical_bytes))
+    except ReviewLocalError as error:
+        raise _error(error.code) from None
+
+
+@router.get("/history")
+async def local_review_history(request: Request,
+    actor: Annotated[ActorContext, Depends(_actor)], engine: Annotated[Engine, Depends(_engine)],
+    settings: Annotated[Settings, Depends(_settings)]):
+    try:
+        query = _unique(request.query_params.multi_items())
+        if not {"marketplace_account_id", "marketplace", "review_id"} <= query.keys() or not query.keys() <= {
+            "marketplace_account_id", "marketplace", "review_id", "head_id", "through_version", "after_version", "limit"}:
+            raise ValueError()
+        for key in ("marketplace_account_id", "through_version", "after_version", "limit"):
+            if key in query:
+                if re.fullmatch(r"0|[1-9][0-9]*", query[key]) is None:
+                    raise ValueError()
+                query[key] = int(query[key])
+    except (ValueError, TypeError):
+        raise _error("REVIEW_LOCAL_INVALID") from None
+    try:
+        value = await run_in_threadpool(read_local_review_history, engine, actor=actor, settings=settings, **query)
+        return _response(value)
     except ReviewLocalError as error:
         raise _error(error.code) from None
 

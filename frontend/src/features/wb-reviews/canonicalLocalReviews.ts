@@ -143,3 +143,59 @@ export function buildCanonicalReviewLocalContextPath(scope: CanonicalReviewScope
 }
 
 export const canonicalReviewLocalCommandPath = '/api/v2/reviews/local/commands'
+
+const historyAudit = z.object({ schemaVersion: z.literal('review-audit-v1'), ...owner,
+  eventId: uuid, aggregateId: uuid, aggregateVersion: version,
+  eventKind: z.enum(['draft.published', 'decision.approved', 'decision.rejected']), occurredAt: instant,
+  actorKind: z.literal('membership'), actorMembershipId: id, commandId: z.null(), attemptId: z.null(),
+  reasonCode: z.null(), policyId: uuid.nullable(), draftId: uuid, decisionId: uuid.nullable(),
+  beforeState: z.enum(['draft_current', 'decision_current']).nullable(),
+  afterState: z.enum(['draft_current', 'decision_current']),
+}).strict().refine(value => value.eventKind === 'draft.published'
+  ? value.policyId !== null && value.decisionId === null && value.afterState === 'draft_current'
+    && (value.aggregateVersion === '1') === (value.beforeState === null)
+  : value.policyId === null && value.decisionId !== null && value.afterState === 'decision_current'
+    && value.beforeState !== null && BigInt(value.aggregateVersion) >= 2n)
+  .refine(value => value.beforeState !== 'decision_current' || BigInt(value.aggregateVersion) >= 3n)
+const historyRequest = z.object({ reviewId: uuid, headId: uuid.optional(), throughVersion: version.optional(),
+  afterVersion: expectedVersion.default('0'), limit: z.number().int().min(1).max(200).default(50),
+}).strict().refine(value => (value.headId === undefined) === (value.throughVersion === undefined)
+  && (value.afterVersion === '0' || value.throughVersion !== undefined))
+const historyPage = z.object({ schemaVersion: z.literal('review-local-history-v1'), ...owner,
+  reviewId: uuid, headId: uuid.nullable(), throughVersion: expectedVersion,
+  events: z.array(historyAudit).max(200), nextAfterVersion: version.nullable(),
+}).strict()
+export type CanonicalReviewHistoryRequest = z.input<typeof historyRequest>
+export type CanonicalReviewHistoryPage = z.infer<typeof historyPage>
+
+export function buildCanonicalReviewHistoryPath(scope: CanonicalReviewScope, request: CanonicalReviewHistoryRequest): string {
+  const s = scopeSchema.safeParse(scope), q = historyRequest.safeParse(request)
+  if (!s.success || !q.success) return invalid()
+  const query = new URLSearchParams({ marketplace_account_id: String(s.data.marketplaceAccountId),
+    marketplace: s.data.marketplace, review_id: q.data.reviewId, limit: String(q.data.limit), after_version: q.data.afterVersion })
+  if (q.data.headId !== undefined && q.data.throughVersion !== undefined) {
+    query.set('head_id', q.data.headId); query.set('through_version', q.data.throughVersion)
+  }
+  return `/api/v2/reviews/local/history?${query}`
+}
+
+export function parseCanonicalReviewHistory(payload: unknown, scope: CanonicalReviewScope,
+  request: CanonicalReviewHistoryRequest): CanonicalReviewHistoryPage {
+  const s = scopeSchema.safeParse(scope), q = historyRequest.safeParse(request), p = historyPage.safeParse(payload)
+  if (!s.success || !q.success || !p.success || !sameScope(p.data, s.data) || p.data.reviewId !== q.data.reviewId) return invalid()
+  const page = p.data, expected = q.data
+  if ((page.headId === null) !== (page.throughVersion === '0')
+    || expected.headId !== undefined && (page.headId !== expected.headId || page.throughVersion !== expected.throughVersion)) return invalid()
+  const after = BigInt(expected.afterVersion), through = BigInt(page.throughVersion), limit = BigInt(expected.limit)
+  if (through < after) return invalid()
+  const count = through - after > limit ? limit : through - after
+  if (BigInt(page.events.length) !== count
+    || page.nextAfterVersion !== (through - after > limit ? (after + limit).toString() : null)) return invalid()
+  const seen = new Set<string>()
+  for (const [index, item] of page.events.entries()) {
+    if (!sameScope(item, s.data) || item.aggregateId !== page.headId
+      || BigInt(item.aggregateVersion) !== after + BigInt(index) + 1n || seen.has(item.eventId)) return invalid()
+    seen.add(item.eventId)
+  }
+  return page
+}

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildCanonicalReviewLocalContextPath, encodeCanonicalReviewLocalCommand,
   parseCanonicalReviewLocalContext, parseCanonicalReviewLocalResult,
+  buildCanonicalReviewHistoryPath, parseCanonicalReviewHistory,
   type CanonicalReviewLocalCommand,
 } from './canonicalLocalReviews'
 
@@ -61,5 +62,52 @@ describe('canonical local Reviews dormant contract', () => {
       policyVersion: '1', headId: uid(8), headVersion: '9223372036854775809' }
     expect(parseCanonicalReviewLocalResult(selected, command).headVersion).toBe('9223372036854775809')
     expect(() => parseCanonicalReviewLocalResult({ ...selected, headVersion: '9223372036854775810' }, command)).toThrow()
+  })
+})
+
+describe('immutable local Review history pages', () => {
+  const audit = { schemaVersion: 'review-audit-v1', ...scope, eventId: uid(10), aggregateId: uid(11),
+    aggregateVersion: '1', eventKind: 'draft.published', occurredAt: '2026-09-09T12:00:00.123456Z',
+    actorKind: 'membership', actorMembershipId: 3, commandId: null, attemptId: null, reasonCode: null,
+    policyId: uid(2), draftId: uid(12), decisionId: null, beforeState: null, afterState: 'draft_current' }
+  const page = { schemaVersion: 'review-local-history-v1', ...scope, reviewId: uid(4), headId: uid(11),
+    throughVersion: '2', events: [audit], nextAfterVersion: '1' }
+  const query = { reviewId: uid(4), limit: 1 }
+
+  it('checks exact first page and carries frozen head/bound into continuation', () => {
+    expect(parseCanonicalReviewHistory(page, scope, query)).toEqual(page)
+    const continuation = { ...query, headId: uid(11), throughVersion: '2', afterVersion: '1' }
+    const path = buildCanonicalReviewHistoryPath(scope, continuation)
+    expect(path).toContain('through_version=2')
+    expect(path).toContain('after_version=1')
+  })
+
+  it.each([
+    { ...page, nextAfterVersion: null }, { ...page, throughVersion: '0' }, { ...page, events: [] },
+    { ...page, events: [{ ...audit, marketplaceAccountId: 99 }] },
+    { ...page, events: [{ ...audit, aggregateVersion: '2' }] },
+    { ...page, events: [{ ...audit, privateText: 'not allowed' }] },
+  ])('rejects missing, foreign, noncontiguous or private events', value => {
+    expect(() => parseCanonicalReviewHistory(value, scope, query)).toThrow()
+  })
+
+  it('rejects upper-bound drift rather than silently using the latest head', () => {
+    expect(() => parseCanonicalReviewHistory(page, scope, { ...query, headId: uid(11), throughVersion: '1' })).toThrow()
+  })
+
+  it('keeps >BIGINT cursor arithmetic exact', () => {
+    const after = '1208925819614629174706176'
+    const through = (BigInt(after) + 2n).toString()
+    const next = (BigInt(after) + 1n).toString()
+    const large = { ...page, throughVersion: through, nextAfterVersion: next,
+      events: [{ ...audit, aggregateVersion: next, beforeState: 'draft_current' }] }
+    expect(parseCanonicalReviewHistory(large, scope, { ...query, headId: uid(11), throughVersion: through,
+      afterVersion: after }).nextAfterVersion).toBe(next)
+  })
+
+  it('represents a fact with no draft as empty, not fabricated audit', () => {
+    const empty = { ...page, headId: null, throughVersion: '0', events: [], nextAfterVersion: null }
+    expect(parseCanonicalReviewHistory(empty, scope, query).events).toEqual([])
+    expect(() => buildCanonicalReviewHistoryPath(scope, { ...query, afterVersion: '1' })).toThrow()
   })
 })
