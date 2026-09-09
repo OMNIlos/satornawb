@@ -2,6 +2,12 @@
 
 ## Current checkpoint: dormant shadow composition after c125a54
 
+Physical guard8338ef7 now accepted from T1 and merged2dc09de; static integration
+criticPASS. Expanded334-test acceptance is blocked by20credential SQLite setup
+errors (314passed): global metadata includes Review JSONB after collection. Minimal
+same-test alonePASS/importedReviewERROR reproduced and sent to T1 fixture owner.
+Not waived; full mixed run must be repeated after fix. Review selector still pending.
+
 Latest bounded acceptance: 19 new actual PostgreSQL shadow cases; combined641PASS
 48.76s, no skips, Ruff/compile/diff0, independent scoped criticPASS. Details in
 2026-09-09-t4-review-shadow-composition.md. Same received WB DTO composition, paired

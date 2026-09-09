@@ -46,3 +46,20 @@ Local policies/send/notifications still await their accepted DDL and domain serv
 Rollback: this dormant module can be removed without changing existing routes.
 The underlying lossless writer rollback must retain decoder-capable dab11ec and
 expanded0065; old TEXT-only binaries/schema downgrade are not a valid rollback.
+
+## Physical-guard integration checkpoint
+
+T1 controller-approved8338ef7 lineage merged as2dc09de. Static independent T4
+integration review found no introduced incompatibility: own Engine-bound roots,
+no savepoints, safe error mapping and return-after-commit remain aligned.
+
+The expanded eight-file run is **not green**:314PASS/20setupERROR37.28s.
+Credential SQLite fixture test_marketplace_credential_store.store_db uses global
+Base.metadata.create_all; collection of Review ORM adds PostgreSQL JSONB coverage,
+which SQLite cannot compile. Minimal collection-only witness (shadow test file plus
+credential-fetch file, selecting only test_paired_fetch_exact_identity_and_closed_session)
+gives1ERROR/38deselected0.74s; that same credential test alone gives1PASS0.48s.
+This is evidence of fixture metadata contamination, not a waived baseline or a
+proven runtime guard defect. Exact reproduction sent to T1, who owns that fixture;
+no SQLite type weakening, skip or shared-file patch by T4. Combined acceptance
+must be rerun after the owner-supplied fix. Review selector still pending/off.
