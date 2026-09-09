@@ -86,8 +86,8 @@ def paired(owner):
 
 
 @pytest.mark.parametrize("mutation", ["replace", "revoke", "reencrypt"])
-def test_joined_statement_keeps_exact_snapshot_during_concurrent_change(pg_store, mutation, monkeypatch):
-    owner, factory, owner_engine = pg_store
+def test_joined_statement_keeps_exact_snapshot_during_concurrent_change(pg_store, mutation):
+    owner, factory, _owner_engine = pg_store
     first = store.put_marketplace_credential(owner, "wb_api", {"token": CANARY})
     engine = factory.kw["bind"]
     statements = []
@@ -106,13 +106,7 @@ def test_joined_statement_keeps_exact_snapshot_during_concurrent_change(pg_store
         elif mutation == "revoke":
             store.revoke_marketplace_credential(owner, "wb_api", "operator_revoked")
         else:
-            # The existing re-encryption maintenance API takes a UUID rather than
-            # a tenant. Give only that writer the disposable DB owner connection;
-            # the fetch itself continues under the unprivileged runtime role.
-            with monkeypatch.context() as maintenance:
-                maintenance.setattr(store, "get_session_factory", lambda: sessionmaker(
-                    bind=owner_engine, expire_on_commit=False))
-                store.reencrypt_credential(first.credential_id, 1, 8)
+            store.reencrypt_credential(first.credential_id, 1, 8, account_identity=owner)
         with factory() as session:
             set_tenant_context(session, owner.organization_id)
             row = session.get(MarketplaceAccountRow, owner.marketplace_account_id)

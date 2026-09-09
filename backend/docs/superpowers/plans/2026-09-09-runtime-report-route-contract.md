@@ -4,7 +4,7 @@
 
 **Goal:** Make the four runtime WB report GET operations have the same real handler in dispatch and OpenAPI, without changing domain handlers or standalone reference contracts.
 
-**Architecture:** `app.main` already mounts real `wb_reports_sprint_d` before the reference adapter. `wb_19_05` then mounts four duplicate stubs: runtime dispatch selects the first real route, but OpenAPI describes the last stub and loses PNL's `source` parameter. Exclude only those superseded reference GET routes from the adapter's local copied routes. Do not suppress warnings or invent operation IDs to conceal duplicate operations.
+**Architecture:** `app.main` already mounts real `wb_reports_sprint_d` before the reference adapter. `wb_19_05` then mounts four duplicate stubs: runtime dispatch selects the first real route, but OpenAPI describes the last stub and loses PNL's `source` parameter. Build a private APIRouter from a filtered new list of the reference router's existing direct routes, then include that private router. Do not mutate the reference router or rely on include_router flattening. Do not suppress warnings or invent operation IDs to conceal duplicate operations.
 
 **Tech Stack:** Existing FastAPI/APIRouter, pytest/httpx; no dependencies, DB or service needed.
 
@@ -40,8 +40,9 @@ SUPERSEDED_REPORT_PATHS = frozenset({
 - [ ] Step1 write RED: full runtime app routes have one operation for each exact path/GET, endpoint is real module's corresponding function, OpenAPI PNL contains `source` with preliminary default and actual accepted enum, all actual date/group/filter parameters unchanged. Compare expected parameter schema to standalone app containing only real report router, not handwritten duplicate schemas. Capture original four duplicate warning IDs as defect evidence, not accepted warnings.
 
 ```python
+from fastapi.routing import iter_route_contexts
 for path in SUPERSEDED_REPORT_PATHS:
-    matches = [route for route in app.routes
+    matches = [route for route in iter_route_contexts(app.routes)
                if getattr(route, "path", None) == path
                and "GET" in (getattr(route, "methods", None) or ())]
     assert len(matches) == 1
@@ -49,13 +50,15 @@ for path in SUPERSEDED_REPORT_PATHS:
 assert app.openapi()["paths"]["/api/v1/wb-reports/pnl"]["get"]["parameters"] == real_only_schema["paths"]["/api/v1/wb-reports/pnl"]["get"]["parameters"]
 ```
 
-- [ ] Step2 run expected assertion RED before implementation. Implement filtering only the runtime adapter's copied GET-only routes after `include_router(reference_router)`; preserve source router object/list and all other local/reference routes. Use exact path+method matching. Do not remove future POST methods by path-only filtering, mutate shared reference routes, change main ordering or clear unrelated OpenAPI cache as a fix.
+- [ ] Step2 run expected assertion RED before implementation. Current installed FastAPI include_router stores _IncludedRouter instead of flattening; iter_route_contexts is its actual OpenAPI traversal. Use that traversal for test-only effective route counts. In application code create a private APIRouter with a newly filtered direct route list BEFORE inclusion; reference_router is currently plain APIRouter() with seven direct routes and no custom router options/lifespan. Preserve source router object/list/route objects and all other local/reference operations. Do not use private FastAPI internals in runtime code. Use exact path+method matching; never delete mixed GET/POST by path-only filtering, change main ordering or clear caches as a fix. Tests compare retained standalone/runtime operation metadata as well as source inventory.
 
 ```python
-router.include_router(reference_router)
-router.routes[:] = [route for route in router.routes
+_runtime_reference_router = APIRouter(routes=[
+    route for route in reference_router.routes
     if not (getattr(route, "path", None) in SUPERSEDED_REPORT_PATHS
-            and getattr(route, "methods", None) == {"GET"})]
+            and getattr(route, "methods", None) == {"GET"})
+])
+router.include_router(_runtime_reference_router)
 ```
 
 Constants may use private naming to avoid public API expansion; no route helper abstraction needed. The test must fail if future mixed-method registration restores a duplicate GET; such a change requires explicit review rather than silently deleting the other method.

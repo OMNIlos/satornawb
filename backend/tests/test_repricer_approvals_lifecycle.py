@@ -103,6 +103,8 @@ def create(
     approval=None,
     catalog=None,
     article="Футболка🚀",
+    size_id=None,
+    min_price_kopecks=None,
     changes=None,
     audit_changes=None,
     emit=True,
@@ -113,12 +115,12 @@ def create(
         "articleId": article,
         "catalogSkuId": catalog,
         "discountPct": 0,
-        "minPriceKopecks": None,
+        "minPriceKopecks": json_numeric(min_price_kopecks),
         "nmId": 2**70,
         "organizationId": 7,
         "priceKopecks": 2**72,
         "schema": "wb-price-apply/v1",
-        "sizeId": None,
+        "sizeId": json_numeric(size_id),
     }
     raw = json.dumps(
         body, ensure_ascii=True, separators=(",", ":"), sort_keys=True
@@ -148,8 +150,8 @@ def create(
         "request_format": "legacy" if legacy else "wb-price-apply/v1",
         "canonical_request_bytes": None if legacy else raw,
         "discount_pct": None if legacy else 0,
-        "size_id": None,
-        "min_price_kopecks": None,
+        "size_id": None if legacy else size_id,
+        "min_price_kopecks": None if legacy else min_price_kopecks,
         "status": "pending",
         "version": 0,
         "created_audit_id": uuid4(),
@@ -175,6 +177,41 @@ def create(
     if emit:
         insert(c, E, audit)
     return result
+
+
+def json_numeric(value):
+    if not isinstance(value, Decimal):
+        return value
+    if value.is_finite() and value == value.to_integral_value():
+        return int(value)
+    return float(value)
+
+
+def create_v1_numeric_boundary(c, *, field, value):
+    assert field in ("size_id", "min_price_kopecks")
+    return create(c, **{field: value})
+
+
+def optional_numeric_failure(engine, *, field, value):
+    try:
+        with engine.begin() as c:
+            scope(c)
+            create_v1_numeric_boundary(c, field=field, value=value)
+    except DBAPIError as error:
+        return (
+            error.orig.sqlstate,
+            error.orig.diag.message_primary,
+            error.orig.diag.constraint_name,
+        )
+    return None
+
+
+def assert_optional_numeric_invalid(engine, *, field, value):
+    assert optional_numeric_failure(engine, field=field, value=value) == (
+        "P0001",
+        "repricer_numeric_invalid",
+        None,
+    )
 
 
 def claim(c, row, *, emit=True, audit_changes=None):
@@ -500,16 +537,112 @@ def test_privileged_import_preserves_historical_states_and_huge_version(
 
 
 @pytest.mark.parametrize(
-    "field",
-    ["nm_id", "recommended_price_kopecks", "size_id", "min_price_kopecks", "version"],
+    "field,constraint",
+    [
+        ("nm_id", "wb_repricer_price_approvals_nm_id_check"),
+        (
+            "recommended_price_kopecks",
+            "wb_repricer_price_approvals_recommended_price_kopecks_check",
+        ),
+        ("version", "wb_repricer_price_approvals_version_check"),
+    ],
 )
 @pytest.mark.parametrize(
     "value", [Decimal("1.5"), Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")]
 )
-def test_physical_numeric_rejects_fraction_and_nonfinite(db, field, value):
-    with pytest.raises(DBAPIError), db.begin() as c:
+def test_required_numeric_rejects_fraction_and_nonfinite_at_column_guard(
+    db, field, constraint, value
+):
+    with pytest.raises(DBAPIError) as captured, db.begin() as c:
         scope(c)
         create(c, legacy=True, changes={field: value})
+    assert captured.value.orig.sqlstate == "23514"
+    assert captured.value.orig.diag.constraint_name == constraint
+
+
+@pytest.mark.parametrize("field", ["size_id", "min_price_kopecks"])
+@pytest.mark.parametrize(
+    "value", [Decimal("1.5"), Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")]
+)
+def test_v1_optional_numeric_rejects_fraction_and_nonfinite_at_numeric_helper(
+    db, field, value
+):
+    assert_optional_numeric_invalid(db, field=field, value=value)
+
+
+@pytest.mark.parametrize(
+    "size_id,min_price_kopecks",
+    [(1, 50), (2**70, 2**72)],
+)
+def test_v1_optional_numeric_positive_values_commit_exactly(
+    db, size_id, min_price_kopecks
+):
+    with db.begin() as c:
+        scope(c)
+        row = create(
+            c, size_id=size_id, min_price_kopecks=min_price_kopecks
+        )
+    with db.begin() as c:
+        scope(c)
+        stored = c.execute(
+            text(
+                f"SELECT size_id,min_price_kopecks FROM {A} "
+                "WHERE approval_row_id=:approval_row_id"
+            ),
+            {"approval_row_id": row["approval_row_id"]},
+        ).one()
+        audit_count = c.execute(
+            text(
+                f"SELECT count(*) FROM {E} "
+                "WHERE approval_row_id=:approval_row_id AND event_kind='approval.created'"
+            ),
+            {"approval_row_id": row["approval_row_id"]},
+        ).scalar_one()
+    assert stored == (Decimal(size_id), Decimal(min_price_kopecks))
+    assert audit_count == 1
+
+
+@pytest.mark.parametrize(
+    "field,value,constraint",
+    [
+        ("size_id", 0, "wb_repricer_price_approvals_size_id_check"),
+        (
+            "min_price_kopecks",
+            49,
+            "wb_repricer_price_approvals_min_price_kopecks_check",
+        ),
+    ],
+)
+def test_v1_optional_numeric_range_denials_use_exact_column_guard(
+    db, field, value, constraint
+):
+    failure = optional_numeric_failure(db, field=field, value=value)
+    assert failure is not None
+    assert failure[0] == "23514"
+    assert failure[2] == constraint
+
+
+def test_optional_numeric_diagnostic_detects_relaxed_helper(cluster):
+    with schema.candidate.disposable_database(cluster) as database:
+        result = schema.candidate.migrate(
+            database.url, "upgrade", "20260909_0066"
+        )
+        assert result.returncode == 0, result.stderr
+        owner = schema.create_engine(database.url, hide_parameters=True)
+        try:
+            with owner.begin() as c:
+                schema.seed(c)
+                c.exec_driver_sql(
+                    """CREATE OR REPLACE FUNCTION public.repricer_integral_finite(v numeric)
+                    RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path=pg_catalog
+                    AS $$ SELECT v IS NOT NULL $$"""
+                )
+            with pytest.raises(AssertionError):
+                assert_optional_numeric_invalid(
+                    owner, field="size_id", value=Decimal("1.5")
+                )
+        finally:
+            owner.dispose()
 
 
 @pytest.mark.parametrize(

@@ -11,7 +11,10 @@ from alembic.script import Script, ScriptDirectory
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 
+from tests import test_orders_exact_text_migration as orders_exact
 from tests import test_orders_schema_candidate as candidate
+from tests import test_review_facts_schema as review_facts
+from tests import test_review_lossless_migration as review_lossless
 
 cluster = candidate.cluster
 FIXTURE = Path(__file__).parent / "fixtures/wb_repricing_sql_golden_vectors_v1.json"
@@ -21,6 +24,25 @@ TABLES = (
     "wb_repricer_price_apply_attempts",
     "wb_repricer_price_approval_audit",
 )
+OLD_BUSINESS_PRIMARY_KEYS = {
+    "lk_organizations": ("organization_id",),
+    "marketplace_accounts": ("marketplace_account_id",),
+    "order_sync_runs": ("sync_run_id",),
+    "marketplace_orders": ("order_id",),
+    "marketplace_order_items": ("order_item_id",),
+    "order_observations": ("observation_id",),
+    "review_sync_runs_v2": ("sync_run_id",),
+    "review_facts": ("review_id",),
+    "review_observations": ("observation_id",),
+    "review_sync_run_items": (
+        "organization_id",
+        "marketplace_account_id",
+        "marketplace",
+        "sync_run_id",
+        "review_id",
+    ),
+}
+REVIEW_NUL_BYTES = "preserved\x00отзыв🚀".encode()
 
 
 @pytest.fixture(scope="module")
@@ -53,6 +75,102 @@ def seed(c):
     c.exec_driver_sql(
         "INSERT INTO iam_memberships(membership_id,organization_id,user_id,role,permissions,scope_mode,allowed_account_ids,is_active) VALUES(77,7,'repricer77','admin','[]','all','[]',true),(78,7,'repricer78','admin','[]','all','[]',true),(79,8,'repricer79','admin','[]','all','[]',true)"
     )
+
+
+def seed_old_business_rows(c):
+    review_facts.seed(c)
+    candidate.scope(c)
+    run_id = orders_exact.make_run(
+        c, source_run_key="repricer-preservation-orders-run"
+    )
+    order_id = candidate.order(c, external="repricer-preservation-order")
+    item_id = candidate.item(
+        c,
+        order_id,
+        source_line_key="repricer-preservation-line",
+        external_item_id="repricer-preservation-item",
+    )
+    observation_id = candidate.observation(
+        c,
+        order_id,
+        run_id,
+        checksum="1" * 64,
+        revision="repricer-preservation-revision",
+        event="repricer-preservation-event",
+    )
+    review = review_lossless.unit(
+        c,
+        {"review_observations": {"text": None, "text_utf8": REVIEW_NUL_BYTES}},
+    )
+    return {
+        "order_run_id": run_id,
+        "order_id": order_id,
+        "order_item_id": item_id,
+        "order_observation_id": observation_id,
+        "review": review,
+    }
+
+
+def snapshot_old_rows(c):
+    return {
+        table: tuple(
+            tuple(row)
+            for row in c.exec_driver_sql(
+                f"SELECT * FROM public.{table} ORDER BY {','.join(primary_key)}"
+            ).all()
+        )
+        for table, primary_key in OLD_BUSINESS_PRIMARY_KEYS.items()
+    }
+
+
+def snapshot_old_acls(c):
+    relation = tuple(
+        c.execute(
+            text(
+                """SELECT n.nspname,c.relname,c.relkind,c.relacl::text
+                FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                WHERE n.nspname='public' AND c.relkind IN ('r','p','S')
+                  AND NOT (c.relname=ANY(:new_tables))
+                ORDER BY n.nspname,c.relname,c.relkind"""
+            ),
+            {"new_tables": list(TABLES)},
+        ).all()
+    )
+    column = tuple(
+        c.execute(
+            text(
+                """SELECT n.nspname,t.relname,a.attname,a.attacl::text
+                FROM pg_attribute a JOIN pg_class t ON t.oid=a.attrelid
+                JOIN pg_namespace n ON n.oid=t.relnamespace
+                WHERE n.nspname='public' AND t.relkind IN ('r','p')
+                  AND a.attnum>0 AND NOT a.attisdropped
+                  AND NOT (t.relname=ANY(:new_tables))
+                ORDER BY n.nspname,t.relname,a.attnum"""
+            ),
+            {"new_tables": list(TABLES)},
+        ).all()
+    )
+    defaults = tuple(
+        c.exec_driver_sql(
+            """SELECT d.defaclrole::regrole::text,coalesce(n.nspname,''),
+                      d.defaclobjtype,d.defaclacl::text
+               FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid=d.defaclnamespace
+               ORDER BY 1,2,3,4"""
+        ).all()
+    )
+    return relation, column, defaults
+
+
+def assert_new_relations_empty_or_absent(c, revision):
+    for table in TABLES:
+        relation = c.execute(
+            text("SELECT to_regclass(:table)"), {"table": table}
+        ).scalar_one()
+        if revision == "20260909_0065":
+            assert relation is None
+        else:
+            assert relation == table
+            assert c.exec_driver_sql(f"SELECT count(*) FROM {table}").scalar_one() == 0
 
 
 def params(vector):
@@ -302,7 +420,7 @@ def test_physical_types_and_no_unbounded_identity_indexes(db):
         )
 
 
-def test_empty_roundtrip_preserves_previous_data(cluster):
+def test_empty_roundtrip_keeps_new_relations_empty(cluster):
     with candidate.disposable_database(cluster) as database:
         for action, target in [
             ("upgrade", "20260909_0065"),
@@ -326,5 +444,79 @@ def test_empty_roundtrip_preserves_previous_data(cluster):
                         c.exec_driver_sql(f"SELECT count(*) FROM {table}").scalar_one()
                         == 0
                     )
+        finally:
+            owner.dispose()
+
+
+def test_populated_old_rows_and_acls_survive_0066_roundtrip(cluster):
+    with candidate.disposable_database(cluster) as database:
+        result = candidate.migrate(database.url, "upgrade", "20260909_0065")
+        assert result.returncode == 0, result.stderr
+        owner = create_engine(database.url, hide_parameters=True)
+        try:
+            with owner.begin() as c:
+                seeded = seed_old_business_rows(c)
+            with owner.connect() as c:
+                before = snapshot_old_rows(c)
+                acl_before = snapshot_old_acls(c)
+                assert all(before[table] for table in OLD_BUSINESS_PRIMARY_KEYS)
+                review_row = c.execute(
+                    text(
+                        "SELECT current_observation_id,last_source_run_id,last_source_run_sequence "
+                        "FROM review_facts WHERE review_id=:review_id"
+                    ),
+                    {"review_id": seeded["review"]["review_facts"]["review_id"]},
+                ).one()
+                assert review_row[0] == seeded["review"]["review_observations"]["observation_id"]
+                assert review_row[1] == seeded["review"]["review_sync_runs_v2"]["sync_run_id"]
+                assert review_row[2] == seeded["review"]["review_sync_runs_v2"]["run_sequence"]
+                text_value, raw_value = c.execute(
+                    text(
+                        "SELECT text,text_utf8 FROM review_observations "
+                        "WHERE observation_id=:observation_id"
+                    ),
+                    {
+                        "observation_id": seeded["review"]["review_observations"][
+                            "observation_id"
+                        ]
+                    },
+                ).one()
+                assert text_value is None
+                assert bytes(raw_value) == REVIEW_NUL_BYTES
+
+            with owner.connect() as c:
+                transaction = c.begin()
+                try:
+                    candidate.scope(c)
+                    assert (
+                        c.execute(
+                            text(
+                                "UPDATE order_sync_runs SET page_count=page_count+1 "
+                                "WHERE sync_run_id=:run_id"
+                            ),
+                            {"run_id": seeded["order_run_id"]},
+                        ).rowcount
+                        == 1
+                    )
+                    with pytest.raises(AssertionError):
+                        assert snapshot_old_rows(c) == before
+                finally:
+                    transaction.rollback()
+
+            with owner.connect() as c:
+                assert snapshot_old_rows(c) == before
+                assert snapshot_old_acls(c) == acl_before
+
+            for action, revision in (
+                ("upgrade", "20260909_0066"),
+                ("downgrade", "20260909_0065"),
+                ("upgrade", "20260909_0066"),
+            ):
+                result = candidate.migrate(database.url, action, revision)
+                assert result.returncode == 0, result.stderr
+                with owner.connect() as c:
+                    assert snapshot_old_rows(c) == before
+                    assert snapshot_old_acls(c) == acl_before
+                    assert_new_relations_empty_or_absent(c, revision)
         finally:
             owner.dispose()

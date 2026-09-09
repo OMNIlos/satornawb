@@ -27,6 +27,9 @@ BEGIN
             ('order_sync_memberships'),
             ('order_read_snapshots'),
             ('order_read_snapshot_rows'),
+            ('production_work_items'),
+            ('production_assignment_receipts'),
+            ('production_assignment_history'),
             ('catalog_cost_versions'),
             ('catalog_economics_override_versions'),
             ('catalog_skus'),
@@ -131,13 +134,18 @@ FROM pg_attribute a WHERE a.attrelid='public.review_sync_runs_v2'::regclass
 GRANT SELECT, UPDATE ON TABLE public.review_sync_runs_v2 TO :"runtime_role";
 GRANT INSERT (sync_run_id, organization_id, marketplace_account_id, marketplace,
     source_run_id, request_checksum, status, completeness, started_at, completed_at,
-    observed_count, manifest_checksum, coverage, error_code, source_run_id_utf8, coverage_utf8)
+    observed_count, manifest_checksum, coverage, error_code, source_run_id_utf8, coverage_utf8,
+    account_binding_schema_version, account_binding_external_account_id,
+    account_binding_credential_ref, account_binding_payload, account_binding_checksum)
     ON public.review_sync_runs_v2 TO :"runtime_role";
 GRANT SELECT, INSERT, UPDATE ON TABLE public.review_facts TO :"runtime_role";
 GRANT SELECT, INSERT ON TABLE public.review_observations, public.review_sync_run_items
     TO :"runtime_role";
 GRANT EXECUTE ON FUNCTION public.review_strict_utf8(bytea),
     public.review_coverage_json_object_utf8(bytea) TO :"runtime_role";
+-- Review binding adds only pure descriptor/CHECK evaluation authority.
+GRANT EXECUTE ON FUNCTION public.review_binding_ascii_string(text),
+    public.review_run_binding_bytes(integer,integer,text,text,text) TO :"runtime_role";
 SELECT format('REVOKE ALL ON SEQUENCE %s FROM %I; GRANT USAGE ON SEQUENCE %s TO %I',
     pg_get_serial_sequence('public.review_sync_runs_v2','run_sequence'), :'runtime_role',
     pg_get_serial_sequence('public.review_sync_runs_v2','run_sequence'), :'runtime_role')
@@ -180,5 +188,36 @@ GRANT EXECUTE ON FUNCTION public.repricer_exact_text(text),
     public.repricer_action_key(integer,integer,text,text),
     public.repricer_dispatch_key(integer,integer,text,text,uuid), public.repricer_context_id(text)
     TO :"runtime_role";
+
+-- Dormant Production assignment overrides, after every broad grant.
+REVOKE ALL ON TABLE public.production_work_items,
+    public.production_assignment_receipts, public.production_assignment_history
+    FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON TABLE public.%I FROM PUBLIC, %I',
+    a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+    ('production_work_items','production_assignment_receipts','production_assignment_history')
+    AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, INSERT, UPDATE ON TABLE public.production_work_items TO :"runtime_role";
+GRANT SELECT, INSERT ON TABLE public.production_assignment_receipts,
+    public.production_assignment_history TO :"runtime_role";
+SELECT format('REVOKE ALL ON SEQUENCE %s FROM PUBLIC, %I; GRANT USAGE ON SEQUENCE %s TO %I',
+    pg_get_serial_sequence(format('public.%I',c.relname),a.attname), :'runtime_role',
+    pg_get_serial_sequence(format('public.%I',c.relname),a.attname), :'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid AND a.attidentity<>''
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+    ('production_work_items','production_assignment_receipts','production_assignment_history')
+\gexec
+REVOKE ALL ON FUNCTION public.production_account_lock(), public.production_row_guard(),
+    public.production_validate() FROM PUBLIC, :"runtime_role";
+REVOKE ALL ON FUNCTION public.production_exact_text(text),
+    public.production_ascii_json_string(text),
+    public.production_assignment_bytes(bigint,bigint,integer,text,text)
+    FROM PUBLIC, :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.production_exact_text(text),
+    public.production_ascii_json_string(text),
+    public.production_assignment_bytes(bigint,bigint,integer,text,text) TO :"runtime_role";
 
 COMMIT;
