@@ -744,13 +744,46 @@ describe('vella source of truth', () => {
 
   it('filters report tables by chip, search, and manager in the static Vella shell', async () => {
     const browser = await chromium.launch({ headless: true })
-    const page = await browser.newPage({ viewport: { width: 980, height: 574 } })
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 980, height: 574 } })
+    await page.route(/^https?:\/\//, route => route.abort())
     const source = pathToFileURL(join(root, 'public/vella-production.html')).toString()
 
     const visibleRows = (tab: string) => page.locator(`#tab-${tab} tbody tr[data-report-row]:visible`).count()
+    // Populate only the test DOM: the production demo renderer stays retired.
+    // Event wiring/filtering remain real; identity, thresholds and owners are explicit.
+    const supplyRows = async (tab: string) => {
+      await page.waitForFunction((tabId) => {
+        const surface = document.getElementById(`tab-${tabId}`)
+        return surface?.querySelector<HTMLElement>('.chips .chip')?.dataset.demoChipBound === '1'
+          && surface?.querySelector<HTMLElement>('.search input')?.dataset.demoSearchBound === '1'
+      }, tab)
+      return page.evaluate((tabId) => {
+      const surface = document.getElementById(`tab-${tabId}`)!
+      const body = surface.querySelector('tbody')!
+      body.replaceChildren()
+      for (let index = 0; index < 12; index++) {
+        const row = document.createElement('tr')
+        const warehouse = index === 2 ? 'Екатеринбург' : 'Казань'
+        Object.assign(row.dataset, {
+          reportRow: tabId, search: `Synthetic ${index < 2 ? 'FBBT_42' : 'OTHER'} ${warehouse} ${index}`,
+          reportTags: tabId === 'pnl' ? 'операционный' : '',
+          manager: index % 2 === 0 ? 'МД' : 'АП',
+          daysToOos: index === 0 ? '6' : index === 1 ? '61' : '20',
+          availableUnits: '10', ktr: index === 2 ? '1.6' : '1', warehouse,
+        })
+        const cell = document.createElement('td')
+        cell.textContent = row.dataset.search!
+        row.appendChild(cell)
+        body.appendChild(row)
+      }
+      ;(window as any).applyGenericReportFilter(surface)
+      }, tab)
+    }
 
     try {
       await page.goto(`${source}?tab=stock`, { waitUntil: 'domcontentloaded' })
+      expect(await page.locator('#tab-stock tr[data-report-row]').count()).toBe(0)
+      await supplyRows('stock')
       await page.waitForSelector('#tab-stock tbody tr[data-report-row]')
       const reportsMenu = await page.locator('[data-nav-group="reports"]').evaluate((group) => {
         const week = group.querySelector('[data-tab="week"]')
@@ -770,14 +803,14 @@ describe('vella source of truth', () => {
       expect(reportsMenu.rulesInside).toBe(true)
 
       const stockAll = await visibleRows('stock')
-      expect(stockAll).toBeGreaterThan(10)
+      expect(stockAll).toBe(12)
 
       await page.locator('#tab-stock .chip', { hasText: 'OOS риск' }).click()
       const stockOos = await visibleRows('stock')
       expect(stockOos).toBeGreaterThan(0)
       expect(stockOos).toBeLessThan(stockAll)
       expect(await page.locator('#tab-stock tbody tr[data-report-row]:visible').evaluateAll((rows) =>
-        rows.every((row) => Number((row as HTMLElement).dataset.daysToOos) <= 7),
+        rows.every((row) => Number((row as HTMLElement).dataset.daysToOos) < 7),
       )).toBe(true)
 
       await page.locator('#tab-stock .chip', { hasText: 'Избыток' }).click()
@@ -803,13 +836,15 @@ describe('vella source of truth', () => {
       for (const tab of ['rnp', 'pnl', 'ads', 'week']) {
         await page.goto(`${source}?tab=${tab}`, { waitUntil: 'domcontentloaded' })
         await page.waitForSelector(`#tab-${tab}.active`)
+        await supplyRows(tab)
         await page.waitForFunction((tabId) => document.querySelectorAll(`#tab-${tabId} tbody tr[data-report-row]`).length > 0, tab)
         const total = await visibleRows(tab)
-        expect(total).toBeGreaterThan(5)
+        expect(total, tab).toBe(12)
         await page.locator(`#tab-${tab} .search input`).fill('FBBT_42')
-        expect(await visibleRows(tab)).toBeLessThan(total)
+        expect(await visibleRows(tab)).toBe(2)
         await page.locator(`#tab-${tab} .search input`).fill('')
         await page.locator(`#tab-${tab} select.adv-select`).first().selectOption('МД')
+        expect(await visibleRows(tab)).toBe(6)
         const managerRows = await page.locator(`#tab-${tab} tbody tr[data-report-row]:visible`).evaluateAll((rows) =>
           rows.every((row) => (row as HTMLElement).dataset.manager === 'МД'),
         )
@@ -875,16 +910,16 @@ describe('vella source of truth', () => {
     }
   }, 45_000)
 
-  it('scales digest balance chart across empty, daily, and aggregated periods', async () => {
+  it('renders legacy digest balance scenarios without retired local period controls', async () => {
     const browser = await chromium.launch({ headless: true })
-    const page = await browser.newPage({ viewport: { width: 1512, height: 982 } })
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1512, height: 982 } })
+    await page.route(/^https?:\/\//, route => route.abort())
     const source = pathToFileURL(join(root, 'public/vella-production.html')).toString()
 
     try {
       await page.goto(`${source}?tab=digest`, { waitUntil: 'domcontentloaded' })
       await page.waitForTimeout(1200)
-      expect(await page.locator('[data-digest-balance-period]').count()).toBe(4)
-      expect(await page.locator('[data-digest-balance-period="seven"]').getAttribute('class')).toContain('active')
+      expect(await page.locator('[data-digest-balance-period]').count()).toBe(0)
 
       const expectBalance = async (scenario: string, hitZones: number, emptyVisible = false) => {
         await page.evaluate((name) => (window as any).setDigestBalanceScenario(name), scenario)
@@ -903,11 +938,9 @@ describe('vella source of truth', () => {
       expect(await page.locator('#digestBalanceTitle').innerText()).toBe('Баланс за период')
       await expectBalance('thirty', 5)
       expect(await page.locator('#digestBalanceChart').evaluate((node) => node.textContent || '')).toContain('НЕД')
-      expect(await page.locator('[data-digest-balance-period="thirty"]').getAttribute('class')).toContain('active')
-      await page.locator('[data-digest-balance-period="fourteen"]').click()
+      await page.evaluate(() => (window as any).setDigestBalanceScenario('fourteen'))
       expect(await page.locator('#digestBalanceChart .chart-hit-zone').count()).toBe(14)
       expect(await page.locator('#digestBalanceTitle').innerText()).toBe('Баланс за период')
-      expect(await page.locator('[data-digest-balance-period="fourteen"]').getAttribute('aria-selected')).toBe('true')
 
       await page.locator('#digestBalanceChart .chart-hit-zone').first().hover()
       await page.locator('#g-tip.show').waitFor({ timeout: 2_000 })

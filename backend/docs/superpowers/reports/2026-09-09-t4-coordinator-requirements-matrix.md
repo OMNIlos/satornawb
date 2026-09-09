@@ -1,5 +1,16 @@
 # T4 — requirement → commit → evidence → remaining work
 
+## Latest: remaining generic-filter/Digest cases pass in scoped gate
+
+Test-only reconciliation: explicit twelve-row DOM fixture uses real filtering,
+waits for delayed listener binding and supplies the P&L operational source tag.
+Retired local Digest controls are not recreated; existing renderer scenarios
+retain point/tooltip/overflow coverage. Final two cases2PASS12.91s, pure
+aggregation5+stock25=30PASS0.72s, TypeScript0/diff0. Partial-bucket mutation caught.
+Two diagnostic fixture failures are disclosed in
+`2026-09-09-t4-filter-digest-test-reconciliation.md`. No runtime changes or
+canonical policy claims; fresh full frontend suite remains required.
+
 ## Latest acceptance: stabilized report case now passes
 
 The previously failing stabilized legacy report case passes1/31.21s after
