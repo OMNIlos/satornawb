@@ -8,6 +8,9 @@ an exclusively owned Unix-socket Redis; no deployment or business tasks.
 **Architecture:** Test-only isolated Celery launcher runs existing heartbeat hooks
 in actual subprocesses; a scrubbed fixture owns Redis and all process lifecycles.
 
+**Tech Stack:** Installed Python/pytest/Celery/kombu/redis-py, local Redis8.10.1,
+macOS sandbox-exec and private Unix sockets; no dependency changes.
+
 **Spec:** `backend/docs/superpowers/specs/2026-09-09-process-heartbeat-live-acceptance-design.md`, read fully.
 
 ## Global constraints
@@ -42,11 +45,49 @@ sources before actions; do not execute app factory or legacy schedules.
   service binary/version and socket directory; inspect actual broker URL parsing
   before connection. Create per-run sandbox profile, prove owned synthetic .env
   and TCP/UDP denial and allowed exact Unix socket. No ambient env or plugins.
+
+Launcher `verify` mode uses only stdlib before spawning the test: allocate the
+private root/profile, then invoke the following argv with env-i-equivalent
+explicit env. Tests refuse direct execution without that launcher-provided root;
+they do not skip. `sys.executable` must resolve to this worktree's .venv.
+
+```python
+argv = ["/usr/bin/sandbox-exec", "-f", str(profile), sys.executable,
+        "-m", "pytest", "-q", "-s", "tests/test_process_heartbeat_live.py", "--tb=short"]
+env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "TMPDIR": "/tmp",
+       "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+       "SATORNA_TEST_HEARTBEAT_OWNED_ROOT": str(root)}
+# root/profile are newly allocated by verify mode, never user-selected existing
+# services. The test checks realpath/mode/marker and sandbox denials before I/O.
+```
+
+All service/reader I/O then occurs in that sandboxed pytest process or its
+inheriting children. `verify` never connects to Redis itself. On unsuccessful
+child cleanup retain exact own artifacts and report failure; do not delete a
+directory that still contains a live owned service's socket.
 - [ ] Step2 launcher constructs isolated app with no domain tasks and empty beat
   schedule, result_expires=None, explicit synthetic names/queue/JSON. Install
   real hook; launch solo worker or real beat with owned shelf path. Assert empty
   schedule before running, no cleanup/default task entry. Control uses only
   parent-owned process handles, not a remotely exposed test command endpoint.
+
+```python
+app = Celery("synthetic-heartbeat", broker="redis+socket://" + socket_path,
+             set_as_current=False)
+app.conf.update(beat_schedule={}, result_expires=None,
+                task_default_queue="synthetic-heartbeat-empty",
+                task_serializer="json", result_serializer="json",
+                accept_content=["json"], enable_utc=True, timezone="UTC")
+install_process_heartbeat(app, settings)
+assert app.conf.beat_schedule == {}
+```
+
+Here settings is an explicitly constructed Settings with the spec's synthetic
+policy and `redis_url="unix://" + socket_path`; no get_settings/.env read. Worker
+mode uses app.worker_main with poolsolo/concurrency1, without-gossip/mingle,
+heartbeat-interval1 and hostname synthetic-worker@local. Beat mode uses app.Beat
+with an owned shelf path and the installed monitored scheduler, never sends a
+task. Verify actual parsed kombu connection class/path before starting either.
 - [ ] Step3 implement every live observation in spec: missing→beat-only→bothfresh,
   advancing timestamps+TTL, paused-live beatstale/resumefresh, natural workerstop
   thenstale→missing, same-ID restart/newincarnation, without-heartbeat/disabled
@@ -60,13 +101,13 @@ sources before actions; do not execute app factory or legacy schedules.
 ```text
 cd backend
 env -i PATH=/usr/local/bin:/usr/bin:/bin TMPDIR=/tmp PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-  .venv/bin/python -m pytest -q -s tests/test_process_heartbeat_live.py --tb=short
+  .venv/bin/python tests/_heartbeat_process_fixture.py verify
 ```
 
-The parent test must itself enter/prove its generated sandbox before any I/O;
-alternatively use an outer sandbox parameterized with its preallocated exact
-socket. A plain unsandboxed service process does not satisfy this command's gate.
-Never widen to working Unix sockets. Make the final handoff command concrete.
+The wrapper launches pytest through its generated exact-socket sandbox before
+any test I/O. A plain unsandboxed service process does not satisfy this gate.
+Never widen to working Unix sockets. Verify mode forwards exact pytest exit code
+and reports cleanup failure as nonzero even if assertions otherwise passed.
 
 - [ ] Step5 if existing implementation passes, report existing-behavior acceptance
   honestly; do not invent a RED code defect. Negative controls are assertions,
