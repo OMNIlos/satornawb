@@ -12,6 +12,8 @@ from pathlib import Path
 
 from packaging.requirements import Requirement
 
+from ops.release_gate import safe_environment
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 EXPECTED_RUNTIME_FILES = {
@@ -28,6 +30,16 @@ EXPECTED_RUNTIME_FILES = {
     "app/reviews/canonical_sync.py",
     "app/orders/router.py",
     "app/orders/read_service.py",
+    "app/main.py",
+    "app/infra/celery_app.py",
+    "app/avito/returns_tasks.py",
+    "app/modules/orders.py",
+    "app/orders/job_publication.py",
+    "app/orders/ingestion_publication.py",
+    "app/platform/integrations/user_orders_jobs.py",
+    "app/platform/integrations/ingestion_publication_guard.py",
+    "app/platform/integrations/ingestion_api.py",
+    "app/platform/integrations/worker_identity.py",
     "vella_wb_19_05/models.py",
 }
 
@@ -45,6 +57,16 @@ REPRESENTATIVE_IMPORTS = (
     "app.reviews.canonical_sync",
     "app.orders.router",
     "app.orders.read_service",
+    "app.main",
+    "app.infra.celery_app",
+    "app.avito.returns_tasks",
+    "app.modules.orders",
+    "app.orders.job_publication",
+    "app.orders.ingestion_publication",
+    "app.platform.integrations.user_orders_jobs",
+    "app.platform.integrations.ingestion_publication_guard",
+    "app.platform.integrations.ingestion_api",
+    "app.platform.integrations.worker_identity",
     "vella_wb_19_05.models",
 )
 
@@ -67,6 +89,7 @@ def _run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
         check=True,
         capture_output=True,
         text=True,
+        env=safe_environment(),
     )
 
 

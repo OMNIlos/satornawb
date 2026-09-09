@@ -3,6 +3,133 @@
 Branch `codex/arch-t3-operations`; исходная база `c88a474`.
 Общая очередь не активирована. Legacy writers/prototype сохранены.
 
+## Current Requirements Matrix (2026-09-09, supersedes all history below)
+
+Implementation baseline: `35ea34e77d80920b0d8779a6b888e6f1d8e7bad0`.
+`implemented` means committed code exists; `released` means its owner supplied an
+exact reviewed READY commit; `consumer-accepted` requires the receiving service's
+own integration gate; `final-integrated` requires the consolidated root candidate.
+None of these authorizes production activation. Test counts are evidence for their
+named scope, not completion percentages or closure of a whole product stage.
+
+Latest user decision relayed by root: **Production assembly/printing is DEFERRED**,
+not DONE. This includes work items/assignment, batches/calendar, frozen sheets,
+XLSX/PDF/stickers, print archive and delivery receipts. Preserve committed code,
+schema/history and existing functionality; no new P1-P4 implementation, renderer
+recovery or feature tests. Required compatibility regressions remain allowed.
+Orders ingestion/storage/read/API/source progression remain ACTIVE. Deferred
+Production and excluded KIZ are not blockers for integration of the active scope.
+
+| Requirement | Actual implementation SHA / state | Evidence | Remaining / owner |
+|---|---|---|---|
+| 1 Discovery, synthetic identity/parity inventory | `4323821`, `f4d6d55`; implemented | Stage1 and UI/DB parity reports; current contract/returns/XLSX/Stage1 rerun 90 PASS, exit0 | Production source gaps recorded for DEFERRED resumption, no active recovery request / root + T3 |
+| 2 Initial ingestion, replay, partial manifests, immutable owner binding | `9d1f88b`, `8010112`, `33c95c1`, `4c8b4c6`; Orders0067 consumer-accepted | Actual0067 seven-file198 PASS; guarded browser USER-session8 PASS; append-only facts and initial publication | Changed facts still reconcile instead of advancing current projection; source ordering/completeness contract and fake-source revision-to-read acceptance / T3 + source owner |
+| 2 Cancellation/return lifecycle | Pure contract and persisted cancellation/return evidence in `9d1f88b`; implemented, not full lifecycle parity | Status mapping and publication tests | Orders partial-return/current progression and reconciliation / T3; work/sheet cancellation handling DEFERRED with Production; WB Statistics never proves fulfillment |
+| 2 Known-order Avito status progression | `f4c6a286030f15ba063980d10dc517a7ddad5da6`; implemented, locally accepted, not activated | 20 runtime-role cases plus48 adjacent and64 pure PASS; durable rejected evidence and two-session CAS | Trusted source-client/job wiring, account traversal and changes beyond status remain separate; no provider chronology claim |
+| 2 Strict browser raw evidence decoder | Implemented in the commit containing `2026-09-09-orders-browser-envelope-contract.md`; fixed v1 partial-only manifest | Final183 pure PASS, exact synthetic fixture/checksums, no auth/body scope or client completeness | NEW producer must supply explicit IDs/status/quantity/occurrence/capture; token-only guard/sink binding awaits T1, no fabricated user principal |
+| 3 Stored order-level deadline read | Follow-up implemented in the commit containing this checkpoint | Final combined69 runtime-role tests PASS;101 pure PASS. Exact org/account/order/current-observation predicates, stable ordering and immutable historical snapshot | No deadline calculation, provider schedule mapping or item-specific binding inferred; source writer and source semantics remain explicit dependencies |
+| 3 Catalog resolution, snapshot pagination, cache-only read | `866d1a1`, `da7e017`, `33c95c1`; local consumer-accepted for stated scope | Scoped Catalog/projection/read gates; v3 provenance and decimal-string BIGINT wire | Exact filters and shared registration / T3 + T1; T4 UI consumer integration; readiness remains unproven, no production activation |
+| 4 Physical P1 work items, receipt/history, account RLS | DEFERRED; T1 `d57c54418762583c41829dabd80969775b4fdb56` + mandatory `bb7a958d99f1458d7e10877406eaf5dfe03ae6bc` released, NOT T3 consumer-accepted | T1 exact READY: feature173/covering447/review; prerequisite0068 `4d95b24b549f0b1f773095ec583a85f18172fdbc`; head0069 | Preserve additive schema; no new service/CAS feature work until resumed / root + T3 + T1 |
+| 4 Permission/actor/replay policy and P1 service | DEFERRED; approved policy `842bbed`, codecs `bd1b9d8`, `35ea34e`; preparation | Committed consumer plan; strict result/command114 pure PASS; T1 main shared-permission265 PASS reported | Preserve implemented policy/code; service, source proof, CAS/audit/two-session acceptance remain unfinished, not active blockers |
+| 5 Batches/groups/calendar/selected frozen sheets | DEFERRED; `142cf46` partial HTML characterization; P2 request `0aa2c48` | Existing characterization/request retained | Resume requires source/rules and P2 persistence/version-set assembly; no further source recovery now |
+| 6 Existing Avito XLSX | DEFERRED new work; existing `f013dec`, `66c2420` preserved | XML/value/quantity/formula-text and deterministic retry tests; latest scoped90 PASS | Frozen-sheet/artifact integration unfinished; only required compatibility regression now |
+| 6 A4 PDF, 120x75 and 58x40 ordinary stickers | DEFERRED; no complete renderer recovered | Source package retained as resumption record | Missing renderer/fixtures and separate format gates; do not search or reconstruct now |
+| 7 Archive/reprint/delivery | DEFERRED; P3/P4 request `0aa2c48`, no completed service | Immutable revision/intent/ambiguity requirements retained | Source/storage/service/retry acceptance unfinished; not an active Orders blocker |
+| 8 Active Orders integration; Production cutover deferred | Orders candidate `35ea34e77d80920b0d8779a6b888e6f1d8e7bad0`; NOT final-integrated | Exact candidate handed T1/root, legacy functionality preserved | Root active-scope consolidated integration and latesthead compatibility; Production parity/writer-fence/retirement stays DEFERRED, not prerequisite |
+| KIZ/separate matcher exclusion | T3 `4374bb5`; T4 owner cleanup (separate branch) | Backend runtime scan has no KIZ subsystem; ordinary return matching and barcodes preserved | No KIZ source or allocation dependency. Historical compatibility records remain; frontend integration belongs to root/T4 |
+
+Current missing input is collected once in
+`2026-09-09-t3-production-source-recovery-package.md`. Operational credentials,
+production canaries and physical printing are NOT prerequisites for safe local
+service development. No current T3 heavy process, reservation or pending cleanup.
+The package now also records root-authorized official Avito OpenAPI lookup:
+required `hasMore` (not `total`), no documented ordered revision/stable order-line
+guarantee. Root subsequently approved the bounded known-order status-only
+application policy, implemented in `app/orders/avito_status_refresh.py` and
+tracked by `2026-09-09-orders-avito-status-refresh.md`. This is not provider
+chronology or account completeness. Local runtime-role acceptance: 20 PASS in
+8.76s; adjacent publication/read/HTTP/browser regression: 48 PASS, two known
+warnings, in 20.22s. Exact owned database/role cleanup was verified in both gates.
+Final independent scoped review found no further significant defects; fresh pure
+source/identity checks passed 64 tests in 0.42s. This follow-up is recorded in the
+commit containing this checkpoint; the frozen baseline above does not include
+it and root integration remains separate. Valid rejected observations remain durable;
+only accepted predecessor lineage is excluded from divergence. Existing work
+items prevent status promotion. Full-account traversal, old-baseline enrollment,
+trusted credential-bound client/worker activation, exact filter semantics and
+shared route registration remain separate missing inputs or integration work.
+Production portions of that package and the first-consumer plan are retained for
+resumption only. The Avito source-semantics investigation concerns ACTIVE Orders;
+it does not authorize new work items, sheet generation or print actions.
+
+## Final Deadline Read Package
+
+Implemented first, then verified under the updated user workflow. Existing
+`order_deadlines` order-level rows for the exact current observation now reach
+the frozen read view using the existing `DeadlineEvidence` wire shape. Source and
+computed instants, original rule/version, timezone and evidence source are retained;
+no new schedule calculation, provider mapping, readiness or schema was introduced.
+Rejected-observation deadlines are not attached to the current projection. Existing
+snapshots do not change when a later deadline is recorded. The source writer and
+item-specific observation binding are not fabricated by this read-only consumer.
+
+Final six-file runtime-role gate: **69 PASS, 2 existing deprecation warnings,
+21.32s, exit 0**. All six exact owned databases/runtime roles were verified absent
+after cleanup. The preceding run was **68 PASS / 1 FAIL, 18.58s, exit 1**: an older
+cancellation-history test asserted over every order in its module-shared database,
+including a new independent reconciled order. The assertion now selects its own
+identity and requires both rows and unchanged statuses; no runtime/permission
+behavior was weakened. Pure read/HTTP/source/identity contracts: **101 PASS,
+0.51s, exit 0**. Ruff, compileall and diff checks passed. Final local critical pass
+checked exact scope predicates, unchanged wire, observation lineage and immutable
+snapshot behavior; consolidated root acceptance remains separate.
+
+The remaining active inputs are collected in the source-recovery package's current
+section. T4 explicitly confirmed no agreed canonical filter engine contract; T1's
+trusted Orders job resolver is in implementation, not yet an executable dependency.
+The finite selectors in source amendment `2f0422076ac0b365d2e97432b9ce57d6aa6b350f`
+describe page acquisition only, not a complete synchronization claim.
+
+## Legacy Cache Baseline Probe (current follow-up)
+
+At `f4c6a286030f15ba063980d10dc517a7ddad5da6`, the unchanged historical
+`tests/test_avito_orders.py::test_avito_orders_endpoint_ignores_blocked_cache_and_refetches`
+passed alone: **1 PASS, 2 existing deprecation warnings, 1.77s, exit 0**.
+This does not establish full-suite resolution; `ops/legacy-test-failures.txt`
+remains unchanged. The test stubs actor/credentials/orders client/cache, but
+does not stub public-color lookup or return-inventory DB enrichment. Thus its
+authorization and enrichment behavior are not acceptance evidence.
+
+Reproduction used a cleared environment, disabled plugin autoload/bytecode/cache,
+and macOS sandbox denial of ALL networking and file writes plus secret-file reads.
+No DB allocator, provider, printing, operational export or file mutation ran.
+Initial pytest FD capture could not create its temporary file and exited before
+collection; switching to in-memory capture and disabling logging fixed only the
+harness, without relaxing containment. No runtime or test source was changed.
+
+```sh
+env -i PATH=/usr/local/bin:/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 \
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /usr/bin/sandbox-exec -p \
+  '(version 1) (allow default) (deny network*) (deny file-write*) (deny file-read* (regex #"/\\.env($|[./])")) (deny file-read* (regex #"/\\.(pgpass|pg_service.conf|netrc)$"))' \
+  /Users/bratishka/Downloads/satornawb-main/.worktrees/arch-t1-platform/backend/.venv/bin/python -m pytest \
+  -p no:cacheprovider -p no:logging --capture=sys -q --tb=short \
+  tests/test_avito_orders.py::test_avito_orders_endpoint_ignores_blocked_cache_and_refetches
+```
+
+Run from this worktree's `backend` using the approved sibling T1 virtualenv.
+The blocked-cache branch explicitly bypasses blocked results at
+`app/routers/avito_orders.py:879`, then calls the injected order client at line884.
+The probe provides no reason to alter that branch or weaken permissions. Missing
+test isolation and possible suite-order/environment dependencies remain distinct
+from an asserted cache defect. Production renderer tests were not resumed.
+
+## Historical Evidence (not current status)
+
+All headings, tables, pending/blocked statements, test counts and next-step notes
+below describe their original checkpoint. In particular, old "P1 DDL not READY"
+and "permission requires owner policy" statements are superseded by the current
+matrix. Do not use the historical sections as a second current backlog.
+
 ## Scope override пользователя, 2026-09-09
 
 КИЗ/Честный знак и отдельный recovered matcher исключены из продукта по прямому

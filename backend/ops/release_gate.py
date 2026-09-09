@@ -134,6 +134,10 @@ def safe_environment() -> dict[str, str]:
             "CI": "1",
             "PYTHONUNBUFFERED": "1",
             "LC_ALL": "C",
+            "PIP_CONFIG_FILE": os.devnull,
+            "PGPASSFILE": os.devnull,
+            "PGSERVICEFILE": os.devnull,
+            "NETRC": os.devnull,
             "VELLA_DATABASE_URL": (
                 "postgresql+psycopg://satorna_gate:satorna_gate@127.0.0.1:1/unreachable"
             ),
