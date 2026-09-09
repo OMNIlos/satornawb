@@ -25,6 +25,10 @@ macOS sandbox-exec and private Unix sockets; no dependency changes.
   no skip or baseline expansion. Real defect requires controller amendment first.
 - Child exit/cleanup failure fails the gate. Never label kill/timeout as natural
   shutdown; never signal a PID not captured from this fixture's own subprocess.
+- This separate live gate is explicitly invoked, not automatically collected by
+  ordinary test_*.py unit/DB runs under their incompatible network sandboxes.
+  No skips/collect-ignore or broadening outer isolation. Release CI must invoke
+  the additional launcher command before claiming combined readiness.
 - Production heartbeat/scheduler policy remains disabled and unspecified. All
   timing/identity settings in this plan are synthetic test values only.
 
@@ -32,7 +36,7 @@ macOS sandbox-exec and private Unix sockets; no dependency changes.
 
 **Files:**
 - Create `backend/tests/_heartbeat_process_fixture.py` (committed test-only launcher).
-- Create `backend/tests/test_process_heartbeat_live.py` (isolated service fixture and acceptance).
+- Create `backend/tests/process_heartbeat_live_gate.py` (isolated service fixture and acceptance).
 - Create `backend/docs/superpowers/reports/2026-09-09-t1-heartbeat-live-handoff.md`.
 
 **Consumes:** actual `app/infra/heartbeat.py`, config Settings, existing fake/
@@ -53,7 +57,7 @@ they do not skip. `sys.executable` must resolve to this worktree's .venv.
 
 ```python
 argv = ["/usr/bin/sandbox-exec", "-f", str(profile), sys.executable,
-        "-m", "pytest", "-q", "-s", "tests/test_process_heartbeat_live.py", "--tb=short"]
+        "-m", "pytest", "-q", "-s", "tests/process_heartbeat_live_gate.py", "--tb=short"]
 env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "TMPDIR": "/tmp",
        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
        "SATORNA_TEST_HEARTBEAT_OWNED_ROOT": str(root)}

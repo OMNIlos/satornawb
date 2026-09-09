@@ -104,6 +104,16 @@ or signal a working user service. Remove only the validated temporary directory
 after owned processes are gone, with Python TemporaryDirectory's scoped cleanup.
 No broad shell delete, environment mutation or persistent Redis data.
 
+## Separate required gate
+
+The live module is `tests/process_heartbeat_live_gate.py`, deliberately separate
+from automatic unit-test filename discovery. It runs explicitly through the owned
+sandbox launcher. Full unit/DB pytest may already run under a stricter unrelated
+network sandbox, which a child cannot broaden to bind a new Redis socket. Do not
+add skips, collection-ignore hooks or weaken that outer sandbox. Release CI must
+invoke this additional live gate explicitly before claiming combined readiness;
+ordinary pytest alone does not include or prove it.
+
 ## Change boundaries and rollout
 
 Initial change is test launcher, live acceptance module and handoff only. If it
