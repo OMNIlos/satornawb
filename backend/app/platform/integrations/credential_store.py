@@ -401,8 +401,65 @@ def _put_marketplace_credential_in_session(
         payload_schema_version=1, credential_id=uuid4(), generation=generation,
         expires_at=expires_at,
     )
-    encrypted = encrypt_credential(identity, plaintext, keyring)
-    if decrypt_credential(identity, encrypted, keyring).reveal() != dict(plaintext):
+    row = _insert_verified_credential_in_session(
+        session, identity, plaintext, keyring=keyring, now=now,
+    )
+    _audit(session, row, operation="put", actor_user_id=actor_user_id)
+    return _metadata(row)
+
+
+def _insert_verified_credential_in_session(
+    session: Session,
+    identity: CredentialIdentity,
+    plaintext: Mapping[str, Any],
+    *,
+    keyring: CredentialKeyring,
+    now: datetime,
+) -> MarketplaceAccountCredentialRow:
+    """Store-only insert/readback primitive, before caller audit and commit.
+
+    Caller owns identity/generation, tenant/auth/account locks and rollback. The
+    ORM result is private to this store; no ciphertext/ORM export to consumers.
+    """
+    if (type(identity) is not CredentialIdentity or type(keyring) is not CredentialKeyring
+            or not isinstance(session, Session) or not session.is_active
+            or not session.in_transaction() or session.in_nested_transaction()
+            or type(now) is not datetime or now.utcoffset() is None):
+        raise CredentialStoreError("credential_contract_invalid")
+    if (any(type(value) is not int or value <= 0 for value in (
+            identity.organization_id, identity.marketplace_account_id,
+            identity.payload_schema_version, identity.generation,
+        )) or type(identity.credential_id) is not UUID
+            or type(identity.provider) is not str or type(identity.credential_kind) is not str
+            or not isinstance(plaintext, Mapping)):
+        raise CredentialStoreError("credential_contract_invalid")
+    root = session.get_transaction()
+    connection = session.connection()
+    physical_root = connection.get_transaction()
+
+    def same_root():
+        if (session.get_transaction() is not root or not root.is_active
+                or not session.is_active or session.in_nested_transaction()
+                or session.connection() is not connection or connection.in_nested_transaction()
+                or connection.get_transaction() is not physical_root
+                or physical_root is None or not physical_root.is_active):
+            raise CredentialStoreError("credential_contract_invalid")
+        if connection.dialect.name == "postgresql":
+            if (_physical_connection(session) is not connection
+                    or connection.get_isolation_level() != "READ COMMITTED"):
+                raise CredentialStoreError("credential_contract_invalid")
+
+    same_root()
+    # Freeze only the already required in-memory comparison; never log/serialize
+    # this payload or put it into audit. The existing crypto validates its schema.
+    try:
+        expected = dict(plaintext)
+    except Exception:
+        raise CredentialCryptoError("credential_contract_invalid") from None
+    if any(type(key) is not str or type(value) is not str for key, value in expected.items()):
+        raise CredentialCryptoError("credential_contract_invalid")
+    encrypted = encrypt_credential(identity, expected, keyring)
+    if decrypt_credential(identity, encrypted, keyring).reveal() != expected:
         raise CredentialCryptoError("credential_auth_failed")
     row = MarketplaceAccountCredentialRow(
         credential_id=identity.credential_id, organization_id=identity.organization_id,
@@ -415,8 +472,44 @@ def _put_marketplace_credential_in_session(
     )
     session.add(row)
     session.flush()
-    _audit(session, row, operation="put", actor_user_id=actor_user_id)
-    return _metadata(row)
+    same_root()
+    session.expire(row)
+    # Force a real SELECT, not an identity-map hit. Frozen scope comes from the
+    # requested identity, never from potentially corrupted/reassigned row fields.
+    with session.no_autoflush:
+        persisted = session.scalar(
+            select(MarketplaceAccountCredentialRow).where(
+                MarketplaceAccountCredentialRow.credential_id == identity.credential_id,
+                MarketplaceAccountCredentialRow.organization_id == identity.organization_id,
+                MarketplaceAccountCredentialRow.marketplace_account_id == identity.marketplace_account_id,
+                MarketplaceAccountCredentialRow.provider == identity.provider,
+                MarketplaceAccountCredentialRow.credential_kind == identity.credential_kind,
+            ).execution_options(populate_existing=True)
+        )
+    same_root()
+    if persisted is None:
+        raise CredentialCryptoError("credential_auth_failed")
+    # Check raw integer types before existing reconstruction helpers normalize.
+    if any(type(getattr(persisted, name)) is not int for name in (
+        "organization_id", "marketplace_account_id", "payload_schema_version",
+        "generation", "key_version", "aad_version",
+    )):
+        raise CredentialCryptoError("credential_auth_failed")
+    try:
+        persisted_identity = _identity(persisted)
+        persisted_encrypted = _encrypted(persisted)
+    except (TypeError, ValueError, OverflowError):
+        raise CredentialCryptoError("credential_auth_failed") from None
+    if (persisted_identity != identity or persisted_encrypted != encrypted
+            or persisted.revoked_at is not None or persisted.revocation_reason_code is not None
+            or _as_utc(persisted.created_at) != now or _as_utc(persisted.updated_at) != now):
+        raise CredentialCryptoError("credential_auth_failed")
+    actual = decrypt_credential(persisted_identity, persisted_encrypted, keyring).reveal()
+    if (type(actual) is not dict or actual.keys() != expected.keys()
+            or any(type(actual[key]) is not str or actual[key] != value for key, value in expected.items())):
+        raise CredentialCryptoError("credential_auth_failed")
+    same_root()
+    return persisted
 
 
 def put_marketplace_credential(
