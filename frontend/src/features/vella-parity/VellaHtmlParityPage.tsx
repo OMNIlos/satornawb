@@ -20059,7 +20059,7 @@ function AvitoRepricerToolbarIsland({ replacementKey }: { replacementKey: string
   )
 }
 
-function AvitoRepricerSettingsPanel({
+export function AvitoRepricerSettingsPanel({
   accessToken,
   refreshKey,
 }: {

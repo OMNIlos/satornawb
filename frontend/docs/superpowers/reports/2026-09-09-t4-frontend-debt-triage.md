@@ -125,3 +125,25 @@ case resolved, exit1. The full run started before the six guards were restored;
 final focused rerun with them passes1/1 and typecheck passes. Full report
 `/tmp/satorna-t4-abc-source-full.json`, finalfocused `-reviewed.json`, mutation
 `-mutation.json`. No runtime source diff; no full green or renderer parity claim.
+
+## Avito schedule modal — open/cancel behavior
+
+Actual settings panel uses `Настроить время`/openScheduleSettings, not the obsolete
+worker/openSettings modal copy required by the source test. Remove only those three
+obsolete assertions, retaining strategy-table/history/pending-cell assertions.
+New real-browser case mounts the existing panel (export-only runtime change) with
+two complete synthetic read responses. It opens the schedule dialog, reads60,
+chooses30, cancels, reopens60 and closes. No save or approval is invoked; any
+non-GET/nonfixture request is aborted and fails the test. Worker/apply flags false
+in synthetic responses. This is not panel-in-page integration or backend parity.
+
+Original selected source1FAIL; browser1PASS. Mutation disconnecting actual open
+handler makes the modal assertion fail (3000ms timeout); restored selected2PASS.
+Independent critic scoped PASS; TypeScript0 and Vite production build0 (existing
+large-chunk/plugin-time warnings). Source HTML/generated payload unchanged.
+
+Fresh full **282PASS/22FAIL/0pending**, exit1 versus280/23: zero new failure IDs,
+only Avito strategy/settings source test resolved, plus new browser case. This
+run also includes restored ABC no-demo guards from4fd9156. JSON evidence prefix
+`/tmp/satorna-t4-avito-settings-`: before/browser/mutation/after/full. Remaining22
+failures are unwaived; no skips or blanket snapshots introduced.

@@ -48,9 +48,7 @@ describe('Avito live integration wiring', () => {
     expect(repricerSource).toContain('Стратегия')
     expect(repricerSource).toContain('Новая цена')
     expect(repricerSource).toContain('avito-title-cell')
-    expect(repricerSource).toContain('openSettings')
-    expect(repricerSource).toContain('Настройки worker')
-    expect(repricerSource).toContain('Что делает')
+    // Actual schedule-modal open/cancel behavior is covered in avitoSettingsModal.test.ts.
   })
 
   it('uses backend Avito stats data without static mock row arrays', () => {
