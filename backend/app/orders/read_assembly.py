@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.modules.orders import OrderContractValidationError
-from app.orders.bindings import account_binding_checksum, bound_high_water_mark
+from app.orders.bindings import bound_high_water_mark, validate_run_binding
 from app.orders.catalog_resolution import resolve_order_catalog
 from app.orders.contracts import AccountCoverage, CatalogResolution, OrderReadRow
 from app.orders.ingestion import _integer
@@ -118,22 +118,40 @@ def freeze_orders_view(
                     raise OrderContractValidationError(
                         "Current membership binding missing"
                     )
-                for source_run in {
-                    run,
-                    *(order["last_seen_sync_run_id"] for order in orders),
-                }:
-                    receipt_binding = session.execute(
-                        text("""SELECT details->>'account_binding_checksum'
-                        FROM lk_audit_events WHERE organization_id=:org AND object_type='orders_sync_run'
-                        AND object_id=:id AND action='orders.manifest_published'"""),
-                        {"org": principal.organization_id, "id": str(source_run)},
-                    ).scalar_one_or_none()
-                    if receipt_binding != account_binding_checksum(
-                        principal.organization_id, (account,)
-                    ):
+                current_runs = {order["last_seen_sync_run_id"] for order in orders}
+                for source_run in {run, *current_runs}:
+                    source_binding = (
+                        session.execute(
+                            text("""SELECT * FROM order_sync_runs
+                        WHERE organization_id=:org AND marketplace_account_id=:account
+                        AND marketplace=:provider AND sync_run_id=:run FOR SHARE"""),
+                            dict(params, provider=account.provider, run=source_run),
+                        )
+                        .mappings()
+                        .one_or_none()
+                    )
+                    if source_binding is None:
                         raise OrderContractValidationError(
                             "Source run account binding missing or changed"
                         )
+                    if source_run in current_runs and (
+                        source_binding["state"] != "complete"
+                        or source_binding["manifest_state"] != "complete"
+                    ):
+                        raise OrderContractValidationError(
+                            "Current source publication incomplete"
+                        )
+                    validate_run_binding(
+                        principal.organization_id,
+                        account,
+                        schema_version=source_binding["account_binding_schema_version"],
+                        external_account_id=source_binding[
+                            "account_binding_external_account_id"
+                        ],
+                        credential_ref=source_binding["account_binding_credential_ref"],
+                        payload=source_binding["account_binding_payload"],
+                        checksum=source_binding["account_binding_checksum"],
+                    )
                 for order in orders:
                     observation = deserialize_observation(order["normalized_evidence"])
                     if (observation.source_kind, observation.adapter_version) != (

@@ -13,6 +13,7 @@ from app.modules.orders import (
     make_wb_source_line_key,
     map_wb_statistics_status,
 )
+from app.orders.bindings import serialize_account_bindings
 from app.orders.ingestion import (
     ObservedOrderItem,
     OrderManifest,
@@ -121,6 +122,14 @@ def test_complete_manifest_commits_once_with_status_items_coverage_audit(authori
                 {"id": first.run_id},
             ).one()
             assert tuple(state) == ("complete", "complete", 1, 2)
+            binding = session.execute(
+                text(
+                    "SELECT account_binding_schema_version, account_binding_payload "
+                    "FROM order_sync_runs WHERE sync_run_id=:id"
+                ),
+                {"id": first.run_id},
+            ).one()
+            assert tuple(binding) == (1, serialize_account_bindings(91001, ACCOUNTS))
             assert (
                 session.execute(
                     text(

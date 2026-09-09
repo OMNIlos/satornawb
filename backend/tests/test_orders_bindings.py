@@ -193,3 +193,9 @@ def test_org_and_extra_mark_segments_cannot_be_substituted():
         validate_snapshot_binding(mark, 2, (ACCOUNT,))
     with pytest.raises(ValueError, match="binding"):
         validate_snapshot_binding(mark + ":extra", 1, (ACCOUNT,))
+
+
+def test_audit_era_v2_mark_is_rejected_even_with_valid_current_digest():
+    mark = "orders-view-v2:" + "a" * 64 + ":" + account_binding_checksum(1, (ACCOUNT,))
+    with pytest.raises(ValueError, match="binding"):
+        validate_snapshot_binding(mark, 1, (ACCOUNT,))

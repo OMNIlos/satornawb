@@ -9,7 +9,7 @@ from sqlalchemy import event, text
 from sqlalchemy.orm import Session
 
 from app.cabinet.orm import LkSessionRow, LkUserRow
-from app.orders.bindings import bound_high_water_mark
+from app.orders.bindings import account_binding_checksum, bound_high_water_mark
 from app.orders.cursor import OrdersCursorCodec
 from app.orders.read_service import read_orders_page, read_orders_snapshot
 from app.orders.snapshot_repository import OrdersSnapshotRepository
@@ -19,11 +19,26 @@ from app.platform.integrations.publication_guard import (
     PublicationGuardError,
     UserSessionPrincipal,
 )
-from tests.test_orders_exact_text_migration import db as _db_fixture
-from tests.test_orders_schema_candidate import cluster, scope  # noqa: F401
+from tests import test_orders_schema_candidate as candidate
+from tests.test_orders_exact_text_migration import migrated_database
+from tests.test_orders_schema_candidate import scope
 from tests.test_orders_snapshot_repository import coverage, stored_rows
 
-read_db = _db_fixture
+cluster = candidate.cluster
+
+
+@pytest.fixture(scope="module")
+def read_db(cluster):
+    """Consumer acceptance targets immutable binding schema, not historical 0064."""
+    from tests.test_orders_schema_integration import runtime_script
+
+    with migrated_database(cluster, "20260909_0067") as engines:
+        owner, runtime = engines
+        result = runtime_script(owner, runtime.url.username)
+        assert result.returncode == 0, result.stderr
+        yield engines
+
+
 ACCOUNTS = (ExpectedAccountBinding(91101, "avito", "synthetic-a", None),)
 
 
@@ -137,6 +152,49 @@ def read(session, principal, snapshot, **kwargs):
         query_checksum="a" * 64,
         **kwargs,
     )
+
+
+@pytest.mark.parametrize("selector", ["explicit", "latest", "cursor"])
+def test_audit_era_snapshot_cannot_be_read_with_matching_live_binding(
+    prepared, selector
+):
+    _, runtime, principal, _ = prepared
+    codec = OrdersCursorCodec(b"synthetic-not-a-secret-key-value-32")
+    with Session(runtime) as session, session.begin():
+        scope(session)
+        rows = stored_rows(session)
+        snapshot = OrdersSnapshotRepository(session, 91001).freeze(
+            rows,
+            coverage(),
+            "orders-view-v2:"
+            + "c" * 64
+            + ":"
+            + account_binding_checksum(91001, ACCOUNTS),
+            "c" * 64,
+            parent_versions={rows[0].observation.identity: 2},
+        )
+    selectors = {
+        "explicit": {"snapshot_id": snapshot},
+        "latest": {"latest": True},
+        "cursor": {
+            "cursor": codec.issue(
+                principal=principal,
+                accounts=(91101,),
+                snapshot_id=snapshot,
+                after_position=0,
+                query_checksum="c" * 64,
+            )
+        },
+    }
+    with Session(runtime) as session, pytest.raises(ValueError, match="binding"):
+        read_orders_page(
+            session,
+            principal=principal,
+            accounts=ACCOUNTS,
+            query_checksum="c" * 64,
+            codec=codec,
+            **selectors[selector],
+        )
 
 
 def test_read_commits_guard_before_return_without_marketplace_credential(prepared):

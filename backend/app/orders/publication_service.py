@@ -13,7 +13,12 @@ from app.modules.orders import (
     WB_STATISTICS_STATUS_MAPPING_VERSION,
     OrderContractValidationError,
 )
-from app.orders.bindings import account_binding_checksum
+from app.orders.bindings import (
+    ACCOUNT_BINDING_SCHEMA_VERSION,
+    account_binding_checksum,
+    serialize_account_bindings,
+    validate_run_binding,
+)
 from app.orders.catalog_resolution import resolve_order_catalog
 from app.orders.contracts import CatalogResolution
 from app.orders.evidence_repository import OrdersEvidenceRepository
@@ -186,7 +191,6 @@ def _replay(session, existing, manifest, params):
         not isinstance(details, dict)
         or details.get("manifest_checksum") != manifest.checksum
         or type(details.get("reconciliation_count")) is not int
-        or details.get("account_binding_checksum") != params["binding"]
     ):
         raise OrderContractValidationError("Run receipt integrity failure")
     return OrdersPublicationResult(
@@ -254,6 +258,12 @@ def publish_orders_manifest(
         "source": manifest.source_kind,
         "key": source_run_key,
         "binding": account_binding_checksum(manifest.organization_id, (account,)),
+        "binding_version": ACCOUNT_BINDING_SCHEMA_VERSION,
+        "binding_external": account.external_account_id,
+        "binding_ref": account.credential_ref,
+        "binding_payload": serialize_account_bindings(
+            manifest.organization_id, (account,)
+        ),
         "mapping": AVITO_ORDER_STATUS_MAPPING_VERSION
         if manifest.marketplace == "avito"
         else WB_STATISTICS_STATUS_MAPPING_VERSION,
@@ -278,6 +288,15 @@ def publish_orders_manifest(
                 .one_or_none()
             )
             if existing is not None:
+                validate_run_binding(
+                    principal.organization_id,
+                    account,
+                    schema_version=existing["account_binding_schema_version"],
+                    external_account_id=existing["account_binding_external_account_id"],
+                    credential_ref=existing["account_binding_credential_ref"],
+                    payload=existing["account_binding_payload"],
+                    checksum=existing["account_binding_checksum"],
+                )
                 result = _replay(session, existing, manifest, params)
             else:
                 params.update(
@@ -289,8 +308,11 @@ def publish_orders_manifest(
                 run = session.execute(
                     text("""INSERT INTO order_sync_runs
                     (organization_id,marketplace_account_id,marketplace,source_kind,source_run_key,
-                     adapter_version,mapping_version,source_contract_version,source_snapshot)
-                    VALUES (:org,:account,:marketplace,:source,:key,:adapter,:mapping,:contract,:snapshot)
+                     adapter_version,mapping_version,source_contract_version,source_snapshot,
+                     account_binding_schema_version,account_binding_external_account_id,
+                     account_binding_credential_ref,account_binding_payload,account_binding_checksum)
+                    VALUES (:org,:account,:marketplace,:source,:key,:adapter,:mapping,:contract,:snapshot,
+                            :binding_version,:binding_external,:binding_ref,:binding_payload,:binding)
                     RETURNING sync_run_id"""),
                     params,
                 ).scalar_one()

@@ -3,6 +3,20 @@
 Продолжение `9d1f88b`. Общая очередь НЕ активирована; Production parity не заявляется.
 Код живёт в T3 worktree/branch, shared registration/config/ORM/migrations не менялись.
 
+## Обновление 0067
+
+T1 lineage merged `ff91356830c14cb494d55d4f5ec28b18a60e88cb` (включает обязательный
+fix c4e3e373). Publication/replay/assembly теперь используют immutable run binding
+поля0067, не audit stamp. Current source обязан быть complete manifest. Новый HWM
+`orders-view-v3`; historical v2 latest/explicit/cursor fail-closed, без backfill.
+Поля/параметры HTTP, cursor v1 и decimal-string row_version не изменены; HWM opaque.
+Shared app errors используют `error.code`, standalone test app использует `detail.code`.
+198PASS/2dependency warnings/85.53s, scoped Ruff/compile/diff/fsck0, sole0067.
+Подробные RED/fixture corrections/rollback в текущей T3 progress matrix.
+Нижние описания v2 и mutable provenance blocker исторические и заменены этим разделом.
+Audit result receipt остаётся mutable и не объявляется immutable command receipt.
+Router всё ещё dormant; Production P1/schema/source/permission gates не закрыты.
+
 ## Реализовано
 
 - Exact account/org Product -> Offer -> SKU lookup. Несколько offers неоднозначны,

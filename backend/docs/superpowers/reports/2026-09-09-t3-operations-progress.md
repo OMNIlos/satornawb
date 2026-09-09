@@ -19,8 +19,8 @@ Backup/user data и исторические Git commits не удалялись
 | Этап / requirement | Реализованные commits / проверки | Remaining / blocker |
 |---|---|---|
 | 1 Discovery / parity / schema request | `4323821` Stage1; `3a30b16` offline/XLSX; `f4d6d55` returns/XLSX edge characterization | Полного production prototype нет; только частичные исходники. КИЗ/matcher исключены, не blocker |
-| 2 Identity / normalized ingestion | `9d1f88b` atomic guarded manifest/status/coverage/audit publication; exact replay/CAS repositories; actual0064 consumer acceptance | Source progression deliberately reconciles; immutable run binding request `0b8ae9d`, real adapter completeness/paired-fetch activation and worker authority still require proof |
-| 3 Catalog / read API | `866d1a1` Catalog/assembly/cursor/HTTP; `da7e017` decimal-string BIGINT wire; accepted physicalguard merge `6891b48`, current combined386PASS | Router unregistered; mutable legacy receipt stamp is not immutable provenance; unbound history rejected; source/adapter mixed coverage needs contract; no filter engine or production readiness |
+| 2 Identity / normalized ingestion | `9d1f88b` atomic publication; exact replay/CAS; actual0064 and now0067 consumer acceptance (198PASS below) | Source progression deliberately reconciles; real adapter completeness/paired-fetch activation and worker authority still require proof |
+| 3 Catalog / read API | `866d1a1` Catalog/assembly/cursor/HTTP; `da7e017` decimal-string BIGINT; 0067 immutable provenance and v3 snapshot gate | Router unregistered; legacy unbound/v2 rejected; source/adapter mixed coverage needs contract; no filter engine or production readiness. Mutable audit result receipt is not claimed immutable |
 | 4 Production work items / commands | Pure assignment preconditions + canonical receipt byte codec; `0aa2c48` exact creation/witness/accountRLS amendment | T1 confirms Production DDL not READY; actual CAS/concurrency NOT_RUN; command permission requires owner policy |
 | 5 Batches / groups / frozen sheets | `142cf46` actual HTML synthetic characterization; `0aa2c48` P2/P3/P4 storage requests | Полный legacy schedule/grouping source не восстановлен; Orders read snapshot не равен Production sheet |
 | 6 XLSX | Renderer characterization: inline text, leading zeros, Cyrillic, quantities, 1000 rows; `f013dec` rejects XML-invalid controls | Frozen sheet adapter/артефакт persistence требуют Production contract |
@@ -30,6 +30,48 @@ Backup/user data и исторические Git commits не удалялись
 | 8 Cutover / retirement | Proposed T4 wire/error handoff `f4d6d55`, no activation | Нет полной parity/reconciliation/writer fence/rollback proof; prototype не удалён; switch запрещён |
 
 ## Strict storage decoder slice
+
+### 0067 consumer acceptance (supersedes preparation notes below)
+
+Merged exact T1 feature and mandatory fix through
+`ff91356830c14cb494d55d4f5ec28b18a60e88cb`; decoder preparation is
+`8010112ed61ead1c345630da38618dd0ebc231ed`. No T1 migration was edited.
+New publication INSERT carries all immutable binding fields from the outset.
+Replay validates those fields before reading its result receipt. Assembly validates
+every selected coverage/current source run directly, never using audit as provenance.
+Current projection sources must also be complete published manifests, not staging.
+SQL repositories use actual columns; no speculative shared ORM change was needed.
+
+New frozen marks are `orders-view-v3`; audit-era v2 snapshots fail closed even when
+the live binding digest matches (latest, explicit and cursor). HTTP shape/query,
+cursor v1 and decimal-string BIGINT are unchanged; HWM stays opaque to consumers.
+Old data is retained, not backfilled/relabelled. Rollback must retain expanded0067
+and a decoder-capable binary; do not downgrade bound rows or reactivate audit-era
+readers. Permission, provider completeness, A-to-B-to-A epoch identity and Production
+eligibility are not established by the immutable fingerprint.
+
+TDD: missing persisted fields RED; audit checksum deletion RED after correcting
+test JSON versus JSONB operator. Initial fixture setup lacked helper privileges;
+fixed by applying actual runtime role script in disposable0067 fixture. Historical
+0064 repository fixture remains unchanged. Critic found staging admission and v2
+acceptance; reproduced 4 failures in12.59s plus pure v2 RED, then fixed. Independent
+re-review reports no further important defects.
+
+Final seven-file gate: **198 passed, 2 known dependency warnings, 85.53s, exit0**:
+`test_orders_bindings.py`, `test_orders_publication_service.py`,
+`test_orders_read_assembly.py`, `test_orders_read_service.py`, `test_orders_http.py`,
+`test_orders_run_binding_migration.py`, `test_orders_run_binding_rls.py`.
+Earlier combined attempt:183PASS/10setupERROR, migration subprocess60s timeout;
+not counted green and timeout was not increased. All allocated databases/roles
+were confirmed absent on cleanup, including failed attempt. Scoped Ruff, compileall,
+diff check, Git fsck:0; sole Alembic head0067. This is not whole-backend acceptance.
+Scrubbed environment, disabled pytest plugin autoload, inherited Unix-only sandbox;
+`/dev/null` passfile warnings retained, no application DB or network access.
+
+Next executable consumer depends on exact Production P1 DDL; f76ad06 is a plan,
+not READY. Missing renderer/schedule/WB fulfillment source gates remain separately
+blocked. No schema/config registration edits, provider/production actions, physical
+printing, operational exports, frontend changes, KIZ, push or activation.
 
 `deserialize_observation` и `deserialize_read_row` в `app/orders/serialization.py`:
 exact envelope/version, exact nested fields, strict scalars/arrays, canonical UTC

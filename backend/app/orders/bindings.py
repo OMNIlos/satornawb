@@ -104,7 +104,7 @@ def bound_high_water_mark(content_checksum, organization_id, accounts):
     ):
         raise OrderContractValidationError("Invalid snapshot content checksum")
     return (
-        "orders-view-v2:"
+        "orders-view-v3:"
         + content_checksum
         + ":"
         + account_binding_checksum(organization_id, accounts)
@@ -113,7 +113,7 @@ def bound_high_water_mark(content_checksum, organization_id, accounts):
 
 def validate_snapshot_binding(mark, organization_id, accounts):
     if type(mark) is not str or not re.fullmatch(
-        r"orders-view-v2:[0-9a-f]{64}:[0-9a-f]{64}", mark
+        r"orders-view-v3:[0-9a-f]{64}:[0-9a-f]{64}", mark
     ):
         raise OrderContractValidationError("Snapshot binding missing")
     if not hmac.compare_digest(
