@@ -212,7 +212,8 @@ describe('vella source of truth', () => {
 
     expect(parityPage).toContain('currentRnpReportPath')
     expect(parityPage).toContain('data-vella-runtime-binding="backend-rnp"')
-    expect(parityPage).toContain('РНП собирается из live WB Analytics')
+    // rnpCacheBrowser.test.ts proves real cache GET → populated/empty/error
+    // rendering and session clearing; obsolete explanatory copy is not the binding.
     expect(parityPage).not.toContain('data-vella-island="rnp-diagnostics"')
     expect(parityPage).not.toContain('source.statusCode')
     expect(parityPage).not.toContain('source.rateLimit')
