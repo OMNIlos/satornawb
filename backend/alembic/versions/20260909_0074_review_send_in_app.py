@@ -438,8 +438,8 @@ BEGIN
    AND marketplace_account_id=NEW.marketplace_account_id AND marketplace=NEW.marketplace AND review_id=NEW.review_id
    AND command_id=NEW.command_id AND attempt_id=NEW.attempt_id AND evidence_id=NEW.result_evidence_id;
   IF e.evidence_id IS NULL OR e.observed_at>NEW.occurred_at
-   OR e.outcome IS DISTINCT FROM CASE NEW.event_kind WHEN 'send.sent' THEN 'exact'
-     WHEN 'send.conflict' THEN 'different' ELSE 'incomplete' END THEN
+   OR e.outcome IS DISTINCT FROM (CASE NEW.event_kind WHEN 'send.sent' THEN 'exact'
+     WHEN 'send.conflict' THEN 'different' ELSE 'incomplete' END) THEN
    RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='review_send_evidence_invalid'; END IF;
  END IF;
  IF NEW.event_kind IN ('send.sent','send.conflict') THEN
@@ -560,7 +560,7 @@ BEGIN
     AND review_id=NEW.source_review_id AND command_id=NEW.source_command_id
     AND aggregate_version=NEW.source_version AND event_id=NEW.source_audit_event_id;
    IF j.event_id IS NULL OR NEW.occurred_at<j.occurred_at OR j.event_kind IS DISTINCT FROM
-    CASE NEW.kind WHEN 'send_blocked' THEN 'send.blocked' WHEN 'send_ambiguous' THEN 'send.ambiguous' END THEN
+    (CASE NEW.kind WHEN 'send_blocked' THEN 'send.blocked' WHEN 'send_ambiguous' THEN 'send.ambiguous' END) THEN
     RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='review_send_source_invalid'; END IF;
   END IF;
   RETURN NEW;

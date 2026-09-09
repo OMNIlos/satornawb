@@ -466,12 +466,12 @@ GRANT EXECUTE ON FUNCTION public.repricer_exact_text(text), public.repricer_asci
 DO $$
 DECLARE t record; a record; c record; f record; who text;
 BEGIN
- FOR t IN SELECT x.name,c.oid,c.relowner,c.relname,c.relacl,c.relkind,c.relrowsecurity,c.relforcerowsecurity
+ FOR t IN SELECT x.name,relation.oid,relation.relowner,relation.relname,relation.relacl,relation.relkind,relation.relrowsecurity,relation.relforcerowsecurity
  FROM (VALUES ('wb_price_runs'),('wb_price_pages'),('wb_price_product_facts'),('wb_price_size_facts'),
  ('wb_price_current_heads'),('wb_price_audit'),('wb_stock_runs'),('wb_stock_pages'),
  ('wb_stock_observations'),('wb_stock_current_heads'),('wb_stock_audit'),
  ('wb_price_ingest_sequence'),('wb_stock_ingest_sequence')) x(name)
- LEFT JOIN pg_class c ON c.oid=to_regclass('public.'||x.name) LOOP
+ LEFT JOIN pg_class relation ON relation.oid=to_regclass('public.'||x.name) LOOP
   IF t.oid IS NULL OR (t.relkind<>'S' AND (NOT t.relrowsecurity OR NOT t.relforcerowsecurity)) THEN
    RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='wb_current_forced_rls_required'; END IF;
   FOR a IN SELECT DISTINCT grantee FROM aclexplode(t.relacl) WHERE grantee<>t.relowner LOOP
@@ -554,10 +554,10 @@ GRANT EXECUTE ON FUNCTION public.orders_binding_text(text,integer),
 DO $$
 DECLARE t record; a record; c record; f record; who text;
 BEGIN
- FOR t IN SELECT x.name,c.oid,c.relowner,c.relname,c.relacl,c.relrowsecurity,c.relforcerowsecurity
+ FOR t IN SELECT x.name,relation.oid,relation.relowner,relation.relname,relation.relacl,relation.relrowsecurity,relation.relforcerowsecurity
  FROM (VALUES ('wb_stock_daily_revisions'),('wb_stock_daily_heads'),('wb_stock_revision_evidence'),
  ('wb_stock_revision_evidence_diffs'),('wb_stock_revision_evidence_decisions'),('wb_stock_daily_audit')) x(name)
- LEFT JOIN pg_class c ON c.oid=to_regclass('public.'||x.name) LOOP
+ LEFT JOIN pg_class relation ON relation.oid=to_regclass('public.'||x.name) LOOP
   IF t.oid IS NULL OR NOT t.relrowsecurity OR NOT t.relforcerowsecurity THEN
    RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='wb_daily_forced_rls_required'; END IF;
   FOR a IN SELECT DISTINCT grantee FROM aclexplode(t.relacl) WHERE grantee<>t.relowner LOOP
