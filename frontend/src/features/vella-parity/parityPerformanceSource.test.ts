@@ -36,7 +36,8 @@ describe('Vella parity performance guards', () => {
 
     expect(source).not.toContain('productsReloadTick')
     expect(strategiesEffect).not.toContain('location.pathname')
-    expect(strategiesEffect).toContain('}, [accessToken, runtime])')
+    // The actual React stats page must not issue a strategies request off products.
+    // repricerStatsPageBrowser.test.ts also mutation-checks this route scope.
     expect(source).toContain('}, [accessToken, productsTabActive, runtime])')
   })
 })

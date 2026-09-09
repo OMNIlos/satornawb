@@ -1,4 +1,4 @@
-import { Fragment, createContext, memo, startTransition, type CSSProperties, type ChangeEvent, type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, createContext, memo, startTransition, type CSSProperties, type ChangeEvent, type KeyboardEvent, type MouseEvent, type ReactNode, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, FileSpreadsheet, FolderPlus, Settings, Sparkles, Upload, X } from 'lucide-react'
@@ -2278,15 +2278,88 @@ function renderLiveRepricerStats(payload: LiveRepricerStatsResponse) {
   window.initTooltips?.()
 }
 
+function clearLiveRepricerStatsAggregates() {
+  const tab = document.getElementById('tab-repricer-stats')
+  if (!tab) return
+  tab.querySelectorAll<HTMLElement>('.stats .stat-val').forEach(value => { value.textContent = '—' })
+  tab.querySelectorAll<HTMLElement>('.stats .stat-delta').forEach(delta => {
+    delta.textContent = ''
+    delta.classList.remove('up', 'down', 'neutral')
+  })
+  const summary = tab.querySelector<HTMLElement>('[data-filter-summary] span')
+  if (summary) summary.textContent = ''
+}
+
 function renderLiveRepricerStatsLoading() {
+  clearLiveRepricerStatsAggregates()
   const body = document.getElementById('repricerStatsBody')
   if (body) body.innerHTML = '<tr data-report-row="1"><td colspan="13"><div class="report-empty-note visible">Загружаю статистику товаров...</div></td></tr>'
 }
 
 function renderLiveRepricerStatsError(error: unknown) {
+  clearLiveRepricerStatsAggregates()
   const body = document.getElementById('repricerStatsBody')
   const message = error instanceof Error ? error.message : 'Не удалось загрузить статистику репрайсера'
   if (body) body.innerHTML = `<tr data-report-row="1"><td colspan="13"><div class="report-empty-note visible">Статистика репрайсера недоступна: ${escapeHtml(message)}</div></td></tr>`
+}
+
+export function installRepricerStatsLiveBridge(accessToken: string | null) {
+  let disposed = false
+  let generation = 0
+  const load = async () => {
+    if (disposed) return null
+    const currentGeneration = ++generation
+    const isCurrent = () => !disposed && currentGeneration === generation
+    if (!accessToken) {
+      renderLiveRepricerStatsError(new ApiError('AUTH_REQUIRED', 401))
+      return null
+    }
+    renderLiveRepricerStatsLoading()
+    const period = repricerStatsPeriodRequest()
+    const queryInput = document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')
+    try {
+      const baseQuery = {
+        ...period,
+        page: 1,
+        pageSize: REPRICER_STATS_PAGE_SIZE,
+        q: queryInput?.value?.trim() || undefined,
+      }
+      const payload = await loadLiveRepricerStats(accessToken, undefined, baseQuery)
+      if (!isCurrent()) return null
+      applyRepricerStatsCachePeriod(payload)
+      renderLiveRepricerStats(payload)
+      const total = Number(payload.total || 0)
+      const maxRows = Math.min(total, REPRICER_STATS_MAX_ROWS)
+      const pageCount = Math.ceil(maxRows / REPRICER_STATS_PAGE_SIZE)
+      const mergedItems = [...(payload.items ?? [])]
+      for (let page = 2; page <= pageCount; page += 1) {
+        const pagePayload = await loadLiveRepricerStats(accessToken, undefined, {
+          ...baseQuery,
+          page,
+        })
+        if (!isCurrent()) return null
+        mergedItems.push(...(pagePayload.items ?? []))
+        renderLiveRepricerStats({
+          ...payload,
+          ...pagePayload,
+          items: mergedItems.slice(0, REPRICER_STATS_MAX_ROWS),
+          itemsReturned: Math.min(mergedItems.length, REPRICER_STATS_MAX_ROWS),
+          summary: payload.summary,
+          total,
+        })
+      }
+      return payload
+    } catch (error) {
+      if (!isCurrent()) return null
+      renderLiveRepricerStatsError(error)
+      throw error
+    }
+  }
+  window.__vellaLoadLiveRepricerStats = load
+  return () => {
+    disposed = true
+    if (window.__vellaLoadLiveRepricerStats === load) delete window.__vellaLoadLiveRepricerStats
+  }
 }
 
 function installSecondaryReportHeaderGuard() {
@@ -7395,7 +7468,7 @@ function DigestBalancePanelIsland({
           )
         })}
       </svg>
-      <div className="balance-empty" id="digestBalanceEmpty">{!state.loading && !points.length ? (state.error ?? 'За выбранный период нет продаж, заказов и возвратов.') : ''}</div>
+      <div className={`balance-empty${!state.loading && !points.length ? ' visible' : ''}`} id="digestBalanceEmpty">{!state.loading && !points.length ? (state.error ?? 'За выбранный период нет продаж, заказов и возвратов.') : ''}</div>
     </div>
   )
 }
@@ -10765,7 +10838,7 @@ function ReportTableMoreRow({ colSpan, shown, total, onMore }: { colSpan: number
   )
 }
 
-function ExpensesTableShellIsland({ replacementKey, state }: { replacementKey: string; state: ExpensesLiveState }) {
+export function ExpensesTableShellIsland({ replacementKey, state }: { replacementKey: string; state: ExpensesLiveState }) {
   const rows = state.status === 'ready' ? getExpensesRows(state.report) : []
   const renderWindow = useReportTableRenderLimit(rows.length)
   const visibleRows = rows.slice(0, renderWindow.limit)
@@ -11266,7 +11339,15 @@ function StockTableShellIsland({ replacementKey, state }: { replacementKey: stri
           data-vella-row-count={rows.length}
         >
           {visibleRows.map((row, index) => (
-            <tr key={`${row.nmId ?? row.sku ?? 'stock'}-${row.warehouseName ?? 'warehouses'}-${index}`} data-report-row="stock">
+            <tr
+              key={`${row.nmId ?? row.sku ?? 'stock'}-${row.warehouseName ?? 'warehouses'}-${index}`}
+              data-report-row="stock"
+              data-days-to-oos={typeof row.daysToOos === 'number' && Number.isFinite(row.daysToOos) ? row.daysToOos : undefined}
+              data-available-units={typeof row.availableUnits === 'number' && Number.isFinite(row.availableUnits) ? row.availableUnits : undefined}
+              data-ktr={typeof row.ktrIndex === 'number' && Number.isFinite(row.ktrIndex) ? row.ktrIndex : undefined}
+              data-warehouse={row.warehouseName ?? undefined}
+              data-decision={row.decision ?? undefined}
+            >
               <td className="report-sticky">
                 <ReportProductCell
                   photoUrl={stockProductPhoto(row)}
@@ -12268,7 +12349,7 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
         </thead>
         <tbody data-vella-island="week-table-body" data-vella-island-status="explicit-jsx" data-vella-row-count={rows.length}>
           {visibleRows.map((row, index) => (
-            <tr key={`${row.sku ?? 'sku'}-${index}`} data-report-row="week">
+            <tr key={`${row.sku ?? 'sku'}-${index}`} data-report-row="week" data-product-status={row.productStatus ?? undefined}>
               <td className="report-sticky">
                 <ReportProductCell
                   photoUrl={weekProductPhoto(row)}
@@ -12352,7 +12433,7 @@ function WeekTableScrollStyles() {
   )
 }
 
-function RnpReportIsland({ replacementKey }: { replacementKey: string }) {
+export function RnpReportIsland({ replacementKey }: { replacementKey: string }) {
   return (
     <PeriodReportGate replacementKey={replacementKey} surface="rnp">
       <RnpReportActiveIsland replacementKey={replacementKey} />
@@ -12361,13 +12442,30 @@ function RnpReportIsland({ replacementKey }: { replacementKey: string }) {
 }
 
 function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
-  const { accessToken } = useAuth()
+  const { accessToken, cabinetMe } = useAuth()
   const activeTab = useContext(ActiveParityTabContext)
   const rnpReportActive = shouldLoadPeriodSurface(activeTab, 'rnp')
-  const [state, setState] = useState<RnpLiveState>({ status: 'loading' })
+  const [publishedState, setPublishedState] = useState<ScopedReportState<RnpLiveState> | null>(null)
   const [periodState, setPeriodState] = useState(() => readReportPeriodState('rnp'))
   const periodFromIso = periodState.fromIso
   const periodToIso = periodState.toIso
+  // Keep session material in component memory only, as in the P&L consumer.
+  const requestScope = JSON.stringify([accessToken, cabinetMe?.organization.organizationId, periodFromIso, periodToIso])
+  const activeScope = useRef(requestScope)
+  useLayoutEffect(() => { activeScope.current = requestScope }, [requestScope])
+  const state = selectScopedReportState<RnpLiveState>(requestScope, publishedState, { status: 'loading' })
+  const setState = useCallback((next: RnpLiveState | ((current: RnpLiveState) => RnpLiveState)) => {
+    if (activeScope.current !== requestScope) return
+    setPublishedState(current => {
+      if (activeScope.current !== requestScope) return current
+      return {
+        scope: requestScope,
+        state: typeof next === 'function'
+          ? next(selectScopedReportState<RnpLiveState>(requestScope, current, { status: 'loading' }))
+          : next,
+      }
+    })
+  }, [requestScope])
   const rnpJob = state.status === 'ready'
     ? describePnlReportJob(state.report.reportJob ?? null)
     : state.job ?? null
@@ -12421,7 +12519,7 @@ function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       cancelled = true
       controller.abort()
     }
-  }, [accessToken, periodFromIso, periodToIso, rnpReportActive])
+  }, [accessToken, periodFromIso, periodToIso, rnpReportActive, requestScope, setState])
 
   useEffect(() => {
     const render = (event: Event) => {
@@ -12476,7 +12574,7 @@ function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       cancelled = true
       if (timer !== null) window.clearTimeout(timer)
     }
-  }, [accessToken, periodFromIso, periodToIso, rnpRefreshRunning, rnpReportActive, state.status])
+  }, [accessToken, periodFromIso, periodToIso, rnpRefreshRunning, rnpReportActive, state.status, requestScope, setState])
 
   useEffect(() => {
     const root = document.getElementById('tab-rnp')
@@ -19700,7 +19798,10 @@ function AvitoListingsIsland({
     }
 
     const controller = new AbortController()
-    setAvitoListingsLiveState({ loading: true, error: null, data: window.__vellaAvitoListingsLiveState?.data ?? null })
+    // The previous response and its selected detail belong to the old request.
+    // Do not expose them under newly applied dates while replacement data loads.
+    window.__vellaSetAvitoListingsState?.({ selectedKey: '' })
+    setAvitoListingsLiveState({ loading: true, error: null, data: null })
     void loadLiveAvitoListings(
       accessToken,
       { dateFrom: state.dateFrom, dateTo: state.dateTo, pageSize: Number(state.pageSize) || 100, forceRefresh: state.forceRefresh },
@@ -20059,7 +20160,7 @@ function AvitoRepricerToolbarIsland({ replacementKey }: { replacementKey: string
   )
 }
 
-function AvitoRepricerSettingsPanel({
+export function AvitoRepricerSettingsPanel({
   accessToken,
   refreshKey,
 }: {
@@ -21294,7 +21395,7 @@ function avitoPickingStatusClass(status: string) {
   return 'ok'
 }
 
-function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
+export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
   const location = useLocation()
   const { accessToken } = useAuth()
   const isAvitoOrdersRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'orders-avito'
@@ -21769,7 +21870,13 @@ function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: 
           .vella-html-parity-root .avito-order-detail-list { grid-template-columns: 1fr; }
         }
       `}</style>
-      {!hasExtensionRows ? (
+      {!hasExtensionRows && (live.loading || sourceError) ? (
+        live.loading ? (
+          <AvitoDataState kind="loading" title="Загружаем лист подбора" subtitle="Собираем заказы и товары Авито." />
+        ) : (
+          <AvitoDataState kind="error" title="Не удалось загрузить заказы" subtitle="Проверьте подключение Авито и обновите данные." />
+        )
+      ) : !hasExtensionRows ? (
         <section className="avito-orders-extension-empty" aria-label="Подключение расширения Avito Orders">
           <div className="avito-orders-extension-card">
             <div className="avito-orders-extension-title">
@@ -21918,7 +22025,6 @@ function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: 
                     <th>Возврат</th>
                     <th>Стикер</th>
                     <th>Баркод</th>
-                    <th>КИЗ</th>
                     <th>QR/штрихкод Авито</th>
                     <th>Статус</th>
                   </tr>
@@ -21939,13 +22045,12 @@ function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: 
                       <td>{avitoOrderReturnBadge(item)}</td>
                       <td><button className="btn btn-default btn-sm" type="button" onClick={(event) => { event.stopPropagation(); openStickerDesigner({ key, order, item, index }) }}>Стикеры</button><span className="orders-picking-muted">{order.trackNumber || 'трек не указан'}</span></td>
                       <td>{avitoPickingCell(order.trackNumber)}</td>
-                      <td>{avitoPickingCell(null)}</td>
                       <td>{avitoPickingCell(item.itemId || order.trackNumber)}</td>
                       <td><span className={`orders-status ${avitoPickingStatusClass(order.status)}`}>{avitoOrderStatusLabel(order.status)}</span></td>
                     </tr>
                   )) : (
                     <tr className="avito-orders-empty-row">
-                      <td colSpan={16}>
+                      <td colSpan={15}>
                         {live.loading ? (
                           <AvitoDataState kind="loading" title="Загружаем лист подбора" subtitle="Собираем заказы и товары Авито." />
                         ) : sourceError ? (
@@ -34921,53 +35026,9 @@ export function VellaHtmlParityPage() {
 
   useEffect(() => {
     if (!runtime) return
-    window.__vellaLoadLiveRepricerStats = async () => {
-      if (!accessToken) {
-        renderLiveRepricerStatsError(new ApiError('AUTH_REQUIRED', 401))
-        return null
-      }
-      renderLiveRepricerStatsLoading()
-      const period = repricerStatsPeriodRequest()
-      const queryInput = document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')
-      try {
-        const baseQuery = {
-          ...period,
-          page: 1,
-          pageSize: REPRICER_STATS_PAGE_SIZE,
-          q: queryInput?.value?.trim() || undefined,
-        }
-        const payload = await loadLiveRepricerStats(accessToken, undefined, baseQuery)
-        applyRepricerStatsCachePeriod(payload)
-        renderLiveRepricerStats(payload)
-        const total = Number(payload.total || 0)
-        const maxRows = Math.min(total, REPRICER_STATS_MAX_ROWS)
-        const pageCount = Math.ceil(maxRows / REPRICER_STATS_PAGE_SIZE)
-        const mergedItems = [...(payload.items ?? [])]
-        for (let page = 2; page <= pageCount; page += 1) {
-          const pagePayload = await loadLiveRepricerStats(accessToken, undefined, {
-            ...baseQuery,
-            page,
-          })
-          mergedItems.push(...(pagePayload.items ?? []))
-          renderLiveRepricerStats({
-            ...payload,
-            ...pagePayload,
-            items: mergedItems.slice(0, REPRICER_STATS_MAX_ROWS),
-            itemsReturned: Math.min(mergedItems.length, REPRICER_STATS_MAX_ROWS),
-            summary: payload.summary,
-            total,
-          })
-        }
-        return payload
-      } catch (error) {
-        renderLiveRepricerStatsError(error)
-        throw error
-      }
-    }
-    if (effectiveActiveParityTab === 'repricer-stats') void window.__vellaLoadLiveRepricerStats()
-    return () => {
-      delete window.__vellaLoadLiveRepricerStats
-    }
+    const dispose = installRepricerStatsLiveBridge(accessToken)
+    if (effectiveActiveParityTab === 'repricer-stats') void window.__vellaLoadLiveRepricerStats?.()
+    return dispose
   }, [accessToken, effectiveActiveParityTab, runtime])
 
   useEffect(() => {

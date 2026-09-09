@@ -72,3 +72,92 @@ cleanup slices: **274 passed / 26 failed / 0 pending**, exit 1; versus the prece
 266/27 report, **0 new failure IDs, 1 resolved**. New cases account for the additional
 passes. Report: `/tmp/satorna-t4-notifications-after.json`. The next SKU browser
 fixture was created after this full run began and is verified separately.
+
+## Expense header help — behavior instead of an obsolete label
+
+The expense table already uses `Статья расходов` rather than the old `Статья ДДС`.
+Original focused run: 2 pass / 1 fail on the obsolete source literal. The new
+assertion renders the real nonempty expense table and requires all nine headers
+to carry nonempty help tips, while retaining the other reports' formula checks.
+The component gains only an export; no formula, handler or displayed copy changes.
+Mutation replacing the first help header with plain th fails the new test; restored
+focused set is 3 pass. Independent scoped critic: PASS; this is SSR, not tooltip
+interaction proof. Direct typecheck and diff check exit 0.
+
+Fresh full suite after shared-HTML compatibility: **278 pass / 25 fail / 0 pending**,
+exit 1. Against 277/26: zero new IDs, exactly the expense help test resolved.
+Reports `/tmp/satorna-t4-help-full.json`, `/tmp/satorna-t4-report-help-mutation.json`.
+All remaining 25 failures are still unwaived.
+
+## Source scanner scope — test references are not shipped components
+
+The deprecated-component guard reported exactly five test files referencing
+KpiStrip; no ordinary runtime file was an offender. Exclude `.test/.spec.ts(x)`
+from this existing runtime-source scan instead of excluding only the scanner's
+own test. Existing runtime search and parity-file exception remain unchanged.
+Targeted RED1 → GREEN1. Temporary ordinary `sourceGuardMutation.ts` containing
+ReportLayout makes the same guard fail again; removed that synthetic file and
+ran the full suite. No production source change or permanent test skip.
+
+Fresh full suite **279 pass /24 fail /0 pending**, exit1: against278/25, zero new
+IDs, only the deprecated-component guard resolved. Typecheck exit0; independent
+critic scoped PASS. JSON `/tmp/satorna-t4-source-guard-full.json`; before/after/
+mutation reports share `/tmp/satorna-t4-source-guard-` prefix. Remaining24 failures
+are unwaived. This scan is an architecture guard, not proof of rendered UI parity.
+
+## ABC live bridge — real results instead of obsolete URL/loading copy
+
+The old source test expected `/api/wb/reports/abc?`; the actual legacy bridge uses
+the period-scoped latest-cache path, while enabled canonical uses the separate v2
+adapter. Original selected test1FAIL. Replace obsolete URL/loading-copy checks with
+actual installAbcLiveDataBridge execution under a fully synthetic fetch boundary:
+one backend row only, empty response,500 error, then null session. Empty/error/auth
+retain no rows; error clears report and finishes loading; null auth makes no request.
+All three requests are GET/latest-cache with the selected dates. No job/provider call.
+
+Keep all six independent no-demo source guards: the new bridge test does not prove
+that a downstream renderer cannot fabricate fallback rows. Critic identified this
+coverage gap and the guards were restored; scoped fix review PASS. Mutation inserting
+a demo row in actual bridge error branch makes the test fail; runtime restored.
+
+Fresh full run280PASS/23FAIL/0pending, versus279/24: zero new IDs, only ABC source
+case resolved, exit1. The full run started before the six guards were restored;
+final focused rerun with them passes1/1 and typecheck passes. Full report
+`/tmp/satorna-t4-abc-source-full.json`, finalfocused `-reviewed.json`, mutation
+`-mutation.json`. No runtime source diff; no full green or renderer parity claim.
+
+## Avito schedule modal — open/cancel behavior
+
+Actual settings panel uses `Настроить время`/openScheduleSettings, not the obsolete
+worker/openSettings modal copy required by the source test. Remove only those three
+obsolete assertions, retaining strategy-table/history/pending-cell assertions.
+New real-browser case mounts the existing panel (export-only runtime change) with
+two complete synthetic read responses. It opens the schedule dialog, reads60,
+chooses30, cancels, reopens60 and closes. No save or approval is invoked; any
+non-GET/nonfixture request is aborted and fails the test. Worker/apply flags false
+in synthetic responses. This is not panel-in-page integration or backend parity.
+
+Original selected source1FAIL; browser1PASS. Mutation disconnecting actual open
+handler makes the modal assertion fail (3000ms timeout); restored selected2PASS.
+Independent critic scoped PASS; TypeScript0 and Vite production build0 (existing
+large-chunk/plugin-time warnings). Source HTML/generated payload unchanged.
+
+Fresh full **282PASS/22FAIL/0pending**, exit1 versus280/23: zero new failure IDs,
+only Avito strategy/settings source test resolved, plus new browser case. This
+run also includes restored ABC no-demo guards from4fd9156. JSON evidence prefix
+`/tmp/satorna-t4-avito-settings-`: before/browser/mutation/after/full. Remaining22
+failures are unwaived; no skips or blanket snapshots introduced.
+
+## RNP — actual stale-period defect
+
+Unlike the obsolete call-string assertion, an actual mounted-browser test reproduced
+old ready rows remaining visible during a new period request. Scoped state now hides
+them immediately and fences obsolete setters by session/organization/period. The
+test also checks exact GET parameters and logout clearing without another request.
+Two source cases replaced by one browser case; six other RNP/Ads guards retained.
+RED old runtime → GREEN new runtime; independent scoped review PASS.
+
+Fresh full **282PASS/21FAIL/0pending**, exit1 versus282/22: no new failure IDs,
+one obsolete RNP source failure resolved. Evidence /tmp/satorna-t4-rnp-period-full.json;
+details in 2026-09-09-t4-rnp-period-isolation.md. Still no canonical RNP cutover or
+full release approval. Out-of-order/polling/org-switch races are not browser-proven.

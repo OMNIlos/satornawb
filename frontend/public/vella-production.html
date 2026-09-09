@@ -5910,7 +5910,6 @@ body.avito-popup-open { overflow: hidden; }
               <th>Возврат</th>
               <th>Стикер</th>
               <th>Баркод</th>
-              <th>КИЗ</th>
               <th>QR/Barcode Авито</th>
               <th>Статус</th>
             </tr>
@@ -9135,7 +9134,7 @@ body.avito-popup-open { overflow: hidden; }
   </div>
   <div class="report-source-strip report-source-compact">
     <div class="source-state-card fresh">
-      <div><div class="source-state-kicker"><span>здоровье остатков</span><span class="source-state-chip">WB-14</span><span class="source-state-chip">WB-15</span><span class="source-state-chip">KIZ/returns</span></div><div class="source-state-title">Официальный складской слой · платное хранение рядом · 12 SKU с риском OOS</div><div class="source-state-meta">Фото, габариты, скрытие, маркировка и возвраты идут в очередь действий, а не отдельными warning-карточками.</div></div>
+      <div><div class="source-state-kicker"><span>здоровье остатков</span><span class="source-state-chip">WB-14</span><span class="source-state-chip">WB-15</span><span class="source-state-chip">Возвраты</span></div><div class="source-state-title">Официальный складской слой · платное хранение рядом · 12 SKU с риском OOS</div><div class="source-state-meta">Фото, габариты, скрытие и возвраты идут в очередь действий, а не отдельными warning-карточками.</div></div>
       <button class="btn btn-default btn-sm source-state-action" type="button" onclick="showHelp('table-fields')">Источники</button>
     </div>
   </div>
@@ -15193,7 +15192,7 @@ const SETTINGS_ACCESS_USERS = [
     id: 'user-print-lead', name: 'Светлана В.', initials: 'СВ', email: 'print@ogni.example', role: 'production', status: 'active', last: 'сегодня, 08:02',
     access: { modules: ['production'], rights: ['orders_manual_create'] },
     scopes: [
-      { marketplace: 'WB', status: 'limited', modules: ['Заказы', 'Лист печати', 'КИЗ'], accounts: ['wb-ogni-main'], permissions: ['orders_manual_create'], blockers: ['Финансы скрыты'] },
+      { marketplace: 'WB', status: 'limited', modules: ['Заказы', 'Лист печати'], accounts: ['wb-ogni-main'], permissions: ['orders_manual_create'], blockers: ['Финансы скрыты'] },
       { marketplace: 'Avito', status: 'view_only', modules: ['Заказы', 'QR-возвраты'], accounts: ['avito-bless-msk', 'avito-anomie-msk'], permissions: [], blockers: ['Чаты и кошельки скрыты'] }
     ]
   },
@@ -17720,11 +17719,10 @@ let ordersManualAddMode = 'single';
 let ordersManualTableRowCount = 3;
 let ordersManualPhotoDataUrl = '';
 
-const ORDERS_EDITABLE_FIELDS = ['photoUrl', 'brand', 'name', 'size', 'color', 'sellerArticle', 'sticker', 'barcode', 'honestSign', 'avitoInternalBarcodeQr', 'quantity', 'status'];
+const ORDERS_EDITABLE_FIELDS = ['photoUrl', 'brand', 'name', 'size', 'color', 'sellerArticle', 'sticker', 'barcode', 'avitoInternalBarcodeQr', 'quantity', 'status'];
 const ORDERS_STATUS_OPTIONS = [
   { value: 'ready', label: 'Готов' },
   { value: 'missing_sticker', label: 'Нет стикера' },
-  { value: 'missing_honest_sign', label: 'Ожидает КИЗ' },
   { value: 'missing_avito_qr', label: 'Нет QR Авито' },
   { value: 'incomplete_data', label: 'Неполные данные' },
   { value: 'cancelled', label: 'Отменён' },
@@ -17884,7 +17882,7 @@ function ordersActionLabel(row){
   const status = String(row?.status || 'ready');
   if (status === 'ready' || status === 'new') return 'Готов';
   if (status === 'missing_sticker') return 'Нет стикера';
-  if (status === 'missing_honest_sign') return 'Ожидает КИЗ';
+  if (status === 'missing_honest_sign') return 'Исторический статус: требуется проверка';
   if (status === 'missing_avito_qr') return 'Нет QR Авито';
   if (status === 'incomplete_data') return 'Неполные данные';
   if (status === 'cancelled') return 'Отменён в источнике';
@@ -17895,7 +17893,7 @@ function ordersProblemCard(row){
   const status = String(row?.status || 'ready');
   const cards = {
     missing_sticker: ['Нет стикера', 'Заполните стикер вручную или обновите данные источника. После правки строка останется в этом же порядке.', 'warn'],
-    missing_honest_sign: ['Ожидает КИЗ', 'КИЗ подтянется из отдельного сервиса. При необходимости можно временно заполнить поле вручную.', 'warn'],
+    missing_honest_sign: ['Исторический статус', 'Сохранён исходный статус заказа. Проверьте данные перед явным изменением статуса; автоматического перевода в готовые нет.', 'warn'],
     missing_avito_qr: ['Нет QR Авито', 'Заполните QR/Barcode Авито вручную или дождитесь обновления источника.', 'warn'],
     incomplete_data: ['Неполные данные', 'Заполните обязательные поля строки: артикул, название, цвет, размер и код источника.', 'warn'],
     cancelled: ['Заказ отменён', 'Не печатать и не собирать. Строка сохранена для истории и сверки с внешним источником.', 'warn'],
@@ -17987,7 +17985,11 @@ function renderOrdersInlineInput(rowId, field, value, options = {}){
 
 function renderOrdersStatusSelect(value){
   const current = ordersNormalizeStatus(value);
-  const options = ORDERS_STATUS_OPTIONS.map(option => {
+  // Retain an existing legacy value without offering it for new orders.
+  const choices = current === 'missing_honest_sign'
+    ? [{ value: current, label: ordersActionLabel({ status: current }) }, ...ORDERS_STATUS_OPTIONS]
+    : ORDERS_STATUS_OPTIONS;
+  const options = choices.map(option => {
     return '<option value="' + escapeHtml(option.value) + '"' + (option.value === current ? ' selected' : '') + '>' + escapeHtml(option.label) + '</option>';
   }).join('');
   return '<select class="orders-inline-select" data-orders-edit-field="status" aria-label="Статус">' + options + '</select>';
@@ -18036,6 +18038,8 @@ function ordersInferProductionSku(row){
 
 function ordersNormalizeStatus(status){
   const raw = String(status || 'ready');
+  // Removing a UI feature must not silently promote persisted historical rows.
+  if (raw === 'missing_honest_sign') return raw;
   const deprecatedStatuses = [
     'needs_' + 'mapping',
     'missing_' + 'track',
@@ -18132,7 +18136,6 @@ function renderOrdersPrintRow(row){
   const sellerArticleCell = ordersEditRowId === rowId ? renderOrdersInlineInput(rowId, 'sellerArticle', row.sellerArticle, { code: true, label: 'Артикул продавца' }) : cell(row.sellerArticle);
   const stickerCell = ordersEditRowId === rowId ? renderOrdersInlineInput(rowId, 'sticker', row.sticker, { code: true, label: 'Стикер' }) : cell(row.sticker);
   const barcodeCell = ordersEditRowId === rowId ? renderOrdersInlineInput(rowId, 'barcode', row.barcode, { code: true, label: 'Баркод' }) : cell(row.barcode);
-  const honestSignCell = ordersEditRowId === rowId ? renderOrdersInlineInput(rowId, 'honestSign', row.honestSign, { code: true, label: 'КИЗ' }) : cell(row.honestSign);
   const avitoQrCell = ordersEditRowId === rowId ? renderOrdersInlineInput(rowId, 'avitoInternalBarcodeQr', row.avitoInternalBarcodeQr, { code: true, label: 'QR/Barcode Авито' }) : cell(row.avitoInternalBarcodeQr);
   const returnCell = renderOrdersReturnCell(row);
   const quantityCell = ordersEditRowId === rowId ? renderOrdersInlineInput(rowId, 'quantity', quantity, { type: 'number', label: 'Количество' }) : '<b>' + escapeHtml(String(quantity)) + '</b>';
@@ -18155,7 +18158,6 @@ function renderOrdersPrintRow(row){
       <td class="orders-return-cell">${returnCell}</td>
       <td>${stickerCell}</td>
       <td>${barcodeCell}</td>
-      <td>${honestSignCell}</td>
       <td>${avitoQrCell}</td>
       <td>${statusCell}${renderOrdersMappingControl(row)}</td>
     </tr>
@@ -18519,7 +18521,6 @@ function ordersManualSourceFields(source){
   return [
     ordersManualFieldHtml('sticker', 'Стикер'),
     ordersManualFieldHtml('barcode', 'Баркод'),
-    ordersManualFieldHtml('honestSign', 'КИЗ', { wide: true }),
   ].join('');
 }
 
@@ -18553,7 +18554,7 @@ function ordersManualTableRowHtml(index){
   const source = getOrdersActiveSource();
   const sourceCells = source === 'avito'
     ? '<td><input class="orders-manual-input" data-orders-manual-table-field="avitoInternalBarcodeQr" placeholder="QR"></td><td><input class="orders-manual-input" data-orders-manual-table-field="accountName" placeholder="Аккаунт"></td>'
-    : '<td><input class="orders-manual-input" data-orders-manual-table-field="sticker" placeholder="Стикер"></td><td><input class="orders-manual-input" data-orders-manual-table-field="barcode" placeholder="Баркод"></td><td><input class="orders-manual-input" data-orders-manual-table-field="honestSign" placeholder="КИЗ"></td>';
+    : '<td><input class="orders-manual-input" data-orders-manual-table-field="sticker" placeholder="Стикер"></td><td><input class="orders-manual-input" data-orders-manual-table-field="barcode" placeholder="Баркод"></td>';
   return `
     <tr data-orders-manual-table-row>
       <td class="num">${index + 1}</td>
@@ -18576,7 +18577,7 @@ function renderOrdersManualTableForm(){
   const source = getOrdersActiveSource();
   const sourceHeaders = source === 'avito'
     ? '<th>QR/Barcode Авито</th><th>Аккаунт</th>'
-    : '<th>Стикер</th><th>Баркод</th><th>КИЗ</th>';
+    : '<th>Стикер</th><th>Баркод</th>';
   return `
     <div class="orders-manual-form" data-orders-manual-form="table">
       <div class="orders-manual-table-wrap">
@@ -19108,6 +19109,8 @@ function renderOrdersPrintList(payload, options = {}){
 
 async function hydrateOrdersPrintList(options = {}){
   const source = options.source === 'avito' ? 'avito' : options.source === 'wb' ? 'wb' : getOrdersActiveSource();
+  // React owns this Avito screen's request scope and DOM. Preserve standalone/WB hydration.
+  if (source === 'avito' && document.querySelector('#tab-orders-print[data-vella-island="avito-orders"]')) return;
   const archive = typeof options.archive === 'boolean' ? options.archive : isOrdersArchiveMode();
   const date = String(options.date || getOrdersSelectedDate() || new Date().toISOString().slice(0, 10)).slice(0, 10);
   const loadKey = source + ':' + (archive ? 'archive' : 'current') + ':' + date;
@@ -22593,12 +22596,13 @@ function rowMatchesChip(tab, row, chipText){
   const tags = (row.dataset.reportTags || '').toLowerCase().split('|').filter(Boolean);
   const hasTag = (...needles) => needles.some(needle => tags.some(tag => tag.includes(needle)));
   if (tab.id === 'tab-stock') {
-    const days = Number(row.dataset.daysToOos || '999');
+    const days = row.dataset.daysToOos?.trim() ? Number(row.dataset.daysToOos) : NaN;
+    const available = row.dataset.availableUnits?.trim() ? Number(row.dataset.availableUnits) : NaN;
     const ktr = Number(row.dataset.ktr || '0');
     const warehouse = (row.dataset.warehouse || '').toLowerCase();
     const decision = (row.dataset.decision || '').toLowerCase();
-    if (normalized.includes('oos')) return days <= 7 || hasTag('oos риск');
-    if (normalized.includes('избыт')) return days >= 60 || /не везти|не дозагружать/.test(decision) || hasTag('избыт');
+    if (normalized.includes('oos') || normalized.includes('риск нехватки')) return available <= 0 || days < 7 || hasTag('oos риск');
+    if (normalized.includes('избыт')) return days > 60 || /не везти|не дозагружать/.test(decision) || hasTag('избыт');
     if (normalized.includes('акци')) return hasTag('в акции');
     if (normalized.includes('топ-склад')) return ['коледино','электросталь','краснодар','казань'].includes(warehouse) || hasTag('топ-склады');
     if (normalized.includes('ктр')) return ktr >= 1.5 || hasTag('ктр высокий');
@@ -22657,7 +22661,7 @@ function applyGenericReportFilter(tab){
   const manager = managerFilterValue(tab);
   const sku = skuFilterValue(tab);
   tab.querySelectorAll('tbody tr[data-report-row]').forEach(row => {
-    const searchText = (row.dataset.search || rowText(row)).toLowerCase();
+    const searchText = ((row.dataset.search || rowText(row)) + (tab.id === 'tab-week' ? ' ' + (row.dataset.productStatus || '') : '')).toLowerCase();
     const queryOk = !query || searchText.includes(query);
     const managerKey = row.dataset.managerId === 'unassigned' ? null : (row.dataset.managerId || managerIdFromCode(row.dataset.manager));
     const managerOk = managerFilterMatches(managerKey, manager);
@@ -23237,7 +23241,7 @@ function ensureDesktopFallback(){
     'avito-repricer': ['Репрайсер Авито доступен в desktop-версии', 'Таблица рекомендаций по цене строится по contactsMessenger и требует широкого рабочего экрана.', '/avito/repricer'],
     'avito-stats': ['Статистика Авито доступна в desktop-версии', 'Графики, аккаунтные таблицы, топ объявлений и детализация источников требуют широкого рабочего экрана.', '/avito/stats'],
     'avito-notifications': ['Уведомления Авито доступны в desktop-версии', 'Правила очереди, события аккаунтов и контроль действий требуют широкого рабочего экрана.', '/avito/notifications'],
-    'orders-print': ['WB лист подбора доступен в desktop-версии', 'WB-лист подбора содержит широкую таблицу с фото, стикером, баркодом, КИЗ-слотом и статусами.', '/orders'],
+    'orders-print': ['WB лист подбора доступен в desktop-версии', 'WB-лист подбора содержит широкую таблицу с фото, стикером, баркодом и статусами.', '/orders'],
     promos: ['Акции WB доступны в desktop-версии', 'Проверка акций и расчёт маржи требуют широкого экрана.', '/wb/promotions'],
     liq: ['Ликвидация доступна в desktop-версии', 'Массовое снижение цены и подтверждение убытка доступны только на desktop.', '/wb/liquidation'],
   };
