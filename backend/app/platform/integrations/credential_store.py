@@ -458,6 +458,34 @@ def put_marketplace_credential(
             raise _translate_persistence_error() from None
 
 
+def _resolve_marketplace_credential_in_session(
+    session: Session,
+    account_identity: MarketplaceAccountCredentialOwner,
+    kind: str,
+    *,
+    keyring: CredentialKeyring,
+    now: datetime,
+) -> DecryptedCredential:
+    """Existing active-row verification in the caller's root, not fetch authority.
+
+    Disconnected account status does not bypass missing/expiry/crypto validation.
+    The caller supplies trusted evaluation time and owns context and final guard.
+    """
+    _credential_transaction_inputs(session, account_identity, kind, now)
+    if now is None:
+        raise CredentialStoreError("credential_contract_invalid")
+    if type(keyring) is not CredentialKeyring:
+        raise CredentialStoreError("credential_configuration_invalid")
+    _account(session, account_identity, lock=False)
+    row = _active_row(session, account_identity, kind, lock=False)
+    if row is None:
+        raise CredentialStoreError("credential_missing")
+    expires_at = _as_utc(row.expires_at)
+    if expires_at is not None and expires_at <= now:
+        raise CredentialStoreError("credential_expired")
+    return decrypt_credential(_identity(row), _encrypted(row), keyring)
+
+
 def resolve_marketplace_credential(
     account_identity: MarketplaceAccountCredentialOwner,
     kind: str,
@@ -468,14 +496,9 @@ def resolve_marketplace_credential(
     with get_session_factory()() as session:
         try:
             set_tenant_context(session, account_identity.organization_id)
-            _account(session, account_identity, lock=False)
-            row = _active_row(session, account_identity, kind, lock=False)
-            if row is None:
-                raise CredentialStoreError("credential_missing")
-            expires_at = _as_utc(row.expires_at)
-            if expires_at is not None and expires_at <= _utc_now():
-                raise CredentialStoreError("credential_expired")
-            return decrypt_credential(_identity(row), _encrypted(row), keyring)
+            return _resolve_marketplace_credential_in_session(
+                session, account_identity, kind, keyring=keyring, now=_utc_now(),
+            )
         except (CredentialCryptoError, CredentialStoreError):
             raise
         except SQLAlchemyError:

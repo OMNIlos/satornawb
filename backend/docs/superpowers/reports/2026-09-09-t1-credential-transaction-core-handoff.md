@@ -7,6 +7,29 @@ paired fetch/executor resolver, reencrypt or maintenance edits.
 
 ## Exact private interfaces in the existing store
 
+Follow-up adds the real status-route active-credential verification dependency:
+
+```python
+_resolve_marketplace_credential_in_session(
+    session: Session, account_identity: MarketplaceAccountCredentialOwner,
+    kind: str, *, keyring: CredentialKeyring, now: datetime,
+) -> DecryptedCredential
+```
+
+This is the ordinary active-row resolver, not the connected-only paired fetch
+resolver. It uses existing account/active-row queries, missing/expiry checks and
+one existing crypto decrypt implementation. No ORM row escapes; corrupt ciphertext
+cannot become a successful status. Caller must not reveal the returned wrapper in
+a status response. Exact keyring/owner class and aware time are required; it neither
+loads keys/time nor creates/commits/rolls back a session. Existing public
+`resolve_marketplace_credential(owner,kind)` keeps its own configured keyring,
+short session, UTC clock and typed error mapping, delegating to this core. The
+explicit evaluation timestamp is sampled immediately before invoking the query
+core; final authority remains the admin caller's responsibility. Test expiry at
+the supplied instant and delayed reads in the final gate; no freshness guarantee
+across provider I/O is implied. Paired fetch/executor and reencrypt are untouched.
+Follow-up source is also UNVERIFIED, with no tests/import/compile/review/PG run.
+
 ```python
 _put_marketplace_credential_in_session(
     session: Session,
