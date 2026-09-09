@@ -12,25 +12,40 @@ own integration gate; `final-integrated` requires the consolidated root candidat
 None of these authorizes production activation. Test counts are evidence for their
 named scope, not completion percentages or closure of a whole product stage.
 
+Latest user decision relayed by root: **Production assembly/printing is DEFERRED**,
+not DONE. This includes work items/assignment, batches/calendar, frozen sheets,
+XLSX/PDF/stickers, print archive and delivery receipts. Preserve committed code,
+schema/history and existing functionality; no new P1-P4 implementation, renderer
+recovery or feature tests. Required compatibility regressions remain allowed.
+Orders ingestion/storage/read/API/source progression remain ACTIVE. Deferred
+Production and excluded KIZ are not blockers for integration of the active scope.
+
 | Requirement | Actual implementation SHA / state | Evidence | Remaining / owner |
 |---|---|---|---|
-| 1 Discovery, synthetic identity/parity inventory | `4323821`, `f4d6d55`; implemented | Stage1 and UI/DB parity reports; current contract/returns/XLSX/Stage1 rerun 90 PASS, exit0 | Full Production sources are missing input, not schema dependencies; one recovery package below / root + T3 |
+| 1 Discovery, synthetic identity/parity inventory | `4323821`, `f4d6d55`; implemented | Stage1 and UI/DB parity reports; current contract/returns/XLSX/Stage1 rerun 90 PASS, exit0 | Production source gaps recorded for DEFERRED resumption, no active recovery request / root + T3 |
 | 2 Initial ingestion, replay, partial manifests, immutable owner binding | `9d1f88b`, `8010112`, `33c95c1`, `4c8b4c6`; Orders0067 consumer-accepted | Actual0067 seven-file198 PASS; guarded browser USER-session8 PASS; append-only facts and initial publication | Changed facts still reconcile instead of advancing current projection; source ordering/completeness contract and fake-source revision-to-read acceptance / T3 + source owner |
-| 2 Cancellation/return lifecycle | Pure contract and persisted cancellation/return evidence in `9d1f88b`; implemented, not full lifecycle parity | Status mapping and publication tests | Partial unit return, cancellation after work/sheet, current progression and reconciliation / T3; WB Statistics never proves fulfillment |
+| 2 Cancellation/return lifecycle | Pure contract and persisted cancellation/return evidence in `9d1f88b`; implemented, not full lifecycle parity | Status mapping and publication tests | Orders partial-return/current progression and reconciliation / T3; work/sheet cancellation handling DEFERRED with Production; WB Statistics never proves fulfillment |
 | 3 Catalog resolution, snapshot pagination, cache-only read | `866d1a1`, `da7e017`, `33c95c1`; local consumer-accepted for stated scope | Scoped Catalog/projection/read gates; v3 provenance and decimal-string BIGINT wire | Exact filters and shared registration / T3 + T1; T4 UI consumer integration; readiness remains unproven, no production activation |
-| 4 Physical P1 work items, receipt/history, account RLS | T1 `d57c54418762583c41829dabd80969775b4fdb56` + mandatory `bb7a958d99f1458d7e10877406eaf5dfe03ae6bc`; released, NOT T3 consumer-accepted | T1 exact READY handoff: feature173, covering447, reviewed fixture follow-up; prerequisite0068 `4d95b24b549f0b1f773095ec583a85f18172fdbc`; actual head0069 | Integrate exact dependency unchanged and accept real P1 service/CAS with two sessions / T3; no source refresh, unassign or planning inferred |
-| 4 Permission/actor/replay policy and P1 service | Root-approved read/create/assign policy in `842bbed`; codecs `bd1b9d8`, `35ea34e`; implemented preparation | Committed first-consumer plan; strict result/command114 pure PASS; T1 reports main shared-permission265 PASS | Shared permission/guard exact reviewed READY pending; not an undecided policy. Then guarded read/create/assign, live source proof, CAS/receipt/audit and two-session acceptance / T1 then T3 |
-| 5 Batches/groups/calendar/selected frozen sheets | `142cf46` partial HTML characterization; P2 request `0aa2c48`; preparation only | Actual HTML characterization and frozen-artifact schema request | Full schedule/grouping source or explicitly approved replacement rules; P2 persistence and deterministic version-set assembly / root + T3 + T1 |
-| 6 Existing Avito XLSX | `f013dec`, `66c2420`; implemented and locally tested renderer | XML validity, values/types/leading zeros/Cyrillic/quantity/formula-text checks; deterministic ZIP retry; current scoped90 PASS | Frozen-sheet adapter, artifact storage/checksum/version, unified Production parity / T3 + T1; does not wait for A4 source |
-| 6 A4 PDF, 120x75 and 58x40 ordinary stickers | No complete production renderer recovered; source gap, not implemented parity | Single recovery package records existing HTML and excluded 58x58 fragment | Recover executable source/fixtures or approve new specification; separate multipage, dimension/unit/barcode and rollback gates / root + T3 |
-| 7 Archive/reprint/delivery | P3/P4 design request `0aa2c48`; preparation only | Immutable revision / durable intent / ambiguous outcome requirements recorded | Storage + actual delivery receipt contract; historical artifact reprint and fake-provider retry acceptance / T1 + T3 + root input |
-| 8 Cutover and retirement | Dormant Orders HTTP handoff, no switch; NOT final-integrated | Legacy prototype/writers preserved; no external actions | After P1 consumer acceptance supply ONE consolidated consumer SHA to root; full parity, reconciliation, writer fence and rollback remain separate / root + T1-T4 |
+| 4 Physical P1 work items, receipt/history, account RLS | DEFERRED; T1 `d57c54418762583c41829dabd80969775b4fdb56` + mandatory `bb7a958d99f1458d7e10877406eaf5dfe03ae6bc` released, NOT T3 consumer-accepted | T1 exact READY: feature173/covering447/review; prerequisite0068 `4d95b24b549f0b1f773095ec583a85f18172fdbc`; head0069 | Preserve additive schema; no new service/CAS feature work until resumed / root + T3 + T1 |
+| 4 Permission/actor/replay policy and P1 service | DEFERRED; approved policy `842bbed`, codecs `bd1b9d8`, `35ea34e`; preparation | Committed consumer plan; strict result/command114 pure PASS; T1 main shared-permission265 PASS reported | Preserve implemented policy/code; service, source proof, CAS/audit/two-session acceptance remain unfinished, not active blockers |
+| 5 Batches/groups/calendar/selected frozen sheets | DEFERRED; `142cf46` partial HTML characterization; P2 request `0aa2c48` | Existing characterization/request retained | Resume requires source/rules and P2 persistence/version-set assembly; no further source recovery now |
+| 6 Existing Avito XLSX | DEFERRED new work; existing `f013dec`, `66c2420` preserved | XML/value/quantity/formula-text and deterministic retry tests; latest scoped90 PASS | Frozen-sheet/artifact integration unfinished; only required compatibility regression now |
+| 6 A4 PDF, 120x75 and 58x40 ordinary stickers | DEFERRED; no complete renderer recovered | Source package retained as resumption record | Missing renderer/fixtures and separate format gates; do not search or reconstruct now |
+| 7 Archive/reprint/delivery | DEFERRED; P3/P4 request `0aa2c48`, no completed service | Immutable revision/intent/ambiguity requirements retained | Source/storage/service/retry acceptance unfinished; not an active Orders blocker |
+| 8 Active Orders integration; Production cutover deferred | Orders candidate `35ea34e77d80920b0d8779a6b888e6f1d8e7bad0`; NOT final-integrated | Exact candidate handed T1/root, legacy functionality preserved | Root active-scope consolidated integration and latesthead compatibility; Production parity/writer-fence/retirement stays DEFERRED, not prerequisite |
 | KIZ/separate matcher exclusion | T3 `4374bb5`; T4 owner cleanup (separate branch) | Backend runtime scan has no KIZ subsystem; ordinary return matching and barcodes preserved | No KIZ source or allocation dependency. Historical compatibility records remain; frontend integration belongs to root/T4 |
 
 Current missing input is collected once in
 `2026-09-09-t3-production-source-recovery-package.md`. Operational credentials,
 production canaries and physical printing are NOT prerequisites for safe local
 service development. No current T3 heavy process, reservation or pending cleanup.
+The package now also records root-authorized official Avito OpenAPI lookup:
+required `hasMore` (not `total`), no documented ordered revision/stable order-line
+guarantee, and one bounded status-only replacement policy option for root decision.
+That option is NOT approved or implemented; it does not claim account completeness.
+Production portions of that package and the first-consumer plan are retained for
+resumption only. The Avito source-semantics investigation concerns ACTIVE Orders;
+it does not authorize new work items, sheet generation or print actions.
 
 ## Historical Evidence (not current status)
 

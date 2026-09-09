@@ -1,5 +1,12 @@
 # T3: Single Production Source Recovery Package
 
+LATEST SCOPE: user has DEFERRED Production assembly/printing. The missing-source
+bundle and Production dependencies below are a resumption record, not an active
+request or blocker for remaining platform acceptance. No more renderer/calendar
+recovery, P1-P4 feature implementation or new print tests until resumed. Preserve
+existing code/schema/history. The official Avito Orders investigation and proposed
+Orders-only source policy remain in active scope, subject to root decision.
+
 Owner input request, not implementation or production authorization.
 Checked against T3 `35ea34e77d80920b0d8779a6b888e6f1d8e7bad0` on 2026-09-09.
 KIZ, Honest Sign allocation and the separate matcher are expressly excluded.
@@ -97,3 +104,93 @@ P1 physical schema is now released (`d57c544` + `bb7a958`), not absent. Shared
 permission READY and T3 service acceptance are distinct pending gates at this
 checkpoint. Root consolidated integration follows ONE accepted consumer SHA,
 not a claim that all eight stages are complete.
+
+## Official Avito Documentation Follow-up
+
+Root explicitly authorized public documentation lookup after the local-only
+checkpoint above. On 2026-09-09 an unauthenticated documentation GET succeeded:
+[official catalog](https://www.avito.ru/developers/api-catalog/order-management/documentation)
+and [official catalog OpenAPI payload](https://www.avito.ru/web/1/openapi/info/order-management).
+The old developers.avito.ru catalog URL redirects to the former. The documentation
+metadata URL on developers.avito.ru returned404; the current www.avito.ru URL
+returned JSON. Web-reader extraction failed, so curl and a JSON parser read the
+public specification, not any operational endpoint. No credentials/cookies were
+supplied; no request was made to api.avito.ru or an account Orders endpoint.
+Search-engine third-party/GitHub results were not opened or used as authority.
+
+OpenAPI info.version is `1.0.0`. SHA256 of the exact UTF-8 `swagger` string from
+the metadata response:
+`dbc46528ad2a580e4ffd9b87c57a062b22454db1bbb5307ee521d18e32c9470a`.
+No full specification, personal-data examples or generated contract was committed.
+
+### Primary-source facts (not inferred guarantees)
+
+- `paths./order-management/1/orders.get`: parameters `ids`, `statuses`,
+  `dateFrom`, `page`, `limit`; limit maximum20. `dateFrom` filters creation time.
+- `components.schemas.ordersInfo`: required `orders` and `hasMore`; no `total`
+  property. Thus legacy total/page-length fallback is not authoritative coverage.
+- `components.schemas.order`: required string `id`, `createdAt`, `updatedAt`,
+  `items`, status and other data. `marketplaceId` is a nullable alternate order ID.
+  No ordered revision, cursor, snapshot token or tie behavior is specified here.
+- `components.schemas.item`: `avitoId` identifies the Avito product; optional `id`
+  identifies the seller's product. Neither is documented as an immutable order-line
+  ID. `count` is quantity. Repeated-listing positions lack a proven stable key.
+- `updatedAt` describes update time only: no uniqueness, monotonicity, timestamp
+  precision or ordering guarantee was found in this fetched specification.
+- The eight enumerated status values match the existing pure contract. A status
+  example elsewhere differs from that enum; it does not authorize an alias.
+- `schedules` exposes nullable source deadlines, not factory calendar/group rules.
+
+Absence here means not documented in this retrieved source, not proof that Avito
+cannot supply a stronger guarantee elsewhere. `hasMore=false` terminates the
+returned traversal; it does not promise an atomic account snapshot while orders
+change between page requests. No new mapping or operational readiness is inferred.
+
+### Bounded Policy Option for Root Decision (NOT approved or implemented)
+
+Name: single-known-order status observation replacement, not provider event order.
+This is a proposed application freshness rule, explicitly weaker than guaranteed
+provider chronology. It must have a separate source-contract version if approved.
+
+1. Restrict to one already published Avito order with no Production work items.
+   Use documented `ids` for that exact order, page1, limit20, no status/date filter.
+   Capture expected current parent/item versions and immutable account binding
+   before fetch; perform fetch outside the transaction. Local duplicate writers
+   are controlled by guarded commit/CAS, not a claimed distributed source lock.
+2. Admit only a successful body containing exactly that one order and strict
+   boolean `hasMore=false`. Missing, duplicate, different IDs, more pages, errors
+   and account drift append no promotable current replacement. They never delete
+   an order or imply cancellation/account-wide absence.
+3. Require item identities, occurrence assignments, quantities and all non-status
+   normalized business fields to match the previously accepted observation.
+   No repeated-listing source identity repair: unresolved or changed item shape
+   reconciles. Catalog links are preserved, not recomputed from title or labels.
+4. Status and source update time may differ. Exact semantic replay is idempotent;
+   missing/invalid time, older time or equal time with changed facts reconcile.
+   Strictly later time is accepted ONLY under this explicit application policy,
+   not advertised as a proven Avito version. Unknown raw status remains unmapped
+   with canonical null; no lifecycle rank or readiness fallback is introduced.
+5. Under live authority/account locks, revalidate the captured projection versions
+   and lack of Production work. Atomic append + CAS must preserve coherent parent,
+   item membership and immutable run provenance. A source-only item version bump
+   must be explicit and tested; no silent update of a P1 frozen source witness.
+6. Single-order response coverage must never become account-complete coverage.
+   Existing read assembly currently uses account manifests; before enabling this
+   option it needs an explicit scoped coverage admission preserving prior account
+   coverage and marking uncertain aggregate freshness. Do not pass this body as
+   a normal complete account manifest just to reuse a successful code path.
+7. Synthetic acceptance: initial fake source -> snapshot read -> changed status
+   -> durable revision -> new read; original snapshot remains unchanged. Add exact
+   replay, changed equal timestamp, older response, concurrent CAS, hasMore=true,
+   missing order, changed/reordered repeated items, account rebind and pre-existing
+   work-item cases. No real provider or physical print is needed.
+
+Tradeoff: this unlocks a narrow local status-refresh chain but cannot guarantee
+upstream freshness and deliberately does not progress quantity/line changes,
+orders already in Production, full-account completeness or print eligibility.
+Two same-body reads would not eliminate upstream eventual-consistency risk and
+are not proposed as a false proof. An alternative is to keep changed facts in
+reconciliation until Avito supplies stronger documented semantics; root should
+choose explicitly. No generic engine, scheduler or extra cache is needed for
+either choice. Orders storage/read/API remain independent. The newer deferral
+pauses P1 and new XLSX work; it does not delete their existing implementations.
