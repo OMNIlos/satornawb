@@ -60,6 +60,15 @@ URL from Config, retaining exactly the same database/socket. Shared Alembic code
 and sandbox are unchanged. This one corrected roundtrip awaits a newly authorized
 slot; no automatic rerun was started. Slot explicitly returned to T1/root.
 
+After the next explicit T1/root handoff, the single corrected head-roundtrip at
+source89f008c passed: **1 PASS / 6.96s / natural exit0** on approved Python3.11,
+env-i and unchanged Unix-only sandbox/allocator. Actual empty upgrade0001->0079,
+downgrade0079->0078 and re-upgrade0079 all passed, followed by the test's head and
+prompt-column assertions. Allocated orders_test_aefbee8e0a8547fb8da749d393118d2f
+was verified absent on cleanup. Prior fifteen PG passes remain separate evidence,
+not a new combined16-pass claim. Slot handed directly to T2 per root queue; no
+active/reserved T3 resource remains. Full integrated acceptance remains root-owned.
+
 ## Current Requirements Matrix (2026-09-09, supersedes all history below)
 
 Implementation baseline: `35ea34e77d80920b0d8779a6b888e6f1d8e7bad0`.
