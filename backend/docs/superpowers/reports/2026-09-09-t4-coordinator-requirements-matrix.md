@@ -1,6 +1,15 @@
 # T4 — requirement → commit → evidence → remaining work
 
-## Current checkpoint: 0ce0517 (supersedes historical snapshot below)
+## Current checkpoint: dormant shadow composition after c125a54
+
+Latest bounded acceptance: 19 new actual PostgreSQL shadow cases; combined641PASS
+48.76s, no skips, Ruff/compile/diff0, independent scoped criticPASS. Details in
+2026-09-09-t4-review-shadow-composition.md. Same received WB DTO composition, paired
+credential authority, committed reservation and both real session-revocation lock
+orders are now covered. Actual manual HTTP wiring, T1 physical guard follow-up and
+Review-specific default-off selector remain gates; scheduler and Avito stay unwired.
+This supersedes the older statements below that composition/race tests are missing,
+not the broader stage-completion requirements.
 
 All eight original stages remain in scope. A pure contract, fixture or dormant
 repository is not an activated service. No production/deploy/push/live provider,
