@@ -78,18 +78,36 @@ coordinator to unblock parallel source implementation (not Stage1 verification):
   follow-up preserves public post-query expiry-clock ordering. Private helpers
   are transaction participants, not authentication; paired fetch/executor/rekey
   and existing public signatures were outside this delegation.
-- T4 now temporarily owns ONLY the existing canonical credential-management
+- T4 temporarily owned ONLY the existing canonical credential-management
   composition under committed plan `2026-09-09-credential-management-commit-fence.md`,
   with exact prerequisite `b21f2166886ade7637b1b9594b5b28c1e38d3e80`: new
   `backend/app/platform/integrations/credential_management.py`, fixed management
   root support only in `publication_guard.py`, only the three canonical exact-account
   credential routes/helpers/imports in `backend/app/routers/cabinet.py`, and new
-  `2026-09-09-t1-credential-management-handoff.md`. T1 will not edit these four
-  paths until the bounded source package returns. Store, schema, grants, config,
+  `2026-09-09-t1-credential-management-handoff.md`. Delivered
+  `33032e9ab8ae74cdfc85934801a1b7517a3d54e4`, imported unchanged as
+  `91f2456d832e2c9e6285a56b7b55afa7dffe4bd8`; ownership returned T1. Store, schema, grants, config,
   legacy routes and domain consumers are excluded. T1's daily stock/evidence
   schema package touches only a new migration, runtime grants and its own handoff.
   This temporary assignment implements the explicit independent-work redistribution
   request; it does not transfer standing shared-auth ownership or acceptance.
+- T2's subsequent exact two-path insert/readback extraction in `credential_store.py`
+  and the existing transaction-core handoff returned as
+  `59bf12b3c5e028ab1262f19f3709a0a363f190b2`, imported unchanged as
+  `7f76425a59f93cd5f39546a017400f8c8ec840ce`. Existing put consumes the private
+  persisted-readback core now; no maintenance entrypoint or extra crypto was
+  delegated. Ownership returned T1; public/private signatures remain stable.
+- T4 now temporarily owns ONLY new
+  `backend/app/security/credential_maintenance_contract.py`: strict immutable
+  metadata/types from the approved maintenance spec, no SQL, I/O, secrets,
+  operational proof or registrar. T1 will consume the actual returned contract.
+- T3 now temporarily owns ONLY failure-output hardening in
+  `backend/app/avito/returns_tasks.py` (no task registration/signature changes),
+  the two raw-exception response spans in `backend/app/routers/avito_orders.py`,
+  `_section_error` diagnostics in `backend/app/routers/avito_overview.py`, and new
+  `2026-09-09-t3-avito-failure-surface-handoff.md`. No account cutover, domain rows,
+  cache keys, rollout or permission changes. T1 freezes these four paths until
+  returned; maintenance/schema, T2 daily participant and T4 types are disjoint.
 
 All these source packages are IMPLEMENTED / UNVERIFIED under the user's source-first
 sequence. No new tests/review/compile/import/PG gates, operational role/flag/key or
