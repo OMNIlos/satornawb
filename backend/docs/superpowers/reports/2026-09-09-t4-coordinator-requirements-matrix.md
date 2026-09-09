@@ -1,6 +1,6 @@
 # T4 — requirement → commit → evidence → remaining work
 
-## Current checkpoint: 30f1f15 (supersedes historical snapshot below)
+## Current checkpoint: 0ce0517 (supersedes historical snapshot below)
 
 All eight original stages remain in scope. A pure contract, fixture or dormant
 repository is not an activated service. No production/deploy/push/live provider,
@@ -41,7 +41,15 @@ independent review. Repository uses explicit command_savepoints=False under guar
 caller must roll back the full root on every error. No current service is wired.
 This closes guard/repository compatibility, not authenticated same-fetch shadow
 composition, audit or a Review-specific two-session revocation acceptance gate.
-Actual0065 and lossless decoder/roundtrip remain pending.
+Actual0065c68cd31 subsequently controller-approved and merged74bde41. Decoder-first
+dab11ec and writer0ce0517 close lossless representation acceptance: fresh622PASS38.86s
+(461Review/adjacent+161guard), no skips, Ruff/compile/diff0, independent reviewPASS.
+All8pairs preserve NUL/Unicode/null-empty and semantic hashes; mixed legacy identity
+is not rewritten; actual guard publication/rollback covers NUL keys. DeepJSON
+RecursionError safe handling was reproduced and fixed during decoder review.
+Rollback requires decoder-capable dab11ec+expanded0065, never oldTEXT-only/downgrade.
+Next same-fetch shadow composition remains separate. T1 was directly requested a
+Review-specific default-off org/account policy; collector flags are not reused.
 No SQL migrations or shared auth are authored by T4. Next independent task:
 remaining evidence-backed frontend test debt; durable wiring waits for real guard/DDL.
 
