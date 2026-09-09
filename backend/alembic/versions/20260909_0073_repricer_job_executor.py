@@ -202,7 +202,9 @@ END $$;
 
 
 def upgrade():
-    op.execute(SQL)
+    # DDL keeps the POSIX [:cntrl:] class literal instead of parsing a bind.
+    # Percent escaping preserves SQL bytes through DDL's context interpolation.
+    op.execute(sa.DDL(SQL.replace("%", "%%")))
     for table in TABLES:
         op.execute(f"ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY")
         op.execute(f"ALTER TABLE public.{table} FORCE ROW LEVEL SECURITY")

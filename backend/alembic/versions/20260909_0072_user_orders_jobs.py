@@ -281,7 +281,9 @@ END $$;
 
 def upgrade():
     # CREATE (never OR REPLACE/IF NOT EXISTS) rejects collisions and schema drift.
-    op.execute(sa.text(SQL))
+    # DDL preserves literal JSON colons instead of interpreting them as binds.
+    # Escape percent signs for DDL's context interpolation, including SQL modulo.
+    op.execute(sa.DDL(SQL.replace("%", "%%")))
     for table in TABLES:
         op.execute(f"ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY")
         op.execute(f"ALTER TABLE public.{table} FORCE ROW LEVEL SECURITY")
