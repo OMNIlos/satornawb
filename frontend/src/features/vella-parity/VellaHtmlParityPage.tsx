@@ -4,6 +4,11 @@ import { useLocation } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, FileSpreadsheet, FolderPlus, Settings, Sparkles, Upload, X } from 'lucide-react'
 import QRCode from 'qrcode'
 import { AuthContext, useAuth } from '@/features/auth/authContext'
+import { WbConnection } from '@/features/wb-live/WbConnection'
+import { WbProducts } from '@/features/wb-live/WbProducts'
+
+// The canonical account-scoped screen owns WB product reads after this cutover.
+const WB_ACCOUNT_PRODUCTS_ENABLED = import.meta.env.VITE_WB_LIVE_ENABLED === 'true'
 import { authorizationHeaders, type PermissionProfile } from '@/features/auth/authApi'
 import { applyAuthProfileToParity, bindParityLogout } from '@/features/auth/parityBridge'
 import {
@@ -108,7 +113,7 @@ import {
   type ReviewPromptMatrix,
   type ReviewPromptRule,
 } from '@/features/reviewsPromptMatrix'
-import { ApiError, apiRequest, buildApiUrl } from '@/lib/api'
+import { ApiError, apiData, apiRequest, buildApiUrl } from '@/lib/api'
 import {
   applyLiveRepricerStrategy,
   downloadLiveRepricerNomenclatureXlsx,
@@ -23783,7 +23788,10 @@ function SettingsProfileIsland({ replacementKey }: { replacementKey: string }) {
     setWbTokenLoading(true)
     setWbTokenError(null)
 
-    void loadSettingsSnapshot(accessToken, cabinetMe)
+    const request = WB_ACCOUNT_PRODUCTS_ENABLED
+      ? apiData<UserAvitoCredentialsView>('/api/v1/cabinet/avito-credentials', { headers: authorizationHeaders(accessToken) }).then((avitoCredentials) => ({ wbToken: EMPTY_WB_TOKEN_VIEW, avitoCredentials }))
+      : loadSettingsSnapshot(accessToken, cabinetMe)
+    void request
       .then((snapshot) => {
         if (cancelled) return
         setWbToken(snapshot.wbToken)
@@ -23971,6 +23979,7 @@ function SettingsProfileIsland({ replacementKey }: { replacementKey: string }) {
                     <div className="profile-input-wrap"><input className="profile-input has-status" id="settingsProfileWorkspace" defaultValue="Огни" readOnly /><span className="profile-input-status">workspace</span></div>
                   </div>
                 </div>
+                {WB_ACCOUNT_PRODUCTS_ENABLED ? (isProfileRoute ? <WbConnection /> : null) : (
                 <div className="profile-token-card">
                   <div className="profile-token-head">
                     <div>
@@ -24050,6 +24059,7 @@ function SettingsProfileIsland({ replacementKey }: { replacementKey: string }) {
                     </button>
                   </div>
                 </div>
+                )}
                 <div className="profile-token-card">
                   <div className="profile-token-head">
                     <div>
@@ -29418,6 +29428,9 @@ function ProductSourceSectionIsland({
 
 function ProductsIsland({ replacementKey, sourceElement }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
   useProductsUiTick()
+  const location = useLocation()
+  const liveProductsActive = isCanonicalProductsRoute(location.pathname) || resolveParityRouteTarget(location.pathname, location.search).tab === 'products'
+  if (WB_ACCOUNT_PRODUCTS_ENABLED) return <div key={replacementKey} className={`tab-content ${liveProductsActive ? 'active' : ''}`} id="tab-products" data-vella-island="products" data-vella-island-status="explicit-jsx">{liveProductsActive ? <WbProducts /> : null}</div>
   return (
     <div
       key={replacementKey}
@@ -30261,6 +30274,9 @@ async function loadProductsPageFromRuntime(
   page = window.__vellaProductsListState?.page ?? 1,
   signal?: AbortSignal,
 ) {
+  if (WB_ACCOUNT_PRODUCTS_ENABLED && (isCanonicalProductsRoute(window.location.pathname) || resolveParityRouteTarget(window.location.pathname, window.location.search).tab === 'products')) {
+    throw new ApiError('Откройте товары выбранного аккаунта WB. Старое чтение этого экрана отключено.', 409, 'WB_ACCOUNT_REQUIRED')
+  }
   const loadSeq = ++productsRuntimeLoadSeq
   const isLatestLoad = () => !signal?.aborted && loadSeq === productsRuntimeLoadSeq
   const requestedPage = Math.max(1, Number(page) || 1)
@@ -34848,7 +34864,7 @@ export function VellaHtmlParityPage() {
   const routeTarget = useMemo(() => resolveParityRouteTarget(location.pathname, location.search), [location.pathname, location.search])
   const [activeParityTab, setActiveParityTab] = useState(routeTarget.tab)
   const effectiveActiveParityTab = routeTarget.tab || activeParityTab
-  const productsTabActive = effectiveActiveParityTab === 'products' || isCanonicalProductsRoute(location.pathname)
+  const productsTabActive = !WB_ACCOUNT_PRODUCTS_ENABLED && (effectiveActiveParityTab === 'products' || isCanonicalProductsRoute(location.pathname))
   const canonicalAbcPnlRollout = useMemo(
     () => resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId),
     [cabinetMe?.organization.organizationId],
