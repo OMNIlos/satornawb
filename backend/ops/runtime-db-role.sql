@@ -549,4 +549,84 @@ GRANT EXECUTE ON FUNCTION public.orders_binding_text(text,integer),
  public.review_run_binding_bytes(integer,integer,text,text,text), public.review_binding_ascii_string(text)
  TO :"runtime_role";
 
+-- 0078: immutable daily stock/evidence storage only. These privileges are not
+-- reviewer permissions, trusted worker identity or an activation instruction.
+DO $$
+DECLARE t record; a record; c record; f record; who text;
+BEGIN
+ FOR t IN SELECT x.name,c.oid,c.relowner,c.relname,c.relacl,c.relrowsecurity,c.relforcerowsecurity
+ FROM (VALUES ('wb_stock_daily_revisions'),('wb_stock_daily_heads'),('wb_stock_revision_evidence'),
+ ('wb_stock_revision_evidence_diffs'),('wb_stock_revision_evidence_decisions'),('wb_stock_daily_audit')) x(name)
+ LEFT JOIN pg_class c ON c.oid=to_regclass('public.'||x.name) LOOP
+  IF t.oid IS NULL OR NOT t.relrowsecurity OR NOT t.relforcerowsecurity THEN
+   RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='wb_daily_forced_rls_required'; END IF;
+  FOR a IN SELECT DISTINCT grantee FROM aclexplode(t.relacl) WHERE grantee<>t.relowner LOOP
+   who:=CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END;
+   EXECUTE format('REVOKE ALL ON TABLE public.%I FROM %s',t.relname,who);
+  END LOOP;
+  FOR c IN SELECT at.attname,x.grantee FROM pg_attribute at CROSS JOIN LATERAL aclexplode(at.attacl) x
+  WHERE at.attrelid=t.oid AND x.grantee<>t.relowner LOOP
+   who:=CASE WHEN c.grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(c.grantee)) END;
+   EXECUTE format('REVOKE ALL (%I) ON public.%I FROM %s',c.attname,t.relname,who);
+  END LOOP;
+  EXECUTE format('REVOKE ALL ON TABLE public.%I FROM PUBLIC',t.relname);
+ END LOOP;
+ FOR f IN SELECT oid,proowner,proacl,oid::regprocedure signature FROM pg_proc WHERE oid IN (
+ 'public.wb_daily_integer(numeric,boolean)'::regprocedure,'public.wb_daily_whitespace(integer)'::regprocedure,
+ 'public.wb_daily_reference(text)'::regprocedure,'public.wb_daily_ascii(text)'::regprocedure,
+ 'public.wb_stock_evidence_row_bytes(public.wb_stock_observations)'::regprocedure,
+ 'public.wb_stock_evidence_diff_bytes(public.wb_stock_revision_evidence_diffs[])'::regprocedure,
+ 'public.wb_stock_evidence_proposal_bytes(public.wb_stock_revision_evidence)'::regprocedure,
+ 'public.wb_stock_evidence_expected_diff(integer,integer,uuid,uuid)'::regprocedure,
+ 'public.wb_daily_run_eligible(integer,integer,uuid,bytea,text,date)'::regprocedure,
+ 'public.wb_daily_lock()'::regprocedure,'public.wb_daily_immutable()'::regprocedure,
+ 'public.wb_daily_insert_guard()'::regprocedure,'public.wb_daily_head_guard()'::regprocedure,
+ 'public.wb_daily_emit_audit()'::regprocedure,'public.wb_daily_audit_guard()'::regprocedure,
+ 'public.wb_daily_graph()'::regprocedure,'public.wb_stock_evidence_graph()'::regprocedure) LOOP
+  FOR a IN SELECT DISTINCT grantee FROM aclexplode(f.proacl) WHERE grantee<>f.proowner LOOP
+   who:=CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END;
+   EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %s',f.signature,who);
+  END LOOP;
+  EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC',f.signature);
+ END LOOP;
+END $$;
+GRANT SELECT ON public.wb_stock_daily_revisions, public.wb_stock_daily_heads,
+ public.wb_stock_revision_evidence, public.wb_stock_revision_evidence_diffs,
+ public.wb_stock_revision_evidence_decisions, public.wb_stock_daily_audit TO :"runtime_role";
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,stock_scope,request_checksum,
+ business_date_msk,revision,daily_revision_id,command_id,source_kind,parser_version,source_run_id,
+ request_bytes,basis,effective_observation_at,actor_kind,actor_membership_id,correction_reason,
+ supersedes_revision,evidence_id,decision_id,proposal_checksum)
+ ON public.wb_stock_daily_revisions TO :"runtime_role";
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,stock_scope,request_checksum,
+ business_date_msk,current_revision,version) ON public.wb_stock_daily_heads TO :"runtime_role";
+GRANT UPDATE (current_revision,version) ON public.wb_stock_daily_heads TO :"runtime_role";
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,stock_scope,request_checksum,
+ business_date_msk,evidence_id,source_kind,parser_version,grain_version,request_bytes,before_run_id,
+ after_run_id,before_manifest_checksum,after_manifest_checksum,before_daily_revision,
+ proposed_by_membership_id,proposal_command_id,proposal_bytes,proposal_checksum,evidence_document_bytes,
+ evidence_document_checksum,reviewed_evidence_reference,diff_checksum,added_count,removed_count,changed_count)
+ ON public.wb_stock_revision_evidence TO :"runtime_role";
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,evidence_id,diff_row_id,nm_id,
+ chrt_id,warehouse_id,change_kind,before_payload_checksum,after_payload_checksum)
+ ON public.wb_stock_revision_evidence_diffs TO :"runtime_role";
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,evidence_id,decision_id,decision_command_id,
+ outcome,reviewed_by_membership_id,reviewed_proposal_checksum,reason_code)
+ ON public.wb_stock_revision_evidence_decisions TO :"runtime_role";
+-- Supports the SECURITY INVOKER head audit trigger only; direct INSERT is denied
+-- by the audit origin guard. Generated IDs/timestamps are excluded from grants.
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,stock_scope,request_checksum,
+ business_date_msk,revision,source_run_id,event_kind,actor_kind,actor_membership_id,
+ before_revision,after_revision,before_head,after_head) ON public.wb_stock_daily_audit TO :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.wb_daily_integer(numeric,boolean), public.wb_daily_whitespace(integer),
+ public.wb_daily_reference(text), public.wb_daily_ascii(text),
+ public.wb_stock_evidence_row_bytes(public.wb_stock_observations),
+ public.wb_stock_evidence_diff_bytes(public.wb_stock_revision_evidence_diffs[]),
+ public.wb_stock_evidence_proposal_bytes(public.wb_stock_revision_evidence),
+ public.wb_stock_evidence_expected_diff(integer,integer,uuid,uuid),
+ public.wb_daily_run_eligible(integer,integer,uuid,bytea,text,date) TO :"runtime_role";
+-- Exact existing validation dependencies; parent tables, indexes and policies unchanged.
+GRANT EXECUTE ON FUNCTION public.wb_current_uuid(uuid), public.wb_current_time(timestamptz),
+ public.review_local_nonblank_utf8(bytea), public.review_strict_utf8(bytea) TO :"runtime_role";
+
 COMMIT;
