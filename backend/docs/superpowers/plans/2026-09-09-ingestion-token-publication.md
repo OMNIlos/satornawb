@@ -63,7 +63,9 @@ rewrite its decoder. T3 owns the token-only durable sink once guard source exist
 - Modify backend/app/platform/integrations/ingestion_tokens.py (shared verifier,
   bound issuance and existing lifecycle internals, safe metadata only).
 - Modify backend/app/platform/integrations/publication_guard.py (only shared
-  installation/root infrastructure needed by token guard, no user policy changes).
+  installation/root infrastructure needed by token guard, plus validation of new
+  bound-token incarnation fields when used via existing ExpectedIngestionToken;
+  no user permission/profile changes or fake principal).
 - Create backend/app/platform/integrations/ingestion_publication_guard.py.
 - Create backend/app/platform/integrations/ingestion_api.py.
 - Create backend/app/platform/integrations/ingestion_limits.py.
@@ -101,6 +103,14 @@ No tests or other paths during implementation; final obligations below retained.
    domain locks, revalidate exact token, binding version, connected status, revocation
    and DB clock; poison failed/nested/foreign/ended root. Compatible trusted final
    transaction-fence registration, no network or second session while holding locks.
+   Existing user-session + ExpectedIngestionToken validation must also reject a
+   NEW bound token when its issuance incarnation differs from the locked account;
+   it cannot bypass the new binding by using the older guard entry point. Preserve
+   an explicitly documented legacy user-authenticated path only outside the new
+   token-only rollout; never allow an unbound row through the token-only factory.
+   Existing table-level UPDATE grants may cover additive columns; column REVOKE
+   alone cannot narrow those privileges. Enforce counter/binding immutability with
+   triggers and disclose actual privileges, without unrelated global ACL reform.
 4. Authenticated issue/status/revoke wrappers construct live principal from real
    ActorContext + current membership and account, fixed integrations:write. Live
    guard before mutations and final commit; disconnected/rebound/wrong account/

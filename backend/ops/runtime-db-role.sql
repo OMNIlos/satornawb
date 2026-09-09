@@ -40,6 +40,14 @@ BEGIN
             ('review_workflow_heads'),
             ('review_local_audit'),
             ('review_local_command_receipts'),
+            ('review_send_commands'),
+            ('review_send_command_authorities'),
+            ('review_send_attempts'),
+            ('review_answer_evidence'),
+            ('review_send_audit'),
+            ('review_send_enqueue_intents'),
+            ('notification_in_app_events'),
+            ('notification_in_app_receipts'),
             ('user_orders_jobs'),
             ('user_orders_job_authorities'),
             ('user_orders_job_attempts'),
@@ -343,5 +351,108 @@ REVOKE ALL ON FUNCTION public.repricing_job_uuid(uuid), public.repricing_job_tim
  public.repricing_job_text(text,integer) FROM PUBLIC, :"runtime_role";
 GRANT EXECUTE ON FUNCTION public.repricing_job_uuid(uuid), public.repricing_job_time(timestamptz),
  public.repricing_job_text(text,integer) TO :"runtime_role";
+
+-- Review send/in-app: exact new-object capabilities. These SQL grants do not
+-- authenticate a worker or prove current multi-member/closing authority.
+REVOKE ALL ON TABLE public.review_send_commands, public.review_send_command_authorities,
+ public.review_send_attempts, public.review_answer_evidence, public.review_send_audit,
+ public.review_send_enqueue_intents, public.notification_in_app_events,
+ public.notification_in_app_receipts FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON TABLE public.%I FROM PUBLIC, %I', a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+ ('review_send_commands','review_send_command_authorities','review_send_attempts',
+  'review_answer_evidence','review_send_audit','review_send_enqueue_intents',
+  'notification_in_app_events','notification_in_app_receipts')
+ AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, INSERT ON TABLE public.review_send_commands, public.review_send_command_authorities,
+ public.review_send_attempts, public.review_answer_evidence, public.review_send_audit,
+ public.review_send_enqueue_intents, public.notification_in_app_events,
+ public.notification_in_app_receipts TO :"runtime_role";
+GRANT UPDATE (state,version,current_attempt_id,completed_at,result_evidence_id,reason_code,audit_event_id)
+ ON public.review_send_commands TO :"runtime_role";
+GRANT UPDATE (state,lease_expires_at,dispatched_at,finished_at,result_evidence_id,reason_code,command_version,audit_event_id)
+ ON public.review_send_attempts TO :"runtime_role";
+GRANT UPDATE (read_at,dismissed_at) ON public.notification_in_app_receipts TO :"runtime_role";
+REVOKE ALL ON FUNCTION public.review_send_account_lock(), public.review_send_audit_guard(),
+ public.review_send_row_guard(), public.review_send_validate() FROM PUBLIC, :"runtime_role";
+REVOKE ALL ON FUNCTION public.review_send_unicode_version(), public.review_send_uuid4(uuid),
+ public.review_send_answer_id(bytea), public.review_send_external_id(bytea),
+ public.review_send_request_bytes(public.review_send_commands,bytea),
+ public.review_send_evidence_bytes(public.review_answer_evidence),
+ public.review_send_audit_bytes(public.review_send_audit),
+ public.review_send_enqueue_bytes(public.review_send_enqueue_intents),
+ public.notification_in_app_identity_bytes(public.notification_in_app_events),
+ public.notification_in_app_event_bytes(public.notification_in_app_events),
+ public.notification_in_app_receipt_bytes(public.notification_in_app_receipts),
+ public.notification_in_app_visible_action_bytes(integer,integer,integer,uuid[],text)
+ FROM PUBLIC, :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.review_send_unicode_version(), public.review_send_uuid4(uuid),
+ public.review_send_answer_id(bytea), public.review_send_external_id(bytea),
+ public.review_send_request_bytes(public.review_send_commands,bytea),
+ public.review_send_evidence_bytes(public.review_answer_evidence),
+ public.review_send_audit_bytes(public.review_send_audit),
+ public.review_send_enqueue_bytes(public.review_send_enqueue_intents),
+ public.notification_in_app_identity_bytes(public.notification_in_app_events),
+ public.notification_in_app_event_bytes(public.notification_in_app_events),
+ public.notification_in_app_receipt_bytes(public.notification_in_app_receipts),
+ public.notification_in_app_visible_action_bytes(integer,integer,integer,uuid[],text)
+ TO :"runtime_role";
+
+-- Repricer typed state: exact new objects only. Org settings mutation has no
+-- approved application permission yet, so this login receives read access only
+-- to that family. Account-owned assignment/liquidation can be implemented now.
+DO $$ BEGIN
+ IF EXISTS (SELECT 1 FROM (VALUES ('wb_repricing_settings_versions'),
+ ('wb_repricing_settings_heads'),('wb_repricing_basket_norm_defaults'),
+ ('wb_repricing_assignment_versions'),('wb_repricing_assignment_heads'),
+ ('wb_repricing_liquidation_campaigns'),('wb_repricing_liquidation_versions'),
+ ('wb_repricing_liquidation_heads'),('wb_repricing_state_audit')) t(name)
+ LEFT JOIN pg_class c ON c.oid=to_regclass('public.'||t.name)
+ WHERE c.oid IS NULL OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
+ THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='wb_state_forced_rls_required'; END IF;
+END $$;
+REVOKE ALL ON TABLE public.wb_repricing_settings_versions, public.wb_repricing_settings_heads,
+ public.wb_repricing_basket_norm_defaults, public.wb_repricing_assignment_versions,
+ public.wb_repricing_assignment_heads, public.wb_repricing_liquidation_campaigns,
+ public.wb_repricing_liquidation_versions, public.wb_repricing_liquidation_heads,
+ public.wb_repricing_state_audit FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON public.%I FROM PUBLIC, %I',a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+ ('wb_repricing_settings_versions','wb_repricing_settings_heads','wb_repricing_basket_norm_defaults',
+  'wb_repricing_assignment_versions','wb_repricing_assignment_heads','wb_repricing_liquidation_campaigns',
+  'wb_repricing_liquidation_versions','wb_repricing_liquidation_heads','wb_repricing_state_audit')
+ AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT ON public.wb_repricing_settings_versions, public.wb_repricing_settings_heads,
+ public.wb_repricing_basket_norm_defaults TO :"runtime_role";
+GRANT SELECT, INSERT ON public.wb_repricing_assignment_versions, public.wb_repricing_assignment_heads,
+ public.wb_repricing_liquidation_campaigns, public.wb_repricing_liquidation_versions,
+ public.wb_repricing_liquidation_heads, public.wb_repricing_state_audit TO :"runtime_role";
+GRANT UPDATE (current_revision,version,updated_at) ON public.wb_repricing_assignment_heads TO :"runtime_role";
+GRANT UPDATE (current_revision,version,updated_at,state,current_price_kopecks,target_price_kopecks,
+ step_pct,hold_orders_to,next_step_at,requires_negative_margin_confirm,confirmed_by_membership_id,
+ confirmed_at,resulting_approval_id,resulting_approval_row_id)
+ ON public.wb_repricing_liquidation_heads TO :"runtime_role";
+REVOKE ALL ON FUNCTION public.wb_state_lock(), public.wb_state_guard(),
+ public.wb_state_settings_witness(), public.wb_state_assignment_witness(),
+ public.wb_state_liquidation_witness() FROM PUBLIC, :"runtime_role";
+REVOKE ALL ON FUNCTION public.wb_state_uuid(uuid), public.wb_state_time(timestamptz),
+ public.wb_state_timestamp(timestamptz), public.wb_state_json(jsonb),
+ public.wb_state_settings_bytes(public.wb_repricing_settings_versions,public.wb_repricing_basket_norm_defaults[]),
+ public.wb_state_assignment_bytes(public.wb_repricing_assignment_versions),
+ public.wb_state_liquidation_bytes(public.wb_repricing_liquidation_versions,public.wb_repricing_liquidation_campaigns)
+ FROM PUBLIC, :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.wb_state_uuid(uuid), public.wb_state_time(timestamptz),
+ public.wb_state_timestamp(timestamptz), public.wb_state_json(jsonb),
+ public.wb_state_settings_bytes(public.wb_repricing_settings_versions,public.wb_repricing_basket_norm_defaults[]),
+ public.wb_state_assignment_bytes(public.wb_repricing_assignment_versions),
+ public.wb_state_liquidation_bytes(public.wb_repricing_liquidation_versions,public.wb_repricing_liquidation_campaigns)
+ TO :"runtime_role";
+-- Exact preexisting pure codec dependencies; no old table/index or policy change.
+GRANT EXECUTE ON FUNCTION public.repricer_exact_text(text), public.repricer_ascii_json_string(text),
+ public.wb_sku_override_decimal(numeric), public.wb_sku_override_integral(numeric) TO :"runtime_role";
 
 COMMIT;
