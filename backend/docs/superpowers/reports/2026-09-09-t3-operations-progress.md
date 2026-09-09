@@ -12,23 +12,173 @@ Branch `codex/arch-t3-operations`; исходная база `c88a474`.
 Avito return matching, Catalog resolution, WB/Avito order identities, XLSX и
 обычная печать не относятся к удаляемому КИЗ subsystem и сохранены.
 Backend app scan не обнаружил kiz/chz/КИЗ/Честный знак runtime references.
-Frontend placeholders требуют отдельной правки владельца T4; координатор уведомлён.
+Frontend cleanup выполнен владельцем T4 в его ветке, включая `8d4a5b9`;
+общая интеграция остаётся отдельным gate. T3 frontend не менял.
 Backup/user data и исторические Git commits не удалялись.
 
 | Этап / requirement | Реализованные commits / проверки | Remaining / blocker |
 |---|---|---|
-| 1 Discovery / parity / schema request | `4323821` Stage1; `3a30b16` offline/XLSX; `f4d6d55` returns/XLSX edge characterization | Полного production prototype/matcher нет; доступны только частичные исходники, см. recovery reports |
-| 2 Identity / normalized ingestion | Existing pure orders contract; `1afd5a2` manifest/replay validation; `2f1724a` observation serialization binding | Exact installed T1 schema не передана; ORM/durable publication/CAS/revocation DB tests не выполнены |
-| 3 Catalog / read API | `1afd5a2` item-scoped read models; `2f1724a` frozen payload; текущий decoder slice | Не реализованы repository resolution, permissions/cursors/API wiring; нужны schema и shared auth protocol |
-| 4 Production work items / commands | `1afd5a2` pure assignment preconditions; DB09-DB13 specification | Production schema/receipts/audit отсутствуют в Orders candidate; нужны отдельный binding и T1 DDL; concurrency proof NOT_RUN |
-| 5 Batches / groups / frozen sheets | Только discovery/parity requirements | Полный legacy schedule/grouping source не восстановлен; Orders read snapshot не равен Production sheet |
-| 6 XLSX | Реальный renderer characterization: inline text, leading zeros, Cyrillic, quantities, 1000 rows, XML-invalid controls | Controls defect выделен в отдельное изменение; frozen sheet adapter/артефакт persistence требуют Production contract |
+| 1 Discovery / parity / schema request | `4323821` Stage1; `3a30b16` offline/XLSX; `f4d6d55` returns/XLSX edge characterization | Полного production prototype нет; только частичные исходники. КИЗ/matcher исключены, не blocker |
+| 2 Identity / normalized ingestion | `9d1f88b` atomic publication; exact replay/CAS; actual0064 and now0067 consumer acceptance (198PASS below) | Source progression deliberately reconciles; real adapter completeness/paired-fetch activation and worker authority still require proof |
+| 3 Catalog / read API | `866d1a1` Catalog/assembly/cursor/HTTP; `da7e017` decimal-string BIGINT; 0067 immutable provenance and v3 snapshot gate | Router unregistered; legacy unbound/v2 rejected; source/adapter mixed coverage needs contract; no filter engine or production readiness. Mutable audit result receipt is not claimed immutable |
+| 4 Production work items / commands | Pure assignment preconditions + canonical receipt byte codec; `0aa2c48` exact creation/witness/accountRLS amendment | T1 confirms Production DDL not READY; actual CAS/concurrency NOT_RUN; command permission requires owner policy |
+| 5 Batches / groups / frozen sheets | `142cf46` actual HTML synthetic characterization; `0aa2c48` P2/P3/P4 storage requests | Полный legacy schedule/grouping source не восстановлен; Orders read snapshot не равен Production sheet |
+| 6 XLSX | Renderer characterization: inline text, leading zeros, Cyrillic, quantities, 1000 rows; `f013dec` rejects XML-invalid controls | Frozen sheet adapter/артефакт persistence требуют Production contract |
 | 6 A4 PDF | Source gap описан | Нет полного renderer/fixtures, не реконструировать по screenshots; multipage/48+ rows NOT_RUN |
-| 6 Stickers 120x75 / 58x40 | Partial matcher evidence only | Доступный fragment 58x58 не доказывает эти форматы; selected unit identity/barcode/quantity tests blocked source |
-| 7 Archive / delivery / KIZ | Requirements and safety boundaries preserved | Immutable historical artifact, receipt/ambiguity и atomic allocations не реализованы; source+schema prerequisites |
+| 6 Stickers 120x75 / 58x40 | Source gap documented; no substitute renderer invented | Нужны исходники обычных WB/Avito renderers; selected unit identity/barcode/quantity parity NOT_RUN. КИЗ/matcher не требуются |
+| 7 Archive / delivery | Requirements and safety boundaries preserved; КИЗ excluded | Immutable historical artifact and delivery receipt/ambiguity require source+Production schema prerequisites |
 | 8 Cutover / retirement | Proposed T4 wire/error handoff `f4d6d55`, no activation | Нет полной parity/reconciliation/writer fence/rollback proof; prototype не удалён; switch запрещён |
 
 ## Strict storage decoder slice
+
+### Independent P1 result decoder
+
+Accepted design `2026-09-09-production-assignment-storage-design.md` already fixes
+the seven result fields. Added frozen AssignmentResult and exact version1 JSONB
+encode/decode, strict positive BIGINT IDs/versions, positive INTEGER SKU/required,
+nonnegative planned/remaining with remaining=required-planned. No planning operation
+or permission follows from this representation. AssignmentCommand now rejects
+values beyond the accepted physical INTEGER/BIGINT bounds before reaching SQL.
+These codecs are internal Python/JSONB, NOT a numeric browser wire contract.
+
+Actual RED64: missing result decoder and three accepted command overflows. Final
+result/command-codec/text/read-contract files113PASS0.11s/exit0; scoped Ruff0,
+independent read-only critic no important findings. P1 persisted witness/CAS/live
+authority still requires exact READY migration and real two-session acceptance.
+No new heavy gate was run while T1 owned the resource interval. Browser-token
+USER-session sink tests now pass the bounded8case actual0067 gate below;
+token-only issuance binding/auth/completeness remain explicitly unresolved.
+
+Decoder follow-up: 10,000 nested empty arrays (20KB) caused uncaught RecursionError
+in `deserialize_assignment_command`:1RED0.06s. Added conversion to its existing
+fixed typed validation error; final114purePASS0.13s/Ruff0, read-only critic no
+important concerns. Shallower initial probe already passed and is not RED evidence.
+No payload/memory limit or HTTP DoS protection is claimed by this exception fix.
+
+### Normalized browser sink acceptance
+
+`tests/test_orders_browser_publication.py`:8PASS3.28s/natural0 after explicit T4
+release, own disposable DB/role absence verified, then explicit release to T1.
+Existing behavior characterization, not a fabricated RED or new auth implementation.
+Complete/partial durable runs and replay, required user session, account/UUID/expiry
+metadata mismatch without run insertion, revoked-token replay denial and final-hook
+revocation rollback all pass. Final-hook denial checks exact authority error, not
+generic SQL permission failure. This is same-transaction revalidation, not a new
+two-writer revocation proof. Read-only critic found no important false positives.
+
+Committed service interface remains:
+`app.orders.publication_service.publish_orders_manifest(session, *, principal,
+account, authorities, manifest, source_run_key) -> OrdersPublicationResult`.
+Principal is actual `UserSessionPrincipal`; account is `ExpectedAccountBinding`;
+browser authorities include `ExpectedIngestionToken` with exact
+`avito.browser_snapshot.write` scope. Own clean root transaction uses fixed
+`sync:run` and live guard. `OrderManifest` is normalized domain input, NOT the
+browser HTTP body. Body owner override policy, token secret verification,
+issuance-time frozen account binding and bearer-only principal are not supplied
+by this sink. Org/account/provider drift rejects rather than overriding identity.
+
+Manifest completeness is structural: one scoped account/source/adapter/snapshot,
+unique orders, contiguous pages with final terminal marker and exact declared
+distinct-order count. Partial stores facts without projecting/removing absent
+orders. No browser/provider completeness is inferred from bearer or supplied flag.
+Immutable0067 binding and original replay result remain; changed evidence reconciles.
+Outcome fields:run_id,state,replayed,reconciliation_count, returned only aftercommit.
+Typed validation/conflict or sanitized PublicationGuardError propagate; HTTP error
+translation remains endpoint-owner work. No memory/cache success fallback.
+
+Tests use synthetic token metadata/verifier only, not a real bearer or account.
+No new route, auth mechanism, provider/network call, operational export or activation.
+
+### Independent XLSX retry stability
+
+Existing Avito XLSX package used render-clock ZIP timestamps. Synthetic two-clock
+test first confirmed all member XML equal but package bytes different (1failed,
+0.51s); renderer now uses explicit fixed ZIP epoch and DEFLATE per member.
+No headers, cell values/types, row ordering, quantity fallback, styles or print
+settings changed. Same-runtime repeat output is byte-stable; cross-Python/zlib
+identity is not promised. Focused XLSX/returns/Stage1:44PASS0.30s/exit0, scoped
+Ruff/compile/diff0, independent critic no important findings. No output file was
+written; only synthetic in-memory rendering. Artifact persistence, renderer version
+registry and frozen-sheet input still require P2/P3 contracts. Rollback of this
+renderer-only change restores old timestamp metadata, not any business data.
+
+### Remaining execution boundary after independent fixes
+
+This lists remaining requested product work, not a claim that every possible bug
+has been eliminated. Existing pure identity/status, receipt codecs, read contracts,
+normalization evidence, date validation and known renderer characterization have
+executable coverage. More invented models would not substitute for these inputs.
+
+| Remaining | Exact missing prerequisite / owner | Existing local evidence |
+|---|---|---|
+| Live Avito ingestion / worker publication | Proven complete provider page manifest and worker principal authority; fetch account binding must travel with response; no provider execution allowed | `2026-09-09-orders-job-source-binding.md`, `2026-09-09-orders-domain-binding-amendment.md`; current service handles normalized guarded user manifests only |
+| WB operational readiness/deadline/sticker ingestion | Separate WB fulfillment source contract, not supplier/orders statistics | Stage1 discovery and `app/modules/orders.py`; statistics unknown/cancellation-only mapping remains deliberate |
+| Automatic changed-fact progression | Proven ordering/version/coverage semantics; opaque revision or clock alone insufficient | `app/orders/publication_service.py` records reconciliation instead; pure comparator is not progression authority |
+| Full order filters / activation | Exact typed filter semantics and shared router registration/permission decision | `2026-09-09-orders-read-http-handoff.md`; query checksum is not a filter implementation; T4 owns frontend |
+| Persistent assignment / quantities / CAS / two-writer proof | Exact READY P1 DDL plus command permission; T1 f76ad06 is plan only, queued after Review binding | `2026-09-09-production-workitems-schema-request.md`, `2026-09-09-production-first-writer-amendment.md`; pure command codec already implemented |
+| Production batches / groups / scheduling / selected sheets | P2 storage plus full source calendar/grouping rules including weekend, cutoff and coverage behavior | `2026-09-09-production-frozen-artifacts-schema-request.md`; actual HTML partial source characterization is not full rule authority |
+| Frozen XLSX artifact / A4 PDF / both sticker sizes | Immutable sheet contract + P3 artifact storage; full A4/sticker renderer source missing | Stage1/UI-DB parity reports; Avito XLSX source exists and is tested, HTML labels are not complete unit/barcode renderers |
+| Archive / reprint / delivery intents and ambiguous receipts | P3/P4 storage plus proven provider acceptance/receipt contract; historical revisions must remain immutable | `2026-09-09-production-frozen-artifacts-schema-request.md`; UI send click is not success |
+| Cutover / prototype retirement | Complete per-format parity, reconciliation, writer fence, rollback and explicit retirement authorization | Current matrix stages5-8 blocked; do not remove prototype or revive whole-JSON writer |
+
+Report filenames above are under `backend/docs/superpowers/reports/` unless stated
+otherwise. KIZ/label matcher is excluded, not a dependency. No schema number is
+reserved by T3; follow the exact T1 READY handoff rather than assuming P1 is0068.
+
+### Independent instant-order correction
+
+Pure contract audit found same-ZoneInfo datetime comparisons use local wall time
+across a repeated hour. Four actual RED cases: two observation directions, valid
+nonempty coverage wrongly rejected, reversed instants wrongly accepted (4failed,
+64passed,0.15s). `AccountCoverage` bounds and `compare_observations` now compare
+UTC instants without replacing source values, inventing a calendar rule or granting
+projection progression. No computed deadline or weekend schedule was introduced.
+Final nine-file pure/serialization/legacy regression:240PASS1.82s/exit0. Scoped
+Ruff/compile/diff0; independent critic reports no important defects.
+Actual0067 publication/assembly regression:18PASS99.07s/exit0, own disposable
+database/role absence verified. No provider or operational actions.
+
+### 0067 consumer acceptance (supersedes preparation notes below)
+
+Merged exact T1 feature and mandatory fix through
+`ff91356830c14cb494d55d4f5ec28b18a60e88cb`; decoder preparation is
+`8010112ed61ead1c345630da38618dd0ebc231ed`. No T1 migration was edited.
+New publication INSERT carries all immutable binding fields from the outset.
+Replay validates those fields before reading its result receipt. Assembly validates
+every selected coverage/current source run directly, never using audit as provenance.
+Current projection sources must also be complete published manifests, not staging.
+SQL repositories use actual columns; no speculative shared ORM change was needed.
+
+New frozen marks are `orders-view-v3`; audit-era v2 snapshots fail closed even when
+the live binding digest matches (latest, explicit and cursor). HTTP shape/query,
+cursor v1 and decimal-string BIGINT are unchanged; HWM stays opaque to consumers.
+Old data is retained, not backfilled/relabelled. Rollback must retain expanded0067
+and a decoder-capable binary; do not downgrade bound rows or reactivate audit-era
+readers. Permission, provider completeness, A-to-B-to-A epoch identity and Production
+eligibility are not established by the immutable fingerprint.
+
+TDD: missing persisted fields RED; audit checksum deletion RED after correcting
+test JSON versus JSONB operator. Initial fixture setup lacked helper privileges;
+fixed by applying actual runtime role script in disposable0067 fixture. Historical
+0064 repository fixture remains unchanged. Critic found staging admission and v2
+acceptance; reproduced 4 failures in12.59s plus pure v2 RED, then fixed. Independent
+re-review reports no further important defects.
+
+Final seven-file gate: **198 passed, 2 known dependency warnings, 85.53s, exit0**:
+`test_orders_bindings.py`, `test_orders_publication_service.py`,
+`test_orders_read_assembly.py`, `test_orders_read_service.py`, `test_orders_http.py`,
+`test_orders_run_binding_migration.py`, `test_orders_run_binding_rls.py`.
+Earlier combined attempt:183PASS/10setupERROR, migration subprocess60s timeout;
+not counted green and timeout was not increased. All allocated databases/roles
+were confirmed absent on cleanup, including failed attempt. Scoped Ruff, compileall,
+diff check, Git fsck:0; sole Alembic head0067. This is not whole-backend acceptance.
+Scrubbed environment, disabled pytest plugin autoload, inherited Unix-only sandbox;
+`/dev/null` passfile warnings retained, no application DB or network access.
+
+Next executable consumer depends on exact Production P1 DDL; f76ad06 is a plan,
+not READY. Missing renderer/schedule/WB fulfillment source gates remain separately
+blocked. No schema/config registration edits, provider/production actions, physical
+printing, operational exports, frontend changes, KIZ, push or activation.
 
 `deserialize_observation` и `deserialize_read_row` в `app/orders/serialization.py`:
 exact envelope/version, exact nested fields, strict scalars/arrays, canonical UTC
@@ -170,3 +320,202 @@ verified. Ruff import-order corrected before commit. This closes the stale-paren
 storage gate, not yet authoritative source/high-watermark selection in service.
 Known0062 long-key B-tree defect remains separate T1 amendment prerequisite; no
 arbitrary cap or hash-as-identity introduced in domain.
+
+## Parent projection CAS primitive
+
+`app/orders/projection_repository.py` set_parent(run_id,observation_id,expected_version)
+uses the caller transaction/tenant context, staging-run FOR UPDATE, exact scoped
+membership, stored observation decoder/checksum/source binding and SQL
+`UPDATE ... WHERE org/account/order/version ... RETURNING version`.
+Updates raw/canonical/mapping fields, effective source time and last-seen run;
+no observed_at ordering, no provider/raw body, no own commit or session.
+
+This is a repository primitive, NOT a source progression decision: trusted service
+must classify replay/out-of-order/reconciliation before calling it, authorize under
+T1 guard and atomically commit all publication effects. Calling this primitive for
+an arbitrary older fact would be misuse; it does not claim automatic lifecycle
+monotonicity. No route calls it. Item projections/status-history/coverage/final-run
+publication remain separate unfinished service work.
+
+TDD RED missing module ->3PGGREEN including two real sessions competing for one
+parent version (one winner/one conflict); combined evidence/snapshot/CAS13PASS16.22s.
+Added caller-rollback regression: focused4PGPASS5.34s. Fresh random disposable DB,
+runtime role and cleanup verified, Unix-only sandbox. Ruff/compileall exit0.
+Self-review checked exact scoped joins and that incoming request cannot override
+stored status. Full auth/revocation/source-progression/long-key gates not claimed.
+
+## Exact-key repository preparation
+
+T1 approved design `87ef04884e5636dbed704ee3f54f2e95fb9959a7` removes raw TEXT
+arbiters in forthcoming0064. Evidence append now rejects RR/SERIALIZABLE, locks
+the scoped account before run/domain locks, then performs fresh C-collated exact
+order/evidence lookup and insert-if-absent. Semantic replay verification and
+bounded membership ON CONFLICT remain; no hash identity or length cap.
+
+RED: two isolation cases DID NOT RAISE on old code. GREEN: eight evidence tests,
+including two actual sessions with pg_blocking_pids proving account-lock wait;
+the waiter establishes a snapshot before blocking and sees the winner's newly
+committed exact fact. Final evidence/parent/snapshot regression17PASS9.67s on0062,
+own disposable DB/role cleanup verified. Ruff (backend cwd) and compileall exit0.
+Manual critic: account lock is serialization, not authorization; caller still
+needs T1 shared guard before entering, and must not hold domain locks first.
+Actual0064 migration/long-key gate remains NOT_RUN until T1 delivers its exact SHA.
+No schema, shared auth, routes, providers, production or frontend changed.
+
+## Item projection primitive
+
+`OrdersProjectionRepository.set_item(run,observation,line,resolution,expected_version)`
+uses the same decoded scoped order-level membership as parent CAS. Shared account
+lock precedes run/item locks under RC. None means insert only if absent; explicit
+version requires CAS. Stored line identity/quantity/effective time cannot be
+overridden by request. Repeated listings retain distinct explicit occurrence keys.
+Identity drift fails; no physical deletion or inferred absent-item cancellation.
+Catalog IDs remain references with account-scoped Product/Offer FKs; resolution is
+an explicit trusted caller decision, not title matching. No readiness field written.
+
+RED2 missing set_item -> GREEN; final parent/item/evidence/snapshot21PASS9.03s,
+including two actual sessions/PIDs competing for item version (one winner, one
+conflict), quantity3->5, repeated lines, missing line, rollback, and same-org other
+account Product rejection. Cleanup verified, Ruff/compileall/diff exit0.
+Manual critic: not an operator assignment endpoint; manual override commands still
+require Production CAS/idempotency/audit service. No-op replay, out-of-order source
+selection and atomic status/coverage/run publication remain service obligations.
+Long-key acceptance still waits exact0064 and its PG gate; no original0062 changes.
+
+## Actual0064 consumer acceptance
+
+Exact T1 implementation `0dbb85d8ccda4d528b4fc9b37d539a6e664cbabf` and test correction
+`d44c971148ab1e5d185adcc079c8d2ab9aced813` merged with prerequisite lineage in
+`2d9a40059f39ecf2b1b2d4f7123d8ff749e2126c`, no conflicts or manual shared-file edits.
+The earlier long-key NOT_RUN entries above are historical; this gate is now PASS.
+
+All three repository suites now use actual0064 pinned disposable fixtures. New
+consumer tests retain >4096-byte synthetic order/adapter/line values exactly,
+replay without changed IDs, create a new observation for changed evidence, keep
+same external ID in two accounts distinct, and roll back order/item/evidence
+together. The existing physical account-wait test now runs with short and long
+keys; both sessions have established snapshots before the waiter is released.
+A separate latest-head fixture applies the actual runtime role script and verifies
+narrow Orders privileges before evidence replay and parent/item projection calls.
+No latest-head assertion is baked into the historical0064 fixture.
+
+Fresh combined command (same sanitized Unix-only prefix documented above):
+`python -m pytest -q -s --tb=short tests/test_orders_exact_repositories.py tests/test_orders_evidence_repository.py tests/test_orders_projection_repository.py tests/test_orders_snapshot_repository.py tests/test_orders_exact_text_migration.py`
+Result: **106 passed in37.92s**, exit0, no skips; 26 consumer cases plus80 migration
+cases. All own disposable DB/role cleanup assertions passed. Ruff over app/orders
+and four consumer files, compileall, diff check and git fsck --no-dangling exit0.
+Self-review read actual171-line migration and checked account-before-domain locks,
+C-comparison predicates, bounded membership arbiter and scope preservation.
+This closes the0064 repository compatibility dependency, NOT publication/auth,
+complete source coverage, worker authority, Production parity or application activation.
+
+## Guarded persisted read service
+
+Consumed T1 paired-fetch `7bfb631d30426dd39a4f4dae7aab4754155b6a62`, guard0900f8e
+and mandatory finalizer fix `4860c53df7e12543c7f8afb7569ada773bea37d3` by clean merge.
+`read_orders_snapshot` owns a fresh root transaction on the supplied unused Session,
+uses fixed cabinet:read and no credential authority, delegates to immutable snapshot
+read, then returns only after revalidation and guarded Session commit succeeds.
+Does not commit a caller's existing transaction. Physical SQLAlchemy COMMIT errors
+are sanitized. Principal must come from authenticated session/canonical membership;
+the passed principal object is not authentication. Exact account bindings and live
+scope are checked on every page. Current T1 guard requires connected accounts;
+no active marketplace credential is required to read stored facts.
+
+RED missing module; fresh GREEN34PASS15.94s: eight read-service cases plus26
+repository cases. Covers no-credential read, Session reuse, membership/permission/
+scope/logout revocation between pages, final-commit mutation rejection/rollback,
+and actual two-session logout lock wait (distinct PIDs, pg_blocking_pids observed).
+Own disposable cleanup verified, Ruff/compileall exit0. Self-review corrected the
+snapshot ID annotation to int and confirmed result cannot escape before commit.
+Not an HTTP route/signed cursor/authentication adapter; no provider/business-state
+write, worker authority, current queue activation or Production parity claimed.
+
+## Executable HTML recovery, not mock authority
+
+Read actual `frontend/public/vella-production.html`, last local source revision
+`58c32d83b9bce69ce1957e48e45b24001cc107c6`; T4 supplied newer cleanup8d4a5b9
+and generator `frontend/scripts/generate-vella-production-snapshot.mjs`. Generator
+was not run, frontend was not edited. New backend-only Node/TypeScript AST harness
+executes original function declarations, never page startup; synthetic localStorage,
+UI boundaries and rejecting fetch replace browser/external actions. No real prints,
+downloads, stored user data or provider calls. Python HTMLParser extracts scripts.
+
+Six executable cases PASS4.84s: group flattening preserves ordering/quantity;
+120x75 and58x40 produce one escaped-text sticker regardless quantity3, with no
+barcode/QR SVG/image/canvas; unknown status normalizes to ready; missing status
+passes ready filter; override storage key is only source/date with whole-object
+last-write-wins; rejected send still stores demo sent. These are characterizations,
+NOT approved canonical rules. They prove why source execution alone is not parity.
+
+Evidence: HTML17434 export calls missing server renderer;17465 send catches failure
+and marks sent;17795 storage key;17861 release-time display fallback08:00;18062
+normalizer;18165 group flattening (consumes groups, does not derive schedule/group
+rules);18190 fallback row ID;18857 sticker markup. No proven Europe/Moscow/weekend
+backend grouping rule or multipage A4 renderer is recovered by these functions.
+Canonical Orders raw/unmapped behavior remains unchanged; no ready fallback copied.
+
+Command: same OS sandbox, scrubbed environment; add NODE_PATH pointing at existing
+T4 frontend/node_modules and run `python -m pytest -q tests/test_orders_production_html.py`.
+Uses existing project TypeScript parser, no installs/new dependencies. Node VM is a
+test mechanism, not a security boundary; OS sandbox denies external networking and
+secret files. Physical print explicitly throws. Further canonical work proceeds
+independently; real format/barcode/render parity gates remain distinct.
+
+## Atomic normalized manifest service
+
+`publish_orders_manifest` owns one fresh caller-supplied Session transaction under
+fixed sync:run. Nonempty declared fetch authorities must match source type; the
+guard verifies exact live principal/account/credential or browser-token binding.
+No fetch inside transaction. Run-key lookup is exact/account serialized; replay
+checks immutable run metadata, semantic membership evidence and stored audit receipt.
+Run, immutable observations/statuses/lifecycle evidence, initial item/parent
+projections, coverage, terminal state and authenticated-user audit commit together.
+Partial manifests store evidence/status only, without changing current projections
+or deleting/cancelling absent orders. Request period bounds remain NULL, not an
+invented provider/date window. Item count counts observed lines, not unit quantity.
+
+Projection authority is deliberately bounded: the first complete normalized fact
+may establish a projection. Exact evidence replay is a no-op; every changed fact
+without a proven source ordering policy records reconciliation rather than regressing
+current state. Cancellation/return statuses produce immutable evidence events,
+never physical deletes. This is NOT yet automatic lifecycle progression or a
+Production eligibility decision; read assembly must expose reconciliation blockers.
+The complete-manifest assertion still requires a real adapter completeness contract;
+no live source handler or scheduler is activated. No missing field becomes ready.
+
+RED missing service import; initial GREEN exposed a test-fixture teardown column
+mistake (one test passed, four setup/teardown errors). Inspected actual credential
+schema, corrected to revocation_reason_code/operator_revoked, cleanup confirmed.
+Final focused9PASS3.59s; combined six Orders consumer files43PASS20.16s, no skips.
+Two actual sessions/PIDs publish one run/audit; same key/different manifest conflicts;
+rotated generation denies; final guard failure rolls back all publication effects;
+WB statistics raw/canonical NULL remains unmapped. Earlier8case combined42PASS18.16s.
+Ruff/compileall/diff exit0, all own disposable resources cleaned. No schema/routers,
+provider calls, real marketplace actions, external print/export or production writes.
+
+## Immutable run decoder preparation (2026-09-09)
+
+T1 delivered 0067 feature d87e575f8fec32815dbeb459157339f8ad25220f plus mandatory
+fix c4e3e373f97be19171f80ebdad2ce919dd7c84dc. Its full schema handoff was read.
+`app/orders/bindings.py:validate_run_binding` now validates its five immutable
+fields against the exact independently guarded single-account binding. Legacy
+unbound, partial fields, changed ownership/provider/reference, aggregate payloads,
+noncanonical bytes and invalid version/checksum reject with a fixed domain error.
+All four single-account golden vectors pass, including Unicode and nullable refs.
+No audit JSON fallback exists in this helper. It is not yet connected to storage.
+
+TDD: missing function produced 19 failures (exit 1); the initial test matrix also
+contained one vacuous nullable-reference case, removed before implementation.
+Final focused command `python -m pytest -q tests/test_orders_bindings.py
+tests/test_orders_contract.py tests/test_orders_http_contracts.py`: 97 passed,
+0.75s, exit 0. Scoped Ruff and compileall: exit 0. Independent read-only critic:
+no important defects; suggested golden-positive coverage added and rerun.
+
+Available next: actual 0067 merge and publication/replay/read assembly acceptance,
+including forged mutable audit and unbound-history denial. Existing consumers
+still use audit provenance: that gate is NOT closed by this pure preparation.
+Blocked separately: Production P1 exact DDL/permission (f76ad06 is only a plan),
+missing full frozen renderer/schedule sources, WB fulfillment source authority,
+and parity/cutover gates. HTTP wire unchanged. No database, provider, production,
+physical print/export, frontend, schema, KIZ, push or activation changes here.

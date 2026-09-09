@@ -11,6 +11,34 @@ from app.avito.orders_picking_xlsx import build_avito_orders_picking_xlsx
 NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
 
+def test_same_xlsx_input_has_identical_bytes_across_render_times(monkeypatch):
+    import zipfile
+
+    order = AvitoOrderRow(
+        orderId="synthetic-repeat-order",
+        status="delivered",
+        items=[
+            AvitoOrderItem(
+                itemId="000synthetic-unit", title="Синтетический товар", quantity=2
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        zipfile.time, "localtime", lambda *_: (2026, 9, 9, 10, 0, 0, 2, 252, 0)
+    )
+    first = build_avito_orders_picking_xlsx([order], date_from=date(2026, 9, 8))
+    monkeypatch.setattr(
+        zipfile.time, "localtime", lambda *_: (2026, 9, 10, 11, 2, 4, 3, 253, 0)
+    )
+    second = build_avito_orders_picking_xlsx([order], date_from=date(2026, 9, 8))
+    with ZipFile(BytesIO(first)) as left, ZipFile(BytesIO(second)) as right:
+        assert left.namelist() == right.namelist()
+        assert {name: left.read(name) for name in left.namelist()} == {
+            name: right.read(name) for name in right.namelist()
+        }
+    assert first == second
+
+
 def render(items):
     order = AvitoOrderRow(
         orderId="000synthetic-order",

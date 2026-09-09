@@ -1,7 +1,7 @@
 """Pure read views. Authorization and snapshot retention are repository obligations."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -160,7 +160,7 @@ class AccountCoverage:
         if self.requested_from is not None:
             _instant(self.requested_from)
             _instant(self.requested_to)
-            if self.requested_from >= self.requested_to:
+            if self.requested_from.astimezone(UTC) >= self.requested_to.astimezone(UTC):
                 raise OrderContractValidationError(
                     "Coverage requires nonempty half-open interval"
                 )

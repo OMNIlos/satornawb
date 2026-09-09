@@ -220,3 +220,23 @@ def test_coverage_bounds_are_paired_and_ordered():
         replace(original, requested_from=now)
     with pytest.raises(OrderContractValidationError):
         replace(original, requested_from=now, requested_to=now.replace(day=7))
+
+
+def test_coverage_repeated_local_hour_is_a_nonempty_instant_interval():
+    from zoneinfo import ZoneInfo
+
+    start = datetime(2024, 10, 27, 2, 30, tzinfo=ZoneInfo("Europe/Berlin"), fold=0)
+    end = start.replace(fold=1)
+    assert start.astimezone(UTC) < end.astimezone(UTC)
+    value = replace(page().account_coverage[0], requested_from=start, requested_to=end)
+    assert value.requested_from is start and value.requested_to is end
+
+
+def test_coverage_rejects_reversed_instants_despite_increasing_local_clock():
+    from zoneinfo import ZoneInfo
+
+    start = datetime(2024, 10, 27, 2, 15, tzinfo=ZoneInfo("Europe/Berlin"), fold=1)
+    end = start.replace(minute=45, fold=0)
+    assert start.astimezone(UTC) > end.astimezone(UTC)
+    with pytest.raises(OrderContractValidationError, match="interval"):
+        replace(page().account_coverage[0], requested_from=start, requested_to=end)
