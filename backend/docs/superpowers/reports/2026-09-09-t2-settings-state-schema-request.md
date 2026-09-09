@@ -250,3 +250,20 @@ positive trusted resource budget; compact decimal exponents are checked before
 expansion. SHA-256 covers complete command bytes. This is not authorization,
 revision/head CAS, a backfill serializer or permission to activate legacy writers.
 T1 DDL acceptance and real persistence tests remain required.
+
+Dedicated SQL parity prerequisite: `tests/fixtures/wb_repricing_override_golden_v1.json`
+pins six full typed commands, canonical ASCII bytes, byte count and SHA-256. Cases:
+all NULL; explicit false/zero/signed decimal zero; all14 fields with negative/fractional
+percentage normalization; 2**80 money and expected version; exact long Decimal
+precision and exponent forms; changed full scope/actor/command plus fallback enum
+and INT4 maxima. Fixture inputs store Decimal values as strings, money/version as
+exact JSON integers; decode with arbitrary-precision integers, never JS Number.
+Canonical output intentionally encodes money/version as decimal strings. Parse outer
+fixture once, ASCII-encode canonical_ascii once; no second JSON encoding. Test
+`test_literal_override_sql_vectors` reads pinned vectors, never regenerates them.
+Literals were initially generated from the existing encoder and pinned; they are
+not independently proven SQL output. The8192 budget is synthetic only. Python
+unbounded ints/Decimal do not imply unlimited PostgreSQL NUMERIC representability;
+DDL/service must fail explicitly outside native limits, never narrow/round or rehash.
+No codec/formula changes in this fixture slice. Fixed mutation permission, live
+mapping authorization, persistence/CAS/audit and empty-only downgrade remain gates.

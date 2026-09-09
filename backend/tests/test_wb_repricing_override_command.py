@@ -252,3 +252,29 @@ def test_module_has_only_pure_standard_library_imports():
         elif isinstance(node, ast.ImportFrom):
             imports.add(node.module)
     assert imports <= {"hashlib", "json", "re", "dataclasses", "decimal"}
+
+
+def test_literal_override_sql_vectors():
+    import hashlib
+    from pathlib import Path
+
+    fixture = json.loads(
+        (
+            Path(__file__).parent / "fixtures" / "wb_repricing_override_golden_v1.json"
+        ).read_text(encoding="ascii")
+    )
+    assert fixture["schema"] == "wb-repricing-overrides-golden/v1"
+    assert len(fixture["vectors"]) == 6
+    for vector in fixture["vectors"]:
+        data = dict(vector["inputs"])
+        typed = dict(data.pop("values"))
+        for key, value in typed.items():
+            if key.endswith("_pct") and value is not None:
+                typed[key] = Decimal(value)
+        actual = OverrideChange(values=OverrideValues(**typed), **data).canonical_bytes(
+            max_bytes=8192
+        )
+        expected = vector["canonical_ascii"].encode("ascii")
+        assert actual == expected, vector["name"]
+        assert len(expected) == vector["byte_count"]
+        assert hashlib.sha256(expected).hexdigest() == vector["sha256"]

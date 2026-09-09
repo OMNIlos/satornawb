@@ -307,3 +307,19 @@ No heavy slot used, no actual source request, schema or current publication/wiri
 Rollback is a code-only revert, no migrated facts. New schema dependencies requested
 directly from T1; uncommitted0069 Production work is unrelated, not consumed as a
 repricer/source READY handoff. Continue independent work while awaiting exact acceptance.
+
+### Next schema selection: SKU overrides / dedicated parity vectors
+
+T1 selected bounded SKU overrides only from existingbfc6c0 request, not whole4A;
+this can unblock a scoped transaction participant without worker authority or
+source/context wiring. T2 provided exact request/codec/pinned-test SHAs, explicitly
+not claiming a dedicated fixture existed at that point. Then supplied the requested
+six literal vectors in `wb_repricing_override_golden_v1.json` covering fullowner,
+14fields, NULL/false/zero, signed/fraction Decimal normalization,2**80 money/version,
+longprecision, modes andINT4 boundaries. Existing encoder byte-unchanged.
+
+Actual missing-fixture RED1FAIL77deselected → focused **78PASS0.07s**, exit0; test
+loads pinned expected bytes/hash/count and never regenerates.8192 syntheticbudget,
+no operational policy. Native NUMERIC limits and separate settings-write/live mapping
+auth must remain explicit; these vectors are SQL parity inputs, not SQL proof.
+Scoped Ruff/compileall/diff exit0; read-only critic no findings, no extra test process.
