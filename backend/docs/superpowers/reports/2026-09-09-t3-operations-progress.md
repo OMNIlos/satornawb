@@ -31,6 +31,24 @@ Backup/user data и исторические Git commits не удалялись
 
 ## Strict storage decoder slice
 
+### Independent P1 result decoder
+
+Accepted design `2026-09-09-production-assignment-storage-design.md` already fixes
+the seven result fields. Added frozen AssignmentResult and exact version1 JSONB
+encode/decode, strict positive BIGINT IDs/versions, positive INTEGER SKU/required,
+nonnegative planned/remaining with remaining=required-planned. No planning operation
+or permission follows from this representation. AssignmentCommand now rejects
+values beyond the accepted physical INTEGER/BIGINT bounds before reaching SQL.
+These codecs are internal Python/JSONB, NOT a numeric browser wire contract.
+
+Actual RED64: missing result decoder and three accepted command overflows. Final
+result/command-codec/text/read-contract files113PASS0.11s/exit0; scoped Ruff0,
+independent read-only critic no important findings. P1 persisted witness/CAS/live
+authority still requires exact READY migration and real two-session acceptance.
+No new heavy gate was run while T1 owned the resource interval. Browser-token
+USER-session sink tests prepared separately are NOT_RUN pending their PG slot;
+token-only issuance binding/auth/completeness remain explicitly unresolved.
+
 ### Independent XLSX retry stability
 
 Existing Avito XLSX package used render-clock ZIP timestamps. Synthetic two-clock

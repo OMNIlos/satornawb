@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from typing import Literal
 
 from app.modules.orders import OrderContractValidationError
@@ -17,8 +17,12 @@ class AssignmentCommand:
     reason: str
 
     def __post_init__(self):
-        for value in (self.work_item_id, self.expected_version, self.catalog_sku_id):
-            if type(value) is not int or value < 1:
+        for value, maximum in (
+            (self.work_item_id, 2**63 - 1),
+            (self.expected_version, 2**63 - 1),
+            (self.catalog_sku_id, 2**31 - 1),
+        ):
+            if type(value) is not int or not 1 <= value <= maximum:
                 raise OrderContractValidationError(
                     "Positive command ID/version required"
                 )
@@ -37,6 +41,52 @@ class OrderCommandConflict(OrderContractValidationError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentResult:
+    work_item_id: int
+    version: int
+    catalog_sku_id: int
+    required_quantity: int
+    planned_quantity: int
+    remaining_quantity: int
+    source_item_version: int
+
+    def __post_init__(self):
+        for value, minimum, maximum in (
+            (self.work_item_id, 1, 2**63 - 1),
+            (self.version, 2, 2**63 - 1),
+            (self.catalog_sku_id, 1, 2**31 - 1),
+            (self.required_quantity, 1, 2**31 - 1),
+            (self.planned_quantity, 0, 2**31 - 1),
+            (self.remaining_quantity, 0, 2**31 - 1),
+            (self.source_item_version, 1, 2**63 - 1),
+        ):
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise OrderContractValidationError("Invalid assignment result")
+        if self.remaining_quantity != self.required_quantity - self.planned_quantity:
+            raise OrderContractValidationError("Invalid assignment result quantities")
+
+
+def serialize_assignment_result(result: AssignmentResult) -> dict:
+    """Seven-field JSONB value; not an HTTP encoding or an authorization receipt."""
+    if type(result) is not AssignmentResult:
+        raise OrderContractValidationError("Exact assignment result required")
+    return asdict(result)
+
+
+def deserialize_assignment_result(
+    payload: dict, *, schema_version: int
+) -> AssignmentResult:
+    if (
+        type(schema_version) is not int
+        or schema_version != 1
+        or type(payload) is not dict
+        or set(payload) != {field.name for field in fields(AssignmentResult)}
+    ):
+        raise OrderContractValidationError("Invalid assignment result payload")
+    return AssignmentResult(**payload)
 
 
 def serialize_assignment_command(command: AssignmentCommand) -> bytes:
