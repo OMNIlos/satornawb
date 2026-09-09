@@ -6,6 +6,17 @@ Updated 2026-09-09 after root process-audit direction. This is the **only curren
 requirement status table**. Everything under HISTORY below is dated evidence, not
 current readiness. Counts prove only named tests, never completion of a stage.
 
+Scope amendment from user via root,2026-09-09: shared WB/Avito Production assembly
+and printing is **DEFERRED, not DONE** (workitems/assignments/batches/schedule,
+assembly sheets/XLSX/PDF/labels/print archive/delivery receipt). T3 owns its exact
+deferred readiness/dependency inventory; T2 neither resumes its implementation nor
+searches missing renderer/calendar sources. Preserve already committed code/schema
+and required compatibility regression, but Production completion is not a gate for
+remaining-scope acceptance/integration/push. Orders ingestion/storage/read/API/source
+progression and all T2 repricer/settings/economics/sources requirements remain active.
+KIZ/matcher stays excluded. Activation/provider/flag restrictions and heavy queue
+are unchanged. Existing0069 compatibility may be tested without resuming P1–P4 work.
+
 `implemented` = code exists at the stated SHA; `released` = bounded owner handoff;
 `consumer-accepted` = downstream owner actually accepted that exact contract;
 `final-integrated` = common candidate verified by root. The latter is **not yet
