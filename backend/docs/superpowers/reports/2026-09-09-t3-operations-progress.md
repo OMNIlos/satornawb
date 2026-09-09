@@ -280,3 +280,34 @@ Own disposable cleanup verified, Ruff/compileall exit0. Self-review corrected th
 snapshot ID annotation to int and confirmed result cannot escape before commit.
 Not an HTTP route/signed cursor/authentication adapter; no provider/business-state
 write, worker authority, current queue activation or Production parity claimed.
+
+## Executable HTML recovery, not mock authority
+
+Read actual `frontend/public/vella-production.html`, last local source revision
+`58c32d83b9bce69ce1957e48e45b24001cc107c6`; T4 supplied newer cleanup8d4a5b9
+and generator `frontend/scripts/generate-vella-production-snapshot.mjs`. Generator
+was not run, frontend was not edited. New backend-only Node/TypeScript AST harness
+executes original function declarations, never page startup; synthetic localStorage,
+UI boundaries and rejecting fetch replace browser/external actions. No real prints,
+downloads, stored user data or provider calls. Python HTMLParser extracts scripts.
+
+Six executable cases PASS4.84s: group flattening preserves ordering/quantity;
+120x75 and58x40 produce one escaped-text sticker regardless quantity3, with no
+barcode/QR SVG/image/canvas; unknown status normalizes to ready; missing status
+passes ready filter; override storage key is only source/date with whole-object
+last-write-wins; rejected send still stores demo sent. These are characterizations,
+NOT approved canonical rules. They prove why source execution alone is not parity.
+
+Evidence: HTML17434 export calls missing server renderer;17465 send catches failure
+and marks sent;17795 storage key;17861 release-time display fallback08:00;18062
+normalizer;18165 group flattening (consumes groups, does not derive schedule/group
+rules);18190 fallback row ID;18857 sticker markup. No proven Europe/Moscow/weekend
+backend grouping rule or multipage A4 renderer is recovered by these functions.
+Canonical Orders raw/unmapped behavior remains unchanged; no ready fallback copied.
+
+Command: same OS sandbox, scrubbed environment; add NODE_PATH pointing at existing
+T4 frontend/node_modules and run `python -m pytest -q tests/test_orders_production_html.py`.
+Uses existing project TypeScript parser, no installs/new dependencies. Node VM is a
+test mechanism, not a security boundary; OS sandbox denies external networking and
+secret files. Physical print explicitly throws. Further canonical work proceeds
+independently; real format/barcode/render parity gates remain distinct.
