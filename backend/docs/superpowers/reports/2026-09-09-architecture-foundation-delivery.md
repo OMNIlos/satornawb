@@ -1,6 +1,6 @@
 # Architecture foundation delivery
 
-Status: final residual acceptance in progress; not yet published. The latest foundation-first instruction controls scope. The original complete product specification is not claimed finished.
+Status: foundation acceptance completed within the finite scope below; ready for ordinary publication to filipp. The latest foundation-first instruction controls scope. The original complete product specification is not claimed finished.
 
 ## Delivered source and boundaries
 
@@ -10,7 +10,7 @@ Status: final residual acceptance in progress; not yet published. The latest fou
 | T2 | Repricer approval/executor persistence, replay and guarded transitions; versioned settings/account-state and source/daily transaction participants | Unapproved financial formulas, organization-wide permissions and missing mutation policies remain closed |
 | T3 | Account-scoped Orders reads and existing user/job/token publication; partial evidence, replay, uncertain-commit readback; packaging/release harness | Completeness, fulfillment, ordering, capture provenance and provider policies require actual contracts |
 | T4 | Canonical Review facts/local workflow/send/notification persistence and guarded composition; typed clients and existing defined read/local entry points | Provider adapters, notification discovery/preferences, new UI and operational activation remain deferred |
-| Root | Immutable source integration, shared-file conflict resolution, important acceptance gates and actual failure repair | Publication only after the residual checks below |
+| Root | Immutable source integration, shared-file conflict resolution, important acceptance gates and actual failure repair | Ordinary publication to filipp; no production deployment |
 
 Production assembly/printing and KIZ/standalone matcher remain excluded from current work. Production here does not mean all Avito functionality. Existing compatibility is preserved. The detailed priority/urgency matrix is in `../plans/2026-09-09-architecture-foundation-delivery.md`.
 
@@ -26,7 +26,7 @@ All original packages combined at 6939bc797662655fe1708e9b8c724f5d39e7eca1 (T1 7
 | Review residuals | 12 passed, 20.97 s, natural exit and cleanup | e001b54 (38956d4); immutable TRUNCATE/downgrade/overload and physical-session send/CAS/rollback cases |
 | Repricer executor | 15 passed, 16.00 s, natural exit and cleanup | Exact one-column SELECT fix 77fc30e (117c14b); no worker algorithm or guard weakening |
 | Combined legacy metadata regression | 139 passed, 18.18 s, natural exit | bedc71d; 137 originally failing/error IDs plus two isolation cases, `/tmp/satorna-foundation-metadata-residual-20260909.xml` |
-| Credential API / WB fixtures | Pending final bounded owner result | Current PG schema/live session fixture; no SQLite bypass of production guard |
+| Credential API / WB fixtures | 14 passed in initial bounded gate; corrected legacy time case separately passed in 7.29 s; integrated case passed again in 7.65 s, natural exit | 6a3f832 (0fb2d7a), actual restricted PG schema/live session; non-UTC DB timestamp converted to UTC preserving instant; no fixture timezone masking |
 | Frontend suite | Original 494 passed; subsequently added 14 passed | Combined frontend; `/tmp/satorna-foundation-frontend-20260909.json`, `/tmp/satorna-foundation-frontend-notifications-final.log` |
 | Frontend actual build | Passed, natural exit | Snapshot generation → TypeScript build → Vite; `/tmp/satorna-foundation-frontend-build-final.log`; generated hash unchanged, timestamp-only edit restored |
 | Main / wheel / release entry points | 26 passed; later Review read/local registration/auth/default-off checks 17 passed | Existing defined routers only; provider/send activation not inferred |
@@ -52,3 +52,9 @@ Initial complete JUnit SHA-256: `47e138c22f450bb57fc8b86e03e53fe14b153e4fd5db90b
 - User-deferred Production assembly/printing, KIZ and standalone matcher.
 
 No extra product behavior was introduced to resolve missing decisions. Publishing this foundation is not a production deployment or authorization to enable dormant external actions.
+
+## Final integration acceptance
+
+Final runtime source: `0fb2d7a` (subsequent report/plan commits change documentation only). The only final runtime delta normalizes an aware legacy credential timestamp to UTC without guessing the zone of a naive value. Root reviewed the complete two-file diff and the integrated non-UTC regression passed naturally: `/tmp/satorna-foundation-final-integrated-api-20260909.log`, 1 passed in 7.65 s.
+
+All identified new failure/error families from the initial full run have corresponding corrected, passing affected gates. The 70 unchanged legacy failures remain explicit debt. No claim of a fresh entirely green backend suite, complete original product delivery or operational activation is made. Final priority and deferred-input boundaries remain unchanged.
