@@ -29,10 +29,10 @@ cluster = candidate.cluster
 
 @pytest.fixture(scope="module")
 def read_db(cluster):
-    """Consumer acceptance targets immutable binding schema, not historical 0064."""
+    """Consumer acceptance follows the same current head as the runtime role script."""
     from tests.test_orders_schema_integration import runtime_script
 
-    with migrated_database(cluster, "20260909_0067") as engines:
+    with migrated_database(cluster, "head") as engines:
         owner, runtime = engines
         result = runtime_script(owner, runtime.url.username)
         assert result.returncode == 0, result.stderr
