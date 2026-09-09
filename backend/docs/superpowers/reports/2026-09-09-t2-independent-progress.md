@@ -1,0 +1,83 @@
+# T2 — independent progress / dependency handoff
+
+Branch `codex/arch-t2-economics`, base `c88a474695569af905b294906ba604d61f3de62f`.
+Worktree `satornawb-main/.worktrees/arch-t2-economics`. No push/deploy/production,
+provider requests, working DB/Redis/state, schema/config/shared wiring/flags changes
+in these slices. Existing pure approval ownership/action keys preserved. Tests use
+synthetic values; cost/economics legacy tests use ephemeral in-memory SQLite, **not**
+a substitute for PostgreSQL approval acceptance. Offline plugin fence is Python-level,
+not an OS/native networking sandbox. No native PostgreSQL calls in this delivery.
+
+## Exact ready commits since root's 6ee8485
+
+| Commit | Scope / evidence |
+| --- | --- |
+| `4e14e21ce79ebda29144d17db0b4a798f4bd2ec4` | Seller-price raw parser/immutable pages/complete manifest; initial54 tests; corrected below |
+| `45f94a39627ebe2916903e9e5e0930844f3daaf5` | Kernel/repository/dispatch reject PostgreSQL-unrepresentable text;72 new tests,227 adjacent; updated approval schema request |
+| `907ec7b46ea5b6427385c7e80a204cb80f4adcad` | Two independently reviewed exact bounded DDL requests: normalized state4A and prices/stocks/daily5 |
+| `c11d07b3d623c5e534bac84166714377d3312a3f` | Safe DecimalException decode boundary;2RED→56parser+16root syntheticPASS |
+| `02591f3c249fbb32082e802b27ca7a058fff83e6` | Pure scoped CollectionRequest canonical bytes/checksum;29 tests |
+| `f7a5d62548d86f39c588c531c143936f0af8e55a` | WB warehouse stock parser/grain/complete manifests/receipt-daily eligibility;42 tests |
+
+Exact changed files per commit: `git show --stat --name-status <full SHA>`. New modules:
+`app/modules/wb_price_snapshots.py`, `wb_source_requests.py`, `wb_stock_snapshots.py`;
+new tests respectively `test_wb_canonical_price_parser.py`,
+`test_wb_source_collection_request.py`, `test_wb_stock_snapshots.py`, plus approval
+`test_wb_repricing_postgres_text.py`. Approval change touches only pure kernel,
+repository Protocol/identity bridge and dispatch domain; no actual writer connection.
+
+## Single requirement matrix
+
+| Stage | Completed evidence | Still required / actual dependency |
+| --- | --- | --- |
+| 1 writer inventory / identity / contract | 769f3cf + ccaed341 +45f94a; composite scope, exclusive marker, safe UUID/text, unchanged valid hashes | T1 accepted approvals/attempts/audit DDL; no UUID-only repository |
+| 2 durable approvals | exact schema request + pure transitions/optimistic versions | Actual PostgreSQL repository,2sessions winner/conflict/fake-call, RLS,rollback,restart/backfill. NOT implemented/tested |
+| 3 jobs/crash | pure attempt/dispatch/outcome/audit matrix and crash acceptance | Durable intent/marker before provider; accepted schema/auth resolver; duplicate jobs/reconciliation. No external exactly-once claim |
+| 4 globals/settings | 80 legacy characterization cases; exact normalized4A schema request907ec7b | T1 rows/heads/audit, concrete repository/context wiring and one-writer fence; additional strategies/context mapping must be typed before cutover |
+| 5 prices/stocks/daily | Price and warehouse stock adapters,request hashes,immutable complete manifest assembly,missing/null/zero,all sizes,receipt-date gate; targeted legacy source fixes | T1 separate source DDL, DB publication/read services, current-head CAS and daily revision persistence; Catalog mapping/source freshness policy, FBS skus/chrtIds contract unresolved |
+| 6 KTR/source revisions | SourceDiff classifications + synthetic closed-day revision evidence tests (94b540f/ee7bd6e) | Verified local/all orders grain, reference effective ranges/gaps/overlap evidence; unknown remains null, scheduler off |
+| 7 final profit | Decision package94b540f with numerical alternatives | Explicit financial owner approval and complete source evidence. No invented OPEX allocation/backdate/rrdId/checksum change; netProfitKopecks/profitClass/abcCode remain null |
+| 8 test debt / handoff | Targeted source/cache/RNP/economics regressions repaired; new scoped group below | Not full backend parity and not DB durability; no weakened guards/removed tests |
+
+No claim that whole T2 scope or any durable repository is ready. T1 Orders0062 and
+Review Facts0063 are **not** repricer approval schema. Latest local T1 inspection:
+`87ef048` over Review Facts `56b5fa5`; no new approval migration seen. State4A and
+source requests can be accepted independently, not queued behind complete repricer.
+
+## Verification
+
+From this worktree `backend`, runtime:
+`/Users/bratishka/Downloads/satornawb-main/.worktrees/wave1-integration/backend/.venv/bin/python`.
+
+```sh
+python -m pytest -q -p tests.repricer_offline_plugin \
+ tests/test_wb_stock_snapshots.py tests/test_wb_repricing_postgres_text.py \
+ tests/test_wb_source_collection_request.py tests/test_wb_canonical_price_parser.py \
+ tests/test_wb_price_size_preservation.py tests/test_wb_repricing_dispatch_contract.py \
+ tests/test_wb_repricing_repository_contract.py tests/test_wb_repricing_approval_domain.py \
+ tests/test_wb_repricing_price_inputs.py tests/test_wb_source_revision.py \
+ tests/test_wb_source_grain_contract.py tests/test_wb_stock_page_validation.py \
+ tests/test_wb_price_units.py tests/test_repricer_calculation_characterization.py \
+ tests/test_economics_internal_identity.py tests/test_economics_policies.py \
+ tests/test_abc_pnl_costs.py tests/test_rnp_runtime.py \
+ tests/test_rnp_source_period_isolation.py tests/test_repricer_bff_cache_contract.py \
+ tests/test_repricer_cache_store.py
+```
+
+Ruff runtime `/tmp/satorna-backend-verify-20260908/bin/python -m ruff check` and
+`python -m compileall -q`: kernel/repository/dispatch/price_snapshots/source_requests/
+stock_snapshots modules plus four new/updated tests listed above; both exit0.
+`git diff --check`, staged diff checks exit0. Scoped test results recorded below;
+counts are not added to infer a broader suite. Fresh combined command above:
+**662 passed in2.24s, exit0**, no pytest warnings. Earlier independently scoped source
+group556PASS and economics/cache group106PASS were also run separately;662 is an
+actual combined run, not only arithmetic. Historical full-suite delta remains unproved.
+
+Independent critique closed text UUID exception leakage, unsupported FBS transport,
+schema nullability/audit/paused-slot ambiguities, collection integer serialization,
+stock owner range and daily datetime overflow. Every code defect gained a failing
+test before correction. Stock final three findings rechecked locally by fresh tests.
+
+Next durable step requires exact corresponding T1 migration; obtain that dependency
+without replacing existing code/formulas or guessing table names. Remaining independent
+extensions are listed explicitly rather than declared completed by these pure adapters.
