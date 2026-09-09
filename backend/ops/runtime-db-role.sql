@@ -104,6 +104,12 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM :"runtime_role";
 GRANT USAGE ON SCHEMA public TO :"runtime_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO :"runtime_role";
+-- 0076 additive columns inherit the existing table privileges. Column REVOKE
+-- cannot narrow a table UPDATE grant: immutable incarnation/binding triggers
+-- enforce these invariants, including OLD+1 caller counter assignments.
+-- Trigger execution is automatic; runtime may not invoke the functions itself.
+REVOKE ALL ON FUNCTION public.ingestion_account_incarnation_guard(),
+    public.ingestion_token_binding_guard() FROM PUBLIC, :"runtime_role";
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO :"runtime_role";
 
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
