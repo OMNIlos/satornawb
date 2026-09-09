@@ -49,6 +49,17 @@ without authoritative financial-source evidence. Neither permits inventing
 automatic assignments or a finance attachment workflow. Retain as explicit
 legacy/P1 failures for root disposition; no test deletion, skip or baseline edit.
 
+The subsequently assigned Python3.11 bounded PG run naturally exited1:
+**15 PASS / 1 FAIL, 17.35s**. All eleven job-publication cases, including both
+uncertain-commit readbacks, and four0019 compatibility cases passed. Six owned
+databases and one runtime role were verified absent by the allocator cleanup.
+The full-head roundtrip failed before connecting: rendering the SQLAlchemy URL
+changed the exact Unix host to percent-encoded %2Ftmp, rejected by Alembic's
+existing ConfigParser interpolation. The test now passes its original allocator
+URL from Config, retaining exactly the same database/socket. Shared Alembic code
+and sandbox are unchanged. This one corrected roundtrip awaits a newly authorized
+slot; no automatic rerun was started. Slot explicitly returned to T1/root.
+
 ## Current Requirements Matrix (2026-09-09, supersedes all history below)
 
 Implementation baseline: `35ea34e77d80920b0d8779a6b888e6f1d8e7bad0`.

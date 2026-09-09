@@ -59,7 +59,9 @@ def test_empty_database_upgrades_to_head_without_stamp(database):
     config, engine = database
     completed = []
     environment = safe_environment()
-    environment["VELLA_DATABASE_URL"] = engine.url.render_as_string(hide_password=False)
+    # Preserve the allocator URL: SQLAlchemy's rendering percent-encodes the Unix
+    # socket path, which ConfigParser would interpret rather than pass to psycopg.
+    environment["VELLA_DATABASE_URL"] = config.get_main_option("sqlalchemy.url")
     run_migration_roundtrip(sys.executable, environment, completed)
     assert completed == ["migration_upgrade_head", "migration_downgrade_one", "migration_reupgrade_head"]
     with engine.connect() as connection:
