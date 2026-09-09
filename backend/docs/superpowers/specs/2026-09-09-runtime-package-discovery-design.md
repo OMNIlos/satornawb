@@ -8,17 +8,20 @@ in this checkout or explicit list. Existing wheel test checks eight representati
 imports and cannot prove future-package inclusion. Do not copy T3 domain code or
 claim the current checkout already loses app.orders from a wheel it cannot build.
 
-Use setuptools bounded discovery for regular Python packages under app and the
+Use setuptools bounded discovery for Python packages under app and the
 existing mapped reference package. Keep dependencies, project metadata, pytest
 paths and package-data behavior unchanged. Installed setuptools/config/expand.py
-was inspected: find_packages accepts multiple where roots, namespaces=False uses
-PackageFinder, and package-dir mappings are filled for alternate roots.
+was inspected: find_packages accepts multiple where roots and package-dir mappings
+are filled for alternate roots. Existing app.reviews is an implicit namespace
+explicitly present in the old package list. A real wheel regression proved that
+namespaces=False loses its canonical_contract.py; preserve it with namespace-aware
+discovery inside the same exact include roots. No domain __init__.py is added.
 
 ```toml
 [tool.setuptools.packages.find]
 where = [".", "backend_contracts"]
 include = ["app", "app.*", "vella_wb_19_05", "vella_wb_19_05.*"]
-namespaces = false
+namespaces = true
 
 [tool.setuptools.package-dir]
 vella_wb_19_05 = "backend_contracts/vella_wb_19_05"
@@ -27,8 +30,10 @@ vella_wb_19_05 = "backend_contracts/vella_wb_19_05"
 Replace only the explicit packages list with this block. No repository-wide
 unbounded discovery, setup.py/build hook, runtime path injection or app.orders
 placeholder. Future regular app subpackages are included by the same rule without
-inventing domain code. This deliberately does not promise discovery of arbitrary
-implicit namespaces or non-Python operational files.
+inventing domain code. Existing implicit namespaces within those roots remain
+supported; unrelated top-level namespaces and non-Python operational files are not
+part of this contract. The controller's source-only finder comparison found the
+sole current extra namespace app.reviews and no non-Python source-tree files.
 
 Preserve clean-source staging in test_installed_wheel.py: only pyproject and
 Python source in its two named roots, excluding existing caches/build/dist/venvs/
