@@ -8,7 +8,7 @@ describe('Repricer stats live source', () => {
   it('loads the repricer stats tab from the backend stats endpoint', () => {
     expect(source).toContain('loadLiveRepricerStats')
     expect(source).toContain('window.__vellaLoadLiveRepricerStats')
-    expect(source).toContain("activeParityTab === 'repricer-stats'")
+    // Route-driven loading is exercised by repricerStatsPageBrowser.test.ts.
     expect(source).toContain('renderLiveRepricerStats(payload)')
     expect(source).toContain('repricerStatsBody')
     expect(source).toContain("protectedLiveTabs = new Set(['repricer-stats'")
@@ -17,7 +17,7 @@ describe('Repricer stats live source', () => {
     expect(source).toContain("type ReportPeriodKey = 'digest' | 'repricer-stats'")
     expect(source).toContain("'repricer-stats', 'report-rules'")
     expect(source).toContain("readReportPeriodState('repricer-stats')")
-    expect(source).toContain("event.detail?.reportKey !== 'repricer-stats'")
+    // Scoped period events are exercised through the actual React page as well.
     expect(source).toContain('applyRepricerStatsCachePeriod(payload)')
     expect(source).toContain('payload.cache?.statsRangeAdjusted')
     expect(source).toContain("applyReportPeriodState('repricer-stats', next")

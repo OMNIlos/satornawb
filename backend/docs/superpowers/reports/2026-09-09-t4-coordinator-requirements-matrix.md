@@ -2,6 +2,15 @@
 
 ## Current checkpoint: frontend response isolation; Review historical binding open
 
+Latest frontend test-only checkpoint: actual VellaHtmlParityPage route/effects/
+generatedHTML browser test replaces2obsolete source-string assertions, retaining
+all otherguards. RealinitialGET/scopedperiodGET/authnullrow+KPIclearing verified.
+In-memory route/eventguard mutations bothfail for intendedbehavior. Finalfull
+349PASS/20FAIL/0pending versus345/21: one sourcecase closed, nonewfailedIDs.
+Includes final Orderswhitespacefix tests. Finaltsc/diff0, independentcriticPASS;
+no runtime/sourceHTML/generated changes. Reportfrontend/docs/superpowers/reports/
+2026-09-09-t4-repricer-stats-route-test.md. Twentyfailures remainunwaived.
+
 Dormant Orders wire preparation868728e:
 canonicalOrders.ts strict typeddecoder and URLbuilder, nofetch/UIactivation/print
 inference. T3da7e017 wire unchanged throughab272ee, directlyconfirmed. ActualT3
