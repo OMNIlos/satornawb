@@ -33,6 +33,22 @@ BEGIN
             ('wb_repricing_sku_override_versions'),
             ('wb_repricing_sku_override_heads'),
             ('wb_repricing_sku_override_audit'),
+            ('review_policy_versions'),
+            ('review_policy_heads'),
+            ('review_draft_revisions'),
+            ('review_decisions'),
+            ('review_workflow_heads'),
+            ('review_local_audit'),
+            ('review_local_command_receipts'),
+            ('user_orders_jobs'),
+            ('user_orders_job_authorities'),
+            ('user_orders_job_attempts'),
+            ('user_orders_job_audit'),
+            ('wb_repricing_jobs'),
+            ('wb_repricing_job_authorities'),
+            ('wb_repricing_job_audit'),
+            ('wb_repricing_upload_receipts'),
+            ('wb_repricing_upload_receipt_audit'),
             ('catalog_cost_versions'),
             ('catalog_economics_override_versions'),
             ('catalog_skus'),
@@ -247,5 +263,85 @@ GRANT EXECUTE ON FUNCTION public.wb_sku_override_decimal(numeric),
     public.wb_sku_override_integral(numeric),
     public.wb_sku_override_bytes(integer,integer,integer,integer,uuid,numeric,jsonb)
     TO :"runtime_role";
+
+-- Local Review completed receipts/history: exact rights after broad grants.
+REVOKE ALL ON TABLE public.review_policy_versions, public.review_policy_heads,
+    public.review_draft_revisions, public.review_decisions, public.review_workflow_heads,
+    public.review_local_audit, public.review_local_command_receipts FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON TABLE public.%I FROM PUBLIC, %I',
+    a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+    ('review_policy_versions','review_policy_heads','review_draft_revisions',
+     'review_decisions','review_workflow_heads','review_local_audit','review_local_command_receipts')
+    AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, INSERT ON TABLE public.review_policy_versions, public.review_draft_revisions,
+    public.review_decisions, public.review_local_audit, public.review_local_command_receipts TO :"runtime_role";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.review_policy_heads, public.review_workflow_heads TO :"runtime_role";
+REVOKE ALL ON FUNCTION public.review_local_account_lock(), public.review_local_row_guard(),
+    public.review_local_validate() FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, %I; GRANT EXECUTE ON FUNCTION %s TO %I',
+    p.oid::regprocedure,:'runtime_role',p.oid::regprocedure,:'runtime_role')
+FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.oid IN
+    ('public.review_local_integer_text(numeric,boolean)'::regprocedure,
+     'public.review_local_timestamp_text(timestamp with time zone)'::regprocedure,
+     'public.review_local_utf8_json_string(bytea)'::regprocedure,
+     'public.review_local_nonblank_utf8(bytea)'::regprocedure,
+     'public.review_local_string(text,boolean)'::regprocedure,
+     'public.review_local_uuid(uuid,boolean)'::regprocedure,
+     'public.review_local_number(numeric,boolean,boolean)'::regprocedure,
+     'public.review_local_label(text)'::regprocedure,
+     'public.review_local_checksum(text)'::regprocedure,
+     'public.review_local_policy_bytes(public.review_policy_versions)'::regprocedure,
+     'public.review_local_generation_bytes(public.review_draft_revisions)'::regprocedure,
+     'public.review_local_decision_binding_bytes(public.review_draft_revisions,bytea)'::regprocedure,
+     'public.review_local_audit_bytes(public.review_local_audit)'::regprocedure,
+     'public.review_local_result_bytes(public.review_local_command_receipts)'::regprocedure,
+     'public.review_local_request_bytes(public.review_local_command_receipts,public.review_policy_versions,public.review_draft_revisions,public.review_decisions,bytea)'::regprocedure)
+\gexec
+
+-- Session-bound Orders jobs: new-object-only overrides, no deletion or helper dispatch.
+REVOKE ALL ON TABLE public.user_orders_jobs, public.user_orders_job_authorities,
+    public.user_orders_job_attempts, public.user_orders_job_audit FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON TABLE public.%I FROM PUBLIC, %I',
+    a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+    ('user_orders_jobs','user_orders_job_authorities','user_orders_job_attempts','user_orders_job_audit')
+    AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, INSERT ON TABLE public.user_orders_jobs, public.user_orders_job_authorities,
+    public.user_orders_job_attempts, public.user_orders_job_audit TO :"runtime_role";
+GRANT UPDATE (state,version,attempt_count,current_attempt_id,next_attempt_at,completed_at,
+    safe_reason,result_sync_run_id,result_coverage_state) ON public.user_orders_jobs TO :"runtime_role";
+GRANT UPDATE (state,version,job_version_after,lease_expires_at,finished_at,safe_reason,
+    result_sync_run_id,result_coverage_state) ON public.user_orders_job_attempts TO :"runtime_role";
+REVOKE ALL ON FUNCTION public.user_orders_row_guard(), public.user_orders_transition_witness()
+    FROM PUBLIC, :"runtime_role";
+REVOKE ALL ON FUNCTION public.user_orders_ascii(text), public.user_orders_text(text,integer),
+    public.user_orders_request_bytes(public.user_orders_jobs) FROM PUBLIC, :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.user_orders_ascii(text), public.user_orders_text(text,integer),
+    public.user_orders_request_bytes(public.user_orders_jobs) TO :"runtime_role";
+
+-- Repricer immutable jobs: API creation only; executor receipts use a separate login.
+REVOKE ALL ON TABLE public.wb_repricing_jobs, public.wb_repricing_job_authorities,
+    public.wb_repricing_job_audit, public.wb_repricing_upload_receipts,
+    public.wb_repricing_upload_receipt_audit FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON TABLE public.%I FROM PUBLIC, %I', a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+ ('wb_repricing_jobs','wb_repricing_job_authorities','wb_repricing_job_audit',
+  'wb_repricing_upload_receipts','wb_repricing_upload_receipt_audit')
+ AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, INSERT ON public.wb_repricing_jobs, public.wb_repricing_job_authorities,
+ public.wb_repricing_job_audit TO :"runtime_role";
+GRANT SELECT ON public.wb_repricing_upload_receipts, public.wb_repricing_upload_receipt_audit TO :"runtime_role";
+REVOKE ALL ON FUNCTION public.repricing_job_guard(), public.repricing_job_witness() FROM PUBLIC, :"runtime_role";
+REVOKE ALL ON FUNCTION public.repricing_job_uuid(uuid), public.repricing_job_time(timestamptz),
+ public.repricing_job_text(text,integer) FROM PUBLIC, :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.repricing_job_uuid(uuid), public.repricing_job_time(timestamptz),
+ public.repricing_job_text(text,integer) TO :"runtime_role";
 
 COMMIT;

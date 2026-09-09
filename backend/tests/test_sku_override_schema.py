@@ -56,7 +56,7 @@ def seed(c):
 def db(cluster):
     role = "sku_override_runtime_" + uuid4().hex
     with candidate.disposable_database(cluster, (role,)) as database:
-        result = candidate.migrate(database.url, "upgrade", TARGET)
+        result = candidate.migrate(database.url, "upgrade", "head")
         assert result.returncode == 0, result.stderr
         owner = create_engine(database.url, hide_parameters=True)
         runtime = create_engine(owner.url.set(username=role), hide_parameters=True)
