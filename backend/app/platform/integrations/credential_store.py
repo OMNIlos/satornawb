@@ -476,10 +476,21 @@ def _resolve_marketplace_credential_in_session(
         raise CredentialStoreError("credential_contract_invalid")
     if type(keyring) is not CredentialKeyring:
         raise CredentialStoreError("credential_configuration_invalid")
+    row = _active_credential_for_resolution(session, account_identity, kind)
+    return _decrypt_active_credential(row, keyring=keyring, now=now)
+
+
+def _active_credential_for_resolution(session, account_identity, kind):
+    """Store-internal row only: one scoped lookup, no clock or crypto."""
     _account(session, account_identity, lock=False)
     row = _active_row(session, account_identity, kind, lock=False)
     if row is None:
         raise CredentialStoreError("credential_missing")
+    return row
+
+
+def _decrypt_active_credential(row, *, keyring, now):
+    """Store-internal shared expiry/decrypt step at explicit evaluation time."""
     expires_at = _as_utc(row.expires_at)
     if expires_at is not None and expires_at <= now:
         raise CredentialStoreError("credential_expired")
@@ -496,9 +507,9 @@ def resolve_marketplace_credential(
     with get_session_factory()() as session:
         try:
             set_tenant_context(session, account_identity.organization_id)
-            return _resolve_marketplace_credential_in_session(
-                session, account_identity, kind, keyring=keyring, now=_utc_now(),
-            )
+            row = _active_credential_for_resolution(session, account_identity, kind)
+            # Preserve legacy timing: read active row BEFORE sampling expiry time.
+            return _decrypt_active_credential(row, keyring=keyring, now=_utc_now())
         except (CredentialCryptoError, CredentialStoreError):
             raise
         except SQLAlchemyError:
