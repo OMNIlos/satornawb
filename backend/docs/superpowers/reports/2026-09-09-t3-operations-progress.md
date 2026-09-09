@@ -31,6 +31,42 @@ Backup/user data и исторические Git commits не удалялись
 
 ## Strict storage decoder slice
 
+### Independent XLSX retry stability
+
+Existing Avito XLSX package used render-clock ZIP timestamps. Synthetic two-clock
+test first confirmed all member XML equal but package bytes different (1failed,
+0.51s); renderer now uses explicit fixed ZIP epoch and DEFLATE per member.
+No headers, cell values/types, row ordering, quantity fallback, styles or print
+settings changed. Same-runtime repeat output is byte-stable; cross-Python/zlib
+identity is not promised. Focused XLSX/returns/Stage1:44PASS0.30s/exit0, scoped
+Ruff/compile/diff0, independent critic no important findings. No output file was
+written; only synthetic in-memory rendering. Artifact persistence, renderer version
+registry and frozen-sheet input still require P2/P3 contracts. Rollback of this
+renderer-only change restores old timestamp metadata, not any business data.
+
+### Remaining execution boundary after independent fixes
+
+This lists remaining requested product work, not a claim that every possible bug
+has been eliminated. Existing pure identity/status, receipt codecs, read contracts,
+normalization evidence, date validation and known renderer characterization have
+executable coverage. More invented models would not substitute for these inputs.
+
+| Remaining | Exact missing prerequisite / owner | Existing local evidence |
+|---|---|---|
+| Live Avito ingestion / worker publication | Proven complete provider page manifest and worker principal authority; fetch account binding must travel with response; no provider execution allowed | `2026-09-09-orders-job-source-binding.md`, `2026-09-09-orders-domain-binding-amendment.md`; current service handles normalized guarded user manifests only |
+| WB operational readiness/deadline/sticker ingestion | Separate WB fulfillment source contract, not supplier/orders statistics | Stage1 discovery and `app/modules/orders.py`; statistics unknown/cancellation-only mapping remains deliberate |
+| Automatic changed-fact progression | Proven ordering/version/coverage semantics; opaque revision or clock alone insufficient | `app/orders/publication_service.py` records reconciliation instead; pure comparator is not progression authority |
+| Full order filters / activation | Exact typed filter semantics and shared router registration/permission decision | `2026-09-09-orders-read-http-handoff.md`; query checksum is not a filter implementation; T4 owns frontend |
+| Persistent assignment / quantities / CAS / two-writer proof | Exact READY P1 DDL plus command permission; T1 f76ad06 is plan only, queued after Review binding | `2026-09-09-production-workitems-schema-request.md`, `2026-09-09-production-first-writer-amendment.md`; pure command codec already implemented |
+| Production batches / groups / scheduling / selected sheets | P2 storage plus full source calendar/grouping rules including weekend, cutoff and coverage behavior | `2026-09-09-production-frozen-artifacts-schema-request.md`; actual HTML partial source characterization is not full rule authority |
+| Frozen XLSX artifact / A4 PDF / both sticker sizes | Immutable sheet contract + P3 artifact storage; full A4/sticker renderer source missing | Stage1/UI-DB parity reports; Avito XLSX source exists and is tested, HTML labels are not complete unit/barcode renderers |
+| Archive / reprint / delivery intents and ambiguous receipts | P3/P4 storage plus proven provider acceptance/receipt contract; historical revisions must remain immutable | `2026-09-09-production-frozen-artifacts-schema-request.md`; UI send click is not success |
+| Cutover / prototype retirement | Complete per-format parity, reconciliation, writer fence, rollback and explicit retirement authorization | Current matrix stages5-8 blocked; do not remove prototype or revive whole-JSON writer |
+
+Report filenames above are under `backend/docs/superpowers/reports/` unless stated
+otherwise. KIZ/label matcher is excluded, not a dependency. No schema number is
+reserved by T3; follow the exact T1 READY handoff rather than assuming P1 is0068.
+
 ### Independent instant-order correction
 
 Pure contract audit found same-ZoneInfo datetime comparisons use local wall time

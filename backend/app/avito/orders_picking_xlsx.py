@@ -4,7 +4,7 @@ from datetime import date
 from io import BytesIO
 from typing import Any
 from xml.sax.saxutils import escape
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from app.avito.orders import AvitoOrderRow
 
@@ -165,10 +165,16 @@ def build_avito_orders_picking_xlsx(orders: list[AvitoOrderRow], *, date_from: d
 
     buffer = BytesIO()
     with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", content_types)
-        archive.writestr("_rels/.rels", rels)
-        archive.writestr("xl/workbook.xml", workbook_xml)
-        archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
-        archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
-        archive.writestr("xl/styles.xml", styles)
+        for name, content in (
+            ("[Content_Types].xml", content_types),
+            ("_rels/.rels", rels),
+            ("xl/workbook.xml", workbook_xml),
+            ("xl/_rels/workbook.xml.rels", workbook_rels),
+            ("xl/worksheets/sheet1.xml", sheet_xml),
+            ("xl/styles.xml", styles),
+        ):
+            # Fixed ZIP epoch keeps retries byte-stable within the same renderer runtime.
+            member = ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            member.compress_type = ZIP_DEFLATED
+            archive.writestr(member, content)
     return buffer.getvalue()
