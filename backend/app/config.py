@@ -166,6 +166,7 @@ class Settings:
     repricer_scheduler_enabled: bool = False
     repricer_execute_interval_minutes: int = 60
     repricer_wb_sync_enabled: bool = True
+    wb_live_sync_enabled: bool = False
     repricer_wb_sync_interval_minutes: int = 40
     repricer_wb_sync_period_days: int = 30
     finance_shadow_ingest_enabled: bool = False
@@ -292,6 +293,7 @@ def get_settings() -> Settings:
         repricer_scheduler_enabled=os.getenv("VELLA_REPRICER_SCHEDULER_ENABLED", "false").lower() == "true",
         repricer_execute_interval_minutes=int(os.getenv("VELLA_REPRICER_EXECUTE_INTERVAL_MINUTES", "60")),
         repricer_wb_sync_enabled=os.getenv("VELLA_REPRICER_WB_SYNC_ENABLED", "true").lower() == "true",
+        wb_live_sync_enabled=_parse_bool_env("VELLA_WB_LIVE_SYNC_ENABLED", False),
         repricer_wb_sync_interval_minutes=int(os.getenv("VELLA_REPRICER_WB_SYNC_INTERVAL_MINUTES", "40")),
         repricer_wb_sync_period_days=int(os.getenv("VELLA_REPRICER_WB_SYNC_PERIOD_DAYS", "30")),
         finance_shadow_ingest_enabled=_parse_bool_env("VELLA_FINANCE_SHADOW_INGEST_ENABLED", False),
