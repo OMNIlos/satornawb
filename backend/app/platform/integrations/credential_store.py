@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NoReturn
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
@@ -13,7 +13,10 @@ from sqlalchemy.orm import Session
 from app.cabinet.orm import LkAuditEventRow
 from app.config import get_settings, load_marketplace_credential_keyring
 from app.infra.db import get_session_factory, set_tenant_context
-from app.platform.integrations.orm import MarketplaceAccountCredentialRow, MarketplaceAccountRow
+from app.platform.integrations.orm import (
+    MarketplaceAccountCredentialRow,
+    MarketplaceAccountRow,
+)
 from app.security.marketplace_credentials import (
     CredentialCryptoError,
     CredentialIdentity,
@@ -23,7 +26,6 @@ from app.security.marketplace_credentials import (
     decrypt_credential,
     encrypt_credential,
 )
-
 
 _REVOCATION_REASONS = frozenset(
     {
@@ -68,6 +70,58 @@ class MarketplaceAccountCredentialOwner:
     organization_id: int
     marketplace_account_id: int
     provider: str
+
+
+@dataclass(frozen=True)
+class CredentialFetchBinding:
+    """Safe evidence captured from the same statement as the fetched secret."""
+
+    owner: MarketplaceAccountCredentialOwner
+    external_account_id: str
+    credential_ref: str | None
+    credential_identity: CredentialIdentity
+
+
+class ResolvedCredentialForFetch:
+    """Explicit secret access; generic copies/serialization must fail closed."""
+
+    __slots__ = ("__binding", "__secret")
+
+    def __init__(self, secret: DecryptedCredential, binding: CredentialFetchBinding) -> None:
+        self.__secret = secret
+        self.__binding = binding
+
+    @property
+    def secret(self) -> DecryptedCredential:
+        return self.__secret
+
+    @property
+    def binding(self) -> CredentialFetchBinding:
+        return self.__binding
+
+    @staticmethod
+    def _refuse_serialization() -> NoReturn:
+        raise TypeError("credential_contract_invalid")
+
+    def __iter__(self) -> NoReturn:
+        self._refuse_serialization()
+
+    def __copy__(self) -> NoReturn:
+        self._refuse_serialization()
+
+    def __deepcopy__(self, memo: object) -> NoReturn:
+        self._refuse_serialization()
+
+    def __reduce__(self) -> NoReturn:
+        self._refuse_serialization()
+
+    def __reduce_ex__(self, protocol: int) -> NoReturn:
+        self._refuse_serialization()
+
+    def __repr__(self) -> str:
+        return "<ResolvedCredentialForFetch redacted>"
+
+    __str__ = __repr__
 
 
 @dataclass(frozen=True)
@@ -383,6 +437,72 @@ def resolve_marketplace_credential(
             if expires_at is not None and expires_at <= _utc_now():
                 raise CredentialStoreError("credential_expired")
             return decrypt_credential(_identity(row), _encrypted(row), keyring)
+        except (CredentialCryptoError, CredentialStoreError):
+            raise
+        except SQLAlchemyError:
+            raise _translate_persistence_error() from None
+
+
+def resolve_marketplace_credential_for_fetch(
+    account_identity: MarketplaceAccountCredentialOwner,
+    kind: str,
+) -> ResolvedCredentialForFetch:
+    """Capture connected-account binding and decrypted authority atomically.
+
+    The outer join distinguishes missing account from missing active credential
+    without a second snapshot. The short session closes before provider I/O.
+    """
+
+    if (
+        not isinstance(account_identity, MarketplaceAccountCredentialOwner)
+        or not isinstance(account_identity.provider, str)
+        or not isinstance(kind, str)
+    ):
+        raise CredentialStoreError("credential_contract_invalid")
+    _validate_owner(account_identity)
+    _validate_kind(account_identity, kind)
+    keyring = _load_keyring()
+    account = MarketplaceAccountRow
+    credential = MarketplaceAccountCredentialRow
+    query = (
+        select(account.external_account_id, account.credential_ref, credential)
+        .outerjoin(
+            credential,
+            (credential.organization_id == account.organization_id)
+            & (credential.marketplace_account_id == account.marketplace_account_id)
+            & (credential.provider == account.marketplace)
+            & (credential.credential_kind == kind)
+            & credential.revoked_at.is_(None),
+        )
+        .where(
+            account.organization_id == account_identity.organization_id,
+            account.marketplace_account_id == account_identity.marketplace_account_id,
+            account.marketplace == account_identity.provider,
+            account.status == "connected",
+        )
+    )
+    with get_session_factory()() as session:
+        try:
+            set_tenant_context(session, account_identity.organization_id)
+            selected = session.execute(query).one_or_none()
+            if selected is None:
+                raise CredentialStoreError("credential_account_not_found")
+            external_account_id, credential_ref, row = selected
+            if row is None:
+                raise CredentialStoreError("credential_missing")
+            identity = _identity(row)
+            if identity.expires_at is not None and identity.expires_at <= _utc_now():
+                raise CredentialStoreError("credential_expired")
+            secret = decrypt_credential(identity, _encrypted(row), keyring)
+            return ResolvedCredentialForFetch(
+                secret=secret,
+                binding=CredentialFetchBinding(
+                    owner=account_identity,
+                    external_account_id=external_account_id,
+                    credential_ref=credential_ref,
+                    credential_identity=identity,
+                ),
+            )
         except (CredentialCryptoError, CredentialStoreError):
             raise
         except SQLAlchemyError:
