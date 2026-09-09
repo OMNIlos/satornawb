@@ -731,3 +731,22 @@ browser/build/fullsuite gate or heavy-slot reservation. Test-only rollback remov
 the new cases; no runtime/schema/data rollback needed.
 Final single-module unit run **102PASS0.62s**, naturalexit0 (old80+new22 actually
 run together). Read-only critic found no defects, did not start test processes.
+
+### RNP absent-advertising response contract (independent stage 8)
+
+Fresh admitted three GET-only historical probes: **3FAIL2.53s**, natural exit1;
+interval released, no cleanup or provider call. PNL viewer has no source fixture;
+BFF RNP correctly returns waiting-source shape; v1 RNP exposes a distinct runtime
+defect: missing ads cache returns `blocked` without the WB-02 blocker required by
+the existing response validator. SQLite thread-close diagnostic also appeared in
+the legacy HTTP harness; this is not a PostgreSQL persistence test.
+
+Narrow runtime fix preserves WB_ADS_CACHE_EMPTY and adds WB-02, both on fresh
+empty sources and legacy cached blocked/unknown responses. No validator weakening,
+formula change, source activation or inferred financial approval. Regression actual
+RED1FAIL0.68s → GREEN1PASS0.62s; additional cached blocked/unknown cases actual
+RED2FAIL1PASS0.72s → **3PASS0.62s**, natural exit0. Cached blocker list is not mutated.
+Command: isolated env-i fake/in-memory SQLite, sandbox-exec/offline plugin,
+`pytest -q -p tests.repricer_offline_plugin tests/test_rnp_missing_ads_contract.py
+--tb=short`. Focused compileall, test Ruff and diff-check exit0. Three historical
+positive HTTP cases remain open, not counted as repaired by this regression.
