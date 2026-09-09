@@ -2,11 +2,13 @@
 
 Caller must hold the platform publication guard through outer commit, with user
 locks acquired before the account lock. No router/task uses this repository yet.
-Commands own savepoints only; no commits, provider I/O or fallback stores.
+Standalone commands own savepoints only. Guarded callers explicitly disable them
+and MUST roll back their entire root on any failure, never catch and commit a
+partial command. No commits, provider I/O or fallback stores.
 """
 
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -79,11 +81,18 @@ class ReviewFactSnapshot:
 
 
 class ReviewFactsRepository:
-    def __init__(self, connection: Connection, owner: ReviewOwner):
-        if not isinstance(owner, ReviewOwner):
+    def __init__(
+        self,
+        connection: Connection,
+        owner: ReviewOwner,
+        *,
+        command_savepoints: bool = True,
+    ):
+        if not isinstance(owner, ReviewOwner) or type(command_savepoints) is not bool:
             raise ReviewRepositoryError()
         self.connection = connection
         self.owner = owner
+        self._command_savepoints = command_savepoints
 
     @property
     def _values(self):
@@ -101,8 +110,10 @@ class ReviewFactsRepository:
         c = self.connection
         if c.dialect.name != "postgresql" or not c.in_transaction():
             raise ReviewRepositoryError("REVIEW_TRANSACTION_REQUIRED")
+        if not self._command_savepoints and c.in_nested_transaction():
+            raise ReviewRepositoryError("REVIEW_TRANSACTION_REQUIRED")
         try:
-            with c.begin_nested():
+            with c.begin_nested() if self._command_savepoints else nullcontext():
                 if (
                     c.exec_driver_sql("SHOW transaction_isolation").scalar_one()
                     != "read committed"
