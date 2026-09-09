@@ -196,8 +196,8 @@ def test_short_source_refresh_is_independent_and_whole_job_refresh_retains_repla
         c.execute(update(Source).where(Source.organization_id == d.org, Source.source == "content").values(
             next_due_at=datetime.now(timezone.utc) - timedelta(seconds=1)))
     refresh = d.repo.claim_batch(locator)
-    assert refresh.source == "content" and refresh.run_id != lease.run_id and refresh.checkpoint["nmID"] == 0
-    assert refresh.checkpoint["updatedAt"].startswith("2026-09-10T11:59:59")
+    assert refresh.source == "content" and refresh.run_id != lease.run_id
+    assert refresh.checkpoint == {"updatedAt": "2026-09-10T12:00:00+00:00", "nmID": 9223372036854000}
     commit(d, refresh)
     with d.engine.begin() as c:
         c.execute(update(Source).where(Source.organization_id == d.org, Source.source == "prices").values(

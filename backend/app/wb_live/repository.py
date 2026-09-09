@@ -136,8 +136,6 @@ class WbLiveRepository:
             checkpoint = {}
             if name == "content" and name in old and old[name].state == "completed" and old[name].checkpoint:
                 checkpoint = dict(old[name].checkpoint)
-                checkpoint["updatedAt"] = (_parse_time(checkpoint["updatedAt"]) - timedelta(seconds=1)).isoformat()
-                checkpoint["nmID"] = 0
             s.add(Source(organization_id=job.organization_id, marketplace_account_id=job.marketplace_account_id,
                 job_id=job.job_id, source=name, run_id=uuid4(), state="queued", checkpoint=checkpoint,
                 processed=0, revision=0, attempt=0, next_due_at=max(now, old[name].next_due_at) if name in old else now,
@@ -222,8 +220,6 @@ class WbLiveRepository:
                     checkpoint = {}
                     if r.source == "content" and r.checkpoint:
                         checkpoint = dict(r.checkpoint)
-                        checkpoint["updatedAt"] = (_parse_time(checkpoint["updatedAt"]) - timedelta(seconds=1)).isoformat()
-                        checkpoint["nmID"] = 0
                     r.run_id, r.checkpoint, r.processed, r.attempt = uuid4(), checkpoint, 0, 0
                     r.revision += 1
                 if r.attempt >= MAX_ATTEMPTS:
