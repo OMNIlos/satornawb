@@ -131,13 +131,18 @@ FROM pg_attribute a WHERE a.attrelid='public.review_sync_runs_v2'::regclass
 GRANT SELECT, UPDATE ON TABLE public.review_sync_runs_v2 TO :"runtime_role";
 GRANT INSERT (sync_run_id, organization_id, marketplace_account_id, marketplace,
     source_run_id, request_checksum, status, completeness, started_at, completed_at,
-    observed_count, manifest_checksum, coverage, error_code, source_run_id_utf8, coverage_utf8)
+    observed_count, manifest_checksum, coverage, error_code, source_run_id_utf8, coverage_utf8,
+    account_binding_schema_version, account_binding_external_account_id,
+    account_binding_credential_ref, account_binding_payload, account_binding_checksum)
     ON public.review_sync_runs_v2 TO :"runtime_role";
 GRANT SELECT, INSERT, UPDATE ON TABLE public.review_facts TO :"runtime_role";
 GRANT SELECT, INSERT ON TABLE public.review_observations, public.review_sync_run_items
     TO :"runtime_role";
 GRANT EXECUTE ON FUNCTION public.review_strict_utf8(bytea),
     public.review_coverage_json_object_utf8(bytea) TO :"runtime_role";
+-- Review binding adds only pure descriptor/CHECK evaluation authority.
+GRANT EXECUTE ON FUNCTION public.review_binding_ascii_string(text),
+    public.review_run_binding_bytes(integer,integer,text,text,text) TO :"runtime_role";
 SELECT format('REVOKE ALL ON SEQUENCE %s FROM %I; GRANT USAGE ON SEQUENCE %s TO %I',
     pg_get_serial_sequence('public.review_sync_runs_v2','run_sequence'), :'runtime_role',
     pg_get_serial_sequence('public.review_sync_runs_v2','run_sequence'), :'runtime_role')
