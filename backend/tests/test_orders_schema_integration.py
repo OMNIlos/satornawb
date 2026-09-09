@@ -130,14 +130,124 @@ def test_actual_chain_has_one_head_containing_orders_revision():
     assert "20260909_0062" in {revision.revision for revision in scripts.iterate_revisions(heads[0], "base")}
 
 
+def _credential_reachable_calls(function):
+    """Bounded source admission; do not count disconnected nested definitions."""
+    calls = []
+
+    class Calls(ast.NodeVisitor):
+        def visit_FunctionDef(self, node):
+            pass
+
+        visit_AsyncFunctionDef = visit_ClassDef = visit_Lambda = visit_FunctionDef
+
+        def visit_If(self, node):
+            if isinstance(node.test, ast.Constant):
+                for statement in node.body if node.test.value else node.orelse:
+                    self.visit(statement)
+            else:
+                self.generic_visit(node)
+
+        def visit_Call(self, node):
+            calls.append(node)
+            self.generic_visit(node)
+
+    visitor = Calls()
+    for statement in function.body:
+        visitor.visit(statement)
+    return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
+
+
+def _assert_credential_fixture_admission(tree):
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    fixture = functions["disposable_postgres"]
+    assert len(fixture.body) == 1 and isinstance(fixture.body[0], ast.If)
+    dispatch = fixture.body[0]
+    assert ast.dump(dispatch.test) == ast.dump(
+        ast.parse("os.environ.get('ORDERS_TEST_USE_LOCAL_CLUSTER') == '1'", mode="eval").body
+    )
+    for branch, generator, creates_role in (
+        (dispatch.body, "_local_postgres", False),
+        (dispatch.orelse, "_native_postgres", True),
+    ):
+        assert len(branch) == 1 and isinstance(branch[0], ast.Expr)
+        delegation = branch[0].value
+        assert isinstance(delegation, ast.YieldFrom)
+        call = delegation.value
+        assert isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+        assert call.func.id == generator
+        bootstraps = [
+            candidate_call for candidate_call in _credential_reachable_calls(functions[generator])
+            if isinstance(candidate_call.func, ast.Name)
+            and candidate_call.func.id == "_bootstrap_postgres"
+        ]
+        assert len(bootstraps) == 1
+        role_arguments = [
+            keyword.value for keyword in bootstraps[0].keywords
+            if keyword.arg == "create_runtime_role"
+        ]
+        assert len(role_arguments) == 1 and isinstance(role_arguments[0], ast.Constant)
+        assert role_arguments[0].value is creates_role
+
+    sequence = []
+    for call in _credential_reachable_calls(functions["_bootstrap_postgres"]):
+        if (
+            isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "command"
+            and call.func.attr in {"stamp", "upgrade", "downgrade"}
+        ):
+            assert len(call.args) == 2 and isinstance(call.args[1], ast.Constant)
+            sequence.append((call.func.attr, call.args[1].value))
+    assert sequence == [
+        ("stamp", "20260905_0060"),
+        ("upgrade", "20260908_0061"),
+        ("downgrade", "20260905_0060"),
+        ("upgrade", "20260908_0061"),
+    ]
+
+
 def test_isolated_credential_fixture_pins_its_supported_revision():
-    # This is a target-selection regression, not execution of the native PG fixture.
+    # Follow actual local/native dispatch to the shared bootstrap. This remains
+    # a pure source-admission regression, not execution of either PG fixture.
     tree = ast.parse((candidate.ROOT / "tests/test_marketplace_credential_rls.py").read_text())
-    fixture = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "disposable_postgres")
-    targets = [node.args[1].value for node in ast.walk(fixture)
-               if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-               and node.func.attr == "upgrade"]
-    assert targets == ["20260908_0061", "20260908_0061"]
+    _assert_credential_fixture_admission(tree)
+
+
+@pytest.mark.parametrize("mutation", [
+    "head", "wrong_revision", "wrong_downgrade", "bypass_local", "bypass_native",
+    "bypass_local_dispatch", "bypass_native_dispatch", "disconnected_local_bootstrap",
+])
+def test_credential_fixture_admission_rejects_unsafe_reachable_changes(mutation):
+    tree = ast.parse((candidate.ROOT / "tests/test_marketplace_credential_rls.py").read_text())
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    if mutation in {"head", "wrong_revision", "wrong_downgrade"}:
+        action = "downgrade" if mutation == "wrong_downgrade" else "upgrade"
+        call = next(
+            call for call in _credential_reachable_calls(functions["_bootstrap_postgres"])
+            if isinstance(call.func, ast.Attribute) and call.func.attr == action
+        )
+        call.args[1] = ast.Constant("head" if mutation == "head" else "20260909_0062")
+    elif mutation.endswith("_dispatch"):
+        branch = functions["disposable_postgres"].body[0]
+        statements = branch.body if "local" in mutation else branch.orelse
+        statements[0].value.value.func.id = "_bypassed_generator"
+    else:
+        generator = "_native_postgres" if mutation == "bypass_native" else "_local_postgres"
+        call = next(
+            call for call in _credential_reachable_calls(functions[generator])
+            if isinstance(call.func, ast.Name) and call.func.id == "_bootstrap_postgres"
+        )
+        call.func.id = "_bypassed_bootstrap"
+        if mutation == "disconnected_local_bootstrap":
+            # A nested function containing the correct literal call is never
+            # invoked. It cannot repair the broken admitted generator path.
+            functions[generator].body.extend(ast.parse(
+                "def disconnected():\n    _bootstrap_postgres(engine, url, create_runtime_role=False)\n"
+            ).body)
+    with pytest.raises(AssertionError):
+        _assert_credential_fixture_admission(tree)
 
 
 @pytest.mark.parametrize("model,name,columns", [
