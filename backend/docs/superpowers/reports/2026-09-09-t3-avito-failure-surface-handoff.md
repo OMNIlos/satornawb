@@ -98,3 +98,41 @@ semantics. Diagnostic-only consumers expecting removed keys need their assertion
 updated; removed fields are intentionally not retained as compatibility leaks.
 Other overview typed/cached errors and external HTTP-library/application logging
 remain outside this source-only change. No whole-Avito sanitization claim is made.
+
+## Follow-up: Overview Typed Errors And Historical Read Output
+
+Separate two-path delegation covers the remaining identified Overview diagnostic
+spans. A single closed projection is used for stats/listings/chats/reviews typed
+errors and caught exceptions. Known codes and blockers are allowlisted, messages
+are fixed, retryable is accepted only as a boolean, and unknown section keys are
+omitted. Existing rate-limit classification may inspect raw text internally but
+emits only a safe rate-limit enum; formatter/projection exceptions return a fixed
+unavailable object without dynamic repr or provider error text.
+
+All four typed result branches now project before response/cache writes. Diagnostic
+events use only the four known section names and fixed text. Historical cache reads
+copy source.errors through this projection and rebuild only exact event kinds
+stats_blocked/listings_blocked/chats_blocked/reviews_blocked. The actual event
+discriminator is `kind`, not an invented ID. Other business events retain their
+original objects, ordering and payload; summaries/accounts/topItems/source.api and
+source.sections remain outside the diagnostic edit. No stored cache is rewritten.
+
+Cooldown messages are fixed on write and read. Existing 70-second policy, key,
+timestamp comparison, naive-time UTC treatment and branch decisions are preserved.
+retryAfterUntil is emitted only after parsing a bounded string and canonical
+datetime re-encoding; invalid diagnostic timestamps become null or are omitted,
+never reflected as raw strings. Safe positive integer retryAfterSeconds may be
+retained. Cache hit/stale status and stale partial semantics remain explicit.
+
+Pending final canaries: four typed errors and exceptions containing synthetic
+secrets in code/message/blockers/extra keys; historical source.errors and all four
+blocked-event text fields; unknown section keys; malformed timestamp and formatter;
+same business rows/events before and after projection; current/historical 429
+cooldown and stale/hit behavior; no source-cache write during cached read. No tests
+or other gates were authored/run for this source-only delivery.
+
+The previously noted typed/cached Overview diagnostic residual is addressed in
+these exact spans, not globally. Arbitrary business fields, external library logs,
+other routers and the unchanged legacy organization-level credential selection
+are not certified by this change. No schema/auth/provider request/TTL/registration
+or KIZ behavior was modified.
