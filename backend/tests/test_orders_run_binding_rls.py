@@ -232,6 +232,80 @@ def test_binding_update_does_not_acquire_account_lock(db):
             c.execute(text("UPDATE order_sync_runs SET page_count=1 WHERE sync_run_id=:id"), {"id": rid})
 
 
+def test_account_created_after_missing_lock_lookup_is_not_admitted(db):
+    """Deterministically expose the missing-row window in the installed guard.
+
+    Only this disposable database's function is temporarily instrumented: an
+    assignment waits on an advisory lock immediately after FOR UPDATE. Unlike
+    PERFORM, assignment preserves FOUND; assertions inside the injected body
+    verify that fact and that the lookup really missed. Production has no pause.
+    """
+    owner, runtime = db
+    account = 91103
+    key = uuid4().hex
+    advisory_key = int(uuid4().hex[:15], 16)
+    ready = Queue()
+    expected = binding.stamp(account=account, external="synthetic-created-during-insert")
+    with owner.begin() as c:
+        assert c.execute(text("SELECT count(*) FROM marketplace_accounts WHERE marketplace_account_id=:id"), {"id": account}).scalar_one() == 0
+        original = c.exec_driver_sql("SELECT pg_get_functiondef('public.orders_run_binding_insert_guard()'::regprocedure)").scalar_one()
+        anchor = "AND marketplace_account_id=NEW.marketplace_account_id FOR UPDATE;"
+        assert original.count(anchor) == 1
+        assert original.count("DECLARE actual record;") == 1
+        instrumented = original.replace("DECLARE actual record;", "DECLARE actual record; binding_test_found boolean; binding_test_pause text;", 1)
+        instrumented = instrumented.replace(anchor, anchor + f"""
+          binding_test_found := FOUND;
+          binding_test_pause := pg_catalog.pg_advisory_xact_lock({advisory_key}::bigint)::text;
+          IF FOUND IS DISTINCT FROM binding_test_found THEN
+            RAISE EXCEPTION 'binding_test_found_changed';
+          END IF;
+          IF binding_test_found THEN
+            RAISE EXCEPTION 'binding_test_expected_missing';
+          END IF;
+        """, 1)
+        c.exec_driver_sql(instrumented)
+
+    def insert_during_creation():
+        try:
+            with runtime.begin() as c:
+                candidate.scope(c)
+                c.exec_driver_sql("SET LOCAL lock_timeout='10s'")
+                ready.put(c.exec_driver_sql("SELECT pg_backend_pid()").scalar_one())
+                exact.make_run(c, marketplace_account_id=account, source_run_key=key, **expected)
+            return "admitted"
+        except DBAPIError as error:
+            assert error.orig.sqlstate == "23514"
+            assert error.orig.diag.message_primary == "orders_run_binding_mismatch"
+            return "rejected"
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with owner.begin() as gate:
+                gate.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": advisory_key})
+                gate_pid = gate.exec_driver_sql("SELECT pg_backend_pid()").scalar_one()
+                future = pool.submit(insert_during_creation)
+                insert_pid = ready.get(timeout=5)
+                assert insert_pid != gate_pid
+                observed_wait(owner, insert_pid, gate_pid)
+                # The blocked assignment proves the row-lock lookup already
+                # missed. Commit matching metadata before releasing that pause.
+                with owner.begin() as creator:
+                    assert creator.exec_driver_sql("SELECT pg_backend_pid()").scalar_one() not in (insert_pid, gate_pid)
+                    creator.execute(text("INSERT INTO marketplace_accounts(marketplace_account_id,organization_id,marketplace,external_account_id,status) VALUES (:id,91001,'avito','synthetic-created-during-insert','connected')"), {"id": account})
+            outcome = future.result(timeout=10)
+        assert outcome == "rejected", "fresh SELECT admitted an account missed by the lock lookup"
+        with owner.connect() as c:
+            assert c.execute(text("SELECT count(*) FROM order_sync_runs WHERE source_run_key=:key"), {"key": key}).scalar_one() == 0
+    finally:
+        with owner.begin() as c:
+            c.exec_driver_sql(original)
+    # Once visible at the actual lookup, this account is a valid positive control.
+    with runtime.begin() as c:
+        candidate.scope(c)
+        rid = exact.make_run(c, marketplace_account_id=account, **expected)
+        assert read_stamp(c, rid) == expected
+
+
 def privileges(c):
     return {
         "tables": c.exec_driver_sql("SELECT oid,relacl::text FROM pg_class WHERE relnamespace='public'::regnamespace ORDER BY oid").all(),

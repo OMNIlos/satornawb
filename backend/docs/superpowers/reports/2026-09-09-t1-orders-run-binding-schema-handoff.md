@@ -45,7 +45,8 @@ or a claim that T3's producer ran in this worktree.
 
 ## Writes, locking and authorization boundary
 
-New bound INSERTs lock the canonical account in READ COMMITTED and use a
+New bound INSERTs require the canonical account lock lookup to find a row in
+READ COMMITTED, immediately rejecting a miss before the fresh read, and use a
 separate volatile SQL statement to read fresh provider/external/reference
 metadata after waiting. Missing/mismatched metadata raises fixed
 `orders_run_binding_mismatch` (23514). Existing 0064 account-first identity
@@ -81,7 +82,7 @@ Failures were UndefinedFunction (42883) and UndefinedColumn (42703); ordinary
 old unbound INSERT passed. One initial PATH mistake caused three setup errors
 before any database was allocated; corrected to installed `/usr/local/bin`.
 
-Final feature gate: **115 passed, 56.05s, exit 0, no skips/xfails**. Tests cover
+Initial feature gate: **115 passed, 56.05s, exit 0, no skips/xfails**. Tests cover
 all malformed partial-null shapes, wrong schema/hash/bytes, text boundaries,
 immutability in three states, both observed physical account-lock winner orders,
 fresh metadata after wait, unchanged sealed stamp after rebind, no account lock
@@ -129,3 +130,31 @@ Rollback retains expanded schema and a decoder-capable binary. Downgrade locks
 `order_sync_runs` ACCESS EXCLUSIVE, refuses any non-NULL binding field with
 `orders_run_binding_downgrade_bound` (55000), and uses `row_security=off` only
 as a fail-closed visibility defense. Never clear bindings to force rollback.
+
+## I1 correction before release
+
+Independent review found that the locking PERFORM's FOUND result was discarded.
+A newly committed account could become visible to the later fresh SELECT even
+though the lock lookup had missed it. The unreleased 0067 now checks NOT FOUND
+immediately after FOR UPDATE and raises the same fixed mismatch error before
+any metadata read. The fresh READ COMMITTED read remains after successful locking.
+
+A coordinated regression temporarily instruments only the installed guard in its
+own disposable database: an advisory-lock assignment pauses immediately after
+the row-lock lookup and preserves FOUND. It checks FOUND did not change and that
+the row lookup missed; an independent creator commits matching account metadata
+during the observed `pg_blocking_pids` pause. This reproduced original admission
+as **1 failed, 3.44s, exit 1**. After the three-line guard fix it reports
+**1 passed, 3.70s, exit 0**, and the restored uninstrumented guard admits a normal
+subsequent insert when that account is visible. This is an instrumented scheduling
+proof, not a claim to reproduce the narrow timing window without instrumentation.
+The original function definition is restored in finally; production has no pause.
+
+Final covering gate after I1: **116 passed, 32.21s, exit 0, no skips/xfails**.
+Compileall, scoped Ruff and diff checks: exit 0. All eleven databases/fourteen
+roles across fix RED, focused GREEN and covering GREEN were cleaned and verified
+absent. Existing account-lock winner and unbound/immutability/ACL/downgrade
+controls still pass. The seven-file adjacent gate above predates this local fix;
+the controller explicitly required only the two covering files for the fix.
+No older revision, grants, domain code or activation changed. I1 awaits focused
+independent re-review; inherited passfile warning M1 remains separately recorded.
