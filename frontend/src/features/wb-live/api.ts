@@ -13,7 +13,7 @@ export type WbProduct = {
   nmId: string; vendorCode: string | null; title: string | null; brand: string | null; subjectId: string | null; subjectName: string | null
   photoUrl: string | null; contentUpdatedAt: string | null; pricesUpdatedAt: string | null
   sizesTruncated: boolean
-  sizes: { chrtId: string; techSize: string | null; skus: string[]; skusTruncated: boolean; priceKopecks: string | null; discountedPriceKopecks: string | null }[]
+  sizes: { chrtId: string; techSize: string | null; skus: string[] | null; skusTruncated: boolean; priceKopecks: string | null; discountedPriceKopecks: string | null }[]
 }
 export type WbProductsPage = {
   marketplaceAccountId: number; items: WbProduct[]; nextCursor: string | null; readVersion: string

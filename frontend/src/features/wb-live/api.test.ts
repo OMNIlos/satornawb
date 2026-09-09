@@ -1,13 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api'
 import { deleteCurrentUserWbToken, upsertCurrentUserWbToken } from '@/features/settings/backend'
-import { formatWbPrice, productsPath, readWbData, saveWbCredential, shouldPollWbSync, startWbSync, wbErrorMessage, type WbSync } from './api'
+import { formatWbPrice, productsPath, readWbData, saveWbCredential, shouldPollWbSync, startWbSync, wbErrorMessage, type WbProductsPage, type WbSync } from './api'
 
 function response(data: unknown) { return new Response(JSON.stringify({ data }), { headers: { 'Content-Type': 'application/json' } }) }
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers() })
 
 describe('WB account live reads', () => {
+  it('preserves unknown barcodes as null for a price-only size', async () => {
+    const payload: WbProductsPage = {
+      marketplaceAccountId: 91, nextCursor: null, readVersion: 'version', readiness: 'partial', sources: [],
+      items: [{
+        nmId: '100001', vendorCode: null, title: null, brand: null, subjectId: null, subjectName: null,
+        photoUrl: null, contentUpdatedAt: null, pricesUpdatedAt: '2026-09-10T00:00:00Z', sizesTruncated: false,
+        sizes: [{ chrtId: '100002', techSize: null, skus: null, skusTruncated: false, priceKopecks: '12345', discountedPriceKopecks: null }],
+      }],
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => response(payload)))
+    const page = await readWbData<WbProductsPage>('price-only', productsPath(91, {}), new AbortController().signal)
+    expect(page.items[0].sizes[0].skus).toBeNull()
+    expect(page.items[0].sizes[0].skusTruncated).toBe(false)
+    expect(page.items[0].sizes[0].priceKopecks).toBe('12345')
+  })
+
   it('deduplicates the same authenticated read and isolates cancellation per subscriber', async () => {
     let resolve!: (value: Response) => void
     let transportSignal: AbortSignal | undefined
