@@ -88,6 +88,16 @@ working parser or claim this request implements that projection. Dry-run/local_m
 results must never create a provider receipt. Ambiguous without a returned ID has
 no receipt row and remains a reconciliation/manual-review blocker.
 
+Dormant implementation follow-up: `app/modules/wb_repricing_upload_receipt.py`
+`extract_post_upload_id` now validates the original **decoded** POST response before
+`_as_int`, returning only a canonical ID. It rejects lossy float/bool/coercion,
+conflicting aliases, explicit errors and non-POST/non-success/local result contexts.
+It does not parse raw JSON, detect duplicate raw JSON keys, authenticate caller
+metadata, prove a committed marker, construct a scoped receipt row or persist it.
+47 synthetic offline cases cover this projection; current WB adapter is untouched.
+The acceptance gate above remains open for trusted adapter/service wiring and DB
+receipt authority, not for this separately tested decoded numeric projection.
+
 ## Replay, conflicting evidence and recovery
 
 UNIQUE `(organization_id,marketplace_account_id,attempt_id)`; receipt insert locks

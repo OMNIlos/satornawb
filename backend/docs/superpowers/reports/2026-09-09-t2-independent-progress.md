@@ -187,3 +187,18 @@ fields, lossy `_as_int`, mixed HTTP/task status, incomplete details pagination a
 receipt-vs-applied semantics. No provider jobs run. Receipt DDL, strict initial-ID
 adapter projection and worker/job reference remain pending; audit vocabulary and
 finite separate-clock semantics are explicit, no guessed retention/permission/TTL.
+
+### Dormant decoded upload-ID projection
+
+After T1 accepted470d410 as domain input (not schema READY), added
+`app/modules/wb_repricing_upload_receipt.py` with47 synthetic offline tests in
+`tests/test_wb_repricing_upload_receipt.py`. Original decoded POST response only;
+no float/bool truncation, invalid alias fallback, unknown transport or raw error
+reflection. It returns only ID, never applied state or retained response payload.
+No current adapter/client or provider execution is connected.
+
+RED missing module exit2; nested explicit error2FAIL exit1 → corrected GREEN.
+Fresh projection+assignment+dispatch group **165 passed in0.52s, exit0**; scoped
+Ruff/compile/diff0. Independent critic47PASS and no material findings. Pure helper
+does not establish raw JSON duplicate-key validation, trusted transport provenance,
+job authority, committed dispatch proof or receipt persistence; those remain gates.
