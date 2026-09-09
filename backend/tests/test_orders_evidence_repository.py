@@ -1,7 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
+from queue import Queue
 from threading import Barrier
+from time import monotonic, sleep
 from uuid import uuid4
 
 import pytest
@@ -151,3 +153,78 @@ def test_same_run_changed_fact_and_wrong_account_are_rejected(evidence_db):
             repo.append(run, replace(row, source_revision="synthetic-new"))
         with pytest.raises(ValueError, match="scope"):
             OrdersEvidenceRepository(session, 91001, 91102).append(run, row)
+
+
+@pytest.mark.parametrize("isolation", ["REPEATABLE READ", "SERIALIZABLE"])
+def test_append_rejects_stale_snapshot_isolation(evidence_db, isolation):
+    _, runtime = evidence_db
+    row = fact()
+    with Session(runtime) as session, session.begin():
+        scope(session)
+        run = new_run(session, row)
+    with (
+        runtime.connect().execution_options(isolation_level=isolation) as connection,
+        Session(connection) as session,
+        session.begin(),
+    ):
+        scope(session)
+        with pytest.raises(ValueError, match="READ COMMITTED"):
+            OrdersEvidenceRepository(session, 91001, 91101).append(run, row)
+    with Session(runtime) as session, session.begin():
+        scope(session)
+        assert (
+            session.execute(
+                text(
+                    "SELECT count(*) FROM marketplace_orders WHERE external_order_id=:id"
+                ),
+                {"id": row.identity.external_order_id},
+            ).scalar_one()
+            == 0
+        )
+
+
+def test_waiter_refreshes_exact_replay_after_account_lock(evidence_db):
+    _, runtime = evidence_db
+    row = fact()
+    with Session(runtime) as session, session.begin():
+        scope(session)
+        first_run, second_run = new_run(session, row), new_run(session, row)
+    pids = Queue()
+
+    def waiter():
+        with Session(runtime) as session, session.begin():
+            scope(session)
+            session.execute(text("SET LOCAL lock_timeout='8s'"))
+            pids.put(session.execute(text("SELECT pg_backend_pid()")).scalar_one())
+            return OrdersEvidenceRepository(session, 91001, 91101).append(
+                second_run, row
+            )
+
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        with Session(runtime) as session, session.begin():
+            scope(session)
+            holder = session.execute(text("SELECT pg_backend_pid()")).scalar_one()
+            session.execute(
+                text("""SELECT marketplace_account_id FROM marketplace_accounts
+                WHERE organization_id=91001 AND marketplace_account_id=91101 FOR UPDATE""")
+            )
+            future = workers.submit(waiter)
+            waiting = pids.get(timeout=5)
+            assert waiting != holder
+            deadline = monotonic() + 5
+            while monotonic() < deadline:
+                blocked = session.execute(
+                    text("SELECT :holder=ANY(pg_blocking_pids(:waiting))"),
+                    {"holder": holder, "waiting": waiting},
+                ).scalar_one()
+                if blocked or future.done():
+                    break
+                sleep(0.01)
+            assert blocked, "Repository must lock the account before exact lookup"
+            first = OrdersEvidenceRepository(session, 91001, 91101).append(
+                first_run, row
+            )
+        replay = future.result(timeout=5)
+    assert replay.replayed
+    assert replay.order_id == first.order_id
+    assert replay.observation_id == first.observation_id

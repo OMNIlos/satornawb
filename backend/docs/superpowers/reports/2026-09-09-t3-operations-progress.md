@@ -193,3 +193,21 @@ Added caller-rollback regression: focused4PGPASS5.34s. Fresh random disposable D
 runtime role and cleanup verified, Unix-only sandbox. Ruff/compileall exit0.
 Self-review checked exact scoped joins and that incoming request cannot override
 stored status. Full auth/revocation/source-progression/long-key gates not claimed.
+
+## Exact-key repository preparation
+
+T1 approved design `87ef04884e5636dbed704ee3f54f2e95fb9959a7` removes raw TEXT
+arbiters in forthcoming0064. Evidence append now rejects RR/SERIALIZABLE, locks
+the scoped account before run/domain locks, then performs fresh C-collated exact
+order/evidence lookup and insert-if-absent. Semantic replay verification and
+bounded membership ON CONFLICT remain; no hash identity or length cap.
+
+RED: two isolation cases DID NOT RAISE on old code. GREEN: eight evidence tests,
+including two actual sessions with pg_blocking_pids proving account-lock wait;
+the waiter establishes a snapshot before blocking and sees the winner's newly
+committed exact fact. Final evidence/parent/snapshot regression17PASS9.67s on0062,
+own disposable DB/role cleanup verified. Ruff (backend cwd) and compileall exit0.
+Manual critic: account lock is serialization, not authorization; caller still
+needs T1 shared guard before entering, and must not hold domain locks first.
+Actual0064 migration/long-key gate remains NOT_RUN until T1 delivers its exact SHA.
+No schema, shared auth, routes, providers, production or frontend changed.
