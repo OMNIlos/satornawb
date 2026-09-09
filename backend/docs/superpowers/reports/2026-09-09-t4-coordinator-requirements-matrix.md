@@ -2,6 +2,15 @@
 
 ## Current checkpoint: frontend response isolation; Review historical binding open
 
+T1 direct dependency ACK: committed spec+implementation plan at
+17028f5667599c0ef2ca2f2536d3334426354afd fully read via git show. T1 explicitly
+consumed T4 codec45e2ccb and six literal vectors. No important domain mismatch;
+four native SQL-positive/two NUL-negative cases, immutable-from-INSERT, exact
+bytes/hash, narrow grants and unchanged orgRLS are specified. Candidate0068
+remains conditional/unreserved; DDL NOT READY. No schema copy, registration,
+activation or service acceptance inferred. Direct ACK sent to T1. Actual
+repository reserve/replay/current+ambiguity/completed-rebind gates remain open.
+
 Latest Avito stats test-only checkpoint: actual React date inputs keep draft
 separate from applied period, Apply performs exact secondGET, logout no extraGET.
 Unique in-memory disabled-Apply mutation fails at secondGET assertion as intended.
