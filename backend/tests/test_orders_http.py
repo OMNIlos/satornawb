@@ -58,6 +58,7 @@ def test_http_reads_existing_snapshot_with_live_guard_and_safe_errors(prepared):
         body = response.json()
         assert body["snapshot_id"] == str(snapshot)
         assert len(body["rows"]) == 1 and body["next_cursor"]
+        assert isinstance(body["rows"][0]["row_version"], str)
         next_page = client.get(
             "/api/v2/orders",
             params={
@@ -102,6 +103,12 @@ def test_http_requires_existing_snapshot_and_has_typed_openapi(prepared):
             "application/json"
         ]["schema"]
         assert "$ref" in schema
+        assert (
+            spec["components"]["schemas"]["OrdersReadRowResponse"]["properties"][
+                "row_version"
+            ]["type"]
+            == "string"
+        )
 
 
 @pytest.mark.parametrize("change", ["revoke", "rebind"])

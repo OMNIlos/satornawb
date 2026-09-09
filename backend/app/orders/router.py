@@ -13,6 +13,7 @@ from app.infra.db import get_db_session, set_tenant_context
 from app.modules.orders import OrderContractValidationError
 from app.orders.contracts import OrderReadPage
 from app.orders.cursor import OrdersCursorCodec
+from app.orders.http_contracts import OrdersReadPageResponse
 from app.orders.read_service import read_orders_page
 from app.platform.integrations.publication_guard import (
     ExpectedAccountBinding,
@@ -83,7 +84,7 @@ def discover_orders_bindings(session, actor, account_ids):
     return principal, tuple(bindings)
 
 
-@router.get("", response_model=OrderReadPage)
+@router.get("", response_model=OrdersReadPageResponse)
 def get_orders(
     account_id: Annotated[list[int], Query()],
     query_checksum: Annotated[str, Query()],

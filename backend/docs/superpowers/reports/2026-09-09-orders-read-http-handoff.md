@@ -46,10 +46,21 @@ Query: repeated positive `account_id` (все должны быть доступ
 query_checksum является selector, не реализацией UI filters. Supported filter/query
 registry ещё не определён; не интерпретировать произвольный hash как выполненный фильтр.
 
-Response model: existing frozen `OrderReadPage`, snake_case, raw/canonical status,
+Response model: explicit Pydantic `OrdersReadPageResponse`, derived from frozen
+`OrderReadPage` at the HTTP boundary, snake_case, raw/canonical status,
 mapping/source versions, per-item version/resolution/blockers, coverage, published_at,
 snapshot_id/high_water_mark/next_cursor. OpenAPI schema реально строится в test app;
 generated frontend artifacts здесь не создавались. HWM содержит hashes, не credential refs.
+
+T4 wire follow-up: `row_version` передаётся **decimal string**, как и `snapshot_id`.
+SQL BIGINT может превышать JS-safe Number. Domain/storage сохраняет int; не использовать
+Number/parseInt на frontend. Org/account/Product/Offer/CatalogSku IDs и quantity
+имеют SQL INTEGER boundary, остаются JSON numbers. TDD actual HTTP int-versus-string
+RED и missing wire module RED; tests включают JSON round-trip `2^53+1`, `2^63-1`,
+реальный generated OpenAPI string schema. Этот follow-up supersedes initial866d1a1 wire.
+Fresh wire + actual HTTP follow-up: **19 passed, 2 dependency warnings, 3.69s, exit0**,
+own Unix-disposable cleanup verified; scoped Ruff/compile/diff0. Independent critic
+не нашёл concrete regression; предложенные negative version cases добавлены и проходят.
 
 Errors: `detail.code`, 401 orders_authentication_required; 403 orders_access_denied;
 400 orders_request_invalid/orders_account_scope_invalid; 409 orders_snapshot_unavailable;
