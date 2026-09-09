@@ -8,7 +8,9 @@ import pytest
 from sqlalchemy import text
 
 from app.reviews.canonical_contract import review_fact_checksum
+from app.reviews.historical_binding import ReviewBindingDescriptor
 from app.reviews.ingestion_contract import ReviewRepositoryError, snapshot_manifest
+from app.reviews.run_binding_storage import encode_review_run_binding
 from tests import test_review_facts_repository as existing
 from tests.test_orders_schema_candidate import scope
 
@@ -45,6 +47,9 @@ def byte_unit(connection, value, *, corrupt=False, legacy=False):
     schema = existing.schema
     run_id, sequence = schema.run(
         connection,
+        **encode_review_run_binding(ReviewBindingDescriptor(
+            91001, 91101, "avito", "synthetic-a", None,
+        )),
         source_run_id=value.source_run_id if legacy else None,
         source_run_id_utf8=None if legacy else value.source_run_id.encode("utf-8"),
         coverage=json.dumps(existing.COVERAGE) if legacy else None,
@@ -109,6 +114,9 @@ def test_run_replay_rejects_duplicate_json_keys_admitted_by_sql(db):
     with db[0].begin() as c:
         existing.schema.run(
             c,
+            **encode_review_run_binding(ReviewBindingDescriptor(
+                91001, 91101, "avito", "synthetic-a", None,
+            )),
             source_run_id=None,
             source_run_id_utf8=source.encode("utf-8"),
             coverage=None,

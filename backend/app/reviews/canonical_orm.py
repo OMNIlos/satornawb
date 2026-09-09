@@ -48,6 +48,11 @@ class CanonicalReviewRunRow(ReviewOwnerColumns, Base):
     coverage: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     coverage_utf8: Mapped[bytes | None] = mapped_column(LargeBinary)
     error_code: Mapped[str | None] = mapped_column(String(64))
+    account_binding_schema_version: Mapped[int | None] = mapped_column(SmallInteger)
+    account_binding_external_account_id: Mapped[str | None] = mapped_column(Text)
+    account_binding_credential_ref: Mapped[str | None] = mapped_column(Text)
+    account_binding_payload: Mapped[bytes | None] = mapped_column(LargeBinary)
+    account_binding_checksum: Mapped[str | None] = mapped_column(Text)
 
 
 class CanonicalReviewFactRow(ReviewOwnerColumns, Base):

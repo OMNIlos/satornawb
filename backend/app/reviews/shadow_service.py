@@ -96,7 +96,7 @@ def _safe_errors():
     except ReviewRepositoryError as error:
         code = (
             "REVIEW_SHADOW_CONFLICT"
-            if error.code in {"REVIEW_REPLAY_CONFLICT", "REVIEW_VERSION_CONFLICT"}
+            if error.code in {"REVIEW_REPLAY_CONFLICT", "REVIEW_VERSION_CONFLICT", "REVIEW_HISTORY_BINDING_CONFLICT"}
             else "REVIEW_SHADOW_STORAGE_UNAVAILABLE"
             if error.code == "REVIEW_STORAGE_UNAVAILABLE"
             else "REVIEW_SHADOW_INVALID"
@@ -160,6 +160,7 @@ def _repository(session, principal, account):
             account.marketplace_account_id,
             "wb",
             account.external_account_id,
+            account.credential_ref,
         ),
         command_savepoints=False,
     )

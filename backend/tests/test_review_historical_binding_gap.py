@@ -1,7 +1,8 @@
-"""Characterize an OPEN history-binding gap, not a safe-read acceptance test."""
+"""Reject old history even under a valid new live account read guard."""
 
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -10,6 +11,7 @@ from app.platform.integrations.publication_guard import (
     acquire_publication_guard,
 )
 from app.reviews.canonical_repository import ReviewFactsRepository, ReviewOwner
+from app.reviews.ingestion_contract import ReviewRepositoryError
 from tests import test_review_shadow_service as shadow
 
 cluster = shadow.cluster
@@ -18,7 +20,7 @@ principal = shadow.principal
 context = shadow.context
 
 
-def test_completed_rebind_exposes_old_fact_under_new_live_read_guard(db, context):
+def test_completed_rebind_rejects_old_fact_under_new_live_read_guard(db, context):
     key = uuid4().hex
     ticket = shadow.start(db, context)
     shadow.api().publish_received_review_rows(
@@ -39,24 +41,22 @@ def test_completed_rebind_exposes_old_fact_under_new_live_read_guard(db, context
             ),
             {"id": ticket.principal.membership_id},
         )
-    with Session(db[1]) as session, session.begin():
-        guard = acquire_publication_guard(
-            session,
-            principal=ticket.principal,
-            required_permissions=frozenset({"reviews:read"}),
-            accounts=(
-                ExpectedAccountBinding(91103, "wb", "synthetic-new-cabinet", None),
-            ),
-            authorities=(),
-        )
-        guard.revalidate_before_write()
-        repo = ReviewFactsRepository(
-            session.connection(),
-            ReviewOwner(91001, 91103, "wb", "synthetic-new-cabinet"),
-            command_savepoints=False,
-        )
-        old = repo.get_fact(key)
-    # This successful observation demonstrates the missing historical source binding.
-    # A future safe reader must reject it; do not describe this PASS as isolation.
-    assert old is not None
-    assert old.text == "synthetic-old-cabinet-body"
+    # Catch outside the whole root: guarded failures must roll back, not commit.
+    with pytest.raises(ReviewRepositoryError, match="^REVIEW_HISTORY_BINDING_CONFLICT$"):  # noqa: SIM117
+        with Session(db[1]) as session, session.begin():
+            guard = acquire_publication_guard(
+                session,
+                principal=ticket.principal,
+                required_permissions=frozenset({"reviews:read"}),
+                accounts=(
+                    ExpectedAccountBinding(91103, "wb", "synthetic-new-cabinet", None),
+                ),
+                authorities=(),
+            )
+            guard.revalidate_before_write()
+            repo = ReviewFactsRepository(
+                session.connection(),
+                ReviewOwner(91001, 91103, "wb", "synthetic-new-cabinet"),
+                command_savepoints=False,
+            )
+            repo.get_fact(key)

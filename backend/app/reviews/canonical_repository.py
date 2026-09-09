@@ -31,6 +31,10 @@ from app.reviews.canonical_orm import (
     CanonicalReviewRunItemRow,
     CanonicalReviewRunRow,
 )
+from app.reviews.historical_binding import (
+    ReviewBindingDescriptor,
+    ReviewBindingDescriptorError,
+)
 from app.reviews.ingestion_contract import (
     ReviewRepositoryError,
     snapshot_manifest,
@@ -41,6 +45,10 @@ from app.reviews.lossless_storage import (
     decode_scalar_pair,
     encode_coverage_pair,
     encode_scalar_pair,
+)
+from app.reviews.run_binding_storage import (
+    decode_review_run_binding,
+    encode_review_run_binding,
 )
 
 RUN = CanonicalReviewRunRow.__table__
@@ -78,18 +86,16 @@ class ReviewOwner:
     marketplace_account_id: int
     marketplace: str
     external_account_id: str
+    credential_ref: str | None = None
 
     def __post_init__(self):
-        if (
-            type(self.organization_id) is not int
-            or self.organization_id <= 0
-            or type(self.marketplace_account_id) is not int
-            or self.marketplace_account_id <= 0
-            or self.marketplace not in ("wb", "avito")
-            or not isinstance(self.external_account_id, str)
-            or not self.external_account_id
-        ):
-            raise ReviewRepositoryError()
+        try:
+            ReviewBindingDescriptor(
+                self.organization_id, self.marketplace_account_id, self.marketplace,
+                self.external_account_id, self.credential_ref,
+            )
+        except ReviewBindingDescriptorError:
+            raise ReviewRepositoryError() from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +129,10 @@ class ReviewFactsRepository:
         self.connection = connection
         self.owner = owner
         self._command_savepoints = command_savepoints
+        self._binding = ReviewBindingDescriptor(
+            owner.organization_id, owner.marketplace_account_id, owner.marketplace,
+            owner.external_account_id, owner.credential_ref,
+        )
 
     @property
     def _values(self):
@@ -134,6 +144,56 @@ class ReviewFactsRepository:
 
     def _scope(self, table):
         return tuple(table.c[key] == value for key, value in self._values.items())
+
+    def _require_run_binding(self, row):
+        try:
+            valid = decode_review_run_binding(row) == self._binding
+        except ReviewBindingDescriptorError:
+            valid = False
+        if not valid:
+            raise ReviewRepositoryError("REVIEW_HISTORY_BINDING_CONFLICT")
+
+    def _require_run_ids(self, identifiers):
+        identifiers = set(identifiers)
+        if None in identifiers:
+            raise ReviewRepositoryError("REVIEW_HISTORY_BINDING_CONFLICT")
+        if not identifiers:
+            return
+        rows = self.connection.execute(
+            select(
+                RUN.c.sync_run_id, RUN.c.organization_id,
+                RUN.c.marketplace_account_id, RUN.c.marketplace,
+                RUN.c.account_binding_schema_version,
+                RUN.c.account_binding_external_account_id,
+                RUN.c.account_binding_credential_ref,
+                RUN.c.account_binding_payload,
+                RUN.c.account_binding_checksum,
+            ).where(*self._scope(RUN), RUN.c.sync_run_id.in_(identifiers))
+        ).mappings().all()
+        if {row["sync_run_id"] for row in rows} != identifiers:
+            raise ReviewRepositoryError("REVIEW_HISTORY_BINDING_CONFLICT")
+        for row in rows:
+            self._require_run_binding(row)
+
+    def _require_identity_binding(self, identity, *, history=False):
+        # Read IDs before joining runs: a missing/foreign run must not disappear
+        # through an inner join. History-only sources influence known-time/revision.
+        pointers = {identity["current_observation_id"]}
+        if identity["ambiguous_observation_id"] is not None:
+            pointers.add(identity["ambiguous_observation_id"])
+        if None in pointers:
+            raise ReviewRepositoryError("REVIEW_HISTORY_BINDING_CONFLICT")
+        query = select(OBS.c.observation_id, OBS.c.source_run_id).where(
+            *self._scope(OBS), OBS.c.review_id == identity["review_id"],
+        )
+        if not history:
+            query = query.where(OBS.c.observation_id.in_(pointers))
+        rows = self.connection.execute(query).all()
+        if not pointers.issubset({row.observation_id for row in rows}):
+            raise ReviewRepositoryError("REVIEW_HISTORY_BINDING_CONFLICT")
+        self._require_run_ids(
+            {identity["last_source_run_id"], *(row.source_run_id for row in rows)}
+        )
 
     @contextmanager
     def _command(self):
@@ -154,7 +214,7 @@ class ReviewFactsRepository:
                 ).scalar_one() != str(self.owner.organization_id):
                     raise ReviewRepositoryError("REVIEW_SCOPE_DENIED")
                 account = c.execute(
-                    select(ACCOUNT.c.external_account_id, ACCOUNT.c.status)
+                    select(ACCOUNT.c.external_account_id, ACCOUNT.c.credential_ref, ACCOUNT.c.status)
                     .where(*self._scope(ACCOUNT))
                     .with_for_update()
                 ).one_or_none()
@@ -162,6 +222,7 @@ class ReviewFactsRepository:
                     account is None
                     or account.status != "connected"
                     or account.external_account_id != self.owner.external_account_id
+                    or account.credential_ref != self.owner.credential_ref
                 ):
                     raise ReviewRepositoryError("REVIEW_SCOPE_DENIED")
                 yield
@@ -193,6 +254,7 @@ class ReviewFactsRepository:
                 .one_or_none()
             )
             if row is not None:
+                self._require_run_binding(row)
                 row = _decode_run(row)
                 if row["request_checksum"] != request_checksum:
                     raise ReviewRepositoryError("REVIEW_REPLAY_CONFLICT")
@@ -202,6 +264,7 @@ class ReviewFactsRepository:
                 insert(RUN)
                 .values(
                     **self._values,
+                    **encode_review_run_binding(self._binding),
                     sync_run_id=uuid4(),
                     **encode_scalar_pair(
                         source_run_id, "source_run_id", required=True, allow_empty=False
@@ -256,6 +319,11 @@ class ReviewFactsRepository:
                     FACT.c.external_review_id_utf8,
                     RUN.c.source_run_id.label("source_key"),
                     RUN.c.source_run_id_utf8.label("source_key_utf8"),
+                    RUN.c.account_binding_schema_version,
+                    RUN.c.account_binding_external_account_id,
+                    RUN.c.account_binding_credential_ref,
+                    RUN.c.account_binding_payload,
+                    RUN.c.account_binding_checksum,
                 )
                 .join(FACT, FACT.c.review_id == OBS.c.review_id)
                 .join(RUN, RUN.c.sync_run_id == OBS.c.source_run_id)
@@ -268,8 +336,11 @@ class ReviewFactsRepository:
                 )
             )
             .mappings()
-            .one()
+            .one_or_none()
         )
+        if row is None:
+            raise ReviewRepositoryError("REVIEW_HISTORY_BINDING_CONFLICT")
+        self._require_run_binding(row)
         result = dict(row)
         for key in OBSERVATION_SCALARS:
             result[key] = decode_scalar_pair(
@@ -331,6 +402,7 @@ class ReviewFactsRepository:
             row = self._identity(external_review_id)
             if row is None:
                 return None
+            self._require_identity_binding(row)
             observation = self._observation(
                 row["review_id"], row["current_observation_id"]
             )
@@ -373,6 +445,7 @@ class ReviewFactsRepository:
             )
             if run is None:
                 raise ReviewRepositoryError("REVIEW_SCOPE_DENIED")
+            self._require_run_binding(run)
             run = _decode_run(run)
             if completed_at < run["started_at"]:
                 raise ReviewRepositoryError()
@@ -394,6 +467,15 @@ class ReviewFactsRepository:
                     or run["coverage"] != normalized_coverage
                 ):
                     raise ReviewRepositoryError("REVIEW_REPLAY_CONFLICT")
+                items = self.connection.execute(
+                    select(ITEM).where(*self._scope(ITEM), ITEM.c.sync_run_id == sync_run_id)
+                ).mappings().all()
+                if len(items) != len(ordered):
+                    raise ReviewRepositoryError("REVIEW_REPLAY_CONFLICT")
+                for item in items:
+                    observation = self._observation(item["review_id"], item["observation_id"])
+                    if observation["content_checksum"] != item["content_checksum"]:
+                        raise ReviewRepositoryError("REVIEW_REPLAY_CONFLICT")
                 return manifest
             for ordinal, fact in enumerate(ordered):
                 self._ingest_fact(
@@ -433,6 +515,8 @@ class ReviewFactsRepository:
     def _ingest_fact(self, run, fact, ordinal, expected_version):
         c = self.connection
         identity = self._identity(fact.identity.external_review_id)
+        if identity is not None:
+            self._require_identity_binding(identity, history=True)
         if (0 if identity is None else identity["version"]) != expected_version:
             raise ReviewRepositoryError("REVIEW_VERSION_CONFLICT")
         if identity is None:

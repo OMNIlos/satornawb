@@ -1,6 +1,24 @@
 # T4 — requirement → commit → evidence → remaining work
 
-## Current checkpoint: Digest/Stock boundary fixes; Review0068 consumer preparing
+## Current checkpoint: Review0068 consumer scoped acceptance; frontend debt continues
+
+Review consumer final focused44PASS11.78s, including six actual account-lock race
+cases, first-fact UPDATE rollback witness, corrected lossless JSON fixture and
+publication adapter. Broader227case actual225PASS2FAIL62.94s retained: both failures
+were race test assuming platform permits empty credentialRef; existing platform
+rejects it, new tests assert that early denial and add valid nonempty ref. No
+runtime weakening, all owned cleanup/absence verified. Ruff/compile/diff0;
+final review main-agent critical pass (not independent finalapproval after agent
+usage limit); root integration review remains. Full report
+`2026-09-09-t4-review-binding-consumer.md` states remaining activation boundaries.
+
+Frontend Week actual segment-search RED→GREEN, P&L null/zero/suppliedtax proof,
+Stock adjacent browser combined3PASS7.19s, tsc0/hashbytesmatch. Old broadcase passes
+P&L after obsolete tax-base label correction; next failure Ads “Все SKU” versus
+actual “Все товары”, later assertions still not executed. No fresh fullsuite or
+new build claim. Explicit T4 heavy release delivered; T3 next.
+
+## Prior current checkpoint — historical evidence
 
 Independent Digest hidden-empty1RED→GREEN and Stock exact7/60 numeric3RED→GREEN
 completed. Main combined28PASS5.90s/natural0/browsercleanup, tsc0/diff0,
@@ -9,9 +27,16 @@ independent critic scopedPASS. Details and limits: frontend report
 
 T1 exact prerequisites imported unchanged locally: dbf8d31→117dbc6,
 d87e575→0439652, mandatoryc4e3e373→f330020,4d95b24→b8b7128.
-This is Git integration only, NOT T4 PostgreSQL acceptance. Review consumer plan
-and two behavioral RED candidates prepared; repository/runtime wiring not changed.
-History-binding consumer, transaction acceptance and activation remain separate.
+T4 actual head0068/runtimegrants migrated successfully in ownfixture. Original
+two behavioral REDs reproduced6.23s/natural1: unstamped reservation and oldcabinet
+read. Consumer runtime now stamps INSERT, validates exact owner reference and
+contributing run provenance including history/replay, maps safe conflict. Main
+targeted18newcases+facts/lossless/shadow:80PASS1FAIL12.53s/natural1, exact5DB5role
+cleanup. Failure was existing duplicate-JSON fixture remaining unbound, masking
+its intended JSON-invalid assertion; fixture now stamps at INSERT, rerun pending.
+Pure metadata/storage/descriptor137PASS0.34s, Ruff0. New account-lock-race tests
+prepared, not yet executed; final PostgreSQL/critic acceptance and activation
+remain open. No fullgreen inference or consumer commit yet.
 
 ## Previous frontend checkpoint — historical evidence
 

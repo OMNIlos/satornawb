@@ -20,9 +20,15 @@
 
 ## Task1: Accept prerequisites and prove current leak
 
+Checkpoint: Task1 actual RED completed on exact imported0068, two behavioral
+failures6.23s with own2DB2rolecleanup. Task2 implementation passes all18 new
+binding cases; targeted adjacent gate80PASS1FAIL12.53s because one JSON-invalid
+fixture was unbound. That fixture is corrected at INSERT; final gate and Task3
+race/rollback acceptance remain pending. No activation or final completion claim.
+
 Files: exact T1 prerequisite commits; `backend/tests/test_review_historical_binding_gap.py`; new `backend/tests/test_review_run_binding_repository.py`.
 
-- [ ] Cherry-pick the four exact approved prerequisite commits, preserving their SQL unchanged. Check sole Alembic0068 and diff.
+- [x] Cherry-pick the four exact approved prerequisite commits, preserving their SQL unchanged. Check sole Alembic0068 and diff.
 - [ ] Convert the existing completed-rebind characterization into rejection acceptance, retaining the old synthetic flow and evidence in the report. The expectation must surround the entire guarded transaction, not catch the error inside `session.begin()`:
 
 ```python
@@ -45,7 +51,7 @@ with pytest.raises(ReviewRepositoryError, match="^REVIEW_HISTORY_BINDING_CONFLIC
 ```
 
 - [ ] Add actual reservation assertion: read the stored run via runtime SELECT and decode with `decode_review_run_binding`; compare with literal `ReviewBindingDescriptor(91001, 91103, "wb", "synthetic-c", None)`. Expect current implementation to store unbound NULLs.
-- [ ] Run those focused tests against own freshly migrated disposable PostgreSQL after resource admission. Require actual behavioral RED, not fixture/setup failure.
+- [x] Run those focused tests against own freshly migrated disposable PostgreSQL after resource admission. Require actual behavioral RED, not fixture/setup failure.
 
 ## Task2: Bind reservation and historical consumption
 
@@ -80,7 +86,7 @@ def _require_run_binding(self, row):
 
 Files: new binding repository tests; `test_review_historical_binding_gap.py`, `test_review_shadow_service.py`, `test_review_publication_repository.py`; one verification report and local coordinator matrix.
 
-- [ ] Cover external-account rebind and credential-reference transitions None→empty→space with fresh valid guards. Current live guard cannot authorize old history.
+- [ ] Cover external-account rebind and valid nonempty credential-reference changes with fresh valid guards. Preserve None/empty/space storage distinctions separately: the platform rejects empty/whitespace references before authorizing a read, so assert that early rejection rather than weakening its policy. Current live guard cannot authorize old history.
 - [ ] Cover legacy unbound reservation/current source, mixed provenance, ambiguous source, watermark-only old source, empty terminal replay and nonempty terminal replay. Same-binding positive replay is unchanged; one invalid contributing run rejects the whole command.
 - [ ] Verify no persistent changes after root failure: run/items/observations/fact heads/versions unchanged except separately committed original reservation. Include a two-fact command where the first fact is actually changed before the second fact fails provenance; a fresh transaction must observe none of the first fact's attempted changes. Never catch-and-commit a failed guarded root; exception expectations surround the entire transaction context.
 - [ ] Exercise both lock winners: completed rebind before publication rejects; held account publication before rebind commits its matching original binding then rebind proceeds. Retain inherited second-run-UPDATE FK wait characterization; do not claim general deadlock freedom.
