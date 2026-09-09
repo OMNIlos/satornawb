@@ -171,12 +171,19 @@ Each omitted/ghost/misbound audit, metadata-only witness fill, actor/time/versio
 
 ```sh
 .venv/bin/python -m pytest -q tests/test_marketplace_account_context.py tests/test_marketplace_account_context_postgres.py tests/test_repricer_approvals_schema.py tests/test_repricer_approvals_lifecycle.py tests/test_repricer_approvals_rls.py
-.venv/bin/python -m pytest -q tests/test_orders_exact_text_migration.py tests/test_orders_schema_candidate.py tests/test_orders_schema_integration.py tests/test_orders_contract.py tests/test_review_facts_schema.py
+.venv/bin/python -m pytest -q tests/test_orders_exact_text_migration.py tests/test_orders_schema_candidate.py tests/test_orders_schema_integration.py tests/test_orders_contract.py tests/test_review_facts_schema.py tests/test_review_lossless_migration.py tests/test_review_lossless_rls.py
 .venv/bin/python -m compileall -q app/infra/db.py alembic/versions/20260909_0066_repricer_approvals.py tests/test_repricer_approvals_schema.py tests/test_repricer_approvals_lifecycle.py tests/test_repricer_approvals_rls.py
 git diff --check
 ```
 
 All commands above run with the authorized scrubbed Unix-only test wrapper, not ambient environment. Record exact commands/exits/counts/natural shutdown and exact DB/role absence checks. Run scoped Ruff through the approved lint-only interpreter, not an unavailable tool claim. No skip/baseline expansion.
+
+For the new-table default-ACL intersection fixture, establish valid previous0065
+first, then install broad defaults before upgrading only0066. Review0065 explicitly
+rejects preexisting PUBLIC writes to its old relations; that earlier documented
+operating precondition is not a0066 test failure or reason to rewrite old migrations.
+Empty bootstrap uses normal authorized defaults. Preserve/recheck all old ACLs;
+new-table narrowing must not change old Review/Orders/default privilege state.
 
 - [ ] Step7 self-review and commit `feat: add account-owned repricer approval storage`. Handoff physical columns/helper signatures, owner/import/context/lock/witness insert ordering, removed assumptions and exact tests. Independent controller review precedes ready delivery to T2; repository/authenticated dispatch/provider proof remains T2/shared integration work, not claimed by DDL.
 
