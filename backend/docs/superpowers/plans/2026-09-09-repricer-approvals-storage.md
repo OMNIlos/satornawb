@@ -48,6 +48,12 @@ def set_marketplace_account_context(
 
 Require actual Session, active clean root transaction (no nested, pending new/dirty/deleted or ended transaction), PostgreSQL READ COMMITTED, strict positive INT4 IDs excluding bool. Before changing anything read both existing settings without autoflush. Each must be unset/empty or match the requested canonical decimal value; a different/malformed value fails closed. An existing own marker must belong to that root and exact pair; never use a marker to skip actual setting verification. Set both values with parameterized transaction-local set_config, record root/pair under a dedicated session.info key, remove only this helper's state when the root ends. Same-pair repeat is legal; scope switching within the same transaction is denied. SQL failures become a safe error with no chained SQL/value fragments. Caller must roll back after failure. It does not lock account rows, grant permission, commit work or guard arbitrary future caller SQL; publication guard remains responsible for final authorization/context checks.
 
+Inspect both Session nested state and the actual bound Connection's nested state
+before context SQL on every call. `Connection.begin_nested()` is not visible to
+Session nested hooks; an existing Connection SAVEPOINT must also deny. This is
+initial/repeated-call admission, not a claim to prevent arbitrary later raw SQL.
+Add a real PostgreSQL negative case plus positive normal Session root control.
+
 - [ ] Step1 write focused missing-interface RED and type/transaction canaries.
 
 ```python
