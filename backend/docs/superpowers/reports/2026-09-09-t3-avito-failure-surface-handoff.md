@@ -68,3 +68,33 @@ Run existing return matching/task/router regression at the final coordinated gat
 Rollback is a bounded revert of this commit's four paths; it would restore the
 unsafe diagnostic behavior and should not be used to recover deleted data because
 no persisted user data was changed by this source package.
+
+## Follow-up: Orders Client Diagnostic Output
+
+Separate two-path source-only delegation closes the specific upstream leak noted
+above in `app/avito/orders.py`. The previous residual paragraph describes the
+state before this follow-up, not the current Orders client diagnostic output.
+
+The real GET, URL construction, headers, parameters, paging, row parser, total,
+status handling and timeout/retry behavior remain unchanged. Diagnostic output
+no longer contains requestUrl/requestParams, payloadKeys/resultKeys/firstOrderKeys
+or any source row identifier. Only fixed endpoint, bounded integer HTTP status,
+bounded count/rawCount and fixed/null reason remain. Out-of-range diagnostic
+integers become null, never truncated business counts. The logging function
+independently projects only these fixed fields; direct callers cannot log arbitrary
+dictionary values or provider identifiers through its `%s` arguments.
+
+Transport failures now return the same blocked/transport_error/retryable DTO with
+a fixed message, constructed outside the exception handler. HTTP failures retain
+existing known codes/blockers/retry behavior for valid statuses; invalid status
+types/ranges produce a fixed request-failed error without formatting raw input.
+No original exception is returned, raised, chained or logged by this boundary.
+
+No test authoring, tests, imports, compile, lint, review, network, providers or
+services were run. Final canaries must cover URL credentials/query canaries,
+provider top-level/row key canaries, transport exception strings, forged diagnostic
+values with sensitive repr, HTTP 401/403/429/5xx and exact unchanged request/row
+semantics. Diagnostic-only consumers expecting removed keys need their assertions
+updated; removed fields are intentionally not retained as compatibility leaks.
+Other overview typed/cached errors and external HTTP-library/application logging
+remain outside this source-only change. No whole-Avito sanitization claim is made.
