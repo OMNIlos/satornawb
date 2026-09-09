@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from app.wb_api.client import WbApiRequest, WbApiResponseEnvelope
 from app.wb_api.reports_sources_runtime import (
     _load_realization_rows,
@@ -110,13 +112,15 @@ def test_stock_report_wb_warehouses_keeps_rows_when_next_page_is_rate_limited():
             return WbApiResponseEnvelope(request=request, statusCode=429, ok=False, data={"error": "rate limited"})
 
     fake = PageThenRateLimitClient()
+    sleeps: list[float] = []
 
-    envelope, rows = _load_stock_report_wb_warehouses(fake, limit=1000, sleeper=lambda _seconds: None)
+    envelope, rows = _load_stock_report_wb_warehouses(fake, limit=1000, sleeper=sleeps.append)
 
     assert envelope.statusCode == 429
     assert envelope.ok is False
     assert len(rows) == 1000
     assert fake.offsets == [0, 1000, 1000, 1000, 1000]
+    assert sleeps == [20.0, 66.0, 66.0, 66.0]
 
 
 def test_reports_sources_snapshot_uses_partial_stock_page_when_next_page_is_rate_limited(monkeypatch):
@@ -174,7 +178,19 @@ def test_reports_sources_snapshot_uses_partial_stock_page_when_next_page_is_rate
     assert snapshot.stocks[0].available_units == 54
 
 
-def test_pnl_report_uses_realization_details_and_finance_reconciliation():
+def test_pnl_report_uses_realization_details_and_finance_reconciliation(monkeypatch):
+    """Unscoped realization data cannot bypass the existing cache-only P&L guard.
+
+    Keep the historical node ID, but reject its obsolete expectation of an
+    automatically final report without organization-owned finance evidence.
+    Source parsing/reconciliation itself is exercised by the snapshot test above.
+    """
+    import app.wb_reports_sprint_d as reports
+
+    def unexpected_source_read(*args, **kwargs):
+        pytest.fail("unscoped P&L must neither fetch nor read another owner's cache")
+
+    monkeypatch.setattr(reports, "get_source_cache", unexpected_source_read)
     payload = build_pnl_report(
         date_from=date(2026, 6, 1),
         date_to=date(2026, 6, 30),
@@ -183,11 +199,10 @@ def test_pnl_report_uses_realization_details_and_finance_reconciliation():
         finance_allowed=True,
     )
 
-    assert payload.reportState == "final"
-    assert payload.blockerIds == []
-    assert payload.totals.revenueKopecks > 0
-    assert payload.rows[0].commissionKopecks > 0
-    assert payload.rows[0].logisticsKopecks != 0
+    assert payload.reportState == "blocked"
+    assert payload.sourceStatus == "blocked"
+    assert payload.blockerIds == ["WB_PNL_FINANCE_CACHE_MISSING"]
+    assert payload.rows == []
 
 
 def test_realization_rows_use_delivery_rub_money_not_dlv_prc_tariff():

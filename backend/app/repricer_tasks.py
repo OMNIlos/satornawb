@@ -1034,8 +1034,11 @@ def _range_source_ready(
     }
     available_dates: set[str] = set()
     for cache in caches:
-        if isinstance(cache, dict):
-            available_dates |= _daily_aggregate_dates(cache)
+        if not isinstance(cache, dict):
+            continue
+        if source == "finance" and require_current_finance_basis and not finance_cache_uses_current_revenue_basis(cache):
+            continue
+        available_dates |= _daily_aggregate_dates(cache)
     return bool(required_dates) and required_dates.issubset(available_dates)
 
 

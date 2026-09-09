@@ -225,3 +225,43 @@ unknown identity blocks publication; page gap/overlap/duplicate blocks complete;
 midnight and missing-day daily guards; correction immutable prior revision; runtime
 role has no sequence override or sealed-history update path. Provider no-call tests
 используют synthetic transport. T1 can serialize these migrations independently of approvals.
+
+## Full synthetic collection/page/run literals for SQL parity
+
+`tests/fixtures/wb_collection_golden_v1.json` contains ten full synthetic vectors,
+not provider evidence: CollectionRequest input/canonical_ascii/SHA256, original
+raw_utf8_text for each page (UTF8 encode once, never reserialize JSON), raw byte count
+and SHA256, offset/received_at/terminal/unknown source time, exact typed observation
+projection, complete flag and manifest_canonical_ascii/byte count/SHA256.
+
+Existing source implementation pins: `02591f3c249fbb32082e802b27ca7a058fff83e6`
+`app/modules/wb_source_requests.py`; last shared price/stock chronology change
+`901c1796e9a0ab04c0a4c7256e19bcce64dbaef1` in `wb_price_snapshots.py` and
+`wb_stock_snapshots.py`. No runtime semantics or encoder changed for these literals.
+Manifest formats remain:
+
+- Prices: compact ASCII JSON `["wb-goods-prices/v1",[org,account,limit,request_hash],
+  [[offset,limit,raw_hash],...]]`.
+- Stocks: `["wb-warehouse-stocks/v1",request_hash,[[offset,limit,raw_hash],...]]`.
+
+Page checksum is raw-byte SHA256, not a second canonical observation encoder.
+Terminal is the actual short-page predicate, including an explicit empty terminal
+after a full page. Prefix with no terminal stays incomplete. Missing/null/zero,
+multiple sizes including unresolved size identity, exact integers above2**53,
+Unicode raw evidence and separate account identity are pinned. Parse outer JSON
+with arbitrary-precision integers, not JS Number.
+
+Important existing identity limitation: same page bytes/request on different receipt
+instants have the SAME manifest hash. `stock-empty-terminal` and
+`stock-cross-business-day` deliberately pin this: only the former has one receipt
+business date; the latter is complete but not eligible for receipt-based daily row.
+Manifest hash is not a run ID, clock, evidence of provider observation time, daily
+eligibility, credential generation or authenticated account binding. Keep distinct
+run identity/time and the shared expected external/ref+paired generation binding;
+do not infer that parent identity from Catalog mapping or a manifest checksum.
+
+The literals were generated once from existing Python parsing/encoding and pinned;
+they are not independently validated SQL results. `test_wb_collection_golden.py`
+reads them without regenerating, for the final source acceptance batch. No new
+intermediate test gate was started for this source-first handoff. New test execution
+and SQL parity remain pending; no publication/current-head/CAS acceptance implied.

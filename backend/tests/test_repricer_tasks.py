@@ -65,7 +65,7 @@ def test_rnp_daily_baskets_ready_accepts_covering_daily_detail(monkeypatch):
 def test_onboarding_readiness_requires_daily_baskets_detail(monkeypatch):
     caches_by_prefix = {
         "period_stats_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28"}],
-        "finance_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28"}],
+        "finance_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28", "revenueBasis": "retailAmount", "financeSchemaVersion": "v3"}],
         "ads_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28"}],
         "baskets_": [
             {
@@ -138,6 +138,8 @@ def test_report_snapshot_source_ready_rejects_aggregate_only_covering_cache(monk
         lambda _organization_id, prefix, **_kwargs: [
             {
                 "sourceKey": "finance_2026-06-25_2026-07-24",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "dateFrom": "2026-06-25",
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "deferred",
@@ -162,6 +164,8 @@ def test_report_snapshot_source_ready_accepts_covering_daily_detail(monkeypatch)
         lambda _organization_id, prefix, **_kwargs: [
             {
                 "sourceKey": "finance_2026-06-25_2026-07-24",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "dateFrom": "2026-06-25",
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "fetched",

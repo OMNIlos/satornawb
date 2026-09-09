@@ -1051,17 +1051,20 @@ def test_week_over_week_enriches_rows_from_period_stats():
 
 
 def test_week_over_week_live_builder_uses_own_sources_not_abc_or_repricer(monkeypatch):
+    """Historical node ID; current fallback composes scoped caches, never live APIs."""
     from app.routers import wb_reports_bff
 
     actor = SimpleNamespace(organization_id=1, user_id="viewer")
     snapshot_calls: list[tuple[date, date]] = []
+    ads_calls: list[tuple[date, date]] = []
     monkeypatch.setattr(wb_reports_bff, "list_cached_goods", lambda _organization_id: [])
     monkeypatch.setattr(wb_reports_bff, "get_source_cache", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(wb_reports_bff, "ensure_daily_stock_history", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(wb_reports_bff, "build_abc_report", lambda **_kwargs: pytest.fail("WoW metrics must not use ABC report"))
     monkeypatch.setattr(wb_reports_bff, "_repricer_rows_for_abc_report", lambda **_kwargs: pytest.fail("WoW metrics must not use repricer rows"))
 
-    def fake_sources_snapshot(*, date_from, date_to, **_kwargs):
+    def fake_sources_snapshot(*, organization_id, date_from, date_to):
+        assert organization_id == 1
         snapshot_calls.append((date_from, date_to))
         if date_from == date(2026, 6, 13):
             return SimpleNamespace(
@@ -1077,8 +1080,17 @@ def test_week_over_week_live_builder_uses_own_sources_not_abc_or_repricer(monkey
             stocks=[],
         )
 
-    monkeypatch.setattr(wb_reports_bff, "build_wb_reports_sources_snapshot", fake_sources_snapshot)
-    monkeypatch.setattr(wb_reports_bff, "build_ads_attribution_snapshot", lambda **_kwargs: SimpleNamespace(rows=[]))
+    assert not hasattr(wb_reports_bff, "build_wb_reports_sources_snapshot")
+    monkeypatch.setattr("app.wb_api.reports_sources_runtime.build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("WoW must not fetch live sources"))
+    monkeypatch.setattr("app.wb_api.ads_runtime.build_ads_attribution_snapshot", lambda **_kwargs: pytest.fail("WoW must not fetch live ads"))
+    monkeypatch.setattr(wb_reports_bff, "build_cached_wb_reports_sources_snapshot", fake_sources_snapshot)
+    def fake_ads_snapshot(*, organization_id, date_from, date_to, group_by):
+        assert organization_id == 1
+        assert group_by == "sku"
+        ads_calls.append((date_from, date_to))
+        return SimpleNamespace(rows=[])
+
+    monkeypatch.setattr(wb_reports_bff, "build_cached_ads_attribution_snapshot", fake_ads_snapshot)
 
     payload = wb_reports_bff._build_week_over_week_fallback_report(
         request=SimpleNamespace(query_params={}),
@@ -1091,8 +1103,9 @@ def test_week_over_week_live_builder_uses_own_sources_not_abc_or_repricer(monkey
     )
 
     assert snapshot_calls == [(date(2026, 6, 13), date(2026, 7, 14)), (date(2026, 5, 12), date(2026, 6, 12))]
-    assert payload["cache"]["status"] == "live"
-    assert [step["stage"] for step in payload["diagnostics"]["requests"]] == ["current_sources", "previous_sources", "current_ads", "previous_ads"]
+    assert ads_calls == snapshot_calls
+    assert payload["cache"]["status"] == "cache-only"
+    assert [step["stage"] for step in payload["diagnostics"]["requests"]] == ["current_sources_cache", "previous_sources_cache", "current_ads_cache", "previous_ads_cache"]
     assert payload["diagnostics"]["requests"][0]["rows"]["orders"] == 2
     assert payload["rows"][0]["orders"]["units"] == 2
     assert payload["rows"][0]["orders"]["deltaPct"] == 100.0
@@ -1105,17 +1118,42 @@ def test_week_over_week_task_builds_current_and_previous_source_ranges(monkeypat
 
     calls: list[tuple[date, date]] = []
     saved: dict[str, dict] = {}
-    snapshot = SimpleNamespace(source_status="fresh", orders=[], sales=[], stocks=[])
-    ads = SimpleNamespace(rows=[])
-    monkeypatch.setattr(
-        wb_reports_bff,
-        "build_wb_reports_sources_snapshot",
-        lambda *, date_from, date_to, **_kwargs: (calls.append((date_from, date_to)) or snapshot),
-    )
-    monkeypatch.setattr(wb_reports_bff, "build_ads_attribution_snapshot", lambda **_kwargs: ads)
-    monkeypatch.setattr(wb_reports_bff, "_build_week_over_week_payload", lambda *args, **_kwargs: {"meta": {"id": "week-over-week"}, "rows": []})
-    monkeypatch.setattr(wb_reports_bff, "save_source_cache", lambda _organization_id, key, payload: saved.__setitem__(key, payload))
-    monkeypatch.setattr(wb_reports_bff, "get_source_cache", lambda _organization_id, key, **_kwargs: saved.get(key))
+    funnel_calls = []
+    period_calls = []
+
+    def cached_abc(*, organization_id, date_from, date_to, group_by, filters, finance_allowed):
+        assert (organization_id, group_by, filters, finance_allowed) == (1, "sku", "", False)
+        calls.append((date_from, date_to))
+        return SimpleNamespace(sourceStatus="fresh", confidence="high", rows=[{"nmId": 101, "sku": "TEST"}])
+
+    def period_stats(organization_id, date_from, date_to):
+        assert organization_id == 1
+        period_calls.append((date_from, date_to))
+        return {}
+
+    def cached_funnel(*, organization_id, date_from, date_to, wb_token, progress_callback):
+        assert organization_id == 1
+        assert wb_token is None
+        funnel_calls.append((date_from, date_to))
+        return {}
+
+    def save_cache(organization_id, key, payload):
+        assert organization_id == 1
+        saved[key] = payload
+
+    def read_cache(organization_id, key, **_kwargs):
+        assert organization_id == 1
+        return saved.get(key)
+
+    monkeypatch.setattr(wb_reports_bff, "build_abc_report", cached_abc)
+    monkeypatch.setattr(wb_reports_bff, "_week_period_stats_aggregates", period_stats)
+    monkeypatch.setattr(wb_reports_bff, "_week_funnel_metrics_by_nm", cached_funnel)
+    monkeypatch.setattr(wb_reports_bff, "_repricer_rows_for_abc_report", lambda **_kwargs: pytest.fail("populated ABC must not use repricer fallback"))
+    monkeypatch.setattr(wb_reports_bff, "_apply_report_rules_to_payload", lambda report, _organization_id: report)
+    monkeypatch.setattr(wb_reports_bff, "save_source_cache", save_cache)
+    monkeypatch.setattr(wb_reports_bff, "get_source_cache", read_cache)
+    monkeypatch.setattr("app.wb_api.reports_sources_runtime.build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("no live source fetch"))
+    monkeypatch.setattr("app.wb_api.ads_runtime.build_ads_attribution_snapshot", lambda **_kwargs: pytest.fail("no live ads fetch"))
 
     result = repricer_tasks.build_report_for_org.run(
         1,
@@ -1130,8 +1168,12 @@ def test_week_over_week_task_builds_current_and_previous_source_ranges(monkeypat
     )
 
     assert calls == [(date(2026, 7, 7), date(2026, 7, 13)), (date(2026, 6, 30), date(2026, 7, 6))]
+    assert funnel_calls == period_calls == calls
     assert result["state"] == "completed"
     assert any(key.startswith("reports_payload_week-over-week") for key in saved)
+    stored = next(value for key, value in saved.items() if key.startswith("reports_payload_week-over-week"))
+    assert stored["report"]["cache"]["status"] == "background-abc"
+    assert stored["report"]["cache"]["previousRange"] == {"from": "2026-06-30", "to": "2026-07-06"}
 
 
 def test_digest_payload_builds_weekly_balance_periods_and_real_problem_rows():
@@ -1432,6 +1474,14 @@ def test_stock_report_payload_cache_requires_current_version():
 
 
 def test_stock_report_payload_groups_warehouses_by_product_with_catalog_meta(monkeypatch):
+    history_calls = []
+
+    def history_stub(snapshot_date, rows):
+        history_calls.append((snapshot_date, rows))
+        return {}
+
+    # Grouping is independent of legacy history capture/backfill side effects.
+    monkeypatch.setattr("app.routers.wb_reports_bff.ensure_daily_stock_history", history_stub)
     snapshot = SimpleNamespace(
         source_status="fresh",
         stocks=[
@@ -1508,6 +1558,7 @@ def test_stock_report_payload_groups_warehouses_by_product_with_catalog_meta(mon
     )
 
     assert payload["filters"]["groupBy"] == "sku"
+    assert history_calls == [(date(2026, 7, 20), snapshot.stocks)]
     assert payload["kpis"][0]["label"] == "Товаров"
     assert len(payload["rows"]) == 1
     row = payload["rows"][0]
@@ -1529,7 +1580,7 @@ def test_stock_report_payload_groups_warehouses_by_product_with_catalog_meta(mon
     assert [item["warehouseName"] for item in row["warehouses"]] == ["Коледино", "Подольск"]
     assert any(kpi["id"] == "marketplace_stock_units" and kpi["value"] == "80" for kpi in payload["kpis"])
     assert any(kpi["id"] == "total_stock_units" and kpi["value"] == "100" for kpi in payload["kpis"])
-    assert "marketplaceStockUnits" in {column["key"] for column in payload["columns"]}
+    assert "wbStockUnits" in {column["key"] for column in payload["columns"]}
     assert "totalStockUnits" in {column["key"] for column in payload["columns"]}
     assert next(card for card in payload["managementCards"] if card["title"] == "Local orders")["value"] == "derived"
 
@@ -1547,7 +1598,10 @@ def test_stock_products_request_body_uses_wb_contract_for_all_stock():
     }
 
 
-def test_bff_rnp_endpoint_returns_full_backend_funnel_shape():
+def test_bff_rnp_endpoint_returns_full_backend_funnel_shape(monkeypatch):
+    from tests.rnp_cache_fixture import install_rnp_cache
+
+    install_rnp_cache(monkeypatch, date(2026, 6, 1), date(2026, 6, 7), bff=True)
     api = client()
     response = api.get(
         "/api/wb/reports/rnp?preset=custom&from=2026-06-01&to=2026-06-07&groupBy=sku",
@@ -1573,7 +1627,7 @@ def test_bff_rnp_endpoint_returns_full_backend_funnel_shape():
     assert "reasons" in row
     assert payload["diagnostics"]["summary"]["funnelRows"] >= 0
     assert payload["diagnostics"]["sources"][0]["endpoint"] == "POST /api/analytics/v3/sales-funnel/products"
-    assert any(source["endpoint"] == "GET /adv/v3/fullstats" for source in payload["diagnostics"]["sources"])
+    assert any(source["endpoint"] == "repricer ads period cache" and source["sourceId"] == "wb-ads-cache" for source in payload["diagnostics"]["sources"])
 
 
 def test_latest_report_payload_cache_respects_requested_range(monkeypatch):
@@ -1696,6 +1750,8 @@ def test_report_daily_sources_ready_rejects_aggregate_only_covering_cache(monkey
         lambda _organization_id, prefix, **_kwargs: [
             {
                 "sourceKey": "finance_2026-06-25_2026-07-24",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "dateFrom": "2026-06-25",
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "deferred",
@@ -1723,6 +1779,8 @@ def test_report_daily_sources_ready_accepts_covering_daily_detail(monkeypatch):
         lambda _organization_id, prefix, **_kwargs: [
             {
                 "sourceKey": "finance_2026-06-25_2026-07-24",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "dateFrom": "2026-06-25",
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "fetched",
@@ -1739,6 +1797,25 @@ def test_report_daily_sources_ready_accepts_covering_daily_detail(monkeypatch):
         date_from=date(2026, 7, 8),
         date_to=date(2026, 7, 21),
     ) == (True, [])
+
+
+@pytest.mark.parametrize("metadata", [
+    {},
+    {"revenueBasis": "retailAmount", "financeSchemaVersion": "v2"},
+    {"revenueBasis": "sellerPayout", "financeSchemaVersion": "v3"},
+])
+def test_report_daily_sources_ready_rejects_legacy_finance_basis(monkeypatch, metadata):
+    monkeypatch.setattr(
+        "app.routers.wb_reports_bff.list_source_cache_ranges_by_prefix",
+        lambda *_args, **_kwargs: [{
+            "dateFrom": "2026-06-25", "dateTo": "2026-07-24",
+            "dailyDetailStatus": "fetched", "dailyAggregatesDays": 30,
+            **metadata,
+        }],
+    )
+    assert _report_daily_sources_ready(
+        2, ("finance",), date_from=date(2026, 7, 8), date_to=date(2026, 7, 21),
+    ) == (False, ["finance"])
 
 
 def test_latest_rnp_cache_skips_ads_only_payload(monkeypatch):

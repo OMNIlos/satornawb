@@ -267,3 +267,57 @@ unbounded ints/Decimal do not imply unlimited PostgreSQL NUMERIC representabilit
 DDL/service must fail explicitly outside native limits, never narrow/round or rehash.
 No codec/formula changes in this fixture slice. Fixed mutation permission, live
 mapping authorization, persistence/CAS/audit and empty-only downgrade remain gates.
+
+### Org settings / liquidation exact command encoding
+
+`app/modules/wb_repricing_state_commands.py` now implements the other requested
+source encoders. These are pure inputs to T1 SQL parity and T2 repositories, not
+DDL, executor authority or a one-writer cutover. All values remain explicit:
+
+- `AlgorithmSettingsValues` has exactly the section3 typed scalar fields, in
+  snake_case; no aliases, economic fields or arbitrary JSON extensions. Percentages
+  are finite Decimal without new business clamps. `AlgorithmSettingsChange` owns
+  org/member/command/expected_version/formula_compatibility_version/full values and
+  typed `BasketNormDefault` children. All three garments are required in
+  fallback_by_type, other modes retain explicitly supplied zero-to-three unique
+  children. Input list is copied to a tuple sorted by garment, never a live view.
+- Tag `wb-repricing-algorithm-settings/v1`, commandKind `replace_settings`; keys:
+  organizationId, actorMembershipId, commandId, expectedVersion,
+  formulaCompatibilityVersion, values, basketDefaults. Each basket child has
+  garment and normUnits. INTEGER columns/IDs are JSON integers; finite NUMERIC
+  values and unbounded expectedVersion are canonical decimal strings.
+- `LiquidationCampaign` captures org/account/SKU/campaign UUID, immutable origin
+  membership/created_at/start_price. `LiquidationChange` includes the full campaign
+  identity/origin, actor/command/expected_version and full `LiquidationValues`.
+  Tag `wb-repricing-liquidation/v1`, commandKind `replace_liquidation`; outer owner
+  keys match override commands plus campaignId. `campaign` contains
+  startedByMembershipId, createdAt, startPriceKopecks; `values` uses the exact
+  section6 snake_case fields. Money, step_pct and version are decimal strings;
+  optional references/timestamps remain explicit JSON null. UUIDs are exact UUID4;
+  resulting_approval_id is exact nonblank logical TEXT, never UUID-coerced.
+- All timestamp bytes are UTC ISO8601 microseconds with Z. Sorted compact ASCII
+  JSON and normalized fixed-point Decimal use the existing override encoder's
+  context-independent primitive. Explicit positive `max_bytes` bounds every
+  canonical_bytes/checksum call, including before compact exponent expansion.
+- `validate_liquidation_transition(previous, command)` consumes a fully scoped
+  immutable `LiquidationRevision`, checks campaign/version equality and the exact
+  section6 transition matrix. No previous row requires expected_version0 and active
+  creation by the immutable origin member. Terminal and paused→paused reject.
+  Changed target/step with a required negative-margin guard cannot carry a retained
+  confirmation; a new revision clears it. Repository must perform authorized exact
+  historical replay before this new-revision validation, under real row locks.
+
+Safe exceptions: `StateCommandValidationError` and `StateCommandConflictError` carry
+fixed messages, not input values. No authentication, DB references, one-active-or-
+paused-campaign uniqueness, current-head CAS, audit or source truth can be proven
+by these value types. Those remain required SQL/service gates. Missing mapping
+version/source references still block canonical reproducible context publication.
+
+`tests/fixtures/wb_repricing_state_golden_v1.json` pins five synthetic full command
+inputs, canonical_ascii, byte_count and sha256: settings all false/signed-zero with
+all3garments; changed owner/actor/large version/negative and precise Decimal; active
+unconfirmed liquidation; paused confirmed; terminal with large exact money/version
+and Unicode logical approval. Vectors were generated once from this Python encoder
+and pinned; they are NOT independent SQL acceptance. The16384byte budget is a test
+budget only, not an operational policy. SQL must also reject native NUMERIC range
+overflow explicitly; never silently round, narrow or rehash to fit.

@@ -3394,6 +3394,16 @@ def test_manual_sync_run_returns_window_profile_metadata(monkeypatch):
 def test_manual_cold_full_sync_enqueues_onboarding_task(monkeypatch):
     queued: list[tuple[int, str]] = []
     saved_statuses: list[dict[str, Any]] = []
+    threads: list[dict[str, object]] = []
+
+    def status_stub(actor):
+        assert actor.organization_id == 7
+        saved = saved_statuses[-1]
+        return {"state": "queued", "running": True, "syncProfile": saved["sync_profile"], "taskId": saved["task_id"]}
+
+    # Test route orchestration only: do not enter status diagnostics/secret reads.
+    monkeypatch.setattr(wb_repricer_bff_router, "_repricer_sync_status_payload", status_stub)
+    monkeypatch.setattr(wb_repricer_bff_router, "uuid4", lambda: "synthetic-request-id")
 
     monkeypatch.setattr("app.routers.wb_repricer_bff._request_actor_and_wb_token", lambda _request: (SimpleNamespace(user_id="user-1", organization_id=7), "wb-token"))
     monkeypatch.setattr("app.routers.wb_repricer_bff.is_wb_sync_running", lambda _organization_id: False)
@@ -3403,8 +3413,7 @@ def test_manual_cold_full_sync_enqueues_onboarding_task(monkeypatch):
     class TaskStub:
         @staticmethod
         def delay(organization_id: int, scenario: str):
-            queued.append((organization_id, scenario))
-            return SimpleNamespace(id="cold-sync-task-1")
+            raise AssertionError("manual onboarding currently uses the API background runner, not Celery")
 
     def run_onboarding_stub(
         organization_id: int, scenario: str, wb_token_override: str
@@ -3415,6 +3424,7 @@ def test_manual_cold_full_sync_enqueues_onboarding_task(monkeypatch):
         def __init__(self, *, target, kwargs, **_thread_options):
             self._target = target
             self._kwargs = kwargs
+            threads.append({"target": target, "kwargs": kwargs, **_thread_options})
 
         def start(self):
             self._target(**self._kwargs)
@@ -3436,11 +3446,17 @@ def test_manual_cold_full_sync_enqueues_onboarding_task(monkeypatch):
     assert payload["state"] == "queued"
     assert payload["running"] is True
     assert payload["syncProfile"] == "onboarding-full"
-    assert payload["taskId"] == "cold-sync-task-1"
+    assert payload["taskId"] == "api-bg-onboarding-synthetic-request-id"
     assert saved_statuses[0]["organizationId"] == 7
     assert saved_statuses[0]["trigger"] == "manual-onboarding"
     assert saved_statuses[0]["sync_profile"] == "onboarding-full"
-    assert saved_statuses[0]["task_id"] == "cold-sync-task-1"
+    assert saved_statuses[0]["task_id"] == payload["taskId"]
+    assert threads == [{
+        "target": run_onboarding_stub,
+        "kwargs": {"organization_id": 7, "scenario": "complete", "wb_token_override": "wb-token"},
+        "name": "wb-onboarding-7",
+        "daemon": True,
+    }]
 
 
 def test_sync_status_includes_schedule_plan(monkeypatch):

@@ -14,7 +14,7 @@ LEGACY_TEST = (
     "test_manual_cold_full_sync_enqueues_onboarding_task"
 )
 SAFE_MARKER = (
-    "INNER_STATUS=1 COLLECTED=1 FAILED=1 ERRORS=0 SENTINEL_REACHED=0"
+    "INNER_STATUS=0 COLLECTED=1 FAILED=0 ERRORS=0 SENTINEL_REACHED=0"
 )
 
 

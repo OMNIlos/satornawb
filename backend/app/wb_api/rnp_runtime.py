@@ -477,7 +477,7 @@ def _cached_ads_rows(organization_id: int, date_from: date, date_to: date) -> tu
             }
         ]
     }
-    return rows, totals, "fresh" if has_any_data else "blocked", "high" if has_any_data else "blocked", [] if has_any_data else ["WB_ADS_CACHE_EMPTY"], diagnostics
+    return rows, totals, "fresh" if has_any_data else "blocked", "high" if has_any_data else "blocked", [] if has_any_data else ["WB-02", "WB_ADS_CACHE_EMPTY"], diagnostics
 
 
 def _ads_by_nm(rows: list[AdsAttributionRow]) -> dict[int, dict[str, int]]:
@@ -887,6 +887,8 @@ def build_rnp_snapshot(
             order_sum = sum(_row_revenue_for_drr(row) for row in rows)
             drr_pct = _pct(ad_spend, order_sum)
             blocker_ids = list(cached_report.get("blockerIds") or [])
+            if cached_report.get("adsSourceStatus") in {"blocked", "unknown"}:
+                blocker_ids = sorted(set(blocker_ids + ["WB-02"]))
             if drr_pct is None:
                 blocker_ids = sorted(set(blocker_ids + ["WB-11"]))
             else:
