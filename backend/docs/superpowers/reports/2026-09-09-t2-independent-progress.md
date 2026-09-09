@@ -53,19 +53,20 @@ repository Protocol/identity bridge and dispatch domain; no actual writer connec
 
 | Stage | Completed evidence | Still required / actual dependency |
 | --- | --- | --- |
-| 1 writer inventory / identity / contract | 769f3cf + ccaed341 +45f94a; composite scope, exclusive marker, safe UUID/text, unchanged valid hashes | T1 accepted approvals/attempts/audit DDL; no UUID-only repository |
-| 2 durable approvals | exact schema request + pure transitions/optimistic versions | Actual PostgreSQL repository,2sessions winner/conflict/fake-call, RLS,rollback,restart/backfill. NOT implemented/tested |
-| 3 jobs/crash | pure attempt/dispatch/outcome/audit matrix and crash acceptance | Durable intent/marker before provider; accepted schema/auth resolver; duplicate jobs/reconciliation. No external exactly-once claim |
+| 1 writer inventory / identity / contract | 769f3cf + ccaed341 +45f94a; composite scope, exclusive marker, safe UUID/text, unchanged valid hashes; accepted T1 approvals0066 dbf8d31 merged by1464fcd | No UUID-only repository; current writers still disconnected |
+| 2 durable approvals | Actual scoped PostgreSQL transaction participant plus committed user-session create/claim/reject/block; real runtime-role tests, two-session CAS, replay, rollback, restart, crossorg/account, immutable terminals | Full repository Protocol not complete: privileged legacy backfill adapter/tests and worker-authorized outcome service still pending; no current-flow cutover |
+| 3 jobs/crash | Pure matrix plus durable reserve/dispatch marker/outcome participant, observed PostgreSQL dispatch lock race and one synthetic effect | Accepted worker/job authority PENDING per T1; no worker impersonation, scheduler/provider wiring or reconciliation activation. No external exactly-once claim |
 | 4 globals/settings | 80 legacy characterization cases; exact normalized4A schema request907ec7b | T1 rows/heads/audit, concrete repository/context wiring and one-writer fence; additional strategies/context mapping must be typed before cutover |
 | 5 prices/stocks/daily | Price and warehouse stock adapters,request hashes,immutable complete manifest assembly,missing/null/zero,all sizes,receipt-date gate; targeted legacy source fixes | T1 separate source DDL, DB publication/read services, current-head CAS and daily revision persistence; Catalog mapping/source freshness policy, FBS skus/chrtIds contract unresolved |
 | 6 KTR/source revisions | SourceDiff classifications + synthetic closed-day revision evidence tests (94b540f/ee7bd6e) | Verified local/all orders grain, reference effective ranges/gaps/overlap evidence; unknown remains null, scheduler off |
 | 7 final profit | Decision package94b540f with numerical alternatives | Explicit financial owner approval and complete source evidence. No invented OPEX allocation/backdate/rrdId/checksum change; netProfitKopecks/profitClass/abcCode remain null |
 | 8 test debt / handoff | Targeted source/cache/RNP/economics regressions repaired; new scoped group below | Not full backend parity and not DB durability; no weakened guards/removed tests |
 
-No claim that whole T2 scope or any durable repository is ready. T1 Orders0062 and
-Review Facts0063 are **not** repricer approval schema. Latest local T1 inspection:
-`87ef048` over Review Facts `56b5fa5`; no new approval migration seen. State4A and
-source requests can be accepted independently, not queued behind complete repricer.
+No claim that whole T2 scope or the complete repository/service protocol is ready.
+Accepted T1 approval schema0066 `dbf8d31d9fc0b9035b9c8a84727e70713956afe0`
+and its reviewed platform prerequisites were merged without conflicts by
+`1464fcdfaab15b053678dd4f6d0337d958dab7f7`. State4A and source requests remain
+independent dependencies, not queued behind complete repricer.
 
 ## Verification
 
@@ -101,6 +102,47 @@ schema nullability/audit/paused-slot ambiguities, collection integer serializati
 stock owner range and daily datetime overflow. Every code defect gained a failing
 test before correction. Stock final three findings rechecked locally by fresh tests.
 
-Next durable step requires exact corresponding T1 migration; obtain that dependency
-without replacing existing code/formulas or guessing table names. Remaining independent
-extensions are listed explicitly rather than declared completed by these pure adapters.
+## Accepted approvals persistence slice
+
+Owned code: `app/modules/wb_repricing_postgres.py`,
+`app/modules/wb_repricing_commands.py`; tests:
+`tests/test_wb_repricing_postgres_repository.py`,
+`tests/test_wb_repricing_approval_commands.py`. Existing pure kernel, current
+repricer, migrations/config/shared wiring are unchanged by this T2 slice.
+
+`ApprovalTransaction` is explicitly an **uncommitted** scoped transaction
+participant, not authentication and not send permission. `UserApprovalCommands`
+owns its clean Engine-bound root and returns after physical commit only. The latter
+uses accepted live PublicationGuard with fixed `price:send`, authenticated membership
+derived from its principal, exact account binding and no request-selected permission.
+It exposes no reserve/dispatch/outcome or worker API. Guard-through-commit behavior
+also depends on accepted T1 guard tests, not solely the tests added here.
+
+RED: missing participant module/API (collection exit2); missing attempt-ID boundary
+6 failing cases, missing durable attempt2 failures (exit1). GREEN: corrected required
+canonical UUID4 and absent-row conflict. User service RED: absent module (exit2).
+Fresh combined real PostgreSQL run: **75 passed in12.77s, exit0**. The runtime role
+is nonowner/NOBYPASSRLS, actual migrations run into disposable databases; fixture
+verified exact database and role cleanup. Explicit null pgpass produces benign
+libpq `/dev/null is not a plain file` warnings; no real credential files read.
+
+Reproduction from backend (same interpreter as above): scrub environment with
+`env -i PATH=/usr/local/bin:/usr/bin:/bin PGPASSFILE=/dev/null PGSERVICEFILE=/dev/null
+NETRC=/dev/null PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ORDERS_TEST_USE_LOCAL_CLUSTER=1`,
+then `/usr/bin/sandbox-exec -f ../.superpowers/t2-repository-offline.sb python
+-m pytest -q -s tests/test_wb_repricing_postgres_repository.py
+tests/test_wb_repricing_approval_commands.py --tb=short`.
+The local untracked test-only sandbox profile allows default, denies network,
+then allows outbound Unix socket `/private/tmp/.s.PGSQL.5432` only, and denies
+reads matching `(^|/)\.env($|\.)` or `(^|/)(\.pgpass|\.netrc)$`.
+This is not an application/config change. No provider TCP access or production DB.
+
+Fresh unchanged pure approval/identity/dispatch/Postgres-text/golden-vector group:
+**228 passed in0.19s, exit0**. Ruff, compileall and diff checks are scoped to the four
+owned Python files. Independent critic's missing-ID blocker fixed/rechecked;
+final read-only review found no further blockers. Full backend baseline delta and
+privileged backfill preservation are not claimed by these results.
+
+Next: bounded worker-authority amendment requested by T1; privileged synthetic
+backfill adapter and additional state/source work can proceed independently.
+Worker/provider/scheduler remain dormant pending the accepted worker contract.
