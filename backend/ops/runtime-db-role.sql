@@ -97,6 +97,17 @@ GRANT SELECT, INSERT ON TABLE public.order_sync_runs, public.marketplace_orders,
 GRANT UPDATE ON TABLE public.order_sync_runs, public.marketplace_orders,
     public.marketplace_order_items TO :"runtime_role";
 
+-- Immutable Orders binding: only pure CHECK/codec helpers are callable.
+REVOKE ALL ON FUNCTION public.orders_run_binding_insert_guard(),
+    public.orders_run_binding_update_guard() FROM PUBLIC, :"runtime_role";
+REVOKE ALL ON FUNCTION public.orders_binding_text(text,integer),
+    public.orders_binding_ascii_string(text),
+    public.orders_run_binding_bytes(integer,integer,text,text,text)
+    FROM PUBLIC, :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.orders_binding_text(text,integer),
+    public.orders_binding_ascii_string(text),
+    public.orders_run_binding_bytes(integer,integer,text,text,text) TO :"runtime_role";
+
 -- Only the identity sequences belonging to these Orders tables are narrowed.
 SELECT format('REVOKE ALL ON SEQUENCE %s FROM %I; GRANT USAGE ON SEQUENCE %s TO %I',
     pg_get_serial_sequence(format('public.%I', c.relname), a.attname), :'runtime_role',
