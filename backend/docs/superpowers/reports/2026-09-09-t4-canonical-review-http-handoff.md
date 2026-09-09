@@ -1,5 +1,64 @@
 # T4 canonical-only WB Review HTTP handoff
 
+## Current approved amendment and integration boundary
+
+Coordinator-approved amendment: explicit-account canonical-only ingestion replaces
+the unsafe legacy dual-consumer for this path. No legacy global Review store is
+read or written. This changes the integration mechanism, not the original parity
+acceptance criterion. A successful endpoint alone does not close stage2/shadow.
+
+Required local parity evidence: one synthetic provider page per invocation;
+compare the same received DTO through direct canonical normalization and the
+persisted service result; compare the existing legacy pure DTO conversion on
+the common lossless subset without calling its fetch/store. Explicitly record
+intentional differences (null/whitespace/date/opaque-ID loss and source versions)
+instead of forcing canonical evidence to mimic legacy coercion. Also require
+account ownership, partial/replay safety, fetch failure and fresh-process retry.
+One fetch per invocation does not promise one fetch across repeated HTTP requests.
+Automatic running-run/ambiguous-COMMIT recovery is not implied by manual retry.
+
+Current frozen consumer input is77abab0ae4a5bef1544bccfbeb92e728d8b7c4e6,
+including27c227e and835a82b. Platform prerequisites through0068 are present and
+locally released/consumer-accepted at their recorded scope. Original900PASS
+predates0068; final binding44PASS follows the recorded225/2 diagnostic run. Root
+must perform the consolidated integration review; no independent final approval
+or shared-app registration is claimed here. Frontend430/0/0 is separate evidence.
+
+Historical-binding blocker at the end of this document is closed for repository
+and guarded ingestion by27c227e, not for an unimplemented public read endpoint.
+Real legacy shadow activation, production flags, live sends and deployments
+remain absent. Local draft/send/notification implementation must not be blocked
+merely by missing real production credentials or observation windows.
+
+### Local amendment acceptance after the frozen milestone input
+
+`test_review_canonical_parity.py` compares the exact DTO returned by the real
+canonical adapter to the repository-decoded persisted observation, including all
+canonical content fields and checksum. One fake page request supplies both; the
+legacy `_to_feedback_row` converter is called purely on the same raw item, never
+through its fetch/store. Common fields match; null and surrounding whitespace/NUL
+differences remain explicit, and different source-schema versions/checksums are
+not erased to fake equality. This is canonical projected-field parity, not every
+legacy UI field such as brand/pros/cons or trusted live legacy-history ownership.
+
+Four fresh spawned interpreters each create their own engine/provider: failed
+fetch502 leaves a committed running reservation and no fact; explicit retry200
+reuses that reservation; exact replay200 retains one observation/revision; denied
+account403 performs zero provider requests. Each permitted invocation makes one
+fake request, not one request across retries. Child SQL capture observes no legacy
+rv_review_* access. Every child exits normally; no parent in-memory state is used
+as the recovered owner. This proves manual retry across process boundaries, not
+automatic rescheduling, crash-at-COMMIT reconciliation or legacy activation.
+
+Actual new-module4PASS13.69s (one owned DB/role cleanup), then canonical HTTP,
+shadow service, binding repository and parity combined **61PASS,2warnings,26.86s**
+with four owned DB/role cleanups and naturalexit0. Scoped Ruff/AST/diff0.
+Existing `/dev/null` passfile and framework deprecation warnings are retained.
+No runtime/schema changes were needed. Main critical pass checked real adapter,
+actual subprocess isolation, exact normalization/hash evidence, denied prefetch,
+and no claim of automatic recovery. Root final independent integration review
+remains; the frozen77abab0 milestone input is not silently replaced by this work.
+
 ## Scope and registration request
 
 Coordinator explicitly approved canonical-only explicit-account sync. It must not
@@ -119,14 +178,14 @@ their DDL, canonical public reads/frontend integration, legacy isolation/retirem
 full integration baseline and separately authorized canary. No architecture-complete
 or production-readiness claim follows from this bounded HTTP slice.
 
-## Historical binding gate discovered before read implementation
+## Historical pre-27c227e binding gate — closed at repository layer
 
 Read-only trace plus actual disposable1case reproduces old Review evidence visible
 after a completed account rebind even under a fresh live guard. See
 2026-09-09-t4-review-historical-binding-request.md and
 tests/test_review_historical_binding_gap.py. Current internal owner IDs do not encode
-historical external binding. This blocks public historical reads and operational
-activation, and requires checking current-head publication/replay across rebinds.
+historical external binding. At that checkpoint it blocked public historical reads
+and operational activation, requiring current-head publication/replay checks across rebinds.
 The earlier900PASS is bounded HTTP/in-flight verification, not a proof that this
 newly characterized completed-rebind gate is closed. Router registration may still
 proceed separately while its policy remains default-off.

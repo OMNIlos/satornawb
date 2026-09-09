@@ -1,5 +1,52 @@
 # T4 — requirement → commit → evidence → remaining work
 
+## Current authoritative status — all eight stages
+
+Frozen platform-milestone input: **77abab0ae4a5bef1544bccfbeb92e728d8b7c4e6**.
+It contains consumer27c227e and HTTP835a82b; frontend acceptance uses the same SHA.
+Later documentation/parity work does not silently replace this integration input.
+`released` below means a local owner handoff, never deployment. `consumer-accepted`
+means the stated local check only. No row is final-integrated or production-active.
+
+| Requirement | Actual implementation SHA / state | Verified evidence | Remaining local work / owner | Production activation |
+|---|---|---|---|---|
+| 1. Typed ABC/P&L cutover | 7cd1fd9/028168b/81ee4b9; implemented, local consumer-accepted, not final-integrated | Typed pagination/account/formula/null guards; full frontend at77abab0:430/0/0 | T1/root shared integration and exact freshness contract; T4 keeps default-off rollback and no invented profit | Not authorized; separate approved canary/deploy |
+| 2. Review Facts + same-DTO parity | 27c227e immutable0068 consumer;835a82b canonical-only HTTP; implemented/local released, main consumer-accepted with stated limits | Binding44PASS; earlier225/2 retained. New sameDTO/fresh-process parity4PASS, combined HTTP/shadow/binding61PASS26.86s. No consolidated platform milestone result yet | T4 canonical public read/service; T1 shared registration; root milestone review. Local explicit retry proven, automatic failed-run/ambiguous-COMMIT recovery not implemented. Platform0068 is released, not missing | Off; original legacy shadow activation is not implemented or authorized |
+| 3. Policies/drafts/decisions | 98d1331 decisions;4b349ec/92ba34c serializers;316eaf8 audit encoder; contracts implemented only | Decision/serializer/golden/audit focused evidence; not durable service acceptance | T1 local policy/draft/head/decision DDL requested by8f4a6c4+b17638f; then T4 fake-generation, authenticated CAS/approval+audit service and restart/races | Not authorized; local implementation must not wait for real LLM credentials |
+| 4. Send/recovery | e4818e3 recovery contract; b17638f attempt/marker matrix; contracts implemented, service not released |35recovery+8lifecycle cases are primitives, not a durable send chain | T1 command/attempt/evidence/outbox/worker authority; T4 transaction intent→claim→marker→fake provider→receipt/ambiguous recovery | Live sends off; production policy separate from local fake-provider acceptance |
+| 5. Notifications | 98d1331 safe event projection;9284fe0 existing preferences reader; partial implementation |31projection+21preferences tests; no event/receipt RLS or delivery-service acceptance claimed | T1 scoped events/receipts and preferences CAS extension; T4 transactional producers, read/visible-ID receipt service, cache isolation. External delivery adds destination/receipt policy | No Telegram/provider actions; missing external policy does not block in-app local storage |
+| 6. Other canonical frontend consumers |77abab0 existing frontend fixes +430/0/0; new domain cutovers not released | Real local UI state/race coverage, not new domain HTTP parity | T2 repricer/finance/sources and T3 Orders approved routes/DTO/permissions/cursor/conflict contracts; T4 adapters and single-owner switch. Production assembly/printing is explicitly deferred below, not a blocker for the remaining scope | Default-off; no invented endpoints or operational authority |
+| 7. Rollout/retirement preparation |e4818e3 runbook; preparation implemented, execution not performed | Null/version/pagination/rollback criteria and build-time redeploy limitation documented | Root/T1 integration artifact and authorized observation inputs; T4 maintain runbook against accepted contracts. Legacy retained until actual parity | Canary/deploy/retirement explicitly not authorized by local test work |
+| 8. Assigned debt + final handoff |77abab0; frontend debt consumer-accepted, architecture final handoff incomplete |Actual full430PASS0FAIL0PENDING/133.91s; T2 independent102PASS0.70s; not full backend green | Root/T1 one consolidated integration milestone, then remaining vertical services and final combined/backend gates; independent final review remains | No release approval inferred from test counts |
+
+Local Reviews amendment and exact parity limits are recorded in
+`2026-09-09-t4-canonical-review-http-handoff.md`. Tests cannot close a row whose
+required service chain or integration is absent. The table above is the only
+current stage-status source in this file.
+
+### Explicitly deferred by user — Production assembly and printing
+
+Shared WB/Avito work items/assignments, batches, schedule, picking/print sheets,
+XLSX/PDF/stickers, print archive and delivery receipts are deferred, not DONE.
+T4 retains the existing UI and completed compatibility protections at frozen
+77abab0; its new canonical Production adapter/switch is not implemented or
+consumer-accepted. T1's implemented0069 atd57c544 and all existing owner code/
+migration history must remain; this statement does not assert T3 P1 service
+acceptance. Exact backend readiness remains in the T1/T3 current ledgers.
+Resumption needs accepted backend service/HTTP/authority contracts and the
+missing source/parity inputs recorded by T3. Do not continue new implementation,
+P1–P4 tests or missing-renderer/calendar research while deferred. Preserve existing
+behavior and required regression compatibility for already accepted changes.
+This deferral does not block Orders ingestion/read/API, Reviews, Notifications,
+T2 work or integration/acceptance of the remaining scope. KIZ/matcher stay excluded.
+
+# Historical ledger — all following checkpoints are superseded snapshots
+
+The headings and tables below retain their original dates/claims as evidence;
+they are not current dependency or completion status. Use only the table above
+for planning. In particular, historical missing0068/guard and frontend failures
+must not be repeated as current blockers.
+
 ## Current complete frontend gate: 430PASS / 0FAIL / 0PENDING
 
 One fresh serial fullfrontend run completed naturally0 in133.91s, JSONsuccess
