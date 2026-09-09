@@ -26,7 +26,7 @@ reencrypt_credential(
 ) -> CredentialMetadata
 ```
 
-Validate the owner instance, canonical positive INTEGER org/account IDs, provider allowlist, UUID and positive non-boolean integer generation/key version before I/O. The next generation must fit the existing BIGINT column; malformed or overflow input yields the existing safe contract code. Do not widen other store entry points or globally change their validation in this task.
+Validate the owner instance, canonical positive INTEGER org/account IDs, provider allowlist, UUID and positive non-boolean integer generation/key version before I/O. Target key version must fit the existing INTEGER column (1..2147483647); the next generation must fit the existing BIGINT column. Malformed or overflow input yields the existing safe contract code. These are physical schema bounds, not a key policy. Do not widen other store entry points or globally change their validation in this task.
 
 The store still owns its fresh Session and physical transaction, keyring loading, decrypt/encrypt/decrypt-verify, write and safe audit. Context is not authentication: only a trusted, explicitly authorized administrative caller may invoke it. This task introduces no public rekey route, worker principal or import-role privileges.
 

@@ -38,7 +38,7 @@ assert rotated.generation == 2  # initial RED before adding owner keyword
 ```
 
 After the RED, update that desired-success call to pass `account_identity=owner`; keep a separate missing-owner safe-denial test. Do not make an old-behavior characterization pass count as the bug's RED.
-- [ ] Write scope and mutation tests before implementation. Seed exact other account in same org and another org/account with their own active credentials. For wrong owner/provider/UUID pair assert safe denial and exact before/after encrypted row plus audit snapshots, never raw secret in output. Missing owner, arbitrary object, booleans, zero/negative/out-of-INT4 owner IDs, invalid UUID/generation/key version and generation overflow deny before I/O.
+- [ ] Write scope and mutation tests before implementation. Seed exact other account in same org and another org/account with their own active credentials. For wrong owner/provider/UUID pair assert safe denial and exact before/after encrypted row plus audit snapshots, never raw secret in output. Missing owner, arbitrary object, booleans, zero/negative/out-of-INT4 owner IDs, invalid UUID/generation/key version and generation overflow deny before I/O. Target key_version must also fit existing INTEGER:1..2147483647;2147483648 denies before key/session factories. Positive maxINT4 validates input shape, but does not imply a configured key exists.
 - [ ] Implement keyword-only owner validation and set tenant context in the fresh owned transaction; enforce actual PostgreSQL READ COMMITTED/nonautocommit (SQLite remains limited contract tests). Lock account before credential. Use exact predicates in SELECT and UPDATE:
 
 ```python
