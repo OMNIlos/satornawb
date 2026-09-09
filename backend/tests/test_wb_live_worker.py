@@ -1,6 +1,7 @@
 """Synthetic transport/orchestration tests, not a PostgreSQL durability proof."""
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID
@@ -130,6 +131,42 @@ def test_content_native_cursor_incremental_and_full_page():
     assert request.jsonBody["settings"]["sort"] == {"ascending": True}
     empty = parse(content([]), "content", page.checkpoint)
     assert empty.complete and empty.checkpoint == page.checkpoint
+
+
+def test_completed_content_refresh_uses_native_checkpoint_through_transport():
+    # WB explicitly documents carrying the last response cursor into the first
+    # request of the next run, not synthesizing a lower timestamp or nmID=0.
+    checkpoint = {"updatedAt": "2026-09-09T23:59:59.12345Z", "nmID": 10}
+    repository = Repository()
+    repository.lease = replace(
+        repository.lease, source="content", checkpoint=checkpoint
+    )
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        settings = json.loads(request.content)["settings"]
+        assert settings["cursor"] == {"limit": 100, **checkpoint}
+        assert settings["sort"] == {"ascending": True}
+        return httpx.Response(200, json=content())
+
+    result = run_one_batch(
+        repository,
+        ReadOnlyWbProvider(transport=httpx.MockTransport(handle)),
+        LOCATOR,
+        clock=lambda: NOW,
+    )
+    assert result == {"status": "complete"} and len(requests) == 1
+    assert repository.events[-1][0] == "commit"
+    assert repository.events[-1][1]["next_checkpoint"] == {
+        "updatedAt": NOW.isoformat(),
+        "nmID": 10,
+    }
+    assert checkpoint == {"updatedAt": "2026-09-09T23:59:59.12345Z", "nmID": 10}
+    with pytest.raises(WbReadError):
+        request_for("content", {**checkpoint, "nmID": 0})
+    with pytest.raises(WbReadError):
+        parse(content([card(0)]), "content", checkpoint)
 
 
 @pytest.mark.parametrize(
