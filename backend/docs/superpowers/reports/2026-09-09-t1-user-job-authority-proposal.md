@@ -23,13 +23,19 @@ Proposed first operation literal is `orders.sync.v1`, fixed permission `sync:run
 
 Proposed exact request v1 fields are:
 
-`schemaVersion=1, operationKind=orders.sync.v1, organizationId, marketplaceAccountId, provider, sourceKind, adapterVersion, mappingVersion, sourceContractVersion, requestedFrom, requestedTo`.
+`schemaVersion=1, operationKind=orders.sync.v1, organizationId, marketplaceAccountId, provider, sourceKind, adapterVersion, mappingVersion, sourceContractVersion, sourceRequest, requestedFrom, requestedTo`.
 
-Versions and source kind come from a trusted, versioned service dispatch table, not an arbitrary client import path. The requested UTC time bounds are a nullable pair or an ordered pair; root should obtain T3's precise meaning of both-null and boundary inclusivity before activating the handler. Do not invent “latest”, “all history”, page/cursor/filter defaults or a retention window. If the adapter needs another material request field (status filter, endpoint mode, snapshot selection), T3 must add it explicitly before freezing v1. No free payload JSON, scenario/force switch, callable name, URL, queue-provided permission or credentials.
+Versions and source kind come from a trusted, versioned service dispatch table, not an arbitrary client import path. T3 exact response `2f0422076ac0b365d2e97432b9ce57d6aa6b350f:backend/docs/superpowers/reports/2026-09-09-orders-job-source-binding.md` supplies the following binding, replacing the earlier unresolved source-request proposal:
+
+- Avito `sourceRequest`: explicit `dateFrom` null or ISO calendar date; `statuses` array of exact nonempty strings without embedded comma/trim/aliases; integer `limit`1..20 and `page`>=1. No defaults. Null date and empty statuses omit the corresponding remote parameter. A nonnull date becomes UTC-midnight Unix seconds. This is one page acquisition, not proven complete synchronization.
+- WB `sourceRequest`: exactly `dateFrom` ISO calendar date, rendered `YYYY-MM-DDT00:00:00` without offset. No inferred timezone, dateTo or flag.
+- All selectors enter canonical request bytes and exact replay equality. `requestedFrom`/`requestedTo` are both null in this initial recognized-source contract: no normalized coverage interval is claimed. Both-null does not claim all-history. Nonnull normalized windows require another reviewed source contract proving timestamp field, timezone, inclusivity, pagination and completeness; guessed local filtering is forbidden.
+
+These source kinds are recognized domain evidence, not registered complete-sync handlers. No inspected provider source proves an immutable complete snapshot/terminal manifest. Real `orders.sync.v1` handler activation therefore remains fail-closed. Local storage/claim/revocation tests may use explicitly synthetic source fixtures. No free payload JSON, scenario/force switch, callable name, URL, queue-provided permission or credentials.
 
 Canonical bytes: ASCII-safe UTF-8 JSON, sorted keys, compact separators, ensure_ascii=true, allow_nan=false; fixed six-digit UTC microseconds with Z and explicit nulls. Store bytea and SHA256, compare exact bytes on replay. Integer IDs are canonical positive integers; strings must be PostgreSQL-representable Unicode scalar text without NUL. New job-key domain may use canonical UUIDv4 client idempotency keys, avoiding the unrelated unbounded legacy text-key issue. This is a new bounded interface, not a change to Orders/source serializers.
 
-`source_snapshot`, provider cursors/pages and manifest bytes are outputs learned by the adapter. They are **not** fabricated at enqueue. Each claimed fetch attempt gets a distinct immutable run/source_run_key derived by trusted domain code from job+attempt identity; T3 must agree the exact derivation and transaction in which the run is created. Reusing a run key with a changed fetched snapshot must conflict rather than rewriting immutable source evidence.
+`source_snapshot` and manifest bytes are outputs learned by the adapter. They are **not** fabricated at enqueue or claim. The exact accepted run key is `orders-job-v1:<canonical lowercase job UUID>:<canonical lowercase attempt UUID>`, additionally scoped by org/account/source. Create the run only after a validated normalized snapshot and manifest are available, within publication transaction after user/account/job/attempt locks and before domain run/projection operations. Failed/no-evidence fetch closes the attempt without a run. Same-attempt changed snapshot/request conflicts; terminal runs never reopen.
 
 ## Minimal proposed relations
 
@@ -138,7 +144,7 @@ Ready local architectural decisions: four bounded relations; single-account/sess
 
 Still requiring owner/domain resolution before production or operation activation:
 
-1. T3 exact `orders.sync.v1` handler/source/version/request-window/filter contract and deterministic per-attempt run identity. Existing observation/manifest types do not supply this enqueue contract. Store no invented source snapshot.
+1. T3 has supplied material selectors and exact per-attempt identity in `2f0422076ac0b365d2e97432b9ce57d6aa6b350f`; these are incorporated above. Provider-complete snapshot/window semantics and production handler registration remain unproven. Store no invented source snapshot and never reinterpret a partial page as complete publication.
 2. Owner-approved authority lifetime, finite attempt/lease/backoff policy and abuse/concurrency controls; audit/job/result retention and deletion procedure. Local synthetic policy fixtures are not production approval. No policy means production job creation stays unavailable.
 3. Whether session logout/expiry should cancel queued work. **Recommended and proposed here: yes**, required for reuse of the existing session guard and user's explicit session-revocation requirement. Detached continuation is a different delegation contract, not a silent exception.
 4. Actual read adapter capability and exact credential dependency chain. No bearer-only browser job and no automatic refresh/rotation substitution are included. A source requiring unrecorded credential renewal must get an explicit new authority contract.

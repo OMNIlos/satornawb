@@ -146,6 +146,28 @@ No ORM/domain/service, wheel-registration or activation acceptance is claimed.
 
 ## Verification
 
+### Accepted follow-up
+
+Schema commit `56b5fa50b2de41a4f3277392148012233952188c` independently passed
+148 PostgreSQL tests in the controller (43.12s) and coordinator (48.80s).
+Review identified a remaining historical-fixture/current-script coupling.
+`b9cb131c0fd234ca12941f46b4ade5899c20f50e` removes that duplicate script call
+from the pinned0063 test and adds a structural target/call regression; latest-head
+ACL/ordering acceptance remains intact. Its focused regression was RED then GREEN;
+the same four-file command below now yields **149 passed, zero skips, 34.93s**.
+`e396b08556b6a47bdf4bbf6ddf6eb9008c34c5a7` only sorts0063 imports.
+Scoped three-file Ruff using the coordinator-approved static tool, own-venv
+compileall and diff checks pass; independent scoped review accepts both fixes.
+Runtime SQL is unchanged. This supersedes the initial missing-Ruff note below.
+
+The source-run concurrency case directly proves an INSERT waiting inside the
+exact-text trigger. The review-ID branch also serializes through its earlier run
+creation; it proves transactional duplicate protection, not an independently
+waiting fact INSERT. Strengthening that branch remains a nonblocking test note,
+not a claim of additional executed proof. All allocated resources were removed.
+
+### Initial implementation evidence
+
 Final matrix: **148 passed, zero skipped, exit 0, 35.02 seconds**: 47 Review
 tests plus all 101 retained Orders candidate/integration/contract tests. This
 includes empty→head migration without stamp, populated 0062→0063 preservation,

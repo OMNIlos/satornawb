@@ -3,17 +3,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NoReturn
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import Engine, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.cabinet.orm import LkAuditEventRow
 from app.config import get_settings, load_marketplace_credential_keyring
 from app.infra.db import get_session_factory, set_tenant_context
-from app.platform.integrations.orm import MarketplaceAccountCredentialRow, MarketplaceAccountRow
+from app.platform.integrations.orm import (
+    MarketplaceAccountCredentialRow,
+    MarketplaceAccountRow,
+)
 from app.security.marketplace_credentials import (
     CredentialCryptoError,
     CredentialIdentity,
@@ -23,7 +26,6 @@ from app.security.marketplace_credentials import (
     decrypt_credential,
     encrypt_credential,
 )
-
 
 _REVOCATION_REASONS = frozenset(
     {
@@ -68,6 +70,58 @@ class MarketplaceAccountCredentialOwner:
     organization_id: int
     marketplace_account_id: int
     provider: str
+
+
+@dataclass(frozen=True)
+class CredentialFetchBinding:
+    """Safe evidence captured from the same statement as the fetched secret."""
+
+    owner: MarketplaceAccountCredentialOwner
+    external_account_id: str
+    credential_ref: str | None
+    credential_identity: CredentialIdentity
+
+
+class ResolvedCredentialForFetch:
+    """Explicit secret access; generic copies/serialization must fail closed."""
+
+    __slots__ = ("__binding", "__secret")
+
+    def __init__(self, secret: DecryptedCredential, binding: CredentialFetchBinding) -> None:
+        self.__secret = secret
+        self.__binding = binding
+
+    @property
+    def secret(self) -> DecryptedCredential:
+        return self.__secret
+
+    @property
+    def binding(self) -> CredentialFetchBinding:
+        return self.__binding
+
+    @staticmethod
+    def _refuse_serialization() -> NoReturn:
+        raise TypeError("credential_contract_invalid")
+
+    def __iter__(self) -> NoReturn:
+        self._refuse_serialization()
+
+    def __copy__(self) -> NoReturn:
+        self._refuse_serialization()
+
+    def __deepcopy__(self, memo: object) -> NoReturn:
+        self._refuse_serialization()
+
+    def __reduce__(self) -> NoReturn:
+        self._refuse_serialization()
+
+    def __reduce_ex__(self, protocol: int) -> NoReturn:
+        self._refuse_serialization()
+
+    def __repr__(self) -> str:
+        return "<ResolvedCredentialForFetch redacted>"
+
+    __str__ = __repr__
 
 
 @dataclass(frozen=True)
@@ -389,6 +443,72 @@ def resolve_marketplace_credential(
             raise _translate_persistence_error() from None
 
 
+def resolve_marketplace_credential_for_fetch(
+    account_identity: MarketplaceAccountCredentialOwner,
+    kind: str,
+) -> ResolvedCredentialForFetch:
+    """Capture connected-account binding and decrypted authority atomically.
+
+    The outer join distinguishes missing account from missing active credential
+    without a second snapshot. The short session closes before provider I/O.
+    """
+
+    if (
+        not isinstance(account_identity, MarketplaceAccountCredentialOwner)
+        or not isinstance(account_identity.provider, str)
+        or not isinstance(kind, str)
+    ):
+        raise CredentialStoreError("credential_contract_invalid")
+    _validate_owner(account_identity)
+    _validate_kind(account_identity, kind)
+    keyring = _load_keyring()
+    account = MarketplaceAccountRow
+    credential = MarketplaceAccountCredentialRow
+    query = (
+        select(account.external_account_id, account.credential_ref, credential)
+        .outerjoin(
+            credential,
+            (credential.organization_id == account.organization_id)
+            & (credential.marketplace_account_id == account.marketplace_account_id)
+            & (credential.provider == account.marketplace)
+            & (credential.credential_kind == kind)
+            & credential.revoked_at.is_(None),
+        )
+        .where(
+            account.organization_id == account_identity.organization_id,
+            account.marketplace_account_id == account_identity.marketplace_account_id,
+            account.marketplace == account_identity.provider,
+            account.status == "connected",
+        )
+    )
+    with get_session_factory()() as session:
+        try:
+            set_tenant_context(session, account_identity.organization_id)
+            selected = session.execute(query).one_or_none()
+            if selected is None:
+                raise CredentialStoreError("credential_account_not_found")
+            external_account_id, credential_ref, row = selected
+            if row is None:
+                raise CredentialStoreError("credential_missing")
+            identity = _identity(row)
+            if identity.expires_at is not None and identity.expires_at <= _utc_now():
+                raise CredentialStoreError("credential_expired")
+            secret = decrypt_credential(identity, _encrypted(row), keyring)
+            return ResolvedCredentialForFetch(
+                secret=secret,
+                binding=CredentialFetchBinding(
+                    owner=account_identity,
+                    external_account_id=external_account_id,
+                    credential_ref=credential_ref,
+                    credential_identity=identity,
+                ),
+            )
+        except (CredentialCryptoError, CredentialStoreError):
+            raise
+        except SQLAlchemyError:
+            raise _translate_persistence_error() from None
+
+
 def get_marketplace_credential_metadata(
     account_identity: MarketplaceAccountCredentialOwner,
     kind: str,
@@ -450,15 +570,25 @@ def reencrypt_credential(
     credential_id: UUID,
     expected_generation: int,
     target_key_version: int,
+    *,
+    account_identity: MarketplaceAccountCredentialOwner | None = None,
 ) -> CredentialMetadata:
+    """Owned transaction for trusted administration; account scope is not authentication."""
     if (
-        not isinstance(credential_id, UUID)
+        not isinstance(account_identity, MarketplaceAccountCredentialOwner)
+        or type(account_identity.organization_id) is not int
+        or not 1 <= account_identity.organization_id <= 2147483647
+        or type(account_identity.marketplace_account_id) is not int
+        or not 1 <= account_identity.marketplace_account_id <= 2147483647
+        or type(account_identity.provider) is not str
+        or account_identity.provider not in {"wb", "avito"}
+        or not isinstance(credential_id, UUID)
         or not isinstance(expected_generation, int)
         or isinstance(expected_generation, bool)
-        or expected_generation < 1
+        or not 1 <= expected_generation < 9223372036854775807
         or not isinstance(target_key_version, int)
         or isinstance(target_key_version, bool)
-        or target_key_version < 1
+        or not 1 <= target_key_version <= 2147483647
     ):
         raise CredentialStoreError("credential_contract_invalid")
     keyring = _load_keyring()
@@ -467,12 +597,26 @@ def reencrypt_credential(
         current_key_version=target_key_version,
         keys={target_key_version: target_key},
     )
-    now = _utc_now()
-    with get_session_factory()() as session:
-        try:
+    try:
+        with get_session_factory()() as session, session.begin():
+            bind = session.get_bind()
+            if bind.dialect.name == "postgresql":
+                if not isinstance(bind, Engine):
+                    raise CredentialStoreError("credential_configuration_invalid")
+                connection = session.connection()
+                if (
+                    getattr(connection.connection.dbapi_connection, "autocommit", None) is not False
+                    or connection.get_isolation_level() != "READ COMMITTED"
+                ):
+                    raise CredentialStoreError("credential_configuration_invalid")
+            set_tenant_context(session, account_identity.organization_id)
+            _account(session, account_identity, lock=True)
             row = session.scalar(
                 select(MarketplaceAccountCredentialRow)
                 .where(
+                    MarketplaceAccountCredentialRow.organization_id == account_identity.organization_id,
+                    MarketplaceAccountCredentialRow.marketplace_account_id == account_identity.marketplace_account_id,
+                    MarketplaceAccountCredentialRow.provider == account_identity.provider,
                     MarketplaceAccountCredentialRow.credential_id == credential_id,
                     MarketplaceAccountCredentialRow.revoked_at.is_(None),
                 )
@@ -482,6 +626,10 @@ def reencrypt_credential(
                 raise CredentialStoreError("credential_missing")
             if int(row.generation) != expected_generation:
                 raise CredentialStoreError("credential_concurrent_update")
+            now = _utc_now()
+            expires_at = _as_utc(row.expires_at)
+            if expires_at is not None and expires_at <= now:
+                raise CredentialStoreError("credential_expired")
             old_payload = decrypt_credential(_identity(row), _encrypted(row), keyring).reveal()
             new_identity = CredentialIdentity(
                 organization_id=int(row.organization_id),
@@ -500,6 +648,9 @@ def reencrypt_credential(
             result = session.execute(
                 update(MarketplaceAccountCredentialRow)
                 .where(
+                    MarketplaceAccountCredentialRow.organization_id == account_identity.organization_id,
+                    MarketplaceAccountCredentialRow.marketplace_account_id == account_identity.marketplace_account_id,
+                    MarketplaceAccountCredentialRow.provider == account_identity.provider,
                     MarketplaceAccountCredentialRow.credential_id == credential_id,
                     MarketplaceAccountCredentialRow.generation == expected_generation,
                     MarketplaceAccountCredentialRow.revoked_at.is_(None),
@@ -520,11 +671,7 @@ def reencrypt_credential(
             session.expire(row)
             session.refresh(row)
             _audit(session, row, operation="reencrypt")
-            session.commit()
-            return _metadata(row)
-        except (CredentialCryptoError, CredentialStoreError):
-            session.rollback()
-            raise
-        except (IntegrityError, SQLAlchemyError):
-            session.rollback()
-            raise _translate_persistence_error() from None
+            metadata = _metadata(row)
+        return metadata
+    except (IntegrityError, SQLAlchemyError):
+        raise _translate_persistence_error() from None

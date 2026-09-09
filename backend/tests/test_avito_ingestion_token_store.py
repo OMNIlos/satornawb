@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -21,21 +22,24 @@ from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from fastapi.encoders import jsonable_encoder
 from pydantic_core import to_json
 from sqlalchemy import create_engine, event, text
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
+from alembic import command
 from app.platform.integrations import ingestion_tokens
 from app.platform.integrations.credential_store import MarketplaceAccountCredentialOwner
+from tests import test_orders_schema_candidate as candidate
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_ROLE = "satorna_ingestion_test_runtime"
+RUNTIME_ROLE = "satorna_ingestion_runtime_" + uuid4().hex
 NOW = datetime(2026, 9, 8, 14, 0, tzinfo=timezone.utc)
 CANARY = "synthetic-ingestion-secret-canary-b41d"
+cluster = candidate.cluster
 
 
 def _free_loopback_port() -> int:
@@ -44,8 +48,90 @@ def _free_loopback_port() -> int:
         return int(probe.getsockname()[1])
 
 
-@pytest.fixture(scope="module")
-def disposable_postgres(tmp_path_factory: pytest.TempPathFactory):
+def _bootstrap_postgres(
+    owner_engine: Engine, owner_url: str, *, create_runtime_role: bool
+) -> None:
+    with owner_engine.begin() as connection:
+        connection.execute(text("""
+                CREATE TABLE lk_organizations (
+                    organization_id INTEGER PRIMARY KEY,
+                    slug VARCHAR(64) NOT NULL UNIQUE,
+                    name VARCHAR(255) NOT NULL
+                );
+                CREATE TABLE lk_users (
+                    user_id VARCHAR(128) PRIMARY KEY,
+                    organization_id INTEGER NOT NULL REFERENCES lk_organizations(organization_id)
+                );
+                CREATE TABLE lk_audit_events (
+                    event_id SERIAL PRIMARY KEY,
+                    organization_id INTEGER NOT NULL REFERENCES lk_organizations(organization_id),
+                    actor_user_id VARCHAR(128) REFERENCES lk_users(user_id),
+                    action VARCHAR(128) NOT NULL,
+                    object_type VARCHAR(64) NOT NULL,
+                    object_id VARCHAR(128) NOT NULL,
+                    details JSON,
+                    before_state JSON,
+                    after_state JSON,
+                    reason TEXT,
+                    ip_address VARCHAR(64),
+                    user_agent VARCHAR(255),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE marketplace_accounts (
+                    marketplace_account_id INTEGER PRIMARY KEY,
+                    organization_id INTEGER NOT NULL REFERENCES lk_organizations(organization_id),
+                    marketplace VARCHAR(16) NOT NULL,
+                    external_account_id VARCHAR(128) NOT NULL,
+                    status VARCHAR(32) NOT NULL,
+                    credential_ref VARCHAR(255),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_marketplace_accounts_org_id UNIQUE (organization_id, marketplace_account_id),
+                    CONSTRAINT uq_marketplace_accounts_org_marketplace_external
+                        UNIQUE (organization_id, marketplace, external_account_id)
+                );
+                """))
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", owner_url)
+    with patch.dict(os.environ, {"VELLA_DATABASE_URL": owner_url}):
+        command.stamp(config, "20260905_0060")
+        command.upgrade(config, "20260908_0061")
+        command.downgrade(config, "20260905_0060")
+        command.upgrade(config, "20260908_0061")
+    quoted_role = owner_engine.dialect.identifier_preparer.quote(RUNTIME_ROLE)
+    with owner_engine.begin() as connection:
+        if create_runtime_role:
+            connection.execute(
+                text(
+                    f"CREATE ROLE {quoted_role} LOGIN NOSUPERUSER NOCREATEDB "
+                    "NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+                )
+            )
+        connection.execute(text(f"GRANT USAGE ON SCHEMA public TO {quoted_role}"))
+        connection.execute(
+            text(
+                f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {quoted_role}"
+            )
+        )
+        connection.execute(
+            text(f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {quoted_role}")
+        )
+        connection.execute(
+            text("INSERT INTO lk_organizations VALUES (1, 'one', 'One'), (2, 'two', 'Two')")
+        )
+        connection.execute(text("INSERT INTO lk_users VALUES ('actor-1', 1), ('actor-2', 2)"))
+        connection.execute(text("""
+                INSERT INTO marketplace_accounts
+                    (marketplace_account_id, organization_id, marketplace, external_account_id, status)
+                VALUES (101, 1, 'avito', 'avito-one-a', 'connected'),
+                       (102, 1, 'avito', 'avito-one-b', 'connected'),
+                       (103, 1, 'wb', 'wb-one', 'connected'),
+                       (104, 1, 'avito', 'avito-disabled', 'disconnected'),
+                       (202, 2, 'avito', 'avito-two', 'connected')
+                """))
+
+
+def _native_postgres(tmp_path_factory: pytest.TempPathFactory):
     required = ("initdb", "pg_ctl", "createdb")
     binaries = {name: shutil.which(name) for name in required}
     if any(path is None for path in binaries.values()):
@@ -111,97 +197,24 @@ def disposable_postgres(tmp_path_factory: pytest.TempPathFactory):
             text=True,
         )
         owner_url = f"postgresql+psycopg://{owner}@127.0.0.1:{port}/{database}"
-        owner_engine = create_engine(owner_url)
-        with owner_engine.begin() as connection:
-            connection.execute(text("""
-                    CREATE TABLE lk_organizations (
-                        organization_id INTEGER PRIMARY KEY,
-                        slug VARCHAR(64) NOT NULL UNIQUE,
-                        name VARCHAR(255) NOT NULL
-                    );
-                    CREATE TABLE lk_users (
-                        user_id VARCHAR(128) PRIMARY KEY,
-                        organization_id INTEGER NOT NULL REFERENCES lk_organizations(organization_id)
-                    );
-                    CREATE TABLE lk_audit_events (
-                        event_id SERIAL PRIMARY KEY,
-                        organization_id INTEGER NOT NULL REFERENCES lk_organizations(organization_id),
-                        actor_user_id VARCHAR(128) REFERENCES lk_users(user_id),
-                        action VARCHAR(128) NOT NULL,
-                        object_type VARCHAR(64) NOT NULL,
-                        object_id VARCHAR(128) NOT NULL,
-                        details JSON,
-                        before_state JSON,
-                        after_state JSON,
-                        reason TEXT,
-                        ip_address VARCHAR(64),
-                        user_agent VARCHAR(255),
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    );
-                    CREATE TABLE marketplace_accounts (
-                        marketplace_account_id INTEGER PRIMARY KEY,
-                        organization_id INTEGER NOT NULL REFERENCES lk_organizations(organization_id),
-                        marketplace VARCHAR(16) NOT NULL,
-                        external_account_id VARCHAR(128) NOT NULL,
-                        status VARCHAR(32) NOT NULL,
-                        credential_ref VARCHAR(255),
-                        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        CONSTRAINT uq_marketplace_accounts_org_id UNIQUE (organization_id, marketplace_account_id),
-                        CONSTRAINT uq_marketplace_accounts_org_marketplace_external
-                            UNIQUE (organization_id, marketplace, external_account_id)
-                    );
-                    """))
-        config = Config(str(ROOT / "alembic.ini"))
-        config.set_main_option("sqlalchemy.url", owner_url)
-        with patch.dict(os.environ, {"VELLA_DATABASE_URL": owner_url}):
-            command.stamp(config, "20260905_0060")
-            command.upgrade(config, "20260908_0061")
-            command.downgrade(config, "20260905_0060")
-            command.upgrade(config, "20260908_0061")
-        with owner_engine.begin() as connection:
-            connection.execute(
-                text(
-                    f"CREATE ROLE {RUNTIME_ROLE} LOGIN NOSUPERUSER NOCREATEDB "
-                    "NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
-                )
+        owner_engine = create_engine(owner_url, hide_parameters=True)
+        try:
+            _bootstrap_postgres(owner_engine, owner_url, create_runtime_role=True)
+            runtime_url = owner_engine.url.set(username=RUNTIME_ROLE).render_as_string(
+                hide_password=False
             )
-            connection.execute(text(f"GRANT USAGE ON SCHEMA public TO {RUNTIME_ROLE}"))
-            connection.execute(
-                text(
-                    f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {RUNTIME_ROLE}"
-                )
-            )
-            connection.execute(
-                text(
-                    f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {RUNTIME_ROLE}"
-                )
-            )
-            connection.execute(
-                text(
-                    "INSERT INTO lk_organizations VALUES (1, 'one', 'One'), (2, 'two', 'Two')"
-                )
-            )
-            connection.execute(
-                text("INSERT INTO lk_users VALUES ('actor-1', 1), ('actor-2', 2)")
-            )
-            connection.execute(text("""
-                    INSERT INTO marketplace_accounts
-                        (marketplace_account_id, organization_id, marketplace, external_account_id, status)
-                    VALUES (101, 1, 'avito', 'avito-one-a', 'connected'),
-                           (102, 1, 'avito', 'avito-one-b', 'connected'),
-                           (103, 1, 'wb', 'wb-one', 'connected'),
-                           (104, 1, 'avito', 'avito-disabled', 'disconnected'),
-                           (202, 2, 'avito', 'avito-two', 'connected')
-                    """))
-        runtime_url = f"postgresql+psycopg://{RUNTIME_ROLE}@127.0.0.1:{port}/{database}"
-        yield {
-            "owner": owner_url,
-            "runtime": runtime_url,
-            "root": str(root),
-            "port": str(port),
-        }
-        owner_engine.dispose()
+            yield {
+                "mode": "native",
+                "owner": owner_url,
+                "runtime": runtime_url,
+                "database": database,
+                "runtime_role": RUNTIME_ROLE,
+                "host": "127.0.0.1",
+                "root": str(root),
+                "port": str(port),
+            }
+        finally:
+            owner_engine.dispose()
     finally:
         # A failed readiness wait can still leave this exact cluster running.
         # Stop it even after interruption; a never-started cluster returns nonzero.
@@ -216,6 +229,38 @@ def disposable_postgres(tmp_path_factory: pytest.TempPathFactory):
             if startup_completed:
                 raise
             # Preserve the original startup error if cleanup cannot be invoked.
+
+
+def _local_postgres(cluster):
+    with candidate.disposable_database(cluster, (RUNTIME_ROLE,)) as database:
+        owner_engine = create_engine(database.url, hide_parameters=True)
+        try:
+            _bootstrap_postgres(
+                owner_engine, database.url, create_runtime_role=False
+            )
+            runtime_url = owner_engine.url.set(username=RUNTIME_ROLE)
+            yield {
+                "mode": "local",
+                "owner": database.url,
+                "runtime": runtime_url.render_as_string(hide_password=False),
+                "database": database.name,
+                "runtime_role": RUNTIME_ROLE,
+                "host": database.host,
+                "port": str(database.port),
+                "root": None,
+            }
+        finally:
+            owner_engine.dispose()
+
+
+@pytest.fixture(scope="module")
+def disposable_postgres(
+    tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest
+):
+    if os.environ.get("ORDERS_TEST_USE_LOCAL_CLUSTER") == "1":
+        yield from _local_postgres(request.getfixturevalue("cluster"))
+    else:
+        yield from _native_postgres(tmp_path_factory)
 
 
 @pytest.mark.parametrize(
@@ -254,9 +299,7 @@ def test_disposable_postgres_cleans_up_failed_start_without_progress(
     monkeypatch.setattr(shutil, "which", lambda name: f"/mock/{name}")
     monkeypatch.setattr(f"{__name__}._free_loopback_port", lambda: 55432)
     monkeypatch.setattr(subprocess, "run", run)
-    fixture_body = disposable_postgres.__wrapped__(
-        SimpleNamespace(mktemp=lambda _prefix: root)
-    )
+    fixture_body = _native_postgres(SimpleNamespace(mktemp=lambda _prefix: root))
     with pytest.raises(type(startup_error)) as caught:
         next(fixture_body)
     assert caught.value is startup_error
@@ -348,12 +391,42 @@ def _assert_invalid(raw_bearer: object) -> None:
         assert raw_bearer not in repr(caught.value)
 
 
-def test_fixture_is_fresh_loopback_postgres_pinned_to_0061(disposable_postgres) -> None:
-    assert disposable_postgres["root"].startswith(
-        ("/private/var/", "/private/tmp/", "/tmp/")
-    )
-    assert disposable_postgres["runtime"].split("@")[1].startswith("127.0.0.1:")
-    assert disposable_postgres["port"] != "5432"
+def test_fixture_is_fresh_owned_postgres_pinned_to_0061(disposable_postgres) -> None:
+    runtime_url = make_url(disposable_postgres["runtime"])
+    assert runtime_url.database == disposable_postgres["database"]
+    assert runtime_url.username == disposable_postgres["runtime_role"]
+    if disposable_postgres["mode"] == "local":
+        assert disposable_postgres["root"] is None
+        assert runtime_url.query["host"] in {"/tmp", "/private/tmp"}
+        assert disposable_postgres["host"] == runtime_url.query["host"]
+        assert re.fullmatch(
+            r"orders_test_[0-9a-f]{32}", disposable_postgres["database"]
+        )
+        assert re.fullmatch(
+            r"satorna_ingestion_runtime_[0-9a-f]{32}",
+            disposable_postgres["runtime_role"],
+        )
+        assert len(disposable_postgres["runtime_role"]) <= 63
+        runtime_engine = create_engine(disposable_postgres["runtime"])
+        try:
+            with runtime_engine.connect() as connection:
+                assert connection.execute(
+                    text(
+                        "SELECT inet_server_addr() IS NULL, current_database(), current_user"
+                    )
+                ).one() == (
+                    True,
+                    disposable_postgres["database"],
+                    disposable_postgres["runtime_role"],
+                )
+        finally:
+            runtime_engine.dispose()
+    else:
+        assert disposable_postgres["root"].startswith(
+            ("/private/var/", "/private/tmp/", "/tmp/")
+        )
+        assert runtime_url.host == "127.0.0.1"
+        assert disposable_postgres["port"] != "5432"
     engine = create_engine(disposable_postgres["owner"])
     try:
         with engine.connect() as connection:
@@ -363,10 +436,23 @@ def test_fixture_is_fresh_loopback_postgres_pinned_to_0061(disposable_postgres) 
             )
             assert connection.execute(
                 text(
-                    "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
-                    "WHERE relname = 'marketplace_account_ingestion_tokens'"
+                    "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class "
+                    "WHERE relname IN "
+                    "('marketplace_account_credentials', "
+                    "'marketplace_account_ingestion_tokens') ORDER BY relname"
                 )
-            ).one() == (True, True)
+            ).all() == [
+                ("marketplace_account_credentials", True, True),
+                ("marketplace_account_ingestion_tokens", True, True),
+            ]
+            attributes = connection.execute(
+                text(
+                    "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, "
+                    "rolbypassrls FROM pg_roles WHERE rolname = :role"
+                ),
+                {"role": disposable_postgres["runtime_role"]},
+            ).one()
+            assert attributes == (False, False, False, False, False)
     finally:
         engine.dispose()
 

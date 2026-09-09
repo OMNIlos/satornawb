@@ -2,6 +2,7 @@
 # Separate contexts expose commit-time constraints.
 # ruff: noqa: SIM117
 
+import ast
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 from threading import Barrier
@@ -18,14 +19,57 @@ from sqlalchemy.exc import DBAPIError
 
 from app.reviews.canonical_contract import normalize_avito_review
 from tests import test_orders_schema_candidate as candidate
-from tests.test_orders_schema_integration import assert_narrow_privileges, runtime_script
+from tests.test_orders_schema_integration import (
+    assert_narrow_privileges,
+    runtime_script,
+)
 
 cluster = candidate.cluster
 TABLES = ('review_sync_runs_v2', 'review_facts', 'review_observations', 'review_sync_run_items')
 RUN_COLUMNS = ('sync_run_id', 'organization_id', 'marketplace_account_id', 'marketplace',
                'source_run_id', 'request_checksum', 'status', 'completeness', 'started_at',
                'completed_at', 'observed_count', 'manifest_checksum', 'coverage', 'error_code')
-OWNER = dict(organization_id=91001, marketplace_account_id=91101, marketplace='avito')
+OWNER = {
+    "organization_id": 91001,
+    "marketplace_account_id": 91101,
+    "marketplace": "avito",
+}
+
+
+def test_historical_roundtrip_does_not_invoke_latest_runtime_script():
+    tree = ast.parse((candidate.ROOT / "tests/test_review_facts_schema.py").read_text())
+    historical = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "test_expand_acl_intersection_and_empty_roundtrip_preserve_old_rows"
+    )
+    calls = {
+        node.func.id
+        for node in ast.walk(historical)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "runtime_script" not in calls
+
+    latest_fixture = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "db"
+    )
+    latest_calls = {
+        node.func.id
+        for node in ast.walk(latest_fixture)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    migration_targets = [
+        node.args[2].value
+        for node in ast.walk(latest_fixture)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "migrate"
+    ]
+    assert migration_targets == ["head"]
+    assert "runtime_script" in latest_calls
 
 
 def insert(c, table, values, returning=None, override=False):
@@ -73,7 +117,7 @@ def item(c, rid, oid, run_id, **changes):
 
 
 def advance(c, rid, oid, expected_version=0, **changes):
-    values = dict(current_observation_id=oid, version=expected_version + 1)
+    values = {"current_observation_id": oid, "version": expected_version + 1}
     values.update(changes)
     return c.execute(text('UPDATE review_facts SET ' + ','.join(f'{key}=:{key}' for key in values)
                           + ' WHERE review_id=:rid AND version=:expected'),
@@ -232,7 +276,14 @@ def test_actual_script_requires_every_force_rls_flag(db, table):
             c.exec_driver_sql(f'ALTER TABLE {table} FORCE ROW LEVEL SECURITY')
 
 
-@pytest.mark.parametrize('change', [dict(marketplace_account_id=91102), dict(marketplace='wb'), dict(organization_id=91002)])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"marketplace_account_id": 91102},
+        {"marketplace": "wb"},
+        {"organization_id": 91002},
+    ],
+)
 def test_scoped_internal_references_reject_substitution(db, change):
     with db[1].begin() as c:
         candidate.scope(c)
@@ -328,7 +379,7 @@ def test_run_and_evidence_guards_even_with_broad_privileges(db):
     owner, runtime = db
     with runtime.begin() as c:
         candidate.scope(c)
-        rid, oid, run_id = complete_fact(c)
+        _, _, run_id = complete_fact(c)
     for column, value in [('sync_run_id', str(uuid4())), ('source_run_id','changed'), ('request_checksum','b'*64),
                            ('started_at','2026-09-08T00:00:00Z'), ('marketplace_account_id',91102)]:
         with pytest.raises(DBAPIError), runtime.begin() as c:
@@ -392,10 +443,6 @@ def test_expand_acl_intersection_and_empty_roundtrip_preserve_old_rows(cluster):
                         assert not c.execute(text('SELECT has_table_privilege(:r,:t,:p)'), {'r':reader,'t':table,'p':privilege}).scalar_one()
                 assert not c.execute(text("SELECT has_any_column_privilege(:r,'review_sync_runs_v2','INSERT')"), {'r':reader}).scalar_one()
             ordering_denials(runtime)
-            assert runtime_script(owner,broad).returncode == 0
-            with owner.connect() as c:
-                assert_acl(c,broad)
-            ordering_denials(runtime)
             with runtime.begin() as c:
                 candidate.scope(c)
                 complete_fact(c)
@@ -431,7 +478,11 @@ def test_exact_external_identity_is_independent_per_account_provider_and_org(db)
     ids = []
     for org, account, provider in [(91001,91101,'avito'),(91001,91102,'avito'),
                                    (91001,91103,'wb'),(91002,91201,'wb')]:
-        scope = dict(organization_id=org,marketplace_account_id=account,marketplace=provider)
+        scope = {
+            "organization_id": org,
+            "marketplace_account_id": account,
+            "marketplace": provider,
+        }
         with db[1].begin() as c:
             candidate.scope(c,org)
             run_id, _ = run(c, **scope)
