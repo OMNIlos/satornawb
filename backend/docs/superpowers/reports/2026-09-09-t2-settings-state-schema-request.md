@@ -126,6 +126,18 @@ event=cleared, before_revision NULL. Он фиксирует явный выбо
 предыдущее назначение. Повтор той же command не создаёт новую revision.
 `typedStrategyId` derived registry mapping, не вторая mutable identity.
 
+Independent pure encoding implementation: `app/modules/wb_repricing_assignments.py`
+`AssignmentChange`; schema tag `wb-repricing-assignment/v1`, commandKind
+`replace_assignment`. Full sorted compact ASCII JSON includes command UUID,
+org/account/SKU, membership, expectedVersion as exact decimal string, strategyId
+(explicit JSON null for clear), intervalHours, source and assignedAt normalized to
+UTC ISO8601 microseconds with `Z`. Checksum is lowercase SHA256 of those bytes.
+No clock/global/state access. IDs are strict internal INT4; strategy enums and
+interval/null combinations follow this section, not guessed legacy defaults.
+This fixes only assignment command bytes, not encoding for other Stage4A domains.
+It does not prove historical replay lookup, auth, durable revision/head CAS or import
+compatibility for unsupported configurations; those still require the real repository.
+
 Cross_marketplace и bundles остаются disabled. schedule/group/plan_fact_period/daily/
 optimal/metric/stockout/turnover требуют собственного typed config extension до
 переноса соответствующих users; их нельзя объявлять migrated по существованию 4A.

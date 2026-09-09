@@ -56,7 +56,7 @@ repository Protocol/identity bridge and dispatch domain; no actual writer connec
 | 1 writer inventory / identity / contract | 769f3cf + ccaed341 +45f94a; composite scope, exclusive marker, safe UUID/text, unchanged valid hashes; accepted T1 approvals0066 dbf8d31 merged by1464fcd | No UUID-only repository; current writers still disconnected |
 | 2 durable approvals | Actual scoped PostgreSQL transaction participant plus committed user-session create/claim/reject/block; real runtime-role tests, two-session CAS, replay, rollback, restart, crossorg/account, immutable terminals; owner-only synthetic legacy import preserving full snapshot | Full repository Protocol not complete: worker-authorized outcome service still pending; no current-flow cutover |
 | 3 jobs/crash | Pure matrix plus durable reserve/dispatch marker/outcome participant, observed PostgreSQL dispatch lock race and one synthetic effect | Accepted worker/job authority PENDING per T1; no worker impersonation, scheduler/provider wiring or reconciliation activation. No external exactly-once claim |
-| 4 globals/settings | 80 legacy characterization cases; exact normalized4A schema request907ec7b | T1 rows/heads/audit, concrete repository/context wiring and one-writer fence; additional strategies/context mapping must be typed before cutover |
+| 4 globals/settings | 80 legacy characterization cases; exact normalized4A schema request907ec7b; pure four-strategy AssignmentChange canonical command bytes/checksum | T1 rows/heads/audit, concrete repository/context wiring and one-writer fence; additional strategies/context mapping must be typed before cutover |
 | 5 prices/stocks/daily | Price and warehouse stock adapters,request hashes,immutable complete manifest assembly,missing/null/zero,all sizes,receipt-date gate; targeted legacy source fixes | T1 separate source DDL, DB publication/read services, current-head CAS and daily revision persistence; Catalog mapping/source freshness policy, FBS skus/chrtIds contract unresolved |
 | 6 KTR/source revisions | SourceDiff classifications + synthetic closed-day revision evidence tests (94b540f/ee7bd6e) | Verified local/all orders grain, reference effective ranges/gaps/overlap evidence; unknown remains null, scheduler off |
 | 7 final profit | Decision package94b540f with numerical alternatives | Explicit financial owner approval and complete source evidence. No invented OPEX allocation/backdate/rrdId/checksum change; netProfitKopecks/profitClass/abcCode remain null |
@@ -165,3 +165,25 @@ Importer has18 cases. Scoped Ruff/compileall exit0. Independent critic found no
 importer blockers; worker receipt limitation clarified in the existing amendment.
 The historical note above about missing backfill proof is superseded only for these
 synthetic cases, not a production migration/backfill or full backend baseline.
+
+### Independent Stage4A assignment command codec
+
+`app/modules/wb_repricing_assignments.py` +
+`tests/test_wb_repricing_assignment_command.py` fix the full assignment command
+encoding documented in the existing settings-state schema request. Strict internal
+INT4 scope/member, UUID4 command, exact decimal version, four supported strategies,
+explicit clear/null, interval compatibility and immutable aware UTC instant. Unknown
+strategy/config is not defaulted. No registry/global reads, formula changes, clock,
+repository or current-state mutation. A checksum is neither auth nor proof of DB CAS.
+
+RED missing module exit2 →56 pure cases pass. Fresh combined codec+unchanged old
+calculation characterization: **136 passed in1.05s, exit0** under offline plugin.
+Scoped Ruff/compile/diff exit0; independent read-only critic found no codec issues.
+This fixes assignment bytes only, not settings/overrides/liquidation serializers.
+
+T1 additionally requested exact receipt schema evidence; the separate
+`2026-09-09-t2-provider-upload-receipt-schema-request.md` traces available WB22/WB23
+fields, lossy `_as_int`, mixed HTTP/task status, incomplete details pagination and
+receipt-vs-applied semantics. No provider jobs run. Receipt DDL, strict initial-ID
+adapter projection and worker/job reference remain pending; audit vocabulary and
+finite separate-clock semantics are explicit, no guessed retention/permission/TTL.
