@@ -4,8 +4,47 @@ LATEST SCOPE: user has DEFERRED Production assembly/printing. The missing-source
 bundle and Production dependencies below are a resumption record, not an active
 request or blocker for remaining platform acceptance. No more renderer/calendar
 recovery, P1-P4 feature implementation or new print tests until resumed. Preserve
-existing code/schema/history. The official Avito Orders investigation and proposed
-Orders-only source policy remain in active scope, subject to root decision.
+existing code/schema/history. The Orders-only bounded source policy was approved
+by root and implemented in `f4c6a286030f15ba063980d10dc517a7ddad5da6`.
+The original investigation/proposal below is retained as decision history, not
+a current request to approve the same policy again.
+
+## Current Active Orders Inputs
+
+The implemented single-known-order refresh captures bindings/versions before
+fetch, preserves valid rejected observations, promotes only status/time changes
+under the explicit application policy, and keeps immutable reads and partial
+coverage. It does not implement full-account sync or prove provider chronology.
+
+Remaining inputs are distinct:
+
+- A trusted credential-bound Orders client/job principal resolver and its caller
+  contract. Supplying an arbitrary HTTP client is not proof of credential scope.
+- Full-account traversal publication semantics, stronger event ordering or an
+  approved replacement rule for changes beyond status. Partial pages never prove
+  absence/cancellation; no status ranking is inferred.
+- Stable line identity for repeated listings and a rule for enrolling old
+  observations without the new non-status fingerprint. Existing rows are not
+  silently backfilled with invented evidence.
+- Exact UI filter semantics and the shared router/source-runner wiring. Existing
+  `query_checksum` selects a prepublished immutable view, not a filter engine.
+- WB fulfillment source contract. Statistics remains observation/cancellation
+  evidence, never readiness, deadlines or sticker authority.
+
+Production source recovery below is deferred and is not part of this active list.
+
+T4 confirmed no agreed canonical filter-engine contract exists. Its current
+`frontend/src/features/orders/canonicalOrders.ts:90-102` emits only account scope,
+opaque query checksum, limit and snapshot/cursor. Legacy Avito date/status/search
+controls and decorative ready/problem chips are not a WB+Avito canonical rule for
+time basis, status/readiness, or order-versus-item filtering. No filter engine is
+invented from those controls. T1 likewise confirmed the trusted job-bound Orders
+principal/client resolver is still a proposal, with implementation continuing in
+its ownership. Shared route registration exists separately in root milestone
+`587967a40c0d779e5271a709701282ffb97ae8a2`; consuming it requires the other domain
+prerequisites, not an isolated import or a claim of source activation.
+
+## Historical Investigation
 
 Owner input request, not implementation or production authorization.
 Checked against T3 `35ea34e77d80920b0d8779a6b888e6f1d8e7bad0` on 2026-09-09.
@@ -146,7 +185,7 @@ cannot supply a stronger guarantee elsewhere. `hasMore=false` terminates the
 returned traversal; it does not promise an atomic account snapshot while orders
 change between page requests. No new mapping or operational readiness is inferred.
 
-### Bounded Policy Option for Root Decision (NOT approved or implemented)
+### Original Bounded Policy Proposal (subsequently approved and implemented)
 
 Name: single-known-order status observation replacement, not provider event order.
 This is a proposed application freshness rule, explicitly weaker than guaranteed

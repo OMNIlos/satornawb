@@ -11,7 +11,12 @@ from app.modules.orders import OrderContractValidationError
 from app.orders.avito_status_refresh import POLICY_VERSION, production_work_exists
 from app.orders.bindings import bound_high_water_mark, validate_run_binding
 from app.orders.catalog_resolution import resolve_order_catalog
-from app.orders.contracts import AccountCoverage, CatalogResolution, OrderReadRow
+from app.orders.contracts import (
+    AccountCoverage,
+    CatalogResolution,
+    DeadlineEvidence,
+    OrderReadRow,
+)
 from app.orders.ingestion import _integer
 from app.orders.serialization import (
     deserialize_observation,
@@ -41,7 +46,8 @@ def freeze_orders_view(
     Mixed source/adapter projections cannot fit the existing one-source-per-account
     wire contract and fail closed, rather than silently dropping older orders.
     Catalog resolution is the stored decision, with explicit stale-evidence blockers.
-    This does not issue Production eligibility or populate invented deadlines.
+    Stored order-level deadlines are bound to the exact current observation.
+    This does not calculate deadlines or issue Production eligibility.
     """
     if not isinstance(session, Session) or session.in_transaction():
         raise PublicationGuardError("publication_context_invalid")
@@ -171,6 +177,28 @@ def freeze_orders_view(
                         order=order["order_id"],
                         observation=order["observation_id"],
                     )
+                    deadlines = tuple(
+                        DeadlineEvidence(
+                            kind=deadline["deadline_kind"],
+                            source_at=deadline["source_deadline_at"],
+                            computed_at=deadline["computed_deadline_at"],
+                            rule_id=deadline["rule_id"],
+                            rule_version=deadline["rule_version"],
+                            timezone=deadline["timezone"],
+                            evidence_source=deadline["evidence_source"],
+                            observed_at=deadline["observed_at"],
+                        )
+                        for deadline in session.execute(
+                            text("""SELECT deadline_kind,source_deadline_at,
+                            computed_deadline_at,rule_id,rule_version,timezone,
+                            evidence_source,observed_at FROM order_deadlines
+                            WHERE organization_id=:org AND marketplace_account_id=:account
+                            AND order_id=:order AND observation_id=:observation
+                            AND order_item_id IS NULL
+                            ORDER BY deadline_kind COLLATE "C",deadline_id"""),
+                            scoped,
+                        ).mappings()
+                    )
                     divergent = session.execute(
                         text("""SELECT EXISTS(SELECT 1 FROM order_observations
                         WHERE organization_id=:org AND marketplace_account_id=:account AND order_id=:order
@@ -287,6 +315,7 @@ def freeze_orders_view(
                                 item["version"],
                                 resolution,
                                 tuple(blockers),
+                                deadlines,
                             )
                         )
             encoded = json.dumps(

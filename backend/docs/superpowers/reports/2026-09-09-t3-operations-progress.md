@@ -25,6 +25,8 @@ Production and excluded KIZ are not blockers for integration of the active scope
 | 1 Discovery, synthetic identity/parity inventory | `4323821`, `f4d6d55`; implemented | Stage1 and UI/DB parity reports; current contract/returns/XLSX/Stage1 rerun 90 PASS, exit0 | Production source gaps recorded for DEFERRED resumption, no active recovery request / root + T3 |
 | 2 Initial ingestion, replay, partial manifests, immutable owner binding | `9d1f88b`, `8010112`, `33c95c1`, `4c8b4c6`; Orders0067 consumer-accepted | Actual0067 seven-file198 PASS; guarded browser USER-session8 PASS; append-only facts and initial publication | Changed facts still reconcile instead of advancing current projection; source ordering/completeness contract and fake-source revision-to-read acceptance / T3 + source owner |
 | 2 Cancellation/return lifecycle | Pure contract and persisted cancellation/return evidence in `9d1f88b`; implemented, not full lifecycle parity | Status mapping and publication tests | Orders partial-return/current progression and reconciliation / T3; work/sheet cancellation handling DEFERRED with Production; WB Statistics never proves fulfillment |
+| 2 Known-order Avito status progression | `f4c6a286030f15ba063980d10dc517a7ddad5da6`; implemented, locally accepted, not activated | 20 runtime-role cases plus48 adjacent and64 pure PASS; durable rejected evidence and two-session CAS | Trusted source-client/job wiring, account traversal and changes beyond status remain separate; no provider chronology claim |
+| 3 Stored order-level deadline read | Follow-up implemented in the commit containing this checkpoint | Final combined69 runtime-role tests PASS;101 pure PASS. Exact org/account/order/current-observation predicates, stable ordering and immutable historical snapshot | No deadline calculation, provider schedule mapping or item-specific binding inferred; source writer and source semantics remain explicit dependencies |
 | 3 Catalog resolution, snapshot pagination, cache-only read | `866d1a1`, `da7e017`, `33c95c1`; local consumer-accepted for stated scope | Scoped Catalog/projection/read gates; v3 provenance and decimal-string BIGINT wire | Exact filters and shared registration / T3 + T1; T4 UI consumer integration; readiness remains unproven, no production activation |
 | 4 Physical P1 work items, receipt/history, account RLS | DEFERRED; T1 `d57c54418762583c41829dabd80969775b4fdb56` + mandatory `bb7a958d99f1458d7e10877406eaf5dfe03ae6bc` released, NOT T3 consumer-accepted | T1 exact READY: feature173/covering447/review; prerequisite0068 `4d95b24b549f0b1f773095ec583a85f18172fdbc`; head0069 | Preserve additive schema; no new service/CAS feature work until resumed / root + T3 + T1 |
 | 4 Permission/actor/replay policy and P1 service | DEFERRED; approved policy `842bbed`, codecs `bd1b9d8`, `35ea34e`; preparation | Committed consumer plan; strict result/command114 pure PASS; T1 main shared-permission265 PASS reported | Preserve implemented policy/code; service, source proof, CAS/audit/two-session acceptance remain unfinished, not active blockers |
@@ -58,6 +60,34 @@ shared route registration remain separate missing inputs or integration work.
 Production portions of that package and the first-consumer plan are retained for
 resumption only. The Avito source-semantics investigation concerns ACTIVE Orders;
 it does not authorize new work items, sheet generation or print actions.
+
+## Final Deadline Read Package
+
+Implemented first, then verified under the updated user workflow. Existing
+`order_deadlines` order-level rows for the exact current observation now reach
+the frozen read view using the existing `DeadlineEvidence` wire shape. Source and
+computed instants, original rule/version, timezone and evidence source are retained;
+no new schedule calculation, provider mapping, readiness or schema was introduced.
+Rejected-observation deadlines are not attached to the current projection. Existing
+snapshots do not change when a later deadline is recorded. The source writer and
+item-specific observation binding are not fabricated by this read-only consumer.
+
+Final six-file runtime-role gate: **69 PASS, 2 existing deprecation warnings,
+21.32s, exit 0**. All six exact owned databases/runtime roles were verified absent
+after cleanup. The preceding run was **68 PASS / 1 FAIL, 18.58s, exit 1**: an older
+cancellation-history test asserted over every order in its module-shared database,
+including a new independent reconciled order. The assertion now selects its own
+identity and requires both rows and unchanged statuses; no runtime/permission
+behavior was weakened. Pure read/HTTP/source/identity contracts: **101 PASS,
+0.51s, exit 0**. Ruff, compileall and diff checks passed. Final local critical pass
+checked exact scope predicates, unchanged wire, observation lineage and immutable
+snapshot behavior; consolidated root acceptance remains separate.
+
+The remaining active inputs are collected in the source-recovery package's current
+section. T4 explicitly confirmed no agreed canonical filter engine contract; T1's
+trusted Orders job resolver is in implementation, not yet an executable dependency.
+The finite selectors in source amendment `2f0422076ac0b365d2e97432b9ce57d6aa6b350f`
+describe page acquisition only, not a complete synchronization claim.
 
 ## Legacy Cache Baseline Probe (current follow-up)
 
