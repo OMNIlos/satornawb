@@ -1598,7 +1598,10 @@ def test_stock_products_request_body_uses_wb_contract_for_all_stock():
     }
 
 
-def test_bff_rnp_endpoint_returns_full_backend_funnel_shape():
+def test_bff_rnp_endpoint_returns_full_backend_funnel_shape(monkeypatch):
+    from tests.rnp_cache_fixture import install_rnp_cache
+
+    install_rnp_cache(monkeypatch, date(2026, 6, 1), date(2026, 6, 7), bff=True)
     api = client()
     response = api.get(
         "/api/wb/reports/rnp?preset=custom&from=2026-06-01&to=2026-06-07&groupBy=sku",
@@ -1624,7 +1627,7 @@ def test_bff_rnp_endpoint_returns_full_backend_funnel_shape():
     assert "reasons" in row
     assert payload["diagnostics"]["summary"]["funnelRows"] >= 0
     assert payload["diagnostics"]["sources"][0]["endpoint"] == "POST /api/analytics/v3/sales-funnel/products"
-    assert any(source["endpoint"] == "GET /adv/v3/fullstats" for source in payload["diagnostics"]["sources"])
+    assert any(source["endpoint"] == "repricer ads period cache" and source["sourceId"] == "wb-ads-cache" for source in payload["diagnostics"]["sources"])
 
 
 def test_latest_report_payload_cache_respects_requested_range(monkeypatch):

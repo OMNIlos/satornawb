@@ -750,3 +750,15 @@ Command: isolated env-i fake/in-memory SQLite, sandbox-exec/offline plugin,
 `pytest -q -p tests.repricer_offline_plugin tests/test_rnp_missing_ads_contract.py
 --tb=short`. Focused compileall, test Ruff and diff-check exit0. Three historical
 positive HTTP cases remain open, not counted as repaired by this regression.
+
+Subsequent separately admitted same-three GET gate with explicit synthetic daily
+and period baskets/ads observations and existing PNL fixture: **3PASS1.86s**, exit0,
+two inherited deprecation warnings. Actual cache parsers, readiness and HTTP login
+remain exercised; only BFF rule decoration is isolated for its shape-only contract.
+Original numeric/permission assertions retained. Ads lineage assertion now names
+actual `wb-ads-cache` / `repricer ads period cache`, not a live fullstats call.
+New fixture compile/Ruff and diff-check0; read-only critic found no defects.
+These three historical nodes are repaired, not the whole report suite. Synthetic
+fixtures are not tenant isolation, financial policy or durable persistence proof.
+Runtime blocker fix rollback is its isolated commit; this subsequent test-only
+fixture slice requires no schema/data/runtime rollback. No shared wiring changed.

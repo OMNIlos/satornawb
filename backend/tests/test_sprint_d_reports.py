@@ -133,7 +133,10 @@ def test_ads_bff_refreshes_and_reuses_cached_report_payload(monkeypatch):
     assert payload["rows"]
 
 
-def test_rnp_has_confirmed_drr_formula_and_finance_viewer_can_see_roi():
+def test_rnp_has_confirmed_drr_formula_and_finance_viewer_can_see_roi(monkeypatch):
+    from tests.rnp_cache_fixture import install_rnp_cache
+
+    install_rnp_cache(monkeypatch, date(2026, 5, 1), date(2026, 5, 28))
     api = client()
     response = api.get("/api/v1/wb-reports/rnp", headers=auth_headers(api, "finance_viewer"))
     assert response.status_code == 200
@@ -168,7 +171,8 @@ def test_plan_fact_and_export_are_available_for_finance_viewer():
     assert export_payload["fileName"] is not None
 
 
-def test_viewer_sees_all_financial_sections_except_monthly_company_costs():
+def test_viewer_sees_all_financial_sections_except_monthly_company_costs(monkeypatch):
+    _isolate_pnl_source_cache(monkeypatch)
     api = client()
     viewer_headers = auth_headers(api, "viewer")
 
