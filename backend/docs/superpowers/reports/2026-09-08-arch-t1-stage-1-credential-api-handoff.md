@@ -78,6 +78,18 @@ coordinator to unblock parallel source implementation (not Stage1 verification):
   follow-up preserves public post-query expiry-clock ordering. Private helpers
   are transaction participants, not authentication; paired fetch/executor/rekey
   and existing public signatures were outside this delegation.
+- T4 now temporarily owns ONLY the existing canonical credential-management
+  composition under committed plan `2026-09-09-credential-management-commit-fence.md`,
+  with exact prerequisite `b21f2166886ade7637b1b9594b5b28c1e38d3e80`: new
+  `backend/app/platform/integrations/credential_management.py`, fixed management
+  root support only in `publication_guard.py`, only the three canonical exact-account
+  credential routes/helpers/imports in `backend/app/routers/cabinet.py`, and new
+  `2026-09-09-t1-credential-management-handoff.md`. T1 will not edit these four
+  paths until the bounded source package returns. Store, schema, grants, config,
+  legacy routes and domain consumers are excluded. T1's daily stock/evidence
+  schema package touches only a new migration, runtime grants and its own handoff.
+  This temporary assignment implements the explicit independent-work redistribution
+  request; it does not transfer standing shared-auth ownership or acceptance.
 
 All these source packages are IMPLEMENTED / UNVERIFIED under the user's source-first
 sequence. No new tests/review/compile/import/PG gates, operational role/flag/key or

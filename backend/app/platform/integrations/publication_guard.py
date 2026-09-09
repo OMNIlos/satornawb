@@ -497,6 +497,21 @@ def _install_listeners(session):
             event.listen(session, name, listener)
 
 
+def _install_credential_management_guard(session, guard):
+    """Fixed admin root only; never relax the public connected fetch contract."""
+    from app.platform.integrations.credential_management import _CredentialManagementGuard
+
+    _require_clean_publication_root(session)
+    if (type(guard) is not _CredentialManagementGuard
+            or guard._session_ref() is not session
+            or guard._transaction is not session.get_transaction()
+            or guard._physical_root is not _physical_connection(session).get_transaction()):
+        raise PublicationGuardError("publication_context_invalid")
+    _install_listeners(session)
+    setattr(session, _STATE, guard)
+    guard.revalidate_before_write()
+
+
 def _register_review_fence(guard, fence):
     from app.platform.integrations.review_job_authority import ReviewPublicationHandle
 
