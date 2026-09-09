@@ -71,6 +71,16 @@ git diff --check
 
 ## Task 2: Enforce same-transaction publication authorization through commit
 
+Finalizer acceptance amendment after independent I1: guard must verify it is the
+last effective before_commit callback at entry (class and instance order); reject
+later callbacks, including claimed read-only observers. Flush once and fail closed
+if new/dirty/deleted work remains, then validate and again reject pending ORM work.
+RealPG RED→GREEN must cover after_flush_postexec leaving a cached user inactive
+mutation and a later before_commit callback mutation, zero committed proof/audit,
+plus a trusted callback registered before guard as positive control. Do not mutate
+dispatch listeners or implement unbounded flush draining. Caller cannot bypass
+the Session protocol with raw COMMIT/private or SQL-executing connection events.
+
 **Files:**
 - Create `backend/app/platform/integrations/publication_guard.py`.
 - Create `backend/tests/test_publication_guard.py`.

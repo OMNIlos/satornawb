@@ -104,6 +104,20 @@ must also detect same-transaction metadata/context tampering. No global auth hoo
 affects sessions that did not acquire a guard. Direct Session.commit cannot silently
 omit the final check. No nested/SAVEPOINT use while guarded.
 
+Supported Session callback lifecycle is fail-closed: at commit callback entry,
+verify that the guard is the last effective before_commit callback. Trusted
+callbacks registered before it may run; any later callback, even intended as a
+read-only observer, is unsupported and denies commit rather than guessing its
+effects. Include effective class/instance listener order in this check. Perform
+one explicit flush, then reject any remaining new/dirty/deleted ORM work before
+validation; reject pending ORM work created during validation too. Do not leave
+work for SQLAlchemy's later _prepare_impl flush loop, silently drain an unbounded
+hook loop or mutate the listener collection while dispatching. A guard denial
+poisons the handle until caller rollback. This is a supported caller-Session
+protocol, not a sandbox for arbitrary private-state mutation, raw DBAPI/connection
+COMMIT or cursor/connection callbacks executing SQL after the last check; those
+bypasses are prohibited caller behavior and not covered authority guarantees.
+
 Locks establish which committed operation wins: publisher first may commit before
 revoke; revoke first makes publisher abort. Final validation proves expiry at that
 validation instant, not an impossible guarantee that time cannot advance between
