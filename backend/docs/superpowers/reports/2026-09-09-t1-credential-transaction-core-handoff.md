@@ -7,6 +7,52 @@ paired fetch/executor resolver, reencrypt or maintenance edits.
 
 ## Exact private interfaces in the existing store
 
+### Persisted INSERT verification follow-up
+
+Additional store-only private primitive, consumed immediately by the existing put
+participant (not a new maintenance implementation):
+
+```python
+_insert_verified_credential_in_session(
+    session: Session, identity: CredentialIdentity, plaintext: Mapping[str, Any],
+    *, keyring: CredentialKeyring, now: datetime,
+) -> MarketplaceAccountCredentialRow  # store-internal only
+```
+
+Existing put still selects/locks account and active row, revokes replacement,
+chooses its own UUID/next generation and creates the full identity. It delegates
+only encryption/INSERT/readback, then audits exactly once after verification. The
+primitive receives explicit exact identity/keyring and aware time, validates typed
+input, reuses the existing encrypt/decrypt equality check BEFORE INSERT, flushes,
+expires the ORM row and runs an exact frozen-owner/ID SELECT with populate_existing
+in the same Session/physical root. It does not trust the identity map or values
+read from the pre-expiry object to form the lookup.
+
+Persisted identity/envelope are reconstructed with existing `_identity/_encrypted`;
+raw integer types are checked before normalization, exact full identity and exact
+encrypted envelope must equal requested/generated values, revoked metadata must
+remain null and creation/update timestamps must match. Actual persisted envelope
+is then decrypted and its full typed plaintext compared in memory before audit.
+Missing/reassigned/corrupted row or mismatched identity/envelope/payload fails closed
+with fixed credential_auth_failed (or existing typed crypto/contract/SQL mapping).
+Root/Connection identity remains checked across flush/readback/decrypt. PG requires
+the existing physical non-autocommit READ COMMITTED checks; SQLite public-path
+compatibility retains an active same-root check without PG-only validation.
+
+No new crypto, session/key/clock/account selection, commit/rollback, audit, retry,
+maintenance SQL/view/CLI or exported ciphertext/ORM response exists in this helper.
+Returning the verified row is allowed only inside store; existing put still emits
+safe metadata. Caller retains live authority, whole-root rollback and finalcommit.
+The persisted comparison adds the intended corruption-denial behavior but does not
+implement maintenance history admission or generation1 policy. Normal/public
+signatures, ordinary post-query expiry clock, paired/executor and rekey unchanged.
+
+Source IMPLEMENTED/UNVERIFIED; no tests/test authoring/review/import/compile/lint/
+PG/Redis/network run. Final obligations: DB-trigger corruption of every identity/
+nonce/AAD/key/schema/ciphertext/timestamp field, true requery despite identity map,
+same-root sabotage, audit/commit failure rollback, no premature audit, strict typed
+plaintext/canary failures, public compatibility and maintenance-owner composition.
+
 Follow-up adds the real status-route active-credential verification dependency:
 
 ```python
