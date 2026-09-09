@@ -104,7 +104,14 @@ def test_put_and_resolve_use_exact_account_identity_and_redacted_types(store_db)
         audit = session.scalars(select(LkAuditEventRow).order_by(LkAuditEventRow.event_id)).all()
         assert [row.action for row in audit] == ["integration.marketplace_credential.put"]
         assert CANARY not in repr(audit[0].details)
-        assert set(audit[0].details) == {"credentialKind", "generation", "operation", "resultCode"}
+        assert set(audit[0].details) == {
+            "credentialKind",
+            "generation",
+            "marketplaceAccountId",
+            "operation",
+            "provider",
+            "resultCode",
+        }
 
 
 def test_put_rotates_atomically_and_only_new_row_is_active(store_db) -> None:
@@ -136,6 +143,25 @@ def test_revoke_removes_active_resolution_without_deleting_ciphertext(store_db) 
         row = session.scalars(select(MarketplaceAccountCredentialRow)).one()
         assert row.ciphertext
         assert row.revocation_reason_code == "operator_revoked"
+
+
+def test_put_after_explicit_revoke_keeps_generation_monotonic(store_db) -> None:
+    put_marketplace_credential(_wb_owner(), "wb_api", {"token": CANARY})
+    revoke_marketplace_credential(_wb_owner(), "wb_api", "operator_revoked")
+
+    replaced = put_marketplace_credential(
+        _wb_owner(),
+        "wb_api",
+        {"token": CANARY + "-new"},
+    )
+
+    assert replaced.generation == 2
+
+
+def test_unknown_kind_is_contract_error_even_when_no_row_exists(store_db) -> None:
+    with pytest.raises(CredentialStoreError) as caught:
+        resolve_marketplace_credential(_wb_owner(), "unknown_kind")
+    assert caught.value.code == "credential_contract_invalid"
 
 
 def test_expired_access_credential_fails_closed(store_db) -> None:

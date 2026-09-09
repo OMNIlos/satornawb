@@ -43,6 +43,31 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     return raw.strip().lower() == "true"
 
 
+def _heartbeat_env_settings() -> dict[str, object]:
+    """Retain malformed policy as invalid; never repair IDs or disable a bad flag."""
+    prefix = "VELLA_PROCESS_HEARTBEAT_"
+    raw = os.getenv(prefix + "ENABLED", "false").strip().lower()
+    enabled = {"true": True, "false": False}.get(raw)
+    values: dict[str, object] = {"process_heartbeat_enabled": enabled}
+    if enabled is False:
+        return values
+    for field in ("namespace", "worker_instance_id", "beat_instance_id"):
+        values["process_heartbeat_" + field] = os.getenv(prefix + field.upper())
+    for field in ("expected_worker_ids", "expected_beat_ids"):
+        raw = os.getenv(prefix + field.upper())
+        values["process_heartbeat_" + field] = tuple(raw.split(",")) if raw is not None else ()
+    for field in ("max_age_seconds", "retention_seconds", "beat_max_interval_seconds",
+                  "redis_connect_timeout_seconds", "redis_socket_timeout_seconds", "redis_retry_attempts"):
+        raw = os.getenv(prefix + field.upper())
+        try:
+            parser = int if field in {"retention_seconds", "redis_retry_attempts"} else float
+            value = parser(raw) if raw is not None else None
+        except (ValueError, OverflowError):
+            value = None
+        values["process_heartbeat_" + field] = value
+    return values
+
+
 def _parse_positive_int_env(name: str) -> int | None:
     raw = os.getenv(name)
     if raw is None:
@@ -76,7 +101,7 @@ class Settings:
     real_price_apply_enabled: bool = False
     repricer_local_price_apply_enabled: bool = True
     repricer_preserve_local_price_overrides: bool = True
-    repricer_scheduler_enabled: bool = True
+    repricer_scheduler_enabled: bool = False
     repricer_execute_interval_minutes: int = 60
     repricer_wb_sync_enabled: bool = True
     repricer_wb_sync_interval_minutes: int = 40
@@ -168,6 +193,18 @@ class Settings:
         "http://localhost:5174",
         "http://127.0.0.1:5174",
     )
+    process_heartbeat_enabled: bool | None = False
+    process_heartbeat_namespace: str | None = None
+    process_heartbeat_worker_instance_id: str | None = None
+    process_heartbeat_beat_instance_id: str | None = None
+    process_heartbeat_expected_worker_ids: tuple[str, ...] = ()
+    process_heartbeat_expected_beat_ids: tuple[str, ...] = ()
+    process_heartbeat_max_age_seconds: float | None = None
+    process_heartbeat_retention_seconds: int | None = None
+    process_heartbeat_beat_max_interval_seconds: float | None = None
+    process_heartbeat_redis_connect_timeout_seconds: float | None = None
+    process_heartbeat_redis_socket_timeout_seconds: float | None = None
+    process_heartbeat_redis_retry_attempts: int | None = None
 
 
 def get_settings() -> Settings:
@@ -175,6 +212,7 @@ def get_settings() -> Settings:
     environment = os.getenv("VELLA_ENV", "local")
     auth_cookie_secure_raw = os.getenv("VELLA_AUTH_COOKIE_SECURE")
     return Settings(
+        **_heartbeat_env_settings(),
         app_name=os.getenv("VELLA_APP_NAME", "Vella WB Backend"),
         environment=environment,
         api_prefix=os.getenv("VELLA_API_PREFIX", "/api/v1"),
@@ -182,7 +220,7 @@ def get_settings() -> Settings:
         real_price_apply_enabled=os.getenv("VELLA_REAL_PRICE_APPLY_ENABLED", "false").lower() == "true",
         repricer_local_price_apply_enabled=os.getenv("VELLA_REPRICER_LOCAL_PRICE_APPLY_ENABLED", "true").lower() == "true",
         repricer_preserve_local_price_overrides=os.getenv("VELLA_REPRICER_PRESERVE_LOCAL_PRICE_OVERRIDES", "true").lower() == "true",
-        repricer_scheduler_enabled=os.getenv("VELLA_REPRICER_SCHEDULER_ENABLED", "true").lower() == "true",
+        repricer_scheduler_enabled=os.getenv("VELLA_REPRICER_SCHEDULER_ENABLED", "false").lower() == "true",
         repricer_execute_interval_minutes=int(os.getenv("VELLA_REPRICER_EXECUTE_INTERVAL_MINUTES", "60")),
         repricer_wb_sync_enabled=os.getenv("VELLA_REPRICER_WB_SYNC_ENABLED", "true").lower() == "true",
         repricer_wb_sync_interval_minutes=int(os.getenv("VELLA_REPRICER_WB_SYNC_INTERVAL_MINUTES", "40")),
