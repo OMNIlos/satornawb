@@ -1,5 +1,7 @@
 # Architecture integration acceptance
 
+> Latest user scope supersedes older completion requirements below: deliver the finite architecture foundation first. Follow `2026-09-09-architecture-foundation-delivery.md`; original unfinished features and operational work are retained as P1/P2 backlog, not silently marked complete.
+
 User scope: finish all assigned T1–T4 work, independently check and correct it,
 audit omissions, then publish the verified result to `OMNIlos/satornawb:filipp`.
 Publication is conditional on correctness. This checklist does not authorize
