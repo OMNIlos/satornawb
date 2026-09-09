@@ -159,6 +159,19 @@ class ReviewSendService:
         return self.commands.create(authenticated_actor=authenticated_actor, intent=intent, policy=policy,
                                     authority_expires_at=authority_expires_at, participant=participant)
 
+    def cancel(self, *, authenticated_actor, locator, expected):
+        """Exact queued CAS by the original sender's currently authorized session."""
+        def participant(session, handle):
+            handle.require_participation(session, ReviewAction.CANCEL)
+            repository = ReviewSendRepository(session.connection(), _binding(locator, handle.capture.account))
+            repository.transition(command_id=locator.command_id, expected_version=handle.expected.version,
+                expected_attempt_id=None, lease_token=None, event_kind="send.cancelled",
+                actor_kind="membership", actor_membership_id=handle.principal.membership_id,
+                reason="USER_CANCELLED")
+
+        return self.commands.cancel(authenticated_actor=authenticated_actor, locator=locator,
+                                    expected=expected, participant=participant)
+
     def _initiation(self, action, *, locator, expected, resolved_credential=None):
         approved = []
         event = {ReviewAction.CLAIM: "send.claimed", ReviewAction.RENEW: "send.lease_renewed",
@@ -283,10 +296,39 @@ class ReviewSendService:
 
     def publish_reconciliation(self, *, authenticated_actor, read_authority, evidence):
         frozen = encode_review_answer_evidence(evidence).canonical_bytes
+        return self._publish_reconciliation(authenticated_actor=authenticated_actor,
+            read_authority=read_authority, build_evidence=lambda session, read: json.loads(frozen))
+
+    def observe_reconciliation(self, *, authenticated_actor, read_authority, observation, verifier_version):
+        """Trusted fresh GET observation, scoped to the sealed captured intent."""
+        from app.reviews.send_driver import ReviewAnswerObservation
+
+        _require(type(observation) is ReviewAnswerObservation)
+        observation.__post_init__()
+
+        def build_evidence(session, read):
+            _intent_payload(read.intent)
+            complete = observation.provider_answer_id is not None and observation.answer_text is not None
+            checksum = None if observation.answer_text is None else sha256(observation.answer_text.encode("utf-8")).hexdigest()
+            outcome = "incomplete" if not complete else "exact" if checksum == read.intent.text_checksum else "different"
+            return {"evidenceVersion": "review-answer-evidence-v1", "evidenceKind": "reconciliation_read",
+                "organizationId": read.locator.organization_id, "marketplaceAccountId": read.locator.marketplace_account_id,
+                "marketplace": read.locator.marketplace, "evidenceId": str(uuid4()), "reviewId": str(read.intent.review_id),
+                "commandId": str(read.locator.command_id), "attemptId": str(read.expected.attempt_id),
+                "outcome": outcome, "readId": str(read.read_id),
+                "reconciliationStartedAt": read.started_at.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                "observedAt": session.scalar(select(func.clock_timestamp())).astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                "providerAnswerId": observation.provider_answer_id, "answerChecksum": checksum, "verifierVersion": verifier_version}
+
+        return self._publish_reconciliation(authenticated_actor=authenticated_actor,
+            read_authority=read_authority, build_evidence=build_evidence)
+
+    def _publish_reconciliation(self, *, authenticated_actor, read_authority, build_evidence):
 
         def participant(session, handle):
             handle.require_participation(session, ReviewAction.RECONCILE)
-            read, item = handle.read_authority, json.loads(frozen)
+            read = handle.read_authority
+            item = json.loads(encode_review_answer_evidence(build_evidence(session, read)).canonical_bytes)
             _require(item["evidenceKind"] == "reconciliation_read" and UUID(item["readId"]) == read.read_id
                      and UUID(item["commandId"]) == read.locator.command_id and UUID(item["attemptId"]) == read.expected.attempt_id)
             repository = ReviewSendRepository(session.connection(), _binding(read.locator, read.account))

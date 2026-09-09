@@ -50,6 +50,43 @@ class ReviewAnswerTransport(Protocol):
                     resolved_credential) -> ReviewAnswerObservation: ...
 
 
+class ReviewAnswerReadTransport(Protocol):
+    def read_answer(self, *, locator, external_review_id: str,
+                    resolved_credential) -> ReviewAnswerObservation: ...
+
+
+def reconcile_once(*, service, authenticated_actor, locator, expected,
+                   transport: ReviewAnswerReadTransport, verifier_version: str):
+    """One fresh GET after a sealed capture; never another POST or automatic retry.
+
+    The trusted adapter must disable its own retries and preserve exact observed
+    answer bytes. A missing/malformed/failed read is incomplete evidence, not proof
+    of absence and not permission to resend. DB publication errors propagate.
+    """
+    from app.reviews.send_service import _intent_payload
+
+    if (type(verifier_version) is not str or re.fullmatch(r"[A-Za-z0-9_.:/-]{1,128}", verifier_version) is None
+            or not callable(getattr(transport, "read_answer", None))):
+        raise ReviewJobError("REVIEW_CONTRACT_INVALID")
+    capture = service.reconciliation.capture_read(authenticated_actor=authenticated_actor,
+                                                  locator=locator, expected=expected)
+    target = _intent_payload(capture.intent)["externalReviewId"]
+    observation = None
+    try:
+        observation = transport.read_answer(locator=capture.locator, external_review_id=target,
+                                            resolved_credential=capture.resolved_credential)
+        if type(observation) is not ReviewAnswerObservation:
+            observation = None
+        else:
+            observation.__post_init__()
+    except Exception:
+        observation = None
+    if observation is None:
+        observation = ReviewAnswerObservation(None, None)
+    return service.observe_reconciliation(authenticated_actor=authenticated_actor,
+        read_authority=capture, observation=observation, verifier_version=verifier_version)
+
+
 def send_once(*, service, locator, expected, transport: ReviewAnswerTransport, verifier_version: str):
     """Starts only from queued; duplicate broker delivery cannot resume a marker.
 
