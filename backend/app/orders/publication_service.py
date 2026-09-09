@@ -252,6 +252,48 @@ def publish_orders_manifest(
         )
     if not valid:
         raise PublicationGuardError("publication_authority_invalid")
+    try:
+        with session.begin():
+            guard = acquire_publication_guard(
+                session,
+                principal=principal,
+                required_permissions=frozenset({"sync:run"}),
+                accounts=(account,),
+                authorities=authorities,
+            )
+            result = _persist_orders_manifest(
+                session,
+                manifest=manifest,
+                account=account,
+                source_run_key=source_run_key,
+                actor_user_id=principal.user_id,
+            )
+            guard.revalidate_before_write()
+        return result
+    except SQLAlchemyError:
+        raise PublicationGuardError("publication_persistence_failed") from None
+
+
+def _persist_orders_manifest(
+    session: Session,
+    *,
+    manifest: OrderManifest,
+    account: ExpectedAccountBinding,
+    source_run_key: str,
+    actor_user_id: str,
+) -> OrdersPublicationResult:
+    """Persist inside a caller-owned, already authorized physical transaction.
+
+    Entry points own authority acquisition and final commit fencing. This helper
+    neither authorizes callers nor commits/revalidates a different principal.
+    """
+    if (
+        not isinstance(session, Session)
+        or not session.in_transaction()
+        or session.in_nested_transaction()
+        or not session.is_active
+    ):
+        raise PublicationGuardError("publication_context_invalid")
     params = {
         "org": manifest.organization_id,
         "account": manifest.marketplace_account_id,
@@ -268,182 +310,166 @@ def publish_orders_manifest(
         if manifest.marketplace == "avito"
         else WB_STATISTICS_STATUS_MAPPING_VERSION,
     }
-    try:
-        with session.begin():
-            guard = acquire_publication_guard(
-                session,
-                principal=principal,
-                required_permissions=frozenset({"sync:run"}),
-                accounts=(account,),
-                authorities=authorities,
-            )
-            existing = (
-                session.execute(
-                    text("""SELECT * FROM order_sync_runs
-                WHERE organization_id=:org AND marketplace_account_id=:account
-                AND source_kind COLLATE "C"=:source AND source_run_key COLLATE "C"=:key FOR UPDATE"""),
+    existing = (
+        session.execute(
+            text("""SELECT * FROM order_sync_runs
+        WHERE organization_id=:org AND marketplace_account_id=:account
+        AND source_kind COLLATE "C"=:source AND source_run_key COLLATE "C"=:key FOR UPDATE"""),
+            params,
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if existing is not None:
+        validate_run_binding(
+            manifest.organization_id,
+            account,
+            schema_version=existing["account_binding_schema_version"],
+            external_account_id=existing["account_binding_external_account_id"],
+            credential_ref=existing["account_binding_credential_ref"],
+            payload=existing["account_binding_payload"],
+            checksum=existing["account_binding_checksum"],
+        )
+        result = _replay(session, existing, manifest, params)
+    else:
+        params.update(
+            marketplace=manifest.marketplace,
+            adapter=manifest.adapter_version,
+            contract=manifest.source_contract_version,
+            snapshot=manifest.source_snapshot,
+        )
+        run = session.execute(
+            text("""INSERT INTO order_sync_runs
+            (organization_id,marketplace_account_id,marketplace,source_kind,source_run_key,
+             adapter_version,mapping_version,source_contract_version,source_snapshot,
+             account_binding_schema_version,account_binding_external_account_id,
+             account_binding_credential_ref,account_binding_payload,account_binding_checksum)
+            VALUES (:org,:account,:marketplace,:source,:key,:adapter,:mapping,:contract,:snapshot,
+                    :binding_version,:binding_external,:binding_ref,:binding_payload,:binding)
+            RETURNING sync_run_id"""),
+            params,
+        ).scalar_one()
+        params["run"] = run
+        reconciliation = 0
+        evidence = OrdersEvidenceRepository(
+            session, manifest.organization_id, manifest.marketplace_account_id
+        )
+        projections = OrdersProjectionRepository(
+            session, manifest.organization_id, manifest.marketplace_account_id
+        )
+        for row in manifest.observations:
+            record = evidence.append(run, row)
+            _status(session, record, params)
+            if row.status.canonical_status in (
+                "cancelled",
+                "returning",
+                "returned",
+            ):
+                _event(
+                    session,
+                    record,
                     params,
+                    "cancellation"
+                    if row.status.canonical_status == "cancelled"
+                    else "return",
                 )
-                .mappings()
-                .one_or_none()
-            )
-            if existing is not None:
-                validate_run_binding(
-                    principal.organization_id,
-                    account,
-                    schema_version=existing["account_binding_schema_version"],
-                    external_account_id=existing["account_binding_external_account_id"],
-                    credential_ref=existing["account_binding_credential_ref"],
-                    payload=existing["account_binding_payload"],
-                    checksum=existing["account_binding_checksum"],
-                )
-                result = _replay(session, existing, manifest, params)
-            else:
-                params.update(
-                    marketplace=manifest.marketplace,
-                    adapter=manifest.adapter_version,
-                    contract=manifest.source_contract_version,
-                    snapshot=manifest.source_snapshot,
-                )
-                run = session.execute(
-                    text("""INSERT INTO order_sync_runs
-                    (organization_id,marketplace_account_id,marketplace,source_kind,source_run_key,
-                     adapter_version,mapping_version,source_contract_version,source_snapshot,
-                     account_binding_schema_version,account_binding_external_account_id,
-                     account_binding_credential_ref,account_binding_payload,account_binding_checksum)
-                    VALUES (:org,:account,:marketplace,:source,:key,:adapter,:mapping,:contract,:snapshot,
-                            :binding_version,:binding_external,:binding_ref,:binding_payload,:binding)
-                    RETURNING sync_run_id"""),
-                    params,
-                ).scalar_one()
-                params["run"] = run
-                reconciliation = 0
-                evidence = OrdersEvidenceRepository(
-                    session, manifest.organization_id, manifest.marketplace_account_id
-                )
-                projections = OrdersProjectionRepository(
-                    session, manifest.organization_id, manifest.marketplace_account_id
-                )
-                for row in manifest.observations:
-                    record = evidence.append(run, row)
-                    _status(session, record, params)
-                    if row.status.canonical_status in (
-                        "cancelled",
-                        "returning",
-                        "returned",
-                    ):
-                        _event(
+            if manifest.coverage_state != "complete":
+                continue
+            current = session.execute(
+                text("""SELECT version,last_seen_sync_run_id FROM marketplace_orders
+                WHERE organization_id=:org AND marketplace_account_id=:account AND order_id=:order FOR UPDATE"""),
+                dict(params, order=record.order_id),
+            ).one()
+            if current.last_seen_sync_run_id is None and current.version == 1:
+                projections.set_parent(run, record.observation_id, expected_version=1)
+                for item in row.items:
+                    resolution = (
+                        resolve_order_catalog(
                             session,
-                            record,
-                            params,
-                            "cancellation"
-                            if row.status.canonical_status == "cancelled"
-                            else "return",
+                            manifest.organization_id,
+                            manifest.marketplace_account_id,
+                            item.identity.external_item_id,
                         )
-                    if manifest.coverage_state != "complete":
-                        continue
-                    current = session.execute(
-                        text("""SELECT version,last_seen_sync_run_id FROM marketplace_orders
-                        WHERE organization_id=:org AND marketplace_account_id=:account AND order_id=:order FOR UPDATE"""),
-                        dict(params, order=record.order_id),
-                    ).one()
-                    if current.last_seen_sync_run_id is None and current.version == 1:
-                        projections.set_parent(
-                            run, record.observation_id, expected_version=1
+                        if item.identity.external_item_id is not None
+                        else CatalogResolution(
+                            "unmapped",
+                            None,
+                            None,
+                            None,
+                            "orders-initial-unmapped-v1",
                         )
-                        for item in row.items:
-                            resolution = (
-                                resolve_order_catalog(
-                                    session,
-                                    manifest.organization_id,
-                                    manifest.marketplace_account_id,
-                                    item.identity.external_item_id,
-                                )
-                                if item.identity.external_item_id is not None
-                                else CatalogResolution(
-                                    "unmapped",
-                                    None,
-                                    None,
-                                    None,
-                                    "orders-initial-unmapped-v1",
-                                )
-                            )
-                            projections.set_item(
-                                run,
-                                record.observation_id,
-                                item.identity.source_line_key,
-                                resolution=resolution,
-                                expected_version=None,
-                            )
-                    else:
-                        previous = session.execute(
-                            text("""SELECT e.normalized_evidence FROM order_sync_memberships m
-                            JOIN order_observations e ON (e.organization_id,e.marketplace_account_id,e.observation_id)=
-                            (m.organization_id,m.marketplace_account_id,m.observation_id)
-                            WHERE m.organization_id=:org AND m.marketplace_account_id=:account AND m.sync_run_id=:last
-                            AND m.order_id=:order AND m.order_item_id IS NULL"""),
-                            dict(
-                                params,
-                                last=current.last_seen_sync_run_id,
-                                order=record.order_id,
-                            ),
-                        ).scalar_one_or_none()
-                        old = (
-                            deserialize_observation(previous)
-                            if previous is not None
-                            else None
-                        )
-                        if (
-                            old is None
-                            or old.source_kind != row.source_kind
-                            or compare_observations(old, row) != "replay"
-                        ):
-                            _event(session, record, params, "reconciliation_required")
-                            reconciliation += 1
-                pages = [page.number for page in manifest.pages]
-                params.update(
-                    state=manifest.coverage_state,
-                    checksum=manifest.checksum,
-                    pages=len(pages),
-                    orders=len(manifest.observations),
-                    items=sum(len(row.items) for row in manifest.observations),
-                    expected=manifest.expected_order_count,
-                    first=min(pages) if pages else None,
-                    last=max(pages) if pages else None,
-                    complete=manifest.coverage_state == "complete",
-                )
-                session.execute(
-                    text("""INSERT INTO order_sync_coverage
-                    (organization_id,marketplace_account_id,sync_run_id,coverage_kind,first_page,last_page,
-                     is_complete,manifest_checksum,completed_at)
-                    VALUES (:org,:account,:run,'orders-manifest-v1',:first,:last,:complete,:checksum,clock_timestamp())"""),
-                    params,
-                )
-                session.execute(
-                    text("""UPDATE order_sync_runs SET state=:state,manifest_state=:state,
-                    payload_checksum=:checksum,page_count=:pages,order_count=:orders,item_count=:items,
-                    expected_order_count=:expected,completed_at=clock_timestamp()
-                    WHERE organization_id=:org AND marketplace_account_id=:account AND sync_run_id=:run"""),
-                    params,
-                )
-                session.add(
-                    LkAuditEventRow(
-                        organization_id=manifest.organization_id,
-                        actor_user_id=principal.user_id,
-                        action=_ACTION,
-                        object_type="orders_sync_run",
-                        object_id=str(run),
-                        details={
-                            "manifest_checksum": manifest.checksum,
-                            "reconciliation_count": reconciliation,
-                            "account_binding_checksum": params["binding"],
-                        },
                     )
+                    projections.set_item(
+                        run,
+                        record.observation_id,
+                        item.identity.source_line_key,
+                        resolution=resolution,
+                        expected_version=None,
+                    )
+            else:
+                previous = session.execute(
+                    text("""SELECT e.normalized_evidence FROM order_sync_memberships m
+                    JOIN order_observations e ON (e.organization_id,e.marketplace_account_id,e.observation_id)=
+                    (m.organization_id,m.marketplace_account_id,m.observation_id)
+                    WHERE m.organization_id=:org AND m.marketplace_account_id=:account AND m.sync_run_id=:last
+                    AND m.order_id=:order AND m.order_item_id IS NULL"""),
+                    dict(
+                        params,
+                        last=current.last_seen_sync_run_id,
+                        order=record.order_id,
+                    ),
+                ).scalar_one_or_none()
+                old = (
+                    deserialize_observation(previous) if previous is not None else None
                 )
-                result = OrdersPublicationResult(
-                    run, manifest.coverage_state, False, reconciliation
-                )
-            guard.revalidate_before_write()
-        return result
-    except SQLAlchemyError:
-        raise PublicationGuardError("publication_persistence_failed") from None
+                if (
+                    old is None
+                    or old.source_kind != row.source_kind
+                    or compare_observations(old, row) != "replay"
+                ):
+                    _event(session, record, params, "reconciliation_required")
+                    reconciliation += 1
+        pages = [page.number for page in manifest.pages]
+        params.update(
+            state=manifest.coverage_state,
+            checksum=manifest.checksum,
+            pages=len(pages),
+            orders=len(manifest.observations),
+            items=sum(len(row.items) for row in manifest.observations),
+            expected=manifest.expected_order_count,
+            first=min(pages) if pages else None,
+            last=max(pages) if pages else None,
+            complete=manifest.coverage_state == "complete",
+        )
+        session.execute(
+            text("""INSERT INTO order_sync_coverage
+            (organization_id,marketplace_account_id,sync_run_id,coverage_kind,first_page,last_page,
+             is_complete,manifest_checksum,completed_at)
+            VALUES (:org,:account,:run,'orders-manifest-v1',:first,:last,:complete,:checksum,clock_timestamp())"""),
+            params,
+        )
+        session.execute(
+            text("""UPDATE order_sync_runs SET state=:state,manifest_state=:state,
+            payload_checksum=:checksum,page_count=:pages,order_count=:orders,item_count=:items,
+            expected_order_count=:expected,completed_at=clock_timestamp()
+            WHERE organization_id=:org AND marketplace_account_id=:account AND sync_run_id=:run"""),
+            params,
+        )
+        session.add(
+            LkAuditEventRow(
+                organization_id=manifest.organization_id,
+                actor_user_id=actor_user_id,
+                action=_ACTION,
+                object_type="orders_sync_run",
+                object_id=str(run),
+                details={
+                    "manifest_checksum": manifest.checksum,
+                    "reconciliation_count": reconciliation,
+                    "account_binding_checksum": params["binding"],
+                },
+            )
+        )
+        result = OrdersPublicationResult(
+            run, manifest.coverage_state, False, reconciliation
+        )
+    return result
