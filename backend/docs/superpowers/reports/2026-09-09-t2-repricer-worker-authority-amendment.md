@@ -59,7 +59,7 @@ authority or choose a newer credential merely to continue sending.
 | Before intent | No intent/send under denied authority | No action to recover |
 | Intent committed, before marker | No provider POST after denied authority | A verified worker may record known local non-dispatch failure only under separately accepted closing authority; otherwise leave blocked recovery, not fabricate authority |
 | Marker committed, before/around POST | Marker is not reusable send permission; revoked authority must not initiate a fresh POST | If non-dispatch cannot be proved, classify ambiguous; no automatic resend |
-| Provider may have accepted, before local outcome commit | Never convert uncertainty to known rejection | Persist safe ambiguous observation using owned state-closing authority; preserve any known upload ID as permitted by the canonical outcome contract |
+| Provider may have accepted, before local outcome commit | Never convert uncertainty to known rejection | Persist safe ambiguous observation using owned state-closing authority; a known upload ID needs a separate durable receipt/evidence contract, currently pending |
 | Result committed, before ACK / duplicate delivery | Closed approval/attempt prevents another POST | Read/ACK the existing result under scoped worker authority; do not reopen/reclaim |
 | Credential revoked while reconciliation needed | Do not use revoked credentials or borrow another tenant/account | Local ambiguity can remain; provider-history read waits for explicitly authorized matching-account read authority |
 
@@ -74,6 +74,13 @@ evidence but **cannot** silently call the existing API to turn ambiguous into ap
 or create another attempt. Any future reconciliation state extension requires a
 separately reviewed domain/schema change; proof of provider nonacceptance is not
 inferred from timeout, absent upload ID or empty history page.
+
+Current `ApplyOutcome` and0066 forbid `wb_upload_id` on ambiguous. Therefore the
+existing `record_attempt_outcome` cannot retain a known upload ID with that status.
+A scoped append-only provider receipt/evidence boundary is a concrete additional
+T1 schema/service dependency; it must bind the exact attempt/dispatch identity.
+Do not discard a known receipt, hide it in error text, or weaken the current
+outcome invariants. No such receipt persistence exists in this slice.
 
 ## Minimum shared contract requested, and proof gates
 

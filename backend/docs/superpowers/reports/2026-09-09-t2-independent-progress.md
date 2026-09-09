@@ -54,7 +54,7 @@ repository Protocol/identity bridge and dispatch domain; no actual writer connec
 | Stage | Completed evidence | Still required / actual dependency |
 | --- | --- | --- |
 | 1 writer inventory / identity / contract | 769f3cf + ccaed341 +45f94a; composite scope, exclusive marker, safe UUID/text, unchanged valid hashes; accepted T1 approvals0066 dbf8d31 merged by1464fcd | No UUID-only repository; current writers still disconnected |
-| 2 durable approvals | Actual scoped PostgreSQL transaction participant plus committed user-session create/claim/reject/block; real runtime-role tests, two-session CAS, replay, rollback, restart, crossorg/account, immutable terminals | Full repository Protocol not complete: privileged legacy backfill adapter/tests and worker-authorized outcome service still pending; no current-flow cutover |
+| 2 durable approvals | Actual scoped PostgreSQL transaction participant plus committed user-session create/claim/reject/block; real runtime-role tests, two-session CAS, replay, rollback, restart, crossorg/account, immutable terminals; owner-only synthetic legacy import preserving full snapshot | Full repository Protocol not complete: worker-authorized outcome service still pending; no current-flow cutover |
 | 3 jobs/crash | Pure matrix plus durable reserve/dispatch marker/outcome participant, observed PostgreSQL dispatch lock race and one synthetic effect | Accepted worker/job authority PENDING per T1; no worker impersonation, scheduler/provider wiring or reconciliation activation. No external exactly-once claim |
 | 4 globals/settings | 80 legacy characterization cases; exact normalized4A schema request907ec7b | T1 rows/heads/audit, concrete repository/context wiring and one-writer fence; additional strategies/context mapping must be typed before cutover |
 | 5 prices/stocks/daily | Price and warehouse stock adapters,request hashes,immutable complete manifest assembly,missing/null/zero,all sizes,receipt-date gate; targeted legacy source fixes | T1 separate source DDL, DB publication/read services, current-head CAS and daily revision persistence; Catalog mapping/source freshness policy, FBS skus/chrtIds contract unresolved |
@@ -143,6 +143,25 @@ owned Python files. Independent critic's missing-ID blocker fixed/rechecked;
 final read-only review found no further blockers. Full backend baseline delta and
 privileged backfill preservation are not claimed by these results.
 
-Next: bounded worker-authority amendment requested by T1; privileged synthetic
-backfill adapter and additional state/source work can proceed independently.
-Worker/provider/scheduler remain dormant pending the accepted worker contract.
+Worker-authority amendment committed `a4de0b8a653857779391bb054ac06cde7d0ac184`
+and sent directly to T1. Known upload ID with ambiguous requires a separate durable
+receipt/evidence boundary: current domain/0066 prohibit upload ID on ambiguous.
+Worker/provider/scheduler remain dormant pending that accepted contract.
+
+### Independent synthetic backfill continuation
+
+`LegacyApprovalImportTransaction` is a separate owner-only caller-committed surface;
+runtime role denied before import. Explicit positive internal catalog/member IDs
+must exactly match snapshot identities; unresolved legacy strings remain blocked.
+No files read, rekeying, inferred IDs, repaired hashes or historical time changes.
+All seven statuses, long logical ID, NUMERIC values above BIGINT, original timestamps,
+replay/conflicting payload and transaction rollback are tested. Current old rows
+are still immutable/non-dispatchable by0066; this is not a real data backfill run.
+
+RED: absent importer API, collection exit2. Fresh combined three-file PG group
+(repository, user commands, `tests/test_wb_repricing_legacy_import.py`):
+**93 passed in11.94s, exit0**, exact three disposable databases/runtime roles cleaned.
+Importer has18 cases. Scoped Ruff/compileall exit0. Independent critic found no
+importer blockers; worker receipt limitation clarified in the existing amendment.
+The historical note above about missing backfill proof is superseded only for these
+synthetic cases, not a production migration/backfill or full backend baseline.

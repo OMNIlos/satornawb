@@ -37,9 +37,12 @@ from app.modules.wb_repricing_dispatch import (
     reserve_attempt,
 )
 from app.modules.wb_repricing_repository import (
+    ApprovalIdentityBlockedError,
     ApprovalRepositoryScope,
     AuthenticatedApprovalActor,
     bridge_actor_membership_id,
+    bridge_internal_id,
+    bridge_snapshot_identity,
 )
 
 
@@ -212,6 +215,16 @@ class ApprovalTransaction:
                 )
             },
         }
+        if kind == "approval.imported":
+            values.update(
+                actor_kind="backfill",
+                actor_membership_id=None,
+                occurred_at=row["created_at"],
+                reason_code=None,
+                safe_error_code=None,
+                wb_upload_id=None,
+                result_code=None,
+            )
         self._insert("wb_repricer_price_approval_audit", values)
 
     def create_intent(
@@ -487,3 +500,70 @@ class ApprovalTransaction:
             after, kind, witness, before=row, attempt=result.attempt, before_attempt=old
         )
         return result
+
+
+class LegacyApprovalImportTransaction:
+    """Owner-only, caller-committed import of already resolved immutable values.
+
+    No legacy files are loaded and no identities, hashes, states, timestamps or
+    money are repaired. The caller must supply verified internal integer catalog
+    and membership identities. Database guards additionally forbid legacy writes
+    by runtime roles, all subsequent lifecycle changes and attempts.
+    """
+
+    def __init__(self, session: Session, scope: ApprovalRepositoryScope):
+        self._transaction = ApprovalTransaction(session, scope)
+        owner = self._transaction._sql(
+            "SELECT current_user = pg_get_userbyid(relowner) FROM pg_class "
+            "WHERE oid='public.wb_repricer_price_approvals'::regclass"
+        ).scalar_one()
+        if owner is not True:
+            raise ApprovalValidationError("legacy import requires table owner")
+
+    def insert_snapshot(
+        self,
+        snapshot,
+        *,
+        catalog_sku_id,
+        claimed_by_membership_id,
+        decided_by_membership_id,
+    ):
+        transaction = self._transaction
+        bridge_snapshot_identity(
+            scope=transaction.scope, catalog_sku_id=catalog_sku_id, snapshot=snapshot
+        )
+        for field, identity in (
+            ("claimed_by_membership_id", claimed_by_membership_id),
+            ("decided_by_membership_id", decided_by_membership_id),
+        ):
+            kernel_identity = None if identity is None else bridge_internal_id(identity)
+            if getattr(snapshot, field) != kernel_identity:
+                raise ApprovalIdentityBlockedError(field)
+        old = transaction._row(False)
+        if old is not None:
+            if old["request_format"] != "legacy" or _snapshot(old) != snapshot:
+                raise ApprovalConflictError("legacy immutable snapshot mismatch")
+            return _snapshot(old)
+        witness = uuid4()
+        values = {
+            field.name: getattr(snapshot, field.name)
+            for field in fields(PriceApprovalSnapshot)
+        }
+        values.update(
+            approval_row_id=uuid4(),
+            marketplace="wb",
+            request_format="legacy",
+            marketplace_account_id=transaction.scope.marketplace_account_id,
+            catalog_sku_id=catalog_sku_id,
+            claimed_by_membership_id=claimed_by_membership_id,
+            decided_by_membership_id=decided_by_membership_id,
+            status=snapshot.status.value,
+            canonical_request_bytes=None,
+            discount_pct=None,
+            size_id=None,
+            min_price_kopecks=None,
+            created_audit_id=witness,
+        )
+        row = transaction._insert("wb_repricer_price_approvals", values)
+        transaction._audit(row, "approval.imported", witness)
+        return _snapshot(row)
