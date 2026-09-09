@@ -40,6 +40,14 @@ BEGIN
             ('review_workflow_heads'),
             ('review_local_audit'),
             ('review_local_command_receipts'),
+            ('review_send_commands'),
+            ('review_send_command_authorities'),
+            ('review_send_attempts'),
+            ('review_answer_evidence'),
+            ('review_send_audit'),
+            ('review_send_enqueue_intents'),
+            ('notification_in_app_events'),
+            ('notification_in_app_receipts'),
             ('user_orders_jobs'),
             ('user_orders_job_authorities'),
             ('user_orders_job_attempts'),
@@ -343,5 +351,53 @@ REVOKE ALL ON FUNCTION public.repricing_job_uuid(uuid), public.repricing_job_tim
  public.repricing_job_text(text,integer) FROM PUBLIC, :"runtime_role";
 GRANT EXECUTE ON FUNCTION public.repricing_job_uuid(uuid), public.repricing_job_time(timestamptz),
  public.repricing_job_text(text,integer) TO :"runtime_role";
+
+-- Review send/in-app: exact new-object capabilities. These SQL grants do not
+-- authenticate a worker or prove current multi-member/closing authority.
+REVOKE ALL ON TABLE public.review_send_commands, public.review_send_command_authorities,
+ public.review_send_attempts, public.review_answer_evidence, public.review_send_audit,
+ public.review_send_enqueue_intents, public.notification_in_app_events,
+ public.notification_in_app_receipts FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON TABLE public.%I FROM PUBLIC, %I', a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+ ('review_send_commands','review_send_command_authorities','review_send_attempts',
+  'review_answer_evidence','review_send_audit','review_send_enqueue_intents',
+  'notification_in_app_events','notification_in_app_receipts')
+ AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, INSERT ON TABLE public.review_send_commands, public.review_send_command_authorities,
+ public.review_send_attempts, public.review_answer_evidence, public.review_send_audit,
+ public.review_send_enqueue_intents, public.notification_in_app_events,
+ public.notification_in_app_receipts TO :"runtime_role";
+GRANT UPDATE (state,version,current_attempt_id,completed_at,result_evidence_id,reason_code,audit_event_id)
+ ON public.review_send_commands TO :"runtime_role";
+GRANT UPDATE (state,lease_expires_at,dispatched_at,finished_at,result_evidence_id,reason_code,command_version,audit_event_id)
+ ON public.review_send_attempts TO :"runtime_role";
+GRANT UPDATE (read_at,dismissed_at) ON public.notification_in_app_receipts TO :"runtime_role";
+REVOKE ALL ON FUNCTION public.review_send_account_lock(), public.review_send_audit_guard(),
+ public.review_send_row_guard(), public.review_send_validate() FROM PUBLIC, :"runtime_role";
+REVOKE ALL ON FUNCTION public.review_send_unicode_version(), public.review_send_uuid4(uuid),
+ public.review_send_answer_id(bytea), public.review_send_external_id(bytea),
+ public.review_send_request_bytes(public.review_send_commands,bytea),
+ public.review_send_evidence_bytes(public.review_answer_evidence),
+ public.review_send_audit_bytes(public.review_send_audit),
+ public.review_send_enqueue_bytes(public.review_send_enqueue_intents),
+ public.notification_in_app_identity_bytes(public.notification_in_app_events),
+ public.notification_in_app_event_bytes(public.notification_in_app_events),
+ public.notification_in_app_receipt_bytes(public.notification_in_app_receipts),
+ public.notification_in_app_visible_action_bytes(integer,integer,integer,uuid[],text)
+ FROM PUBLIC, :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.review_send_unicode_version(), public.review_send_uuid4(uuid),
+ public.review_send_answer_id(bytea), public.review_send_external_id(bytea),
+ public.review_send_request_bytes(public.review_send_commands,bytea),
+ public.review_send_evidence_bytes(public.review_answer_evidence),
+ public.review_send_audit_bytes(public.review_send_audit),
+ public.review_send_enqueue_bytes(public.review_send_enqueue_intents),
+ public.notification_in_app_identity_bytes(public.notification_in_app_events),
+ public.notification_in_app_event_bytes(public.notification_in_app_events),
+ public.notification_in_app_receipt_bytes(public.notification_in_app_receipts),
+ public.notification_in_app_visible_action_bytes(integer,integer,integer,uuid[],text)
+ TO :"runtime_role";
 
 COMMIT;
