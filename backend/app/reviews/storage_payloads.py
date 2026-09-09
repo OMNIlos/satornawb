@@ -137,3 +137,66 @@ def encode_review_send(payload: object) -> EncodedStoragePayload:
     _checksum(value["bindingChecksum"])
     _checksum(value["textChecksum"])
     return _finish(value)
+
+
+def encode_review_local_audit(payload: object) -> EncodedStoragePayload:
+    """Encode only local membership events from the documented v1 proposal.
+
+    Representation checks cannot prove actor authority, actual before-state,
+    scoped references, immutable witnesses or transactionally atomic publication.
+    Send/worker audit events deliberately require a separate lifecycle boundary.
+    """
+    value = _object(payload, {
+        "schemaVersion", "organizationId", "marketplaceAccountId", "marketplace",
+        "eventId", "aggregateId", "aggregateVersion", "eventKind", "occurredAt",
+        "actorKind", "actorMembershipId", "commandId", "draftId", "policyId",
+        "decisionId", "attemptId", "beforeState", "afterState", "reasonCode",
+    })
+    _require(value["schemaVersion"] == "review-audit-v1")
+    _owner(value)
+    for key in ("organizationId", "marketplaceAccountId", "actorMembershipId"):
+        _integer(value[key])
+        _require(value[key] <= 2147483647)
+    _require(value["actorKind"] == "membership" and value["reasonCode"] is None)
+    _uuid(value["eventId"])
+    _uuid(value["aggregateId"])
+    _integer(value["aggregateVersion"])
+    _timestamp(value["occurredAt"])
+    kind = value["eventKind"]
+    _require(type(kind) is str and kind in {
+        "policy.created", "policy.selected", "draft.published",
+        "decision.approved", "decision.rejected",
+    })
+    refs = {
+        "policy.created": {"policyId"},
+        "policy.selected": {"policyId"},
+        "draft.published": {"policyId", "draftId"},
+        "decision.approved": {"draftId", "decisionId"},
+        "decision.rejected": {"draftId", "decisionId"},
+    }[kind]
+    for key in ("commandId", "draftId", "policyId", "decisionId", "attemptId"):
+        if key in refs:
+            _uuid(value[key])
+        else:
+            _require(value[key] is None)
+    before, after, version = (
+        value["beforeState"], value["afterState"], value["aggregateVersion"]
+    )
+    _require(before is None or type(before) is str)
+    _require(after is None or type(after) is str)
+    if before == "decision_current":
+        # Version 1 starts with a draft; the earliest decision is version 2.
+        _require(version >= 3)
+    if kind == "policy.created":
+        _require(before is None and after is None)
+        _require(value["aggregateId"] == value["policyId"])
+    elif kind == "policy.selected":
+        _require(after == "policy_selected")
+        _require(before is None if version == 1 else before == "policy_selected")
+    elif kind == "draft.published":
+        _require(after == "draft_current")
+        _require(before is None if version == 1 else before in {"draft_current", "decision_current"})
+    else:
+        _require(version >= 2 and after == "decision_current")
+        _require(before in {"draft_current", "decision_current"})
+    return _finish(value)
