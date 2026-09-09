@@ -30,7 +30,11 @@ SHA256, observed_count integer, completeness always partial. It contains no Revi
 body, provider payload, credential reference or secret. It is not a printable/send
 capability or a public canonical Review read response.
 
-Errors use `detail.code`:
+Standalone synthetic-app errors use `detail.code`. In the actual shared app,
+app/main.py's existing HTTPException handler emits `{error:{code,message,details}}`;
+consumers must use `error.code`. The safe code vocabulary below is unchanged.
+Shared-app registration tests belong to T1; T4's standalone tests do not establish
+the final shared envelope.
 
 - 401 REVIEW_SYNC_AUTHENTICATION_REQUIRED (real existing bearer/session resolver).
 - 403 REVIEW_SYNC_DENIED (live permission/scope, session or authority change).
@@ -39,7 +43,10 @@ Errors use `detail.code`:
 - 502 REVIEW_SYNC_PROVIDER_UNAVAILABLE (provider failure or malformed page envelope).
 - 503 REVIEW_SYNC_STORAGE_UNAVAILABLE or REVIEW_SYNC_CONFIGURATION_INVALID.
 
-FastAPI body-validation422 remains the standard framework contract. Fixed error
+Standalone FastAPI body-validation422 remains the standard framework contract.
+The shared app instead returns error.code=VALIDATION_ERROR and removes input/ctx
+from validation issues. Shared handler/default-off/auth/422 acceptance is still due.
+Fixed error
 codes do not echo provider errors, SQL, credentials or bearer strings. Dependencies
 also translate engine/config acquisition failures. Shared auth may update session
 last_seen_at; canonical-only does not mean zero authentication/control-plane writes.
@@ -111,3 +118,15 @@ Remaining stages include account-owned policy/draft/send/notification services a
 their DDL, canonical public reads/frontend integration, legacy isolation/retirement,
 full integration baseline and separately authorized canary. No architecture-complete
 or production-readiness claim follows from this bounded HTTP slice.
+
+## Historical binding gate discovered before read implementation
+
+Read-only trace plus actual disposable1case reproduces old Review evidence visible
+after a completed account rebind even under a fresh live guard. See
+2026-09-09-t4-review-historical-binding-request.md and
+tests/test_review_historical_binding_gap.py. Current internal owner IDs do not encode
+historical external binding. This blocks public historical reads and operational
+activation, and requires checking current-head publication/replay across rebinds.
+The earlier900PASS is bounded HTTP/in-flight verification, not a proof that this
+newly characterized completed-rebind gate is closed. Router registration may still
+proceed separately while its policy remains default-off.
