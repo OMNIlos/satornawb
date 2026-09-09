@@ -2,7 +2,8 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { installAbcLiveDataBridge } from '../vella-parity/VellaHtmlParityPage'
 
 const root = process.cwd()
 
@@ -138,18 +139,63 @@ describe('vella source of truth', () => {
     expect(html).not.toContain('<th>Брать</th>')
   })
 
-  it('requires live backend rows for the ABC report table without static row fallback', () => {
+  it('requires live backend rows for the ABC report table without static row fallback', async () => {
+    // Keep the independent UI guard: bridge state alone cannot prevent a renderer fallback.
     const parityPage = read('src/features/vella-parity/VellaHtmlParityPage.tsx')
-
-    expect(parityPage).toContain('/api/wb/reports/abc?')
-    expect(parityPage).toContain('window.__vellaAbcLiveRows')
-    expect(parityPage).not.toContain(': REPORT_ABC_DATA')
-    expect(parityPage).not.toContain('324 840 ₽')
-    expect(parityPage).not.toContain('68 940 ₽')
-    expect(parityPage).not.toContain('ABC source')
-    expect(parityPage).not.toContain('Все SKU · реклама частичная')
-    expect(parityPage).not.toContain('+41 200 ₽')
-    expect(parityPage).toContain('Загружаем ABC-отчет с бэкенда')
+    for (const demo of [': REPORT_ABC_DATA', '324 840 ₽', '68 940 ₽', 'ABC source',
+      'Все SKU · реклама частичная', '+41 200 ₽']) {
+      expect(parityPage).not.toContain(demo)
+    }
+    const runtime = Object.assign(new EventTarget(), {
+      location: { pathname: '/wb/reports/abc', search: '', origin: 'http://localhost' },
+      localStorage: { getItem: () => null, setItem: () => undefined },
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+      __vellaReportPeriods: {
+        abc: { days: 7, fromIso: '2026-09-01', toIso: '2026-09-07', mode: 'custom' },
+      },
+    })
+    vi.stubGlobal('window', runtime)
+    const requests: Array<{ url: string; method: string }> = []
+    let outcome: 'rows' | 'empty' | 'error' = 'rows'
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      requests.push({ url, method: init?.method ?? 'GET' })
+      if (!url.includes('/api/wb/reports/abc/latest-cache?') || (init?.method ?? 'GET') !== 'GET') {
+        throw new Error('Unexpected request in synthetic ABC fixture')
+      }
+      return new Response(JSON.stringify(outcome === 'error'
+        ? { detail: 'Synthetic backend unavailable' }
+        : { rows: outcome === 'rows' ? [{ sku: 'BACKEND-ONLY' }] : [], filteredSummary: {} }), {
+        status: outcome === 'error' ? 500 : 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      installAbcLiveDataBridge('synthetic-rows-token')
+      await window.__vellaLoadLiveAbcReport?.()
+      expect(window.__vellaAbcLiveRows?.map((row) => row.sku)).toEqual(['BACKEND-ONLY'])
+      for (const next of ['empty', 'error'] as const) {
+        outcome = next
+        installAbcLiveDataBridge(`synthetic-${next}-token`)
+        await window.__vellaLoadLiveAbcReport?.()
+        expect(window.__vellaAbcLiveRows).toEqual([])
+        expect(window.__vellaAbcLiveLoading).toBe(false)
+      }
+      expect(window.__vellaAbcLiveReport).toBeNull()
+      expect(window.__vellaAbcLiveError).toBe('Synthetic backend unavailable')
+      expect(requests).toHaveLength(3)
+      expect(requests.every(({ url, method }) => method === 'GET'
+        && url.includes('2026-09-01') && url.includes('2026-09-07'))).toBe(true)
+      installAbcLiveDataBridge(null)
+      await window.__vellaLoadLiveAbcReport?.()
+      expect(window.__vellaAbcLiveRows).toEqual([])
+      expect(window.__vellaAbcLiveAuthExpired).toBe(true)
+      expect(requests).toHaveLength(3)
+    } finally {
+      warn.mockRestore()
+      vi.unstubAllGlobals()
+    }
   })
 
   it('never exposes legacy mock rows on backend-owned report tabs', () => {

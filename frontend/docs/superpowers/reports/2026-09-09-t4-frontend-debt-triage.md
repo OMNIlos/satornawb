@@ -104,3 +104,24 @@ IDs, only the deprecated-component guard resolved. Typecheck exit0; independent
 critic scoped PASS. JSON `/tmp/satorna-t4-source-guard-full.json`; before/after/
 mutation reports share `/tmp/satorna-t4-source-guard-` prefix. Remaining24 failures
 are unwaived. This scan is an architecture guard, not proof of rendered UI parity.
+
+## ABC live bridge — real results instead of obsolete URL/loading copy
+
+The old source test expected `/api/wb/reports/abc?`; the actual legacy bridge uses
+the period-scoped latest-cache path, while enabled canonical uses the separate v2
+adapter. Original selected test1FAIL. Replace obsolete URL/loading-copy checks with
+actual installAbcLiveDataBridge execution under a fully synthetic fetch boundary:
+one backend row only, empty response,500 error, then null session. Empty/error/auth
+retain no rows; error clears report and finishes loading; null auth makes no request.
+All three requests are GET/latest-cache with the selected dates. No job/provider call.
+
+Keep all six independent no-demo source guards: the new bridge test does not prove
+that a downstream renderer cannot fabricate fallback rows. Critic identified this
+coverage gap and the guards were restored; scoped fix review PASS. Mutation inserting
+a demo row in actual bridge error branch makes the test fail; runtime restored.
+
+Fresh full run280PASS/23FAIL/0pending, versus279/24: zero new IDs, only ABC source
+case resolved, exit1. The full run started before the six guards were restored;
+final focused rerun with them passes1/1 and typecheck passes. Full report
+`/tmp/satorna-t4-abc-source-full.json`, finalfocused `-reviewed.json`, mutation
+`-mutation.json`. No runtime source diff; no full green or renderer parity claim.
