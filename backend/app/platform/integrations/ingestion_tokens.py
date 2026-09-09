@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.cabinet.orm import LkAuditEventRow
 from app.infra.db import get_session_factory, set_tenant_context
@@ -88,6 +88,17 @@ class VerifiedIngestionToken:
     owner: MarketplaceAccountCredentialOwner
     scope: str
     expires_at: datetime
+    account_binding: IngestionAccountBinding
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class IngestionAccountBinding:
+    marketplace_account_id: int
+    provider: str
+    external_account_id: str
+    credential_ref: str | None
+    binding_version: int
+    binding_schema_version: int = 1
 
 
 class IssuedIngestionToken:
@@ -270,7 +281,7 @@ def _owner_rows(
         == owner.marketplace_account_id,
         MarketplaceAccountIngestionTokenRow.provider == "avito",
         MarketplaceAccountIngestionTokenRow.scope == INGESTION_TOKEN_SCOPE,
-    )
+    ).options(defer(MarketplaceAccountIngestionTokenRow.verifier))
     if active_only:
         query = query.where(MarketplaceAccountIngestionTokenRow.revoked_at.is_(None))
     query = query.order_by(
@@ -306,6 +317,7 @@ def _latest_owner_row(
 ) -> MarketplaceAccountIngestionTokenRow | None:
     return session.scalar(
         select(MarketplaceAccountIngestionTokenRow)
+        .options(defer(MarketplaceAccountIngestionTokenRow.verifier))
         .where(
             MarketplaceAccountIngestionTokenRow.organization_id
             == owner.organization_id,
@@ -379,6 +391,72 @@ def _audit(
     )
 
 
+def _database_now(session: Session) -> datetime:
+    now = session.scalar(select(func.clock_timestamp()))
+    if type(now) is not datetime or now.tzinfo is None or now.utcoffset() is None:
+        raise IngestionTokenStoreError("ingestion_token_unavailable")
+    return now.astimezone(timezone.utc)
+
+
+def _captured_binding(account: MarketplaceAccountRow) -> IngestionAccountBinding:
+    from app.platform.integrations.publication_guard import ExpectedAccountBinding, _integer
+
+    ExpectedAccountBinding(account.marketplace_account_id, account.marketplace,
+                           account.external_account_id, account.credential_ref)
+    if not _integer(account.ingestion_binding_version, 2**63 - 1):
+        raise IngestionTokenStoreError("ingestion_token_account_unavailable")
+    return IngestionAccountBinding(account.marketplace_account_id, account.marketplace,
+                                   account.external_account_id, account.credential_ref,
+                                   account.ingestion_binding_version)
+
+
+def _issue_ingestion_token_in_session(
+    session: Session, owner: MarketplaceAccountCredentialOwner, *, expires_at: datetime,
+    actor_user_id: str | None = None,
+) -> IssuedIngestionToken:
+    """Private participant: caller owns authentication, root, policy and commit.
+
+    The one-time wrapper must not escape that root until its commit succeeded.
+    """
+    _validate_owner(owner)
+    account = _require_connected_account(session, owner, lock=True)
+    binding = _captured_binding(account)
+    rows = _owner_rows(session, owner, active_only=True, lock=True)
+    now = _database_now(session)
+    normalized_expiry = _validate_expiry(expires_at, now)
+    for current in rows:
+        current.revoked_at = now
+        current.revocation_reason_code = "token_rotated"
+        _audit(session, current, operation="revoke", result_code="token_rotated", actor_user_id=actor_user_id)
+    if rows:
+        session.flush()
+    secret = raw_bearer = None
+    row = None
+    try:
+        secret = secrets.token_urlsafe(_SECRET_BYTES)
+        if _URLSAFE_SECRET.fullmatch(secret) is None:
+            raise IngestionTokenStoreError("ingestion_token_unavailable")
+        token_id = uuid4()
+        row = MarketplaceAccountIngestionTokenRow(
+            token_id=token_id, organization_id=owner.organization_id,
+            marketplace_account_id=owner.marketplace_account_id, provider="avito",
+            verifier=hashlib.sha256(secret.encode("ascii")).digest(), scope=INGESTION_TOKEN_SCOPE,
+            issued_at=now, expires_at=normalized_expiry, binding_schema_version=1,
+            binding_external_account_id=binding.external_account_id,
+            binding_credential_ref=binding.credential_ref, binding_version=binding.binding_version,
+        )
+        session.add(row)
+        session.flush()
+        _audit(session, row, operation="issue", result_code="issued", actor_user_id=actor_user_id)
+        metadata = _metadata(row, now=now)
+        # Do not leave a verifier-bearing ORM object attached to the Session.
+        session.expunge(row)
+        raw_bearer = f"{_TOKEN_PREFIX}.{owner.organization_id}.{token_id.hex}.{secret}"
+        return IssuedIngestionToken(metadata, raw_bearer)
+    finally:
+        secret = raw_bearer = row = None
+
+
 def issue_ingestion_token(
     owner: MarketplaceAccountCredentialOwner,
     *,
@@ -386,47 +464,15 @@ def issue_ingestion_token(
     actor_user_id: str | None = None,
 ) -> IssuedIngestionToken:
     _validate_owner(owner)
-    _validate_expiry(expires_at, _utc_now())
     session = _new_session()
+    issued = None
+    committed = False
     try:
         set_tenant_context(session, owner.organization_id)
-        _require_connected_account(session, owner, lock=True)
-        current_rows = _owner_rows(session, owner, active_only=True, lock=True)
-        now = _utc_now()
-        normalized_expiry = _validate_expiry(expires_at, now)
-        for current in current_rows:
-            current.revoked_at = now
-            current.revocation_reason_code = "token_rotated"
-        if current_rows:
-            session.flush()
-
-        secret = secrets.token_urlsafe(_SECRET_BYTES)
-        if _URLSAFE_SECRET.fullmatch(secret) is None:
-            raise IngestionTokenStoreError("ingestion_token_unavailable")
-        token_id = uuid4()
-        row = MarketplaceAccountIngestionTokenRow(
-            token_id=token_id,
-            organization_id=owner.organization_id,
-            marketplace_account_id=owner.marketplace_account_id,
-            provider="avito",
-            verifier=hashlib.sha256(secret.encode("ascii")).digest(),
-            scope=INGESTION_TOKEN_SCOPE,
-            issued_at=now,
-            expires_at=normalized_expiry,
-        )
-        session.add(row)
-        session.flush()
-        _audit(
-            session,
-            row,
-            operation="issue",
-            result_code="issued",
-            actor_user_id=actor_user_id,
-        )
+        issued = _issue_ingestion_token_in_session(session, owner, expires_at=expires_at, actor_user_id=actor_user_id)
         session.commit()
-        metadata = _metadata(row, now=now)
-        raw_bearer = f"{_TOKEN_PREFIX}.{owner.organization_id}.{token_id.hex}.{secret}"
-        return IssuedIngestionToken(metadata, raw_bearer)
+        committed = True
+        return issued
     except IngestionTokenStoreError:
         _rollback_safely(session)
         raise
@@ -434,64 +480,74 @@ def issue_ingestion_token(
         _rollback_safely(session)
         raise IngestionTokenStoreError("ingestion_token_unavailable") from None
     finally:
+        if not committed and issued is not None:
+            issued._raw_bearer = None
         _close_safely(session)
+
+
+def _verify_ingestion_token_in_session(session: Session, *, raw_bearer: str) -> VerifiedIngestionToken:
+    """The sole bearer verifier. Locator is untrusted until locked comparison.
+
+    No verifier-bearing ORM rows enter the identity map. Token-only admission and
+    the standalone verifier both deny legacy unbound tokens without rebinding.
+    """
+    secret = candidate_verifier = stored_verifier = token = None
+    try:
+        organization_id, token_id, secret = _parse_bearer(raw_bearer)
+        candidate_verifier = hashlib.sha256(secret.encode("ascii")).digest()
+        root = session.get_transaction()
+        marker = session.info.get("satorna_tenant_context")
+        if marker is not None and (type(marker) is not tuple or len(marker) != 2
+                or (marker[0] is root and marker != (root, organization_id))):
+            raise IngestionTokenStoreError("ingestion_token_invalid")
+        current = session.scalar(text("SELECT current_setting('app.organization_id', true)"))
+        if current not in (None, "", str(organization_id)):
+            raise IngestionTokenStoreError("ingestion_token_invalid")
+        # This is only an RLS locator restriction, not verified account context.
+        set_tenant_context(session, organization_id)
+        t = MarketplaceAccountIngestionTokenRow
+        account_id = session.scalar(select(t.marketplace_account_id).where(
+            t.organization_id == organization_id, t.token_id == token_id,
+            t.provider == "avito", t.scope == INGESTION_TOKEN_SCOPE))
+        if account_id is None:
+            raise IngestionTokenStoreError("ingestion_token_invalid")
+        owner = MarketplaceAccountCredentialOwner(organization_id, int(account_id), "avito")
+        _validate_owner(owner)
+        account = _require_connected_account(session, owner, lock=True, verifier=True)
+        binding = _captured_binding(account)
+        token = session.execute(select(t.marketplace_account_id, t.verifier, t.expires_at, t.revoked_at,
+            t.binding_schema_version, t.binding_external_account_id, t.binding_credential_ref, t.binding_version
+        ).where(t.organization_id == organization_id, t.token_id == token_id,
+                t.provider == "avito", t.scope == INGESTION_TOKEN_SCOPE).with_for_update()).one_or_none()
+        if token is None:
+            raise IngestionTokenStoreError("ingestion_token_invalid")
+        stored_verifier = bytes(token.verifier)
+        secret_matches = hmac.compare_digest(stored_verifier, candidate_verifier)
+        expires_at = _as_utc(token.expires_at)
+        now = _database_now(session)
+        if (not secret_matches or len(stored_verifier) != 32 or token.revoked_at is not None
+                or expires_at is None or expires_at <= now
+                or token.marketplace_account_id != owner.marketplace_account_id
+                or (token.binding_schema_version, token.binding_external_account_id,
+                    token.binding_credential_ref, token.binding_version) !=
+                   (1, binding.external_account_id, binding.credential_ref, binding.binding_version)):
+            raise IngestionTokenStoreError("ingestion_token_invalid")
+        return VerifiedIngestionToken(token_id, owner, INGESTION_TOKEN_SCOPE, expires_at, binding)
+    finally:
+        raw_bearer = secret = candidate_verifier = stored_verifier = token = None
 
 
 def verify_ingestion_token(raw_bearer: str) -> VerifiedIngestionToken:
-    organization_id, token_id, secret = _parse_bearer(raw_bearer)
-    candidate_verifier = hashlib.sha256(secret.encode("ascii")).digest()
     session = _new_session()
     try:
-        set_tenant_context(session, organization_id)
-        candidate = _token_row(
-            session,
-            organization_id=organization_id,
-            token_id=token_id,
-            lock=False,
-        )
-        if candidate is None:
-            raise IngestionTokenStoreError("ingestion_token_invalid")
-        owner = MarketplaceAccountCredentialOwner(
-            organization_id=organization_id,
-            marketplace_account_id=int(candidate.marketplace_account_id),
-            provider="avito",
-        )
-
-        # Global lock order is account row, then token row. The unlocked locator
-        # read is repeated under the token lock before any successful use.
-        _require_connected_account(session, owner, lock=True, verifier=True)
-        row = _token_row(
-            session,
-            organization_id=organization_id,
-            token_id=token_id,
-            lock=True,
-        )
-        if (
-            row is None
-            or int(row.marketplace_account_id) != owner.marketplace_account_id
-        ):
-            raise IngestionTokenStoreError("ingestion_token_invalid")
-        now = _utc_now()
-        stored_verifier = bytes(row.verifier)
-        secret_matches = hmac.compare_digest(stored_verifier, candidate_verifier)
-        expires_at = _as_utc(row.expires_at)
-        if (
-            not secret_matches
-            or len(stored_verifier) != hashlib.sha256().digest_size
-            or row.revoked_at is not None
-            or expires_at is None
-            or expires_at <= now
-        ):
-            raise IngestionTokenStoreError("ingestion_token_invalid")
-        row.last_used_at = now
-        session.flush()
+        with session.no_autoflush:
+            verified = _verify_ingestion_token_in_session(session, raw_bearer=raw_bearer)
+        now = _database_now(session)
+        session.execute(text("UPDATE marketplace_account_ingestion_tokens SET last_used_at=:now "
+                             "WHERE organization_id=:org AND token_id=:token"),
+                        {"now": now, "org": verified.owner.organization_id, "token": verified.token_id})
         session.commit()
-        return VerifiedIngestionToken(
-            token_id=row.token_id,
-            owner=owner,
-            scope=INGESTION_TOKEN_SCOPE,
-            expires_at=expires_at,
-        )
+        return verified
     except IngestionTokenStoreError:
         _rollback_safely(session)
         raise
@@ -499,7 +555,31 @@ def verify_ingestion_token(raw_bearer: str) -> VerifiedIngestionToken:
         _rollback_safely(session)
         raise IngestionTokenStoreError("ingestion_token_unavailable") from None
     finally:
+        raw_bearer = None
         _close_safely(session)
+
+
+def _revoke_ingestion_tokens_in_session(session, owner, reason_code, *, actor_user_id=None):
+    _validate_owner(owner)
+    if type(reason_code) is not str or reason_code not in _REVOCATION_REASONS:
+        raise IngestionTokenStoreError("ingestion_token_reason_invalid")
+    _require_existing_account(session, owner, lock=True)
+    rows = _owner_rows(session, owner, active_only=True, lock=True)
+    now = _database_now(session)
+    for row in rows:
+        row.revoked_at = now
+        row.revocation_reason_code = reason_code
+        _audit(session, row, operation="revoke", result_code=reason_code, actor_user_id=actor_user_id)
+    if rows:
+        session.flush()
+    return tuple(_metadata(row, now=now) for row in rows)
+
+
+def _get_ingestion_token_status_in_session(session, owner):
+    _validate_owner(owner)
+    _require_existing_account(session, owner, lock=False)
+    row = _latest_owner_row(session, owner)
+    return None if row is None else _metadata(row, now=_database_now(session))
 
 
 def revoke_ingestion_tokens(
@@ -511,26 +591,12 @@ def revoke_ingestion_tokens(
     _validate_owner(owner)
     if reason_code not in _REVOCATION_REASONS:
         raise IngestionTokenStoreError("ingestion_token_reason_invalid")
-    now = _utc_now()
     session = _new_session()
     try:
         set_tenant_context(session, owner.organization_id)
-        _require_existing_account(session, owner, lock=True)
-        rows = _owner_rows(session, owner, active_only=True, lock=True)
-        for row in rows:
-            row.revoked_at = now
-            row.revocation_reason_code = reason_code
-            _audit(
-                session,
-                row,
-                operation="revoke",
-                result_code=reason_code,
-                actor_user_id=actor_user_id,
-            )
-        if rows:
-            session.flush()
+        metadata = _revoke_ingestion_tokens_in_session(session, owner, reason_code, actor_user_id=actor_user_id)
         session.commit()
-        return tuple(_metadata(row, now=now) for row in rows)
+        return metadata
     except IngestionTokenStoreError:
         _rollback_safely(session)
         raise
@@ -545,15 +611,10 @@ def get_ingestion_token_status(
     owner: MarketplaceAccountCredentialOwner,
 ) -> IngestionTokenMetadata | None:
     _validate_owner(owner)
-    now = _utc_now()
     session = _new_session()
     try:
         set_tenant_context(session, owner.organization_id)
-        _require_existing_account(session, owner, lock=False)
-        row = _latest_owner_row(session, owner)
-        if row is None:
-            return None
-        return _metadata(row, now=now)
+        return _get_ingestion_token_status_in_session(session, owner)
     except IngestionTokenStoreError:
         _rollback_safely(session)
         raise

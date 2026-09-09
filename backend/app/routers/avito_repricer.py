@@ -278,7 +278,7 @@ def _rate_limit_key(account_ids: list[str]) -> str:
 def _rate_limit_error(message: str = "Avito rate limit is active") -> dict[str, Any]:
     return {
         "code": "rate_limited",
-        "message": message,
+        "message": "Avito rate limit is active",
         "retryable": True,
         "blockerIds": ["AVITO_RATE_LIMIT"],
     }
@@ -310,7 +310,7 @@ def _active_rate_limit(cooldown: dict[str, Any] | None) -> dict[str, Any] | None
     if retry_at <= now:
         return None
     return {
-        **_rate_limit_error(str(cooldown.get("message") or "Avito API is cooling down after 429")),
+        **_rate_limit_error(),
         "retryAfterUntil": retry_at.isoformat(),
         "retryAfterSeconds": max(1, int((retry_at - now).total_seconds())),
     }
@@ -321,12 +321,66 @@ def _save_rate_limit(organization_id: int, account_ids: list[str], *, message: s
     retry_after_until = now + timedelta(seconds=AVITO_REPRICER_RATE_LIMIT_COOLDOWN_SECONDS)
     payload = {
         "code": "rate_limited",
-        "message": message or "Avito HTTP 429",
+        "message": "Avito HTTP 429",
         "retryAfterUntil": retry_after_until.isoformat(),
         "savedAt": now.isoformat(),
     }
     save_source_cache(organization_id, _rate_limit_key(account_ids), payload)
     return payload
+
+
+def _safe_source_error(error: Any) -> dict[str, Any] | None:
+    """Explicit diagnostic projection, never a recursive secret-key redactor."""
+    if error is None:
+        return None
+    if isinstance(error, BaseModel):
+        try:
+            error = error.model_dump(mode="json")
+        except Exception:
+            error = None
+    raw = error if type(error) is dict else {}
+    messages = {
+        "auth_required": "Avito authentication required",
+        "forbidden_scope": "Avito permission required",
+        "rate_limited": "Avito rate limit is active",
+        "avito_server_error": "Avito server error",
+        "avito_request_failed": "Avito request failed",
+        "transport_error": "Avito transport error",
+    }
+    code = raw.get("code")
+    if type(code) is not str or code not in messages:
+        code = "avito_request_failed"
+    blockers = raw.get("blockerIds")
+    allowed = ("AVITO_AUTH", "AVITO_SCOPE", "AVITO_RATE_LIMIT", "AVITO_STATS", "AVITO_LISTINGS", "AVITO_CHATS")
+    result = {"code": code, "message": messages[code],
+              "retryable": raw.get("retryable") if type(raw.get("retryable")) is bool else False,
+              "blockerIds": [v for v in blockers if type(v) is str and v in allowed] if type(blockers) is list else []}
+    until = raw.get("retryAfterUntil")
+    if type(until) is str:
+        try:
+            parsed = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            if parsed.utcoffset() is not None:
+                result["retryAfterUntil"] = parsed.isoformat()
+        except ValueError:
+            pass
+    seconds = raw.get("retryAfterSeconds")
+    if type(seconds) is int and seconds >= 0:
+        result["retryAfterSeconds"] = seconds
+    return result
+
+
+def _safe_source_diagnostics(diagnostics: Any) -> dict[str, Any] | None:
+    if type(diagnostics) is not dict:
+        return None
+    result = {}
+    for key in ("groupings", "dataTotalCount", "itemsCount", "pages"):
+        value = diagnostics.get(key)
+        if type(value) is int and value >= 0:
+            result[key] = value
+    status = diagnostics.get("status")
+    if type(status) is int and 100 <= status <= 599:
+        result["status"] = status
+    return result
 
 
 def _rounded_kopecks(value: int) -> int:
@@ -469,8 +523,8 @@ def _response_payload(
                 "maxDepthDays": 270,
             },
             "repricerSettings": repricer_settings,
-            "diagnostics": diagnostics,
-            "error": error.model_dump(mode="json") if hasattr(error, "model_dump") else error,
+            "diagnostics": _safe_source_diagnostics(diagnostics),
+            "error": _safe_source_error(error),
         },
     }
 
@@ -514,11 +568,13 @@ def _cache_hit_payload(cached: dict[str, Any], organization_id: int | None = Non
     cache["status"] = "hit"
     source["cache"] = cache
     source["error"] = None
+    source["diagnostics"] = _safe_source_diagnostics(source.get("diagnostics"))
     payload["source"] = source
     return payload
 
 
 def _stale_cached_payload(cached: dict[str, Any], error: dict[str, Any], organization_id: int | None = None) -> dict[str, Any]:
+    error = _safe_source_error(error) or {}
     payload = _cache_hit_payload(cached, organization_id)
     payload["status"] = "partial"
     source = dict(payload.get("source") or {})
@@ -630,6 +686,7 @@ def approve_avito_repricer_price_approval(request: Request, approvalId: str) -> 
     credentials = get_user_avito_credentials_secret(actor.user_id) or get_organization_avito_credentials_secret(actor.organization_id)
     if credentials is None:
         raise HTTPException(status_code=409, detail={"code": "AVITO_CREDENTIALS_REQUIRED", "message": "Avito credentials are required to apply a price"})
+    apply_failed = False
     try:
         access_token = resolve_user_avito_access_token(
             user_id=actor.user_id,
@@ -642,9 +699,11 @@ def approve_avito_repricer_price_approval(request: Request, approvalId: str) -> 
             base_url=settings.avito_api_base_url,
             timeout_seconds=settings.avito_api_timeout_seconds,
         ).update_price(str(approval.get("itemId") or ""), int(approval.get("recommendedPriceKopecks") or 0))
-    except Exception as exc:
-        logger.warning("Avito price apply failed approval_id=%s item_id=%s error=%r", approvalId, approval.get("itemId"), exc)
-        raise HTTPException(status_code=409, detail={"code": "AVITO_PRICE_APPLY_FAILED", "message": str(exc)[:500]}) from exc
+    except Exception:
+        apply_failed = True
+    if apply_failed:
+        logger.warning("AVITO_PRICE_APPLY_FAILED")
+        raise HTTPException(status_code=409, detail={"code": "AVITO_PRICE_APPLY_FAILED", "message": "Avito price apply failed"}) from None
     updated = [item for item in payload["items"] if item.get("approvalId") != approvalId]
     _save_pending_approvals(actor.organization_id, updated)
     approved = {**approval, "status": "approved", "resolvedAt": datetime.now(timezone.utc).isoformat()}
@@ -702,6 +761,7 @@ def get_avito_repricer(
         raise HTTPException(status_code=409, detail="AVITO_CREDENTIALS_REQUIRED")
 
     settings = get_settings()
+    oauth_failed = False
     try:
         access_token = resolve_user_avito_access_token(
             user_id=actor.user_id,
@@ -709,8 +769,10 @@ def get_avito_repricer(
             base_url=settings.avito_api_base_url,
             timeout_seconds=settings.avito_api_timeout_seconds,
         )
-    except Exception as exc:
-        raise HTTPException(status_code=409, detail="AVITO_OAUTH_FAILED") from exc
+    except Exception:
+        oauth_failed = True
+    if oauth_failed:
+        raise HTTPException(status_code=409, detail="AVITO_OAUTH_FAILED") from None
 
     client = build_avito_listings_client(
         access_token=access_token,
@@ -719,9 +781,11 @@ def get_avito_repricer(
     )
     result = client.fetch_listings(AvitoListingsFetchRequest(dateFrom=start, dateTo=end, accountIds=account_id))
     error_payload = result.error.model_dump(mode="json") if result.error is not None else None
-    if _is_rate_limited_error(error_payload):
-        saved_limit = _save_rate_limit(actor.organization_id, account_id, message=(error_payload or {}).get("message"))
-        error_payload = {**(error_payload or _rate_limit_error()), **saved_limit}
+    rate_limited = _is_rate_limited_error(error_payload)
+    error_payload = _safe_source_error(error_payload)
+    if rate_limited:
+        saved_limit = _save_rate_limit(actor.organization_id, account_id)
+        error_payload = {**_rate_limit_error(), **saved_limit}
         if isinstance(cached, dict) and cached.get("rows"):
             return _stale_cached_payload(cached, error_payload, actor.organization_id)
     payload = _response_payload(

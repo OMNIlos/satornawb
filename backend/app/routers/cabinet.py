@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy.orm import Session
 
 from app.cabinet.schemas import (
     AuditEventView,
@@ -52,30 +51,18 @@ from app.control_plane.auth import (
     has_permission,
     hash_password,
 )
-from app.infra.db import get_db_session
-from app.platform.integrations.access import (
-    MarketplaceAccountCredentialAccess,
-    get_marketplace_credential_actor,
-    require_marketplace_account_credential_access,
-    require_marketplace_credential_write,
+from app.infra.db import get_session_factory
+from app.platform.integrations.access import get_marketplace_credential_actor
+from app.platform.integrations.credential_management import (
+    CredentialManagementError,
+    CredentialManagementService,
 )
 from app.platform.integrations.credential_store import (
     CredentialMetadata,
-    CredentialStoreError,
-    get_marketplace_credential_metadata,
-    put_marketplace_credential,
-    require_marketplace_credential_store_ready,
-    resolve_marketplace_credential,
-    revoke_marketplace_credential,
+    _load_keyring,
 )
-from app.platform.integrations.wb_credentials import (
-    WbCredentialBindingError,
-    fetch_wb_seller_id,
-)
-from app.security.marketplace_credentials import (
-    MAX_SECRET_FIELD_BYTES,
-    CredentialCryptoError,
-)
+from app.platform.integrations.wb_credentials import fetch_wb_seller_id
+from app.security.marketplace_credentials import MAX_SECRET_FIELD_BYTES
 
 
 router = APIRouter(tags=["cabinet"])
@@ -122,18 +109,29 @@ def _validate_avito_credentials_for_user_request(client_id: str, client_secret: 
 
 
 def _credential_error(code: str) -> HTTPException:
-    if code == "credential_account_not_found":
+    if code == "WB_CREDENTIAL_IDENTITY_INVALID":
+        return HTTPException(status_code=400, detail={
+            "code": code, "message": "WB credential identity could not be verified"})
+    if code == "WB_SELLER_IDENTITY_MISMATCH":
+        return HTTPException(status_code=409, detail={
+            "code": code, "message": "WB seller identity does not match marketplace account"})
+    if code == "credential_management_access_denied":
+        status_code = 403
+    elif code == "credential_account_not_found":
         status_code = 404
     elif code in {
         "credential_account_identity_mismatch",
         "credential_auth_failed",
         "credential_expired",
+        "credential_concurrent_update",
     }:
         status_code = 409
     elif code in {
         "credential_configuration_invalid",
         "credential_persistence_failed",
         "credential_key_unavailable",
+        "credential_management_context_invalid",
+        "credential_management_readback_required",
     }:
         status_code = 503
     elif code == "credential_missing":
@@ -146,20 +144,16 @@ def _credential_error(code: str) -> HTTPException:
     )
 
 
-def _credential_access(
-    session: Session,
-    actor: ActorContext,
-    *,
-    marketplace_account_id: int,
-    provider: str,
-) -> MarketplaceAccountCredentialAccess:
-    require_marketplace_credential_write(actor)
-    return require_marketplace_account_credential_access(
-        session,
-        actor,
-        marketplace_account_id=marketplace_account_id,
-        provider=provider,
-    )
+def _credential_management_service() -> CredentialManagementService:
+    failed = False
+    try:
+        service = CredentialManagementService(session_factory=get_session_factory(),
+            keyring_loader=_load_keyring, wb_seller_verifier=fetch_wb_seller_id)
+    except Exception:  # noqa: BLE001 - never expose configured pool/key paths.
+        failed = True
+    if failed:
+        raise _credential_error("credential_configuration_invalid")
+    return service
 
 
 def _require_user_managed_credential_kind(
@@ -475,23 +469,18 @@ def get_marketplace_account_credential_status(
     provider: str,
     credentialKind: str,
     actor: ActorContext = Depends(get_marketplace_credential_actor),
-    session: Session = Depends(get_db_session),
+    management: CredentialManagementService = Depends(_credential_management_service),
 ) -> DataEnvelope[MarketplaceCredentialStatusView]:
     _require_user_managed_credential_kind(provider, credentialKind)
-    access = _credential_access(
-        session,
-        actor,
-        marketplace_account_id=marketplaceAccountId,
-        provider=provider,
-    )
+    code = None
     try:
-        metadata = get_marketplace_credential_metadata(access.owner, credentialKind)
-        view = _credential_status_view(marketplaceAccountId, metadata)
-        if view.status == "active":
-            resolve_marketplace_credential(access.owner, credentialKind)
-    except (CredentialCryptoError, CredentialStoreError) as exc:
-        raise _credential_error(exc.code) from None
-    return DataEnvelope(data=view)
+        metadata = management.status(authenticated_actor=actor, marketplace_account_id=marketplaceAccountId,
+                                     provider=provider, credential_kind=credentialKind)
+    except CredentialManagementError as error:
+        code = error.code
+    if code is not None:
+        raise _credential_error(code)
+    return DataEnvelope(data=_credential_status_view(marketplaceAccountId, metadata))
 
 
 @router.put(
@@ -504,51 +493,20 @@ def put_marketplace_account_credential(
     credentialKind: str,
     payload: MarketplaceCredentialWriteRequest,
     actor: ActorContext = Depends(get_marketplace_credential_actor),
-    session: Session = Depends(get_db_session),
+    management: CredentialManagementService = Depends(_credential_management_service),
 ) -> DataEnvelope[MarketplaceCredentialStatusView]:
     _require_user_managed_credential_kind(provider, credentialKind)
-    access = _credential_access(
-        session,
-        actor,
-        marketplace_account_id=marketplaceAccountId,
-        provider=provider,
-    )
     plaintext = _credential_payload(provider, credentialKind, payload)
+    code = None
     try:
-        require_marketplace_credential_store_ready()
-    except (CredentialCryptoError, CredentialStoreError) as exc:
-        raise _credential_error(exc.code) from None
-    expected_external_account_id: str | None = None
-    if provider == "wb":
-        try:
-            seller_id = fetch_wb_seller_id(plaintext["token"])
-        except WbCredentialBindingError:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "WB_CREDENTIAL_IDENTITY_INVALID",
-                    "message": "WB credential identity could not be verified",
-                },
-            ) from None
-        if seller_id != access.external_account_id:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "WB_SELLER_IDENTITY_MISMATCH",
-                    "message": "WB seller identity does not match marketplace account",
-                },
-            )
-        expected_external_account_id = seller_id
-    try:
-        metadata = put_marketplace_credential(
-            access.owner,
-            credentialKind,
-            plaintext,
-            actor_user_id=actor.user_id,
-            expected_external_account_id=expected_external_account_id,
-        )
-    except (CredentialCryptoError, CredentialStoreError) as exc:
-        raise _credential_error(exc.code) from None
+        metadata = management.put(authenticated_actor=actor, marketplace_account_id=marketplaceAccountId,
+                                  provider=provider, credential_kind=credentialKind, plaintext=plaintext)
+    except CredentialManagementError as error:
+        code = error.code
+    finally:
+        plaintext.clear()
+    if code is not None:
+        raise _credential_error(code)
     return DataEnvelope(
         data=_credential_status_view(marketplaceAccountId, metadata)
     )
@@ -564,24 +522,17 @@ def delete_marketplace_account_credential(
     credentialKind: str,
     reasonCode: str = Query(default="operator_revoked"),
     actor: ActorContext = Depends(get_marketplace_credential_actor),
-    session: Session = Depends(get_db_session),
+    management: CredentialManagementService = Depends(_credential_management_service),
 ) -> DataEnvelope[MarketplaceCredentialStatusView]:
     _require_user_managed_credential_kind(provider, credentialKind)
-    access = _credential_access(
-        session,
-        actor,
-        marketplace_account_id=marketplaceAccountId,
-        provider=provider,
-    )
+    code = None
     try:
-        metadata = revoke_marketplace_credential(
-            access.owner,
-            credentialKind,
-            reasonCode,
-            actor_user_id=actor.user_id,
-        )
-    except (CredentialCryptoError, CredentialStoreError) as exc:
-        raise _credential_error(exc.code) from None
+        metadata = management.revoke(authenticated_actor=actor, marketplace_account_id=marketplaceAccountId,
+            provider=provider, credential_kind=credentialKind, reason_code=reasonCode)
+    except CredentialManagementError as error:
+        code = error.code
+    if code is not None:
+        raise _credential_error(code)
     return DataEnvelope(
         data=_credential_status_view(marketplaceAccountId, metadata)
     )

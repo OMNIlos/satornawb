@@ -4,6 +4,37 @@
 
 ## Delivery boundaries
 
+### Actual-schema audit amendment (2026-09-09)
+
+The integration owner approved this source-only correction: `lk_audit_events`
+is created by0005 and extended by0006, but has no RLS contract. A restrictive
+policy alone would not constrain runner writes. Do not enable/change global audit
+RLS or grant the runner direct audit access. Add one fixed maintenance safe-audit
+helper, SECURITY INVOKER and ungranted in inert schema, transferred to the dedicated
+NOLOGIN/non-superuser/non-BYPASSRLS/non-table-owner helper role before SECURITY
+DEFINER activation in the inert provisioning artifact. Runner cannot inherit or
+SET ROLE to that owner.
+
+The helper accepts only authorization UUID and closed backfill|verify operation,
+authenticates actual session_user OID+name, reuses checked metadata/binding locks
+and fresh validity, derives owner/target/object from metadata and the exact
+generation1 credential, and writes fixed schema-qualified audit SQL. No caller
+JSON, actor, scope, message or arbitrary SQL selects audit authority. Helper owner
+receives only required audit INSERT columns and exact existing sequence USAGE,
+not audit SELECT. Runner gets only exact helper EXECUTE, never base audit or
+sequence privileges. PUBLIC EXECUTE remains denied. Exact inert/active manifest
+and deprovision include the helper and its grants.
+
+The trusted store calls it only AFTER actual persisted-readback/decrypt/equality
+verification in the same physical root. A directly callable audit helper is not
+proof of that verification or malicious-runner algorithm compliance. Document
+explicit retry's audit semantics separately from idempotent ciphertext state;
+do not promise exactly-once audit without a persisted receipt. Negative ACL,
+principal-forgery and rollback/commit cases join the final gate. No role/template
+execution, production database or operational key action is authorized.
+
+### Delivery order
+
 1. Inert forward schema, narrow atomic provisioning artifact, actual disposable-role/lock/source-invalidation acceptance. No global operational role creation in Alembic; no key load or consumer.
 2. One new store-owned backfill/verify operation using existing crypto and persisted resolver core, same physical root, exact source/history admission, safe audit and rollback; no public consumer or CLI.
 3. Inventory/backfill/verify/report CLI and synthetic interruption/restore rehearsal after those two independently accepted contracts. Operational mapping proof, principal custody, validity/timeout/drain and key lifecycle policies are mandatory external inputs, never defaults.
@@ -32,7 +63,7 @@ Authorization partial UNIQUE(org,account,provider,kind) WHERE revoked_at IS NULL
 
 ## Inert Alembic contract
 
-One transactional new revision creates only private schema/two tables, FORCE RLS, schema-admin-only unfiltered metadata SELECT policies, and fixed static SECURITY INVOKER function definitions. No source/history views or source trigger registrations yet. Functions: lock helper and separate provider-specific invalidators plus exact metadata invariants. Schema/table/function/column ACLs scrub every non-owner grant/default-created grant option atomically; no global ALTER DEFAULT PRIVILEGES change. All functions `search_path=pg_catalog,pg_temp`; all table references qualified.
+One transactional new revision creates only private schema/two tables, FORCE RLS, schema-admin-only unfiltered metadata SELECT policies, and fixed static SECURITY INVOKER function definitions. No source/history views or source trigger registrations yet. Functions: lock helper, fixed safe-audit helper, separate provider-specific invalidators and exact metadata invariants. Schema/table/function/column ACLs scrub every non-owner grant/default-created grant option atomically; no global ALTER DEFAULT PRIVILEGES change. All functions `search_path=pg_catalog,pg_temp`; all table references qualified.
 
 The metadata SELECT policy targets the actual schema/table-owner role and grants neither operational registration nor bypass. Empty-proof code validates the owner/policy before treating count zero as true emptiness. Existing forced tenant RLS on accounts/encrypted rows remains unchanged. No `CREATE ROLE`, role membership, SECURITY DEFINER under migrator, auto template invocation or installed runtime flag.
 
@@ -54,7 +85,7 @@ Runtime gets no maintenance grants. Trigger invocation does not require direct r
 
 Install ordinary enabled source triggers (tgenabled='O'), exact AFTER ROW UPDATE OF watched columns and DELETE; not ENABLE ALWAYS. Preflight refuses runtime/runner effective legacy TRUNCATE, source ownership, ALTER/DISABLE capability, privileged SET ROLE or applicable session_replication_role SET privilege; it never repairs old runtime ACLs. Refuse incompatible pre-existing rewrite/trigger behavior rather than claim cache-only safety blindly. Exact origin-mode, unrelated trigger preservation, bypass denial and absent/wrong GUC tests required. Privileged replica/restore/truncate/disable stays a separate suspension/re-review operation.
 
-Runner encrypted-table SELECT and INSERT policies are explicitly role-targeted RESTRICTIVE, intersecting the existing permissive tenant policy with active persisted direct-session principal and exact approved target/owner/kind; INSERT also requires allow_backfill and generation1. Audit INSERT has corresponding restrictive allowlist. No runner UPDATE/DELETE/TRUNCATE. Helper/view owner has metadata-only history rights and is distinct from runner, so ALL historical UUIDs remain visible as metadata through the scoped view. Caller GUC cannot bypass the restrictive authorization condition; adding merely permissive policies is insufficient.
+Runner encrypted-table SELECT and INSERT policies are explicitly role-targeted RESTRICTIVE, intersecting the existing permissive tenant policy with active persisted direct-session principal and exact approved target/owner/kind; INSERT also requires allow_backfill and generation1. Audit uses only the fixed helper in the actual-schema amendment, not a runner base-table grant or a non-enforcing policy on the existing non-RLS table. No runner UPDATE/DELETE/TRUNCATE. Helper/view owner has metadata-only history rights and is distinct from runner, so ALL historical UUIDs remain visible as metadata through the scoped view. Caller GUC cannot bypass the restrictive authorization condition; adding merely permissive policies is insufficient.
 
 Separate explicit empty-only deprovision artifact uses the same fixed-order ACCESS EXCLUSIVE NOWAIT locks, proves BOTH private tables unfiltered empty and exact active manifest, then removes caller rights/exact views/triggers and operational policies, converts functions to invoker BEFORE ownership return, and proves exact inert state before commit. Any failure rolls back; no waits/retries/cleanup of populated history. Dedicated owner roles may be removed only if exact dependency checks prove no unrelated use; never delete registrar/runner identities or DROP OWNED/CASCADE. Any retained target/authorization (even expired/revoked) refuses. Populated suspension/retirement remains a later owner-approved procedure, not a destructive rollback.
 
