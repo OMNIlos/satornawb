@@ -5,6 +5,11 @@ from typing import Literal
 
 PermissionProfile = Literal["viewer", "settings_editor", "price_sender", "finance_viewer", "admin", "custom"]
 
+PRODUCTION_PERMISSION_KEYS = frozenset({"production:read", "production:create", "production:assign"})
+PRODUCTION_READ_PERMISSIONS = frozenset({"production:read"})
+PRODUCTION_CREATE_PERMISSIONS = frozenset({"production:read", "production:create"})
+PRODUCTION_ASSIGN_PERMISSIONS = frozenset({"production:read", "production:assign"})
+
 LEGACY_PROFILE_ALIASES: dict[str, PermissionProfile] = {
     "admin": "admin",
     "owner": "admin",
