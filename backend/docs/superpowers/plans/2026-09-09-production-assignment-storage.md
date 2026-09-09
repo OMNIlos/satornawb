@@ -28,6 +28,13 @@
 - Create `backend/tests/test_production_assignment_lifecycle.py`.
 - Create `backend/tests/test_production_assignment_rls.py`.
 - Create `backend/docs/superpowers/reports/2026-09-09-t1-production-assignment-schema-handoff.md`.
+- Modify `backend/tests/test_orders_schema_integration.py` only the existing credential-fixture revision regression and its focused negative controls, as the controller amendment below specifies.
+
+### Controller amendment: repair inherited fixture-admission regression
+
+The mandatory adjacent gate produced438PASS/1FAIL on this candidate. Both the failing Orders test and credential fixture are byte-identical to review BASEf563d8a. Earlier accepted53e0549 extracted the actual0060→0061→0060→0061 bootstrap into `_bootstrap_postgres`; the old AST assertion still walks only `disposable_postgres` and sees zero upgrade calls. This is a pre-existing test regression, not permission to waive the required gate.
+
+Keep migration0069, runtime grants and credential fixture unchanged. In the existing Orders test, validate the actual fixture dispatch to local/native generators, their calls to the shared bootstrap, and the bootstrap's exact pinned upgrade/downgrade sequence. Preserve failure when a reachable upgrade target becomes `head` or a wrong revision, or when either generator bypasses the bootstrap; do not pass by finding disconnected literals anywhere in the file. Reproduce the current focused failure before editing, then add focused negative controls and run the repaired pure test group without PostgreSQL. This is the sole additional write path; no broad test cleanup. The original failed adjacent run remains evidence, and the full seven-file adjacent gate must pass in a later explicitly allocated heavy slot before READY. One bounded implementation commit includes this test repair; controller review BASE remainsf563d8a and includes this visible docs amendment.
 
 **Consumes:** accepted spec; existing0062 Orders scoped FK/quantity/version and Catalog/member anchors,0064 account-first discipline, accepted account context2408839 and physical guard8338ef7 as consumer requirements; candidate.cluster/disposable_database/migrate; latest-head runtime script fixture from test_orders_schema_integration. Source codec and exact literal test:
 `72dfaccb9e6190234c025f3c96bcfef400ce43b0:backend/app/modules/production.py` and `backend/tests/test_production_assignment_serialization.py` (read only).
@@ -106,7 +113,7 @@ git diff --check
 ```
 
 All listed adjacent filenames were confirmed in the current checkout before plan completion. Report later removal/rename to controller, not silent omission. Scoped Ruff new Python; exact own resource cleanup/absence for success and fault paths. `/dev/null` passfile warnings remain disclosed, no real password-file access. No app/provider/production actions.
-- [ ] Self-review exact accepted spec and six-path scope; commit `feat: add scoped Production assignment storage`, report RED/GREEN/commands/exit/cleanup/solehead/DDL API/caller lock-clock-source obligations and unselected permission gates. Independent task review before exact READY T3. Do not implement domain writer or next migration.
+- [ ] Self-review exact accepted spec and amended seven-path implementation scope; commit `feat: add scoped Production assignment storage`, report RED/GREEN/commands/exit/cleanup/solehead/DDL API/caller lock-clock-source obligations and unselected permission gates. Independent task review before exact READY T3. Do not implement domain writer or next migration.
 
 ## Controller preflight
 
