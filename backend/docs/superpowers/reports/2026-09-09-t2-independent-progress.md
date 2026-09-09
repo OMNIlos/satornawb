@@ -2,6 +2,21 @@
 
 ## CURRENT — original requirements, local readiness and owners
 
+Stage4A source package for T1 now includes complete org algorithm settings/three
+basket-default and liquidation command encoding at
+`app/modules/wb_repricing_state_commands.py`. Latest exact field/byte contract is
+appended to the existing settings-state-schema-request; five pinned synthetic SQL
+prerequisite vectors are in `tests/fixtures/wb_repricing_state_golden_v1.json`.
+Implementation first, then final **232PASS0.18s**, naturalexit0, across new state
+commands + existing assignment and override commands under env-i/offline sandbox.
+Compileall/Ruff/diff0. No intermediate test loop, no live sources/DB/DDL/auth defaults.
+Own final critical pass checked exact field families, Decimal bounds, scoped/version
+binding, immutable children and liquidation terminal/confirmation rules. Real SQL
+parity, new state repositories/CAS/audit and one-writer fence remain unimplemented;
+T1 owns requested tables, and missing immutable mapping/source facts still block
+reproducible canonical context publication. Codec is not permission or evidence of
+the user's true ownership. Rollback is source/tests/docs-only, with no persisted rows.
+
 Latest process amendment: complete an implementation package first, then its final
 checks; no repeated intermediate test/review loops. Independent calculation service
 now exists in `app/modules/wb_repricing_calculation.py`: detached recursively frozen
