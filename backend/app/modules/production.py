@@ -1,5 +1,7 @@
 """Pure assignment preconditions; this module performs no authorization or writes."""
 
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Literal
 
@@ -35,6 +37,59 @@ class OrderCommandConflict(OrderContractValidationError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+def serialize_assignment_command(command: AssignmentCommand) -> bytes:
+    """Exact v1 receipt bytes from the accepted schema request, not a DB write."""
+    if type(command) is not AssignmentCommand:
+        raise OrderContractValidationError("Exact assignment command required")
+    value = {
+        "schema_version": 1,
+        "command": {
+            field: getattr(command, field)
+            for field in (
+                "work_item_id",
+                "expected_version",
+                "idempotency_key",
+                "catalog_sku_id",
+                "reason",
+            )
+        },
+    }
+    return json.dumps(
+        value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), allow_nan=False
+    ).encode("ascii")
+
+
+def assignment_command_checksum(command: AssignmentCommand) -> str:
+    return hashlib.sha256(serialize_assignment_command(command)).hexdigest()
+
+
+def deserialize_assignment_command(payload: bytes) -> AssignmentCommand:
+    try:
+        if type(payload) is not bytes:
+            raise ValueError
+        value = json.loads(payload)
+        if type(value) is not dict or set(value) != {"schema_version", "command"}:
+            raise ValueError
+        if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+            raise ValueError
+        if type(value["command"]) is not dict or set(value["command"]) != {
+            "work_item_id",
+            "expected_version",
+            "idempotency_key",
+            "catalog_sku_id",
+            "reason",
+        }:
+            raise ValueError
+        command = AssignmentCommand(**value["command"])
+        if serialize_assignment_command(command) != payload:
+            raise ValueError
+        return command
+    except (ValueError, TypeError, UnicodeError):
+        raise OrderContractValidationError(
+            "Invalid assignment receipt payload"
+        ) from None
 
 
 def validate_assignment_preconditions(
