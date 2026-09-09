@@ -93,6 +93,9 @@ BEGIN
   PERFORM 1 FROM public.marketplace_accounts
     WHERE organization_id=NEW.organization_id
       AND marketplace_account_id=NEW.marketplace_account_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='orders_run_binding_mismatch';
+  END IF;
   SELECT marketplace, external_account_id, credential_ref INTO actual
     FROM public.marketplace_accounts
     WHERE organization_id=NEW.organization_id
