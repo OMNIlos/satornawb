@@ -72,3 +72,19 @@ cleanup slices: **274 passed / 26 failed / 0 pending**, exit 1; versus the prece
 266/27 report, **0 new failure IDs, 1 resolved**. New cases account for the additional
 passes. Report: `/tmp/satorna-t4-notifications-after.json`. The next SKU browser
 fixture was created after this full run began and is verified separately.
+
+## Expense header help — behavior instead of an obsolete label
+
+The expense table already uses `Статья расходов` rather than the old `Статья ДДС`.
+Original focused run: 2 pass / 1 fail on the obsolete source literal. The new
+assertion renders the real nonempty expense table and requires all nine headers
+to carry nonempty help tips, while retaining the other reports' formula checks.
+The component gains only an export; no formula, handler or displayed copy changes.
+Mutation replacing the first help header with plain th fails the new test; restored
+focused set is 3 pass. Independent scoped critic: PASS; this is SSR, not tooltip
+interaction proof. Direct typecheck and diff check exit 0.
+
+Fresh full suite after shared-HTML compatibility: **278 pass / 25 fail / 0 pending**,
+exit 1. Against 277/26: zero new IDs, exactly the expense help test resolved.
+Reports `/tmp/satorna-t4-help-full.json`, `/tmp/satorna-t4-report-help-mutation.json`.
+All remaining 25 failures are still unwaived.

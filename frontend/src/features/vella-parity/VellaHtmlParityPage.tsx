@@ -10765,7 +10765,7 @@ function ReportTableMoreRow({ colSpan, shown, total, onMore }: { colSpan: number
   )
 }
 
-function ExpensesTableShellIsland({ replacementKey, state }: { replacementKey: string; state: ExpensesLiveState }) {
+export function ExpensesTableShellIsland({ replacementKey, state }: { replacementKey: string; state: ExpensesLiveState }) {
   const rows = state.status === 'ready' ? getExpensesRows(state.report) : []
   const renderWindow = useReportTableRenderLimit(rows.length)
   const visibleRows = rows.slice(0, renderWindow.limit)
