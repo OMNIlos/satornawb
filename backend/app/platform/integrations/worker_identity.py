@@ -5,6 +5,9 @@ from dataclasses import dataclass
 import re
 
 from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.platform.integrations.publication_guard import _physical_connection
 
 
 class ExecutorIdentityDenied(ValueError):
@@ -35,7 +38,9 @@ class ExecutorRoleIdentity:
 def verify_executor_login(session, *, identity: ExecutorRoleIdentity) -> None:
     """Check the actual current connection, never SET ROLE/GUC/queue assertions."""
     try:
-        if type(identity) is not ExecutorRoleIdentity:
+        if (type(identity) is not ExecutorRoleIdentity or not isinstance(session, Session)
+                or not session.in_transaction() or not session.is_active or session.in_nested_transaction()
+                or _physical_connection(session).get_isolation_level() != "READ COMMITTED"):
             raise ExecutorIdentityDenied()
         executor = role_name(identity.marketplace_executor_role)
         api = role_name(identity.marketplace_api_runtime_role)
