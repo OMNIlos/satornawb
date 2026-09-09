@@ -19,7 +19,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.cabinet.orm import LkSessionRow, LkUserRow
-from app.cabinet.permissions import permissions_from_profile
+from app.cabinet.permissions import (
+    PRODUCTION_PERMISSION_KEYS,
+    PRODUCTION_READ_PERMISSIONS,
+    permissions_from_profile,
+)
 from app.infra.db import set_tenant_context
 from app.platform.identity.orm import IamMembershipRow
 from app.platform.integrations.orm import (
@@ -125,6 +129,9 @@ def _contracts(principal, required_permissions, accounts, authorities):
     principal.__post_init__()
     if (type(required_permissions) is not frozenset or not required_permissions
             or not all(_text(p, 64) for p in required_permissions)):
+        raise PublicationGuardError("publication_context_invalid")
+    if (required_permissions & (PRODUCTION_PERMISSION_KEYS - PRODUCTION_READ_PERMISSIONS)
+            and not PRODUCTION_READ_PERMISSIONS <= required_permissions):
         raise PublicationGuardError("publication_context_invalid")
     if type(accounts) not in (tuple, list) or not accounts:
         raise PublicationGuardError("publication_binding_changed")

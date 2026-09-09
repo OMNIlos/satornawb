@@ -127,9 +127,17 @@ DEL and all non-ASCII escaped, supplementary codepoints UTF16 surrogate pairs.
 No jsonb::text substitute; domain does not impose 4096 request cap here.
 Byte equality against reconstructed typed values enforces lexical canonical bytes,
 then SHA256 equality; parsed projection must match all exact keys/types and values.
-Strict decimal JSON numeric representation excludes bool, quoted numerics, floats,
-exponents and null before casts; casts bounded/sanitized, never rounded. Preserve
-requested physical BIGINT/INTEGER bounds. Result payload equals all seven values
+Canonical request bytes require strict decimal integer tokens: no bool, quoted
+numerics, fractional or exponent spelling, or null. Before casts the JSONB
+projection validator rejects wrong types, retained noncanonical fractional forms
+and out-of-range values, without rounding. JSONB can normalize an exponent token
+such as 1e0 to 1 before a trigger sees it; the database cannot prove the original
+lexical form of JSONB input. It proves exact typed projection equality against the
+canonical BYTEA request and captured result values. Raw command lexical admission
+remains the trusted decoder's obligation, not a property of JSONB or this schema.
+Characterize normalization with real PostgreSQL tests and reject noncanonical
+request BYTEA regardless of equivalent parsed JSONB. Preserve requested physical
+BIGINT/INTEGER bounds. Result payload equals all seven values
 from captured NEW, not supplied “success” metadata. Canonical bytes store metadata
 commands, not credentials/provider body. Generic logs/errors never reflect reason/key.
 

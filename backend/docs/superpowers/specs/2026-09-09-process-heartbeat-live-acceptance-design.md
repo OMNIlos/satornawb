@@ -40,6 +40,10 @@ Read-only observed executable `/usr/local/bin/redis-server --version` reports
 
 Parent and children use scrubbed env and worktree backend/.venv. The launcher
 receives only own temp paths and synthetic nonsecret test policy, never .env.
+Validate the absolute invocation path under the own `.venv/bin` together with
+resolved `sys.prefix` equal to the own resolved `.venv`, distinct from
+`sys.base_prefix`. Normal venv interpreter symlinks may resolve to the installed
+base Python binary; that binary equality does not prove the environment owner.
 Wrap every process in a plan-owned sandbox that denies all network and all
 previously denied secret locations. Permit network-bind/inbound/outbound only
 for this exact canonical Redis Unix socket. No PostgreSQL access is needed.

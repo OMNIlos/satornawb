@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from email.parser import BytesParser
 from pathlib import Path
@@ -20,6 +21,8 @@ EXPECTED_RUNTIME_FILES = {
     "app/wb_ads_cache/__init__.py",
     "app/security/__init__.py",
     "app/platform/integrations/__init__.py",
+    "app/platform/integrations/credential_store.py",
+    "app/platform/integrations/publication_guard.py",
     "app/reviews/canonical_contract.py",
     "vella_wb_19_05/models.py",
 }
@@ -31,6 +34,8 @@ REPRESENTATIVE_IMPORTS = (
     "app.wb_ads_cache",
     "app.security",
     "app.platform.integrations",
+    "app.platform.integrations.credential_store",
+    "app.platform.integrations.publication_guard",
     "app.reviews.canonical_contract",
     "vella_wb_19_05.models",
 )
@@ -122,8 +127,17 @@ def test_wheel_build_does_not_reuse_stale_build_output(tmp_path: Path) -> None:
 
     pyproject = synthetic_source / "pyproject.toml"
     original_metadata = pyproject.read_text()
-    mutated_metadata = original_metadata.replace(', "app.wb_ads_cache"]', "]")
+    mutated_metadata = original_metadata.replace(
+        "namespaces = true",
+        'namespaces = true\nexclude = ["app.wb_ads_cache"]',
+    )
     assert mutated_metadata != original_metadata
+    original_config = tomllib.loads(original_metadata)
+    expected_config = copy.deepcopy(original_config)
+    expected_config["tool"]["setuptools"]["packages"]["find"]["exclude"] = [
+        "app.wb_ads_cache"
+    ]
+    assert tomllib.loads(mutated_metadata) == expected_config
     pyproject.write_text(mutated_metadata)
 
     stale_file = synthetic_source / "build/lib/app/wb_ads_cache/__init__.py"
@@ -153,7 +167,21 @@ def test_wheel_build_does_not_reuse_stale_build_output(tmp_path: Path) -> None:
 
 
 def test_built_wheel_contains_and_imports_runtime_packages(tmp_path: Path) -> None:
-    wheel = _build_wheel(PROJECT_ROOT, tmp_path / "wheelhouse")
+    synthetic_source = tmp_path / "synthetic-source"
+    _stage_build_source(PROJECT_ROOT, synthetic_source)
+
+    probe = synthetic_source / "app/wheel_probe_nested/deeper"
+    probe.mkdir(parents=True)
+    (probe.parent / "__init__.py").write_text("", encoding="utf-8")
+    (probe / "__init__.py").write_text("", encoding="utf-8")
+    (probe / "value.py").write_text(
+        "VALUE = 'synthetic-wheel-proof'\n", encoding="utf-8"
+    )
+    unrelated = synthetic_source / "synthetic_unrelated_package/__init__.py"
+    unrelated.parent.mkdir()
+    unrelated.write_text("", encoding="utf-8")
+
+    wheel = _build_wheel(synthetic_source, tmp_path / "wheelhouse")
     with zipfile.ZipFile(wheel) as archive:
         installed_files = set(archive.namelist())
         metadata_path = next(
@@ -170,10 +198,31 @@ def test_built_wheel_contains_and_imports_runtime_packages(tmp_path: Path) -> No
         assert requirement.marker is not None
         assert requirement.marker.evaluate({"extra": "test"})
         assert not requirement.marker.evaluate({"extra": ""})
-    assert EXPECTED_RUNTIME_FILES <= installed_files, (
+    expected_runtime_files = EXPECTED_RUNTIME_FILES | {
+        "app/wheel_probe_nested/deeper/value.py"
+    }
+    assert expected_runtime_files <= installed_files, (
         "built wheel is missing runtime files: "
-        f"{sorted(EXPECTED_RUNTIME_FILES - installed_files)}"
+        f"{sorted(expected_runtime_files - installed_files)}"
     )
+
+    from setuptools.config.expand import find_packages
+
+    config = tomllib.loads(
+        (synthetic_source / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    discovery_config = config["tool"]["setuptools"]["packages"]["find"]
+    discovered = find_packages(
+        root_dir=str(synthetic_source), **discovery_config
+    )
+    assert "app.wheel_probe_nested.deeper" in discovered
+    assert "synthetic_unrelated_package" not in discovered
+    broad_discovery_config = copy.deepcopy(discovery_config)
+    broad_discovery_config["include"] = ["*"]
+    broadly_discovered = find_packages(
+        root_dir=str(synthetic_source), **broad_discovery_config
+    )
+    assert "synthetic_unrelated_package" in broadly_discovered
 
     target = tmp_path / "installed"
     _run(
@@ -207,17 +256,30 @@ for module_name in json.loads(sys.argv[2]):
     if not origin.is_relative_to(target):
         raise AssertionError(f"{module_name} loaded outside install target: {origin}")
     origins[module_name] = str(origin)
+for module_name, expected_value in json.loads(sys.argv[3]).items():
+    actual_value = getattr(importlib.import_module(module_name), "VALUE")
+    if actual_value != expected_value:
+        raise AssertionError(
+            f"{module_name}.VALUE was {actual_value!r}, expected {expected_value!r}"
+        )
 print(json.dumps(origins, sort_keys=True))
 """
+    representative_imports = (
+        *REPRESENTATIVE_IMPORTS,
+        "app.wheel_probe_nested.deeper.value",
+    )
     probe = _run(
         "-I",
         "-c",
         import_probe,
         str(target),
-        json.dumps(REPRESENTATIVE_IMPORTS),
+        json.dumps(representative_imports),
+        json.dumps(
+            {"app.wheel_probe_nested.deeper.value": "synthetic-wheel-proof"}
+        ),
         cwd=outside_checkout,
     )
     origins = json.loads(probe.stdout)
-    assert set(origins) == set(REPRESENTATIVE_IMPORTS)
+    assert set(origins) == set(representative_imports)
     print(f"wheel={wheel}")
     print(json.dumps(origins, indent=2, sort_keys=True))

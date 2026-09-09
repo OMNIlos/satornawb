@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans task-by-task.
 
-**Goal:** Include future regular app subpackages and prove installed-wheel origins without copying domain code.
+**Goal:** Include future regular app subpackages, preserve existing implicit app.reviews, and prove installed-wheel origins without copying domain code.
 
 **Architecture:** Bounded setuptools discovery replaces the static package list;
 clean temporary build fixtures prove future nested packages and negative exclusions.
@@ -50,7 +50,12 @@ probe.mkdir(parents=True)
 # contains app/wheel_probe_nested/deeper/value.py, then install/probe with -I.
 ```
 
-- [ ] Step2 replace the static list with exact spec TOML. Adapt temporary
+- [ ] Step2 replace the static list with exact spec TOML. Namespace-aware
+  discovery with namespaces=true preserves existing implicit app.reviews; never
+  remove its representative assertions or add domain package placeholders. The
+  initial namespaces=false plan produced a real missing canonical_contract.py
+  failure and is superseded by this correction, not accepted as a baseline.
+  Adapt temporary
   stale-source pyproject mutation by adding `exclude = ["app.wb_ads_cache"]`
   inside packages.find, asserting the mutation changed only that test config.
   Do not add this exclusion to the real project. Preserve mapped reference root.

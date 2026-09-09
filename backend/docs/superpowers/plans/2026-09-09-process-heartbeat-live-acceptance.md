@@ -53,7 +53,12 @@ sources before actions; do not execute app factory or legacy schedules.
 Launcher `verify` mode uses only stdlib before spawning the test: allocate the
 private root/profile, then invoke the following argv with env-i-equivalent
 explicit env. Tests refuse direct execution without that launcher-provided root;
-they do not skip. `sys.executable` must resolve to this worktree's .venv.
+they do not skip. Validate the absolute invocation path under this worktree's
+`.venv/bin`, and require resolved `sys.prefix` to equal this worktree's resolved
+`.venv` and differ from `sys.base_prefix`. Do not require the interpreter binary's
+symlink target to remain inside `.venv`: the existing isolated venv legitimately
+links to the installed Python binary. A shared binary target alone never admits
+another project's environment.
 
 ```python
 argv = ["/usr/bin/sandbox-exec", "-f", str(profile), sys.executable,

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, NoReturn
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import Engine, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -570,15 +570,25 @@ def reencrypt_credential(
     credential_id: UUID,
     expected_generation: int,
     target_key_version: int,
+    *,
+    account_identity: MarketplaceAccountCredentialOwner | None = None,
 ) -> CredentialMetadata:
+    """Owned transaction for trusted administration; account scope is not authentication."""
     if (
-        not isinstance(credential_id, UUID)
+        not isinstance(account_identity, MarketplaceAccountCredentialOwner)
+        or type(account_identity.organization_id) is not int
+        or not 1 <= account_identity.organization_id <= 2147483647
+        or type(account_identity.marketplace_account_id) is not int
+        or not 1 <= account_identity.marketplace_account_id <= 2147483647
+        or type(account_identity.provider) is not str
+        or account_identity.provider not in {"wb", "avito"}
+        or not isinstance(credential_id, UUID)
         or not isinstance(expected_generation, int)
         or isinstance(expected_generation, bool)
-        or expected_generation < 1
+        or not 1 <= expected_generation < 9223372036854775807
         or not isinstance(target_key_version, int)
         or isinstance(target_key_version, bool)
-        or target_key_version < 1
+        or not 1 <= target_key_version <= 2147483647
     ):
         raise CredentialStoreError("credential_contract_invalid")
     keyring = _load_keyring()
@@ -587,12 +597,26 @@ def reencrypt_credential(
         current_key_version=target_key_version,
         keys={target_key_version: target_key},
     )
-    now = _utc_now()
-    with get_session_factory()() as session:
-        try:
+    try:
+        with get_session_factory()() as session, session.begin():
+            bind = session.get_bind()
+            if bind.dialect.name == "postgresql":
+                if not isinstance(bind, Engine):
+                    raise CredentialStoreError("credential_configuration_invalid")
+                connection = session.connection()
+                if (
+                    getattr(connection.connection.dbapi_connection, "autocommit", None) is not False
+                    or connection.get_isolation_level() != "READ COMMITTED"
+                ):
+                    raise CredentialStoreError("credential_configuration_invalid")
+            set_tenant_context(session, account_identity.organization_id)
+            _account(session, account_identity, lock=True)
             row = session.scalar(
                 select(MarketplaceAccountCredentialRow)
                 .where(
+                    MarketplaceAccountCredentialRow.organization_id == account_identity.organization_id,
+                    MarketplaceAccountCredentialRow.marketplace_account_id == account_identity.marketplace_account_id,
+                    MarketplaceAccountCredentialRow.provider == account_identity.provider,
                     MarketplaceAccountCredentialRow.credential_id == credential_id,
                     MarketplaceAccountCredentialRow.revoked_at.is_(None),
                 )
@@ -602,6 +626,10 @@ def reencrypt_credential(
                 raise CredentialStoreError("credential_missing")
             if int(row.generation) != expected_generation:
                 raise CredentialStoreError("credential_concurrent_update")
+            now = _utc_now()
+            expires_at = _as_utc(row.expires_at)
+            if expires_at is not None and expires_at <= now:
+                raise CredentialStoreError("credential_expired")
             old_payload = decrypt_credential(_identity(row), _encrypted(row), keyring).reveal()
             new_identity = CredentialIdentity(
                 organization_id=int(row.organization_id),
@@ -620,6 +648,9 @@ def reencrypt_credential(
             result = session.execute(
                 update(MarketplaceAccountCredentialRow)
                 .where(
+                    MarketplaceAccountCredentialRow.organization_id == account_identity.organization_id,
+                    MarketplaceAccountCredentialRow.marketplace_account_id == account_identity.marketplace_account_id,
+                    MarketplaceAccountCredentialRow.provider == account_identity.provider,
                     MarketplaceAccountCredentialRow.credential_id == credential_id,
                     MarketplaceAccountCredentialRow.generation == expected_generation,
                     MarketplaceAccountCredentialRow.revoked_at.is_(None),
@@ -640,11 +671,7 @@ def reencrypt_credential(
             session.expire(row)
             session.refresh(row)
             _audit(session, row, operation="reencrypt")
-            session.commit()
-            return _metadata(row)
-        except (CredentialCryptoError, CredentialStoreError):
-            session.rollback()
-            raise
-        except (IntegrityError, SQLAlchemyError):
-            session.rollback()
-            raise _translate_persistence_error() from None
+            metadata = _metadata(row)
+        return metadata
+    except (IntegrityError, SQLAlchemyError):
+        raise _translate_persistence_error() from None
