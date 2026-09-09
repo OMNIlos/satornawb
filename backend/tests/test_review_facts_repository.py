@@ -85,9 +85,10 @@ def test_reserve_exact_replay_and_conflict_leave_original_unchanged(db):
         assert (
             connection.execute(
                 text(
-                    "SELECT count(*) FROM review_sync_runs_v2 WHERE source_run_id=:key"
+                    "SELECT count(*) FROM review_sync_runs_v2 WHERE "
+                    "COALESCE(source_run_id_utf8,convert_to(source_run_id,'UTF8'))=:key"
                 ),
-                {"key": key},
+                {"key": key.encode("utf-8")},
             ).scalar_one()
             == 1
         )

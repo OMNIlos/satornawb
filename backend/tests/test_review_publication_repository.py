@@ -89,10 +89,11 @@ def guarded(session, principal, authority, *, read=False):
     return guard, repo
 
 
+@pytest.mark.parametrize("suffix", ["", "\0🚀"])
 def test_guarded_publication_and_new_session_read_use_no_savepoints(
-    db, principal, authority
+    db, principal, authority, suffix
 ):
-    source, key = uuid4().hex, uuid4().hex
+    source, key = uuid4().hex + suffix, uuid4().hex + suffix
     savepoints = []
     with Session(db[1]) as session, session.begin():
         c = session.connection()
@@ -110,8 +111,9 @@ def test_guarded_publication_and_new_session_read_use_no_savepoints(
     assert savepoints == []
 
 
-def test_root_failure_rolls_back_prior_run_and_facts(db, principal, authority):
-    source, key = uuid4().hex, uuid4().hex
+@pytest.mark.parametrize("suffix", ["", "\0🚀"])
+def test_root_failure_rolls_back_prior_run_and_facts(db, principal, authority, suffix):
+    source, key = uuid4().hex + suffix, uuid4().hex + suffix
     with pytest.raises(ReviewRepositoryError, match="REVIEW_REPLAY_CONFLICT"):
         with Session(db[1]) as session, session.begin():
             guard, repo = guarded(session, principal, authority)
@@ -127,16 +129,20 @@ def test_root_failure_rolls_back_prior_run_and_facts(db, principal, authority):
         assert (
             c.execute(
                 text(
-                    "SELECT count(*) FROM review_sync_runs_v2 WHERE source_run_id=:id"
+                    "SELECT count(*) FROM review_sync_runs_v2 WHERE "
+                    "COALESCE(source_run_id_utf8,convert_to(source_run_id,'UTF8'))=:id"
                 ),
-                {"id": source},
+                {"id": source.encode("utf-8")},
             ).scalar_one()
             == 0
         )
         assert (
             c.execute(
-                text("SELECT count(*) FROM review_facts WHERE external_review_id=:id"),
-                {"id": key},
+                text(
+                    "SELECT count(*) FROM review_facts WHERE "
+                    "COALESCE(external_review_id_utf8,convert_to(external_review_id,'UTF8'))=:id"
+                ),
+                {"id": key.encode("utf-8")},
             ).scalar_one()
             == 0
         )

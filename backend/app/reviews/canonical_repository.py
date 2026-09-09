@@ -36,13 +36,25 @@ from app.reviews.ingestion_contract import (
     snapshot_manifest,
     timestamp,
 )
-from app.reviews.lossless_storage import decode_coverage_pair, decode_scalar_pair
+from app.reviews.lossless_storage import (
+    decode_coverage_pair,
+    decode_scalar_pair,
+    encode_coverage_pair,
+    encode_scalar_pair,
+)
 
 RUN = CanonicalReviewRunRow.__table__
 ACCOUNT = MarketplaceAccountRow.__table__
 FACT = CanonicalReviewFactRow.__table__
 OBS = CanonicalReviewObservationRow.__table__
 ITEM = CanonicalReviewRunItemRow.__table__
+OBSERVATION_SCALARS = (
+    "external_product_id",
+    "text",
+    "source_status",
+    "source_schema_version",
+    "normalization_version",
+)
 
 
 def _exact_key(table, key, value):
@@ -191,7 +203,9 @@ class ReviewFactsRepository:
                 .values(
                     **self._values,
                     sync_run_id=uuid4(),
-                    source_run_id=source_run_id,
+                    **encode_scalar_pair(
+                        source_run_id, "source_run_id", required=True, allow_empty=False
+                    ),
                     request_checksum=request_checksum,
                     status="running",
                     completeness="partial",
@@ -199,13 +213,15 @@ class ReviewFactsRepository:
                     completed_at=None,
                     observed_count=0,
                     manifest_checksum=None,
-                    coverage={
-                        "from": None,
-                        "to": None,
-                        "streams": [],
-                        "pagesObserved": 0,
-                        "providerEndReached": False,
-                    },
+                    **encode_coverage_pair(
+                        {
+                            "from": None,
+                            "to": None,
+                            "streams": [],
+                            "pagesObserved": 0,
+                            "providerEndReached": False,
+                        }
+                    ),
                     error_code=None,
                 )
                 .returning(RUN.c.sync_run_id, RUN.c.run_sequence)
@@ -255,13 +271,7 @@ class ReviewFactsRepository:
             .one()
         )
         result = dict(row)
-        for key in (
-            "external_product_id",
-            "text",
-            "source_status",
-            "source_schema_version",
-            "normalization_version",
-        ):
+        for key in OBSERVATION_SCALARS:
             result[key] = decode_scalar_pair(
                 row,
                 key,
@@ -412,7 +422,7 @@ class ReviewFactsRepository:
                     completed_at=completed_at,
                     observed_count=count,
                     manifest_checksum=manifest,
-                    coverage=normalized_coverage,
+                    **encode_coverage_pair(normalized_coverage),
                     error_code=None,
                 )
             ).rowcount
@@ -431,7 +441,12 @@ class ReviewFactsRepository:
                 insert(FACT).values(
                     **self._values,
                     review_id=review_id,
-                    external_review_id=fact.identity.external_review_id,
+                    **encode_scalar_pair(
+                        fact.identity.external_review_id,
+                        "external_review_id",
+                        required=True,
+                        allow_empty=False,
+                    ),
                     current_observation_id=None,
                     version=0,
                     last_source_run_id=None,
@@ -466,19 +481,25 @@ class ReviewFactsRepository:
                     revision=revision,
                     source_run_id=run["sync_run_id"],
                     **{
+                        column: value
+                        for key in OBSERVATION_SCALARS
+                        for column, value in encode_scalar_pair(
+                            getattr(fact, key),
+                            key,
+                            required=key
+                            in ("source_schema_version", "normalization_version"),
+                            allow_empty=key == "text",
+                        ).items()
+                    },
+                    **{
                         key: getattr(fact, key)
                         for key in (
-                            "external_product_id",
                             "source_created_at",
                             "source_updated_at",
                             "rating",
-                            "text",
                             "answered",
                             "can_answer",
-                            "source_status",
                             "observed_at",
-                            "source_schema_version",
-                            "normalization_version",
                             "content_checksum",
                         )
                     },
