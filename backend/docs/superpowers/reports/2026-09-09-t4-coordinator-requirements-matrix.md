@@ -2,7 +2,7 @@
 
 ## Current checkpoint: frontend response isolation; Review historical binding open
 
-Dormant Orders wire preparation (commit recorded in Git history with this matrix):
+Dormant Orders wire preparation868728e:
 canonicalOrders.ts strict typeddecoder and URLbuilder, nofetch/UIactivation/print
 inference. T3da7e017 wire unchanged throughab272ee, directlyconfirmed. ActualT3
 Pydantic JSON golden matches; independentcritic found2P2s, actual4RED fixed precise
