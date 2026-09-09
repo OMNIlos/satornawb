@@ -63,3 +63,29 @@ This is evidence of fixture metadata contamination, not a waived baseline or a
 proven runtime guard defect. Exact reproduction sent to T1, who owns that fixture;
 no SQLite type weakening, skip or shared-file patch by T4. Combined acceptance
 must be rerun after the owner-supplied fix. Review selector still pending/off.
+
+## Fixture blocker closed with actual Review collection
+
+Exact T1 controller-approved34b5f62 was cherry-picked as79f83b9, preserving its
+test-only patch and avoiding unrelated pending approvals migration ancestry.
+The same runtime fixture patch-id is0bfa989ee0226f69b82f8392985e22902e406849.
+All eight original files were retained and credential-store/fixture-isolation
+files added: **349 passed in27.69s** with Review files first, and **349 passed
+in31.46s** with the entire file list reversed. Both exited0 with no skips and
+the actual Review ORM loaded. The original20setup errors are resolved for this
+mixed gate; no exclusion or JSONB/schema weakening. This is not a full backend run.
+
+Ordered file list (second run exactly reversed), from backend:
+test_review_shadow_service.py, test_review_publication_repository.py,
+test_publication_guard.py, test_publication_guard_postgres.py,
+test_marketplace_account_context.py, test_marketplace_account_context_postgres.py,
+test_marketplace_credential_fetch.py, test_marketplace_credential_fetch_postgres.py,
+test_marketplace_credential_fixture_isolation.py, test_marketplace_credential_store.py.
+All under tests/, using the same scrubbed Unix-only sandbox/disposable DB harness
+as the failed run. Fixture cleanup checks ran on natural completion.
+
+New-fixture Ruff, both fixture compileall and diff-check exit0. T1's four unchanged
+legacy-file Ruff findings remain disclosed in its handoff, not a whole-lint PASS.
+T1 independent review approved the exact patch; T4 checked the actual diff and
+independently ran both mixed orders. Review default-off selector is still pending;
+neither HTTP integration nor live/provider/production work has been enabled.

@@ -2,6 +2,12 @@
 
 ## Current checkpoint: dormant shadow composition after c125a54
 
+Fixture follow-up supersedes the blocker immediately below: acceptedT1 34b5f62
+cherry-picked79f83b9; actual mixed collection with Review ORM and all original files
+plus fixture regressions passes349tests27.69s and349tests31.46s in reverse order,
+no skips/naturalexit0.20setup errors closed for this gate, not a full backend claim.
+No unaccepted approvals ancestry imported; Review selector remains pending/off.
+
 Physical guard8338ef7 now accepted from T1 and merged2dc09de; static integration
 criticPASS. Expanded334-test acceptance is blocked by20credential SQLite setup
 errors (314passed): global metadata includes Review JSONB after collection. Minimal
