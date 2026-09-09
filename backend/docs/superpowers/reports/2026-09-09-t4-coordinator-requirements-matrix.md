@@ -1,6 +1,6 @@
 # T4 — requirement → commit → evidence → remaining work
 
-## Current checkpoint: 316eaf8 (supersedes historical snapshot below)
+## Current checkpoint: 9099f32 (supersedes historical snapshot below)
 
 All eight original stages remain in scope. A pure contract, fixture or dormant
 repository is not an activated service. No production/deploy/push/live provider,
@@ -17,9 +17,24 @@ send, print/export action or rollout activation in this continuation.
 | 7. Rollout/retirement | e4818e3 canary/rollback runbook; default-off, build-time redeploy requirement and separate write-action authority retained. | Approved budgets/window/artifact and explicit canary authority; legacy retirement only after actual parity and writer rollback. |
 | 8. Debt/final handoff | Actual-rendering/browser fixes;5d92b78 expense-help,0aec110 runtime-source guard with RED/GREEN and mutation. Fresh full frontend279PASS/24FAIL/0pending versus278/25: zero new IDs, one resolved. Typecheck0, full npm build0 (large-chunk/plugin-time warnings); generator hash unchanged, timestamp-only incidental diff restored. Critic PASS. | Remaining24 failures, integration/full backend baseline, complete ready-set review; current checkpoint is not final architecture handoff. |
 
-T1 was directly sent exact5d4ac9a and316eaf8 with byte-decoding instructions and limits;
-send_message delivery succeeded. Receipt is not proof of reading/acceptance. Latest
-observed T1 HEAD d44c971 (Orders amendment), publication guard not consumed yet.
+Latest verification superseding the counts in the stage rows above:
+
+- Reviews268ea1d: valid Unicode/NUL identities preserved, invalid surrogate keys
+  rejected with typed safe errors before SQL on write and read. Fresh405 combined
+  backend tests pass (real disposable PostgreSQL plus adjacent contracts), no skips;
+  scoped Ruff/compile/diff0. Local audit remains an encoder, not durable storage.
+- Frontend4fd9156 actual ABC bridge empty/error/auth behavior, ff7038a Avito schedule
+  cancel browser case,9099f32 RNP period/session scoped runtime fix with actual RED.
+  Full282PASS/21FAIL/0pending, zero new failure IDs versus282/22. TypeScript and Vite
+  build exit0; existing chunk/plugin warnings. All21 failures remain unwaived.
+- T1 explicitly confirmed reading exact5d4ac9a,316eaf8,a836560,268ea1d. The unified
+  eight-pair lossless design405033a and implementation plan1d8d493 were read fully;
+  actual0065 migration and T4 decoder/repository acceptance are not yet available.
+- T1 fetch-only authority7bfb631 handoff read: paired credential/binding is not
+  publication authorization. Full shared guard remains pending; neither this API
+  nor the proposed0065 are claimed installed in this worktree.
+
+Latest observed T1 HEAD1d8d493; no full publication guard consumed yet.
 No SQL migrations or shared auth are authored by T4. Next independent task:
 remaining evidence-backed frontend test debt; durable wiring waits for real guard/DDL.
 
