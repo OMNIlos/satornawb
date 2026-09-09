@@ -95,4 +95,3 @@ This remains a conceptual design, not dispatchable Task text: exact free revisio
 - History alternate UUID revoked/newer/target-plus-other visible only as metadata; wrong context gives zero not empty sentinel; store refuses before insertion and exact counts unchanged.
 - One physical root/connection, persisted encrypted readback canary corruption, audit/commit failure rollback; interrupted-before-commit vs committed retry/rekey conflict; no separate public put/resolve call.
 - No new consumer/queue/flags/key deployment/live backfill and no production proof invented. Production rollout still needs owner inputs and later parity/restore/observation.
-
