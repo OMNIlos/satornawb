@@ -34,8 +34,6 @@ implementation/testing; no provider calls, flag changes, deploy or push in T2.
 | 7 Final profitability | Decision package `94b540f592a0fed3a29ce476fdb3dbd7ce58a604` | Synthetic alternatives delivered; no financial rule selected, no final-profit implementation/acceptance claimed | Financial owner approval + complete source evidence, then T2 canonical service/golden tests. netProfitKopecks/profitClass/abcCode remain null; no guessed allocation/account/backdate/rrdId/hash adjustment |
 | 8 Test debt, rollback and common integration | Current code candidate `f3c61d7704813790245ec73096c753ee5dd93915`; scoped fixes/commands below | Named unit and owned-disposable PG evidence only; inherited lint deltas disclosed. T4 independently reran102characterization cases with OS network deny. No full backend/combined platform acceptance | Root one common integration milestone after T1 platform release; T2 consumer regression on accepted dependencies, remaining assigned failures and rollback verification. No further abstractions/characterization without a concrete service need |
 
-### Canonical SKU policy — one compatibility record
-
 ### Independent finance readiness regression (2026-09-09)
 
 Historical root-assigned IDs are not fresh baseline failures. Local scoped probe
@@ -62,7 +60,29 @@ as HEAD, no new diagnostic. Read-only critic found no defects; no independent
 test run implied. This is a bounded stage8 fix, not full-suite baseline closure.
 Rollback: revert this code/test slice; no persisted facts or schema to roll back.
 
-### Canonical SKU policy details
+### Cold onboarding legacy test / containment contract (2026-09-09)
+
+T1 assigned exact `test_wb_repricer_bff.py::test_manual_cold_full_sync_enqueues_onboarding_task`
+and explicitly delegated the single SAFE_MARKER update in shared
+`test_background_test_isolation.py`. Current route already uses an API background
+thread and `api-bg-onboarding-{uuid}`; no runtime dispatch behavior is changed.
+The test now stubs status diagnostics before any cache/secret access, captures exact
+thread arguments/name/daemon and rejects an unexpected Celery dispatch. The inline
+runner is synthetic, not the actual onboarding task. Historical node ID retained.
+
+Fresh isolated old-ID RED **1FAIL2.03s**; corrected test **1PASS2.43s**. Then actual
+child containment old-marker RED **1FAIL2.13s** showed precisely
+`INNER_STATUS=0 COLLECTED=1 FAILED=0 ERRORS=0 SENTINEL_REACHED=0`; updated only its
+expected marker. Combined domain+containment **2PASS4.03s**, naturalexit0, two
+inherited Starlette deprecation warnings. Scrubbed child environment, actual-entrypoint
+sentinel, exact stdout/stderr assertions and natural shutdown remain unchanged.
+Same OS/offline parent fences as above; no provider/PG/job or baseline-list edit.
+Ruff of the legacy BFF test remains72 inherited diagnostics, same as HEAD; shared
+containment code has only the marker change. Compile/diff verification recorded
+with this slice: compileall/diff exit0. Read-only critic found no defects and did
+not run tests. Test-only rollback; no data/schema/runtime rollback needed.
+
+### Canonical SKU policy — one compatibility record
 
 Root explicitly approved: independent get/history require fixed `settings:read`;
 replace and exact-command replay require **both** `settings:read` + `settings:write`
