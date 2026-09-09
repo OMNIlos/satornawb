@@ -172,3 +172,46 @@ Critic Pass found and fixed the column-reader helper privilege and runtime
 function grant-option gaps. Named local preflight-critic skill is unavailable;
 no reviewer subagent was spawned. T2 repository, authorization/provider and
 activation acceptance remain separate controller/shared integration work.
+
+## Later test-only regression strengthening
+
+The verification above is the original0066 implementation evidence. A later
+test-only follow-up from baseline
+`99b295e1946314f312d1a1c1fc46fd21a213724f` strengthens two Minor review gaps;
+it does not change revision0066, runtime SQL, ORM/domain code, role scripts or any
+consumer.
+
+The new populated0065 fixture commits one Avito Orders run/order/item/observation
+and one complete Review run/fact/observation/run-item unit under the existing
+guards. It snapshots exact driver-returned rows for those relations and their
+organization/account parents, including identity values, timestamps, watermark
+links and `review_observations.text_utf8` bytes
+`b"preserved\x00\xd0\xbe\xd1\x82\xd0\xb7\xd1\x8b\xd0\xb2\xf0\x9f\x9a\x80"`.
+Every selected relation is asserted nonempty. The same exact rows and preexisting
+relation, column and default ACLs are compared after0066 upgrade, empty0066
+downgrade to0065, and re-upgrade. New approvals relations are asserted empty when
+present and absent at0065. A transaction-local permitted staging-run mutation
+proves the row comparison fails, then rolls back; the ordinary unchanged
+comparison passes. This is representative synthetic old-history preservation,
+not universal production-shaped parity.
+
+Optional numeric checks now build otherwise-valid independently serialized v1
+requests. `size_id=1,min_price_kopecks=50` and both fields above BIGINT commit
+with one creation audit and exact NUMERIC round-trip. Fractions and NaN/positive
+Infinity/negative Infinity for each optional field must fail specifically with
+SQLSTATE `P0001` and `repricer_numeric_invalid`; size0 and minimum49 instead bind
+to their exact `23514` column CHECK names. Required numeric/version negatives are
+also tightened to exact column CHECK names. An isolated disposable replacement
+of only the numeric predicate changes the fractional failure to
+`repricer_request_exact`, proving the diagnostic assertion detects a removed
+numeric guard; the database is then destroyed.
+
+The final prescribed three-module PostgreSQL gate on the strengthened tests reports
+`199 passed in 124.46s`, natural exit0, with exact disposable database/role cleanup
+messages. Focused RED was exactly two expected assertion failures; focused GREEN
+was `26 passed, 142 deselected`. Compileall, scoped Ruff and `git diff --check`
+also exit0. These are later local results and do not rewrite the original counts
+above or claim a new full-backend green run. The inherited libpq `/dev/null`
+passfile warnings remain visible and separately tracked as M3; no real passfile
+was read and no warning was suppressed. Independent acceptance of this follow-up
+remains the controller's gate.
