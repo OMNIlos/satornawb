@@ -150,8 +150,6 @@ Lint correction: earlier TTL entry measured2 UP017 before the final25h assertion
 but committed17b0172 added a third. Current slice replaces only that new occurrence
 with `UTC`; actual scoped Ruff now2 original UP017 again. No blanket formatting.
 
-### Canonical SKU policy — one compatibility record
-
 ### Stock grouping / WoW cache-only legacy contracts (2026-09-09)
 
 Stock grouping test safely isolated legacy history helper before calling renderer;
@@ -177,7 +175,18 @@ Separate remaining WoW task ID statically traces to existing background ABC/funn
 composition, not this cache-only fallback. Do not conflate their contracts or run
 the legacy task with unmocked dependencies. No blanket rerun or baseline edit.
 
-### Canonical SKU policy contract
+WoW task case subsequently safely reproduced absent-import **1FAIL1.51s** before
+task invocation. Repaired only the test to actual existing background ABC route:
+strict org/current/previous calls through synthetic ABC, period stats and funnel;
+no token forwarded, no repricer fallback for populated ABC. Rules and cache I/O
+stubbed, real pure mapper/shell preserved; exact background-abc metadata and saved
+previousRange checked. Direct `.run` is a synchronous synthetic test, not a queued
+or production job. Final task+fallback+stock **3PASS1.51s**, natural0/two warnings.
+Compile/diff0, same20 inherited Ruff diagnostics, critic no findings/no tests.
+No durable/auth/queue claim. T1 next single ACL RED ACK given only after natural
+completion, no active T2 tests/reservation/cleanup.
+
+### Canonical SKU policy — one compatibility record
 
 Root explicitly approved: independent get/history require fixed `settings:read`;
 replace and exact-command replay require **both** `settings:read` + `settings:write`

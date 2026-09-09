@@ -1118,17 +1118,42 @@ def test_week_over_week_task_builds_current_and_previous_source_ranges(monkeypat
 
     calls: list[tuple[date, date]] = []
     saved: dict[str, dict] = {}
-    snapshot = SimpleNamespace(source_status="fresh", orders=[], sales=[], stocks=[])
-    ads = SimpleNamespace(rows=[])
-    monkeypatch.setattr(
-        wb_reports_bff,
-        "build_wb_reports_sources_snapshot",
-        lambda *, date_from, date_to, **_kwargs: (calls.append((date_from, date_to)) or snapshot),
-    )
-    monkeypatch.setattr(wb_reports_bff, "build_ads_attribution_snapshot", lambda **_kwargs: ads)
-    monkeypatch.setattr(wb_reports_bff, "_build_week_over_week_payload", lambda *args, **_kwargs: {"meta": {"id": "week-over-week"}, "rows": []})
-    monkeypatch.setattr(wb_reports_bff, "save_source_cache", lambda _organization_id, key, payload: saved.__setitem__(key, payload))
-    monkeypatch.setattr(wb_reports_bff, "get_source_cache", lambda _organization_id, key, **_kwargs: saved.get(key))
+    funnel_calls = []
+    period_calls = []
+
+    def cached_abc(*, organization_id, date_from, date_to, group_by, filters, finance_allowed):
+        assert (organization_id, group_by, filters, finance_allowed) == (1, "sku", "", False)
+        calls.append((date_from, date_to))
+        return SimpleNamespace(sourceStatus="fresh", confidence="high", rows=[{"nmId": 101, "sku": "TEST"}])
+
+    def period_stats(organization_id, date_from, date_to):
+        assert organization_id == 1
+        period_calls.append((date_from, date_to))
+        return {}
+
+    def cached_funnel(*, organization_id, date_from, date_to, wb_token, progress_callback):
+        assert organization_id == 1
+        assert wb_token is None
+        funnel_calls.append((date_from, date_to))
+        return {}
+
+    def save_cache(organization_id, key, payload):
+        assert organization_id == 1
+        saved[key] = payload
+
+    def read_cache(organization_id, key, **_kwargs):
+        assert organization_id == 1
+        return saved.get(key)
+
+    monkeypatch.setattr(wb_reports_bff, "build_abc_report", cached_abc)
+    monkeypatch.setattr(wb_reports_bff, "_week_period_stats_aggregates", period_stats)
+    monkeypatch.setattr(wb_reports_bff, "_week_funnel_metrics_by_nm", cached_funnel)
+    monkeypatch.setattr(wb_reports_bff, "_repricer_rows_for_abc_report", lambda **_kwargs: pytest.fail("populated ABC must not use repricer fallback"))
+    monkeypatch.setattr(wb_reports_bff, "_apply_report_rules_to_payload", lambda report, _organization_id: report)
+    monkeypatch.setattr(wb_reports_bff, "save_source_cache", save_cache)
+    monkeypatch.setattr(wb_reports_bff, "get_source_cache", read_cache)
+    monkeypatch.setattr("app.wb_api.reports_sources_runtime.build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("no live source fetch"))
+    monkeypatch.setattr("app.wb_api.ads_runtime.build_ads_attribution_snapshot", lambda **_kwargs: pytest.fail("no live ads fetch"))
 
     result = repricer_tasks.build_report_for_org.run(
         1,
@@ -1143,8 +1168,12 @@ def test_week_over_week_task_builds_current_and_previous_source_ranges(monkeypat
     )
 
     assert calls == [(date(2026, 7, 7), date(2026, 7, 13)), (date(2026, 6, 30), date(2026, 7, 6))]
+    assert funnel_calls == period_calls == calls
     assert result["state"] == "completed"
     assert any(key.startswith("reports_payload_week-over-week") for key in saved)
+    stored = next(value for key, value in saved.items() if key.startswith("reports_payload_week-over-week"))
+    assert stored["report"]["cache"]["status"] == "background-abc"
+    assert stored["report"]["cache"]["previousRange"] == {"from": "2026-06-30", "to": "2026-07-06"}
 
 
 def test_digest_payload_builds_weekly_balance_periods_and_real_problem_rows():
