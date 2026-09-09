@@ -30,6 +30,10 @@ Remaining inputs are distinct:
   `query_checksum` selects a prepublished immutable view, not a filter engine.
 - WB fulfillment source contract. Statistics remains observation/cancellation
   evidence, never readiness, deadlines or sticker authority.
+- Browser producer acceptance and token-only durable sink integration. The strict
+  `avito-browser-evidence-v1` raw decoder is now implemented (see its dedicated
+  contract report), always partial. It does not reconstruct missing legacy IDs,
+  status, quantity, occurrence or capture time; T1 owns token-only commit authority.
 
 Production source recovery below is deferred and is not part of this active list.
 
