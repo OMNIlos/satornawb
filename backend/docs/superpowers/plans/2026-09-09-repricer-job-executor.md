@@ -121,3 +121,10 @@ Keep final security/concurrency/RLS/migration/guard/transport cases from spec in
 the handoff, do not execute them during implementation. Commit schema/grants as
 `feat: add repricer job and upload receipt storage`, then runtime/config/handoff as
 `feat: add explicit repricer executor authority`. Root final tests later, no push.
+
+Source-delivery amendment: if implementation discovers a necessary0073/grants
+addition after the schema SHA has been communicated, commit it separately as
+`fix: fence repricer job creation authority` BEFORE the Python runtime commit.
+The user's separate-schema-commit rule takes precedence over the planned two
+commit count. Preserve original SHA; no amend/rebase. Handoff must include the
+full original schema→schema follow-up→runtime chain, all UNVERIFIED.
