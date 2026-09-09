@@ -132,4 +132,42 @@ SELECT format('REVOKE ALL ON SEQUENCE %s FROM %I; GRANT USAGE ON SEQUENCE %s TO 
     pg_get_serial_sequence('public.review_sync_runs_v2','run_sequence'), :'runtime_role')
 \gexec
 
+-- Repricer overrides follow all broad grants inside the same atomic transaction.
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM (VALUES ('wb_repricer_price_approvals'),
+        ('wb_repricer_price_apply_attempts'),('wb_repricer_price_approval_audit')) t(name)
+        LEFT JOIN pg_class c ON c.oid=to_regclass('public.'||t.name)
+        WHERE c.oid IS NULL OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
+    THEN RAISE EXCEPTION 'repricer_forced_rls_required'; END IF;
+END $$;
+REVOKE ALL ON TABLE public.wb_repricer_price_approvals,
+    public.wb_repricer_price_apply_attempts, public.wb_repricer_price_approval_audit
+    FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON TABLE public.%I FROM PUBLIC, %I',
+    a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+    ('wb_repricer_price_approvals','wb_repricer_price_apply_attempts','wb_repricer_price_approval_audit')
+    AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, INSERT, UPDATE ON TABLE public.wb_repricer_price_approvals,
+    public.wb_repricer_price_apply_attempts TO :"runtime_role";
+GRANT SELECT, INSERT ON TABLE public.wb_repricer_price_approval_audit TO :"runtime_role";
+REVOKE ALL ON FUNCTION public.repricer_account_lock(), public.repricer_row_guard(),
+    public.repricer_validate() FROM PUBLIC, :"runtime_role";
+REVOKE ALL ON FUNCTION public.repricer_exact_text(text),
+    public.repricer_integral_finite(numeric), public.repricer_safe_code(text),
+    public.repricer_ascii_json_string(text), public.repricer_integer_decimal(numeric),
+    public.repricer_request_bytes(integer,integer,text,integer,numeric,text,numeric,smallint,numeric,numeric),
+    public.repricer_action_key(integer,integer,text,text),
+    public.repricer_dispatch_key(integer,integer,text,text,uuid), public.repricer_context_id(text)
+    FROM PUBLIC, :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.repricer_exact_text(text),
+    public.repricer_integral_finite(numeric), public.repricer_safe_code(text),
+    public.repricer_ascii_json_string(text), public.repricer_integer_decimal(numeric),
+    public.repricer_request_bytes(integer,integer,text,integer,numeric,text,numeric,smallint,numeric,numeric),
+    public.repricer_action_key(integer,integer,text,text),
+    public.repricer_dispatch_key(integer,integer,text,text,uuid), public.repricer_context_id(text)
+    TO :"runtime_role";
+
 COMMIT;
