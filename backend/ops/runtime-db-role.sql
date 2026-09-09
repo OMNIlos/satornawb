@@ -44,6 +44,11 @@ BEGIN
             ('user_orders_job_authorities'),
             ('user_orders_job_attempts'),
             ('user_orders_job_audit'),
+            ('wb_repricing_jobs'),
+            ('wb_repricing_job_authorities'),
+            ('wb_repricing_job_audit'),
+            ('wb_repricing_upload_receipts'),
+            ('wb_repricing_upload_receipt_audit'),
             ('catalog_cost_versions'),
             ('catalog_economics_override_versions'),
             ('catalog_skus'),
@@ -318,5 +323,25 @@ REVOKE ALL ON FUNCTION public.user_orders_ascii(text), public.user_orders_text(t
     public.user_orders_request_bytes(public.user_orders_jobs) FROM PUBLIC, :"runtime_role";
 GRANT EXECUTE ON FUNCTION public.user_orders_ascii(text), public.user_orders_text(text,integer),
     public.user_orders_request_bytes(public.user_orders_jobs) TO :"runtime_role";
+
+-- Repricer immutable jobs: API creation only; executor receipts use a separate login.
+REVOKE ALL ON TABLE public.wb_repricing_jobs, public.wb_repricing_job_authorities,
+    public.wb_repricing_job_audit, public.wb_repricing_upload_receipts,
+    public.wb_repricing_upload_receipt_audit FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON TABLE public.%I FROM PUBLIC, %I', a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+ ('wb_repricing_jobs','wb_repricing_job_authorities','wb_repricing_job_audit',
+  'wb_repricing_upload_receipts','wb_repricing_upload_receipt_audit')
+ AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, INSERT ON public.wb_repricing_jobs, public.wb_repricing_job_authorities,
+ public.wb_repricing_job_audit TO :"runtime_role";
+GRANT SELECT ON public.wb_repricing_upload_receipts, public.wb_repricing_upload_receipt_audit TO :"runtime_role";
+REVOKE ALL ON FUNCTION public.repricing_job_guard(), public.repricing_job_witness() FROM PUBLIC, :"runtime_role";
+REVOKE ALL ON FUNCTION public.repricing_job_uuid(uuid), public.repricing_job_time(timestamptz),
+ public.repricing_job_text(text,integer) FROM PUBLIC, :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.repricing_job_uuid(uuid), public.repricing_job_time(timestamptz),
+ public.repricing_job_text(text,integer) TO :"runtime_role";
 
 COMMIT;
