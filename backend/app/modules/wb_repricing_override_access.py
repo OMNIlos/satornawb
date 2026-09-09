@@ -78,16 +78,8 @@ def acquire_override_read_guard(
     )
 
 
-def acquire_override_replace_guard(session, *, change, principal, binding):
-    """Require BOTH permissions and freeze a current scoped mapping for new mutation.
-
-    Not an exact-command replay entry point: the future service must authorize
-    BOTH permissions before receipt lookup, then require mapping only for a new
-    revision. A historical replay does not become a new mutation after remapping.
-    This does not prove an immutable historical mapping version. Lock all matching
-    current offers in PK order; SHARE conflicts with changing catalog_sku_id, unlike
-    KEY SHARE. No guessed offer status grammar, article lookup or nmId-to-size map.
-    """
+def acquire_override_command_guard(session, *, change, principal, binding):
+    """Require BOTH before any receipt lookup, without requiring current mapping."""
     if (
         type(change) is not OverrideChange
         or type(principal) is not UserSessionPrincipal
@@ -96,7 +88,7 @@ def acquire_override_replace_guard(session, *, change, principal, binding):
     change.__post_init__()
     if change.actor_membership_id != principal.membership_id:
         raise PublicationGuardError("publication_context_invalid")
-    guard = _acquire(
+    return _acquire(
         session,
         change.organization_id,
         change.marketplace_account_id,
@@ -104,6 +96,14 @@ def acquire_override_replace_guard(session, *, change, principal, binding):
         binding,
         WB_SKU_OVERRIDE_REPLACE_PERMISSIONS,
     )
+
+
+def lock_override_mapping(session, *, change):
+    """Mapping-only participant: caller must already hold live auth/account guard.
+
+    Does not grant authority or prove an immutable historical mapping version.
+    SHARE conflicts with catalog_sku_id changes; KEY SHARE would not suffice.
+    """
     try:
         mapped = (
             session.execute(
@@ -125,5 +125,13 @@ def acquire_override_replace_guard(session, *, change, principal, binding):
         raise PublicationGuardError("publication_persistence_failed") from None
     if not mapped:
         raise OverrideMappingUnresolvedError()
+
+
+def acquire_override_replace_guard(session, *, change, principal, binding):
+    """Combined access for new mutation only; replay uses command guard first."""
+    guard = acquire_override_command_guard(
+        session, change=change, principal=principal, binding=binding
+    )
+    lock_override_mapping(session, change=change)
     guard.revalidate_before_write()
     return guard

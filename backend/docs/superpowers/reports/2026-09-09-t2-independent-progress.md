@@ -28,7 +28,7 @@ implementation/testing; no provider calls, flag changes, deploy or push in T2.
 | 1 Writers, identity bridge, repository contract | `769f3cf44742622824233eefe8f81d4e360f8484`, `ccaed3410e32c50b3604f02e5b1171fd7243ce49`, `45f94a39627ebe2916903e9e5e0930844f3daaf5` | Inventory/explicit identity bridge/scoped contract implemented; T1 approval0066 consumed by merge `1464fcdfaab15b053678dd4f6d0337d958dab7f7`; valid action keys unchanged | T2 current writers still disconnected; account/membership bridge is not authorization or writer cutover |
 | 2 Durable approvals | `bd3bb60a0baadc8d7683c8efd8bf4eff444c9643`, legacy import `9c7e5baa6dc3b3b2f113671b03db6c301942b1e7` | Actual PG participant + committed user-session create/claim/reject/block; recorded93PG cases include CAS/races/scope/restart/rollback/import; locally accepted0066 only | T2 full Protocol/worker-authorized outcome service and current-flow integration incomplete; T1 accepted worker authority/schema needed, then T2 service acceptance |
 | 3 Jobs, attempts, receipt, crash recovery | Participant at `bd3bb60`; job-domain request `3c99f1eddb4750faa2be0ce79806c2d6f26cbc7e`; raw receipt codec `43e2cab31707192f2a30ab9b00ca7e56c6b11c4d` | Durable attempt/marker/outcome primitives tested;95synthetic receipt cases. Job/receipt domain inputs released to T1, not DDL or worker-service READY | T1 exact jobs/receipt DDL + trusted worker/closing resolver; T2 actual dispatch/reconciliation/crash matrix through fake-provider service, duplicate delivery proof, one action owner. No external exactly-once claim |
-| 4 Normalized settings / removal of globals | Override codec `bfc6c0eb156ef5b6a1d0a5b14066a6c7bb0ad01a`, vectors `a6b9fd1975d509911abc9da666bc0049e49228ce`, characterization `f3c61d7704813790245ec73096c753ee5dd93915`; shared permissions consumed by `5294fdb0860092b20c1fcc9c71b781b8666518a3` |78override cases; T1 independently reconstructed6vectors and accepted bytes as DDL prerequisite.102legacy calculation cases;81pure shared-export+codec cases. Permissions released and consumer-accepted; no durable state/service acceptance | T1 selected override-only versions/heads/separate audit design; exact DDL/ACL release pending. T2 scoped PG repository + authenticated service next. Org settings/assignments/liquidation/context rows and mapping versions remain T1/T2 work; one-writer fence/cutover NOT done |
+| 4 Normalized settings / removal of globals | Codec `bfc6c0e`, vectors `a6b9fd1`, characterization `f3c61d7`; permissions consumed `5294fdb`; access `fcaf22984b6658095ca28a3c4b618c3d56361f32`; accepted T1 override0070 `54386d4a789b0b74ae30710035defe949ea44b6a` merged `1e56b57915fa0be3c067f2ae79d3984752678bbe`; dormant service in accompanying slice | Actual43PG PASS10.62s: access19 + service24 including read/replay/CAS/rollback. SQL prerequisite consumed; bounded service locally verified, not downstream/final integration or writer cutover | Org settings/assignments/liquidation/context rows and mapping versions remain T1/T2 work. Existing globals untouched; one-writer fence/cutover NOT done |
 | 5 Price snapshots / stock snapshots / daily / typed reads | Price `4e14e21ce79ebda29144d17db0b4a798f4bd2ec4`, stock `f7a5d62548d86f39c588c531c143936f0af8e55a`, chronology fix `901c1796e9a0ab04c0a4c7256e19bcce64dbaef1`; DDL request `907ec7b46ea5b6427385c7e80a204cb80f4adcad` | Immutable typed adapters/manifests/grain/presence and UTC chronology implemented;104scoped parser cases. Not actual publication or historical stock persistence | T1 source DDL; T2 atomic publication/current-head CAS, stock daily revisions and typed DB reads, fake collection/restart tests. FBS exact identity contract and source freshness policy unresolved; today's stock is not historical evidence |
 | 6 KTR and source revision policy | `94b540f592a0fed3a29ce476fdb3dbd7ce58a604`; stock evidence request `0edde8bcc735999eaec0361620af47eee0b2c8a0`, codec/vectors `0c8fca9c5f8bdf62e630398cb1bd663acfb2cee0` | SourceDiff classification and stock count-only bytes implemented;69pure codec/diff cases. T1 accepted8vectors as prerequisite, not SQL/auth/publication proof; exact requests delivered | Owner source evidence: KTR artifact/effective bands + local/all-orders grain; T1 evidence DDL/auth, T2 complete diff+parent-linked daily correction service. Finance rrd/fingerprint limitation preserved; scheduler off |
 | 7 Final profitability | Decision package `94b540f592a0fed3a29ce476fdb3dbd7ce58a604` | Synthetic alternatives delivered; no financial rule selected, no final-profit implementation/acceptance claimed | Financial owner approval + complete source evidence, then T2 canonical service/golden tests. netProfitKopecks/profitClass/abcCode remain null; no guessed allocation/account/backdate/rrdId/hash adjustment |
@@ -90,6 +90,95 @@ a new revision. The combined replace helper is not a replay entry point; histori
 replay must not require a surviving current mapping. This boundary was sent to T1.
 
 ### Stable consumer candidate for the common milestone
+
+New accepted prerequisite, separate from the frozen common milestone:
+T1 SKU storage `54386d4a789b0b74ae30710035defe949ea44b6a` (0070 after0069)
+consumed with full ancestry by merge `1e56b57915fa0be3c067f2ae79d3984752678bbe`.
+Only merge conflict was permissions context after prior SKU-export cherry-pick;
+the final permissions, all migrations and runtime SQL match T1 exactly (diff0).
+Release annotation `6e35c06ba3d66790c0b0f7091d5d22f5c9ad5469` consumed as
+`1362dab`; full independent review read: Approved,0Critical/0Important/2Minor
+(targeted FK tests can be masked by deferred orphan; inherited passfile warnings).
+No independent T2 schema rewrite, ORM/config/flag change or deferred Production work.
+Postmerge actual access baseline19PASS; new service test then failed after real0070
+bootstrap because the service module was absent (19PASS1FAIL9.94s/natural1).
+Minimal first-write implementation now passes its actual PG test:1PASS4.20s/natural0,
+physical commit visible from another connection across revision/head/audit. Both
+gates used the accepted scrubbed Unix allocator and network-deny sandbox; exact owned
+DB/role absence was verified and heavy slots released. Bounded service now locally
+verified by the43-case gate below; no current writer wiring or full stage4 acceptance.
+
+### Dormant authenticated SKU override service — bounded release
+
+`app/modules/wb_repricing_override_service.py` owns a fresh PostgreSQL physical root
+per call. `SkuOverrideService(engine,max_request_bytes=...)` requires a PostgreSQL
+Engine and explicit trusted byte budget; methods are `replace(change,principal,
+binding,now=aware_datetime)`, `get_current(OverrideScope,principal,binding)` and
+`history(OverrideScope,principal,binding,limit=...,before_revision=...)`. History is
+descending, cursor-exclusive and returns an immutable tuple; trusted caller owns
+the page/resource budget. No HTTP, provider, worker or legacy adapter is connected.
+
+The private SQL write participant deliberately has no public unguarded repository
+surface. Read/current/history use fixed READ; replace/replay fixed BOTH. Authenticated
+membership must equal command actor. Mapping-only helper grants no authority and
+is used only after the same root's command guard and missing receipt. All receipt
+queries include org/account/SKU/command; reads reconstruct the immutable command
+from actual typed columns and verify canonical bytes/hash. NUMERIC is decoded as
+Decimal/int, never float. Current head/version/time must agree with its revision.
+
+```
+live principal/session/member + exact account lock
+  -> full-owner command lookup
+     -> matching actor+bytes: original immutable revision -> final auth -> COMMIT
+     -> new command: mapping SHARE -> scoped head/expected-version
+        -> revision INSERT -> head INSERT or scoped version CAS -> audit INSERT
+        -> final live auth -> physical COMMIT -> return
+
+holder locks exact account
+  worker A --wait chain--> holder
+  worker B --wait chain via A or directly--> holder
+release holder -> one revision1 winner -> other sees version1 -> conflict
+```
+
+Actual accepted0070 runtime tests: **43 passed in10.62s, natural exit0** (19 existing
+access +24 service). Coverage: physical commit visibility; full-null first row;
+later revision and historical replay after mapping deletion; historical reads after
+deletion; exact2**80 money/long signed Decimal/false/zero roundtrip; bounded history;
+same-key changed payload/version/actor conflict; stale new command; read/write/both/
+neither permissions before receipt reads; independent command namespace for two WB
+accounts in one org; audit-statement and physical-commit failure rollback; final
+live-session revocation rollback; two actual concurrent Sessions with observed
+transitive owned wait chains and one CAS winner. No sleep-based winner assumption
+or timeout widening. Temporary resources were exactly removed/absence verified:
+
+- `orders_test_3fced08fcaf74c3d9bb1ff711c1a770e` / `repricer_runtime_4ab4add211714eb8a75e5f389c3bc560`;
+- `orders_test_5a0a488a631f4aa29e28ad3b3c1b8003` / `sku_override_runtime_3047b427ea784432874bd514374d13bc`.
+
+RED history retained: missing service after bootstrap19PASS1FAIL9.94s; firstwrite
+1PASS4.20s; historical replay after remapping1PASS1FAIL4.30s; then34PASS6FAIL/
+3deselected14.24s (five missing-read-API failures and a too-narrow direct-blocker
+observer). Read API implemented; observer changed to actual transitive blocking
+graph with the same5s deadline. The last43-case gate is the final evidence, not a
+claim those earlier failed gates passed. Inherited libpq passfile warnings remain.
+
+Exact final PG command, from this worktree's backend (exit0):
+
+```sh
+env -i PATH=/usr/local/bin:/usr/bin:/bin PGPASSFILE=/dev/null PGSERVICEFILE=/dev/null NETRC=/dev/null PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ORDERS_TEST_USE_LOCAL_CLUSTER=1 /usr/bin/sandbox-exec -f ../.superpowers/t2-repository-offline.sb /Users/bratishka/Downloads/satornawb-main/.worktrees/wave1-integration/backend/.venv/bin/python -m pytest -q -s tests/test_wb_override_access.py tests/test_wb_override_service.py --tb=short
+```
+
+Scoped backend-cwd Ruff/compileall/diff-check are the static gates. A root-cwd Ruff
+invocation inferred app as third-party and reported I001 in the new test; no import
+behavior changed to satisfy that alternate cwd. Read-only critic inspected current
+service/access/tests and found no safety defects; its initial stale FOR UPDATE
+observation was explicitly withdrawn after rereading actual FOR SHARE source.
+
+Rollback is code-only while dormant. No automatic downgrade of populated0070 and
+no runtime memory/file fallback. This is not current-flow integration, one-writer
+fence, complete normalized settings, immutable mapping context, source persistence
+or full backend regression acceptance. The frozen root candidate remains unchanged
+until an explicit new consumer milestone is agreed. Production/flags/provider
+actions were not run; imported T1 ancestry is preserved, not independently rewritten.
 
 Immutable T2 code candidate: `f3c61d7704813790245ec73096c753ee5dd93915` on
 `codex/arch-t2-economics`, base `c88a474695569af905b294906ba604d61f3de62f`.
