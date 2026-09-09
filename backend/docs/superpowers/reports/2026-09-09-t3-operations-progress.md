@@ -46,8 +46,42 @@ result/command-codec/text/read-contract files113PASS0.11s/exit0; scoped Ruff0,
 independent read-only critic no important findings. P1 persisted witness/CAS/live
 authority still requires exact READY migration and real two-session acceptance.
 No new heavy gate was run while T1 owned the resource interval. Browser-token
-USER-session sink tests prepared separately are NOT_RUN pending their PG slot;
+USER-session sink tests now pass the bounded8case actual0067 gate below;
 token-only issuance binding/auth/completeness remain explicitly unresolved.
+
+### Normalized browser sink acceptance
+
+`tests/test_orders_browser_publication.py`:8PASS3.28s/natural0 after explicit T4
+release, own disposable DB/role absence verified, then explicit release to T1.
+Existing behavior characterization, not a fabricated RED or new auth implementation.
+Complete/partial durable runs and replay, required user session, account/UUID/expiry
+metadata mismatch without run insertion, revoked-token replay denial and final-hook
+revocation rollback all pass. Final-hook denial checks exact authority error, not
+generic SQL permission failure. This is same-transaction revalidation, not a new
+two-writer revocation proof. Read-only critic found no important false positives.
+
+Committed service interface remains:
+`app.orders.publication_service.publish_orders_manifest(session, *, principal,
+account, authorities, manifest, source_run_key) -> OrdersPublicationResult`.
+Principal is actual `UserSessionPrincipal`; account is `ExpectedAccountBinding`;
+browser authorities include `ExpectedIngestionToken` with exact
+`avito.browser_snapshot.write` scope. Own clean root transaction uses fixed
+`sync:run` and live guard. `OrderManifest` is normalized domain input, NOT the
+browser HTTP body. Body owner override policy, token secret verification,
+issuance-time frozen account binding and bearer-only principal are not supplied
+by this sink. Org/account/provider drift rejects rather than overriding identity.
+
+Manifest completeness is structural: one scoped account/source/adapter/snapshot,
+unique orders, contiguous pages with final terminal marker and exact declared
+distinct-order count. Partial stores facts without projecting/removing absent
+orders. No browser/provider completeness is inferred from bearer or supplied flag.
+Immutable0067 binding and original replay result remain; changed evidence reconciles.
+Outcome fields:run_id,state,replayed,reconciliation_count, returned only aftercommit.
+Typed validation/conflict or sanitized PublicationGuardError propagate; HTTP error
+translation remains endpoint-owner work. No memory/cache success fallback.
+
+Tests use synthetic token metadata/verifier only, not a real bearer or account.
+No new route, auth mechanism, provider/network call, operational export or activation.
 
 ### Independent XLSX retry stability
 
