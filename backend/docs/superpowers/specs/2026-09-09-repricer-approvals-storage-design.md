@@ -168,8 +168,6 @@ Update eventual `backend/ops/runtime-db-role.sql` with these narrow grants/revok
 
 Safe errors are generic fixed codes. No full row/request/approval text inside RAISE EXCEPTION, JSON errors, task args or generic audit. DB parse errors can reflect values; reject hostile Unicode/UUID/input types in domain before casting and sanitize database exceptions in service.
 
-## 9. Empty-only downgrade
-
 Account-helper lifetime amendment: support only Engine-bound Sessions produced
 by the normal Session factory. An external Connection root can outlive a joined
 Session commit (default conditional_savepoint resolves to rollback_only), leaving
@@ -178,6 +176,8 @@ context SQL using the public get_bind Engine type, including join modes that mig
 transfer commit ownership. Avoid private transaction maps and never commit/rollback
 external caller work. Test both default and explicit rollback_only joins with
 unchanged external settings/data on denial and real Engine-root lifecycle controls.
+
+## 9. Empty-only downgrade
 
 Under authorized owner visibility, acquire ACCESS EXCLUSIVE locks on all three exact tables in a fixed order before counting. Inspect all rows regardless of tenant context; do not rely on an owner SELECT hidden by FORCE RLS. A migration session must have genuine all-row visibility (appropriate privileged migration role); `row_security=off` alone does not grant bypass and must not be presented as one. Refuse downgrade atomically if any table is nonempty.
 

@@ -43,8 +43,9 @@ assert not is_review_shadow_enabled(Settings(), organization_id=1, marketplace_a
 ```
 
 Use test monkeypatch only within scrubbed process to exercise actual get_settings.
-Invalid corpus: flag yes/1/empty; pairs0:1,-1:1,+1:2,01:2,1:02,1:2:3,1:2,empty
-trailing segment, Unicode digits, duplicate pairs, huge/out-of-INT4 IDs, embedded
+Invalid corpus: flag yes/1/empty; pairs `0:1`, `-1:1`, `+1:2`, `01:2`,
+`1:02`, `1:2:3`, `1:2,` (empty trailing segment), Unicode digits,
+duplicate pairs, huge/out-of-INT4 IDs, embedded
 spaces and wildcard. Test direct tuple/list/bool/float malformations separately.
 Enabled empty selects nobody. Disabled with malformed configured pairs still fails.
 - [ ] Step2 run expected RED, then implement minimal dedicated strict parser and
