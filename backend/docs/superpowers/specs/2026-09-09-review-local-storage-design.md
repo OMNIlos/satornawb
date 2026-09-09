@@ -264,7 +264,8 @@ nonempty downgrade55000. Native CHECK/FK/unique/type/permission errors are trans
 by T4 into safe service errors, never logged/returned with raw request/text/descriptor.
 
 Only additive migration0071, new-object runtime grant additions, four scoped test
-modules, four copied synthetic fixtures and one handoff may change in implementation.
+modules, four copied synthetic fixtures and one handoff may change in implementation,
+plus the two bounded existing test fixtures in the measured amendment below.
 No old migrations/ORM/routers/domain code/config/dependencies/frontend/legacy writers,
 no broad/default ACL changes or role creation in Alembic, no SECURITY DEFINER,
 no production/working DB/Redis/real credentials/.env/providers/network/push/deploy/
@@ -288,3 +289,28 @@ proof. Guards check NEW action at INSERT, not all old history against final poin
 so a later source/policy switch does not corrupt earlier valid captured witnesses.
 Use fixed safe review_local_source_changed and review_local_not_answerable codes
 (SQLSTATE23514) for those additional physical predicates.
+
+## Measured compatibility amendment (2026-09-09)
+
+The first exact ten-module adjacent run naturally returned375PASS/1FAIL/241setupERROR
+in220.04s, after the new focused499 passed44.57s. Only two existing test paths are
+additionally allowed: `tests/test_review_facts_schema.py`'s broad-privilege evidence
+test, and `tests/test_sku_override_schema.py`'s runtime `db` fixture.
+
+The old evidence test's TRUNCATE CASCADE now reaches new FK children before its
+expected old immutable trigger; missing child TRUNCATE grants mask that assertion.
+Grant TRUNCATE on all tables only within this test's exclusively owned disposable
+public schema and rollback-only root. Preserve its existing UPDATE/DELETE grants,
+exact old immutable-error assertions and verify ACL restoration after rollback.
+No application/runtime grants, SQL guards or historical migration may change.
+
+The current runtime grant script requires current canonical relations. Its SKU
+fixture must therefore migrate actual head, as the existing Orders fixture does;
+the new local Review runtime fixture must follow the same rule. All explicit
+revision-pinned presence/preservation/upgrade-downgrade tests remain unchanged.
+No conditional runtime-prerequisite weakening or mocked substitute grant script.
+
+Implementation scope is now thirteen paths (twelve source/test/fixture hashes and
+the handoff). Preserve measured failures, first verify both exact old nodes, then
+repeat focused/ten-module compatibility and independent main covering checks.
+This does not expand domain implementation, baseline failures or production access.

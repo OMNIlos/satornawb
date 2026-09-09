@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Only additive migration0071, new-object runtime grant additions, four scoped test modules, four copied synthetic fixtures and one handoff may change in implementation.
+- Only additive migration0071, new-object runtime grant additions, four scoped test modules, four copied synthetic fixtures, one handoff and the two narrowly amended existing test fixtures below may change in implementation.
 - No old migrations/ORM/routers/domain code/config/dependencies/frontend/legacy writers, no broad/default ACL changes or role creation in Alembic, no SECURITY DEFINER, no production/working DB/Redis/real credentials/.env/providers/network/push/deploy/flags/backfill/cleanup.
 - Tests use own worktree backend/.venv, scrubbed environment, accepted allocator-owned disposable Unix PG and explicit heavy-slot queue handoff. No prefix catalog inventory, unrelated workloads, SQLite RLS substitute, skips, timeout widening, baseline expansion or kill-as-success.
 - Production assembly/printing remains deferred; old compatibility only. Real service/retention/delivery approval is separate, not guessed and not a blanket blocker for this local persistence.
@@ -21,7 +21,7 @@
 
 ## Task 1: Implement the atomic local Review storage contract
 
-**Files, exactly eleven:**
+**Files, exactly thirteen after the measured compatibility amendment:**
 
 - Create `backend/alembic/versions/20260909_0071_review_local_storage.py`.
 - Modify `backend/ops/runtime-db-role.sql` only new-table prerequisites and new object grants.
@@ -34,8 +34,37 @@
 - Create `backend/tests/fixtures/t1_review_local_command_v1_golden.json`.
 - Create `backend/tests/fixtures/t1_review_account_binding_v1_golden.json`.
 - Create `backend/docs/superpowers/reports/2026-09-09-t1-review-local-storage-handoff.md`.
+- Modify `backend/tests/test_review_facts_schema.py` only `test_run_and_evidence_guards_even_with_broad_privileges`: rollback-only synthetic TRUNCATE diagnostic grant and restoration proof, preserving every existing exact error assertion.
+- Modify `backend/tests/test_sku_override_schema.py` only the runtime `db` fixture: migrate actual `head` before invoking current runtime grants. Historical TARGET/PREVIOUS tests remain pinned.
 
-**Consumes:** released0070 with unchanged0063/0065/0068; actual canonical account/member FK keys; `tests.test_orders_schema_candidate.cluster`, `disposable_database`, `migrate`; `tests.test_orders_schema_integration.runtime_script`; `tests.test_review_facts_schema` row builders and `tests.test_review_run_binding_migration` binding/preservation helpers (read before using, no historical changes). Golden sources at immutable `ad793f9c4672210b25fe05e35dc1ddb03cf676ac:backend/tests/fixtures/reviews/`: storage-v1-golden.json, local-audit-v1-golden.json, local-command-v1-golden.json, account_binding_descriptor_v1.json respectively. T4 matrices/codec and amendments through176d243df4ef3349e03fa31f1d4231f3e9064271 are accepted inputs, not imported runtime modules.
+**Consumes:** released0070 with unchanged0063/0065/0068 migrations; actual canonical account/member FK keys; `tests.test_orders_schema_candidate.cluster`, `disposable_database`, `migrate`; `tests.test_orders_schema_integration.runtime_script`; `tests.test_review_facts_schema` row builders and `tests.test_review_run_binding_migration` binding/preservation helpers (read before using; only the two test-fixture amendments above). Golden sources at immutable `ad793f9c4672210b25fe05e35dc1ddb03cf676ac:backend/tests/fixtures/reviews/`: storage-v1-golden.json, local-audit-v1-golden.json, local-command-v1-golden.json, account_binding_descriptor_v1.json respectively. T4 matrices/codec and amendments through176d243df4ef3349e03fa31f1d4231f3e9064271 are accepted inputs, not imported runtime modules.
+
+### Measured compatibility amendment (2026-09-09)
+
+Final new focused499 passed44.57s. Exact ten-module adjacent617 then naturally
+returned375PASS/1FAIL/241setupERROR in220.04s with owned cleanup. Actual failures:
+old Review evidence diagnostic expected its immutable trigger, but CASCADE first
+hit missing TRUNCATE permission on the new draft relation; SKU shared runtime
+fixture migrated0070 while current fail-closed runtime script requires0071.
+
+The existing Review test deliberately verifies triggers under broader temporary
+privileges in an owned rollback-only root. Keep its UPDATE/DELETE grants and exact
+`Review evidence is immutable` assertions. Add TRUNCATE on all tables only inside
+that disposable public schema/root so current/future FK CASCADE participants cannot
+mask the intended trigger. Snapshot and verify actual role ACL restoration after
+rollback. This grants no permanent/runtime privilege and changes no trigger/DDL.
+
+Current runtime-script fixtures must migrate actual head, including the new local
+Review `db` fixture, matching existing Orders integration fixture behavior. Keep
+targeted0070/0071 presence, predecessor, downgrade and preservation tests pinned to
+their respective revisions. Never trim runtime prerequisites or substitute grants.
+
+First run the two previously failing exact nodes after the amendment, then unchanged
+four-module focused gate and exact ten-module adjacent gate. Main independent gate
+includes the four new modules plus these same two old regression nodes. Keep all
+prior failed results, re-freeze twelve source/test/fixture hashes plus the handoff
+as the thirteenth implementation path. No extra domain file, baseline edit, skip,
+timeout change or old migration change is admitted.
 
 **Produces:** `review_policy_versions`, `review_policy_heads`, `review_draft_revisions`, `review_decisions`, `review_workflow_heads`, `review_local_audit`, `review_local_command_receipts` and the fixed `review_local_*` helper family in the spec. Revision20260909_0071/down20260909_0070, no labels/dependencies. Complete actual columns/types/FKs/helper signatures and service transaction order in final handoff, not a generic repository API.
 
@@ -145,14 +174,14 @@ git diff --check
 ```
 
 - [ ] Following separate fresh admission, exact adjacent modules: test_review_facts_schema.py, test_review_lossless_migration.py, test_review_lossless_rls.py, test_review_run_binding_migration.py, test_review_run_binding_rls.py, test_review_run_binding_acl.py, test_sku_override_schema.py, test_sku_override_lifecycle.py, test_sku_override_rls.py, test_orders_schema_integration.py. No new deferred Production tests. Record natural exit, inherited warnings and exact own cleanup; distinguish any old synthetic allocator controls from real resources. No eleventh/extra module or new path fix without controller ruling.
-- [ ] Freeze ten code/test/fixture source hashes, complete all actual columns/nullability/FK/check/index/trigger/helper signatures/grants/safe codes/order and exact measured gates in handoff. Keep physical constraints vs T4 auth/replay/HTTP/rollout acceptance distinct. Four copied fixture hashes/source commits and byte limitations explicit. Main independent covering gate after resource handoff, fresh one-head/compile/Ruff/diff/hash checks.
-- [ ] Self-critique, then only on controller checkpoint commit exactly `feat: add account-owned local review storage`. Report full SHA, exactly eleven paths, all failures and cleanup. Independent task spec/quality review and main verification precede exact READY to T4; no next schema/consumer action in this task.
+- [ ] Freeze twelve code/test/fixture source hashes, complete all actual columns/nullability/FK/check/index/trigger/helper signatures/grants/safe codes/order and exact measured gates in handoff. Keep physical constraints vs T4 auth/replay/HTTP/rollout acceptance distinct. Four copied fixture hashes/source commits and byte limitations explicit. Main independent covering gate after resource handoff, fresh one-head/compile/Ruff/diff/hash checks.
+- [ ] Self-critique, then only on controller checkpoint commit exactly `feat: add account-owned local review storage`. Report full SHA, exactly thirteen paths, all failures and cleanup. Independent task spec/quality review and main verification precede exact READY to T4; no next schema/consumer action in this task.
 
 ## Preflight matrix
 
 | Shared interface | Consistency check |
 | --- | --- |
-| Eleven paths / task | One coupled graph+codec/RLS unit, fixtures/handoff included; no old/domain files |
+| Thirteen paths / task | One coupled graph+codec/RLS unit plus two measured test-fixture compatibility repairs; no old migrations/domain files |
 | Pure bytes / physical rows | Fixed complete formats from typed fields; NUL only BYTEA path; NUMERIC no rounding |
 | Four command receipts / audit | canonical commandIdNULL preserved; separate private scoped key and reciprocal event refs |
 | Policy head / draft epoch | historical selected witness, captured epoch not FK current version; ABA rejects new actions |
