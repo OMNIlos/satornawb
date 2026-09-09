@@ -1,6 +1,6 @@
 # T4 — requirement → commit → evidence → remaining work
 
-## Current checkpoint: 9099f32 (supersedes historical snapshot below)
+## Current checkpoint: 30f1f15 (supersedes historical snapshot below)
 
 All eight original stages remain in scope. A pure contract, fixture or dormant
 repository is not an activated service. No production/deploy/push/live provider,
@@ -34,7 +34,14 @@ Latest verification superseding the counts in the stage rows above:
   publication authorization. Full shared guard remains pending; neither this API
   nor the proposed0065 are claimed installed in this worktree.
 
-Latest observed T1 HEAD1d8d493; no full publication guard consumed yet.
+The earlier pending-guard statement is superseded: exact T1 guard4860c53 and paired
+fetch7bfb631 lineage are now merged83ef4a4. T4 root-transaction compatibility30f1f15
+passes253 tests (new9+repository35+schema48+sharedguard161), Ruff/compile/diff0 and
+independent review. Repository uses explicit command_savepoints=False under guard;
+caller must roll back the full root on every error. No current service is wired.
+This closes guard/repository compatibility, not authenticated same-fetch shadow
+composition, audit or a Review-specific two-session revocation acceptance gate.
+Actual0065 and lossless decoder/roundtrip remain pending.
 No SQL migrations or shared auth are authored by T4. Next independent task:
 remaining evidence-backed frontend test debt; durable wiring waits for real guard/DDL.
 
