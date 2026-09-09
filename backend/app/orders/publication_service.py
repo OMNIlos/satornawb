@@ -13,6 +13,8 @@ from app.modules.orders import (
     WB_STATISTICS_STATUS_MAPPING_VERSION,
     OrderContractValidationError,
 )
+from app.orders.bindings import account_binding_checksum
+from app.orders.catalog_resolution import resolve_order_catalog
 from app.orders.contracts import CatalogResolution
 from app.orders.evidence_repository import OrdersEvidenceRepository
 from app.orders.ingestion import OrderManifest, _text, compare_observations
@@ -184,6 +186,7 @@ def _replay(session, existing, manifest, params):
         not isinstance(details, dict)
         or details.get("manifest_checksum") != manifest.checksum
         or type(details.get("reconciliation_count")) is not int
+        or details.get("account_binding_checksum") != params["binding"]
     ):
         raise OrderContractValidationError("Run receipt integrity failure")
     return OrdersPublicationResult(
@@ -250,6 +253,7 @@ def publish_orders_manifest(
         "account": manifest.marketplace_account_id,
         "source": manifest.source_kind,
         "key": source_run_key,
+        "binding": account_binding_checksum(manifest.organization_id, (account,)),
         "mapping": AVITO_ORDER_STATUS_MAPPING_VERSION
         if manifest.marketplace == "avito"
         else WB_STATISTICS_STATUS_MAPPING_VERSION,
@@ -326,17 +330,27 @@ def publish_orders_manifest(
                             run, record.observation_id, expected_version=1
                         )
                         for item in row.items:
-                            projections.set_item(
-                                run,
-                                record.observation_id,
-                                item.identity.source_line_key,
-                                resolution=CatalogResolution(
+                            resolution = (
+                                resolve_order_catalog(
+                                    session,
+                                    manifest.organization_id,
+                                    manifest.marketplace_account_id,
+                                    item.identity.external_item_id,
+                                )
+                                if item.identity.external_item_id is not None
+                                else CatalogResolution(
                                     "unmapped",
                                     None,
                                     None,
                                     None,
                                     "orders-initial-unmapped-v1",
-                                ),
+                                )
+                            )
+                            projections.set_item(
+                                run,
+                                record.observation_id,
+                                item.identity.source_line_key,
+                                resolution=resolution,
                                 expected_version=None,
                             )
                     else:
@@ -400,6 +414,7 @@ def publish_orders_manifest(
                         details={
                             "manifest_checksum": manifest.checksum,
                             "reconciliation_count": reconciliation,
+                            "account_binding_checksum": params["binding"],
                         },
                     )
                 )

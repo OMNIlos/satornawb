@@ -214,6 +214,32 @@ def test_fetched_publication_cannot_omit_authority(authority):
         )
 
 
+def test_initial_publication_uses_exact_existing_catalog_link(authority):
+    from tests.test_orders_catalog_resolution import seed
+
+    _, runtime, principal, credential = authority
+    row = item_fact()
+    with Session(runtime) as session, session.begin():
+        scope(session)
+        _, _, sku = seed(session, 91101, row.items[0].identity.external_item_id)
+    with Session(runtime) as session:
+        result = publish(
+            session, principal, credential, manifest(row), "synthetic-" + uuid4().hex
+        )
+        with session.begin():
+            scope(session)
+            resolved = session.execute(
+                text(
+                    "SELECT i.catalog_sku_id,i.resolution_state FROM marketplace_order_items i JOIN marketplace_orders o USING (organization_id,marketplace_account_id,order_id) WHERE o.last_seen_sync_run_id=:id"
+                ),
+                {"id": result.run_id},
+            ).all()
+            assert [tuple(value) for value in resolved] == [
+                (sku, "resolved"),
+                (sku, "resolved"),
+            ]
+
+
 def test_wb_statistics_publication_does_not_invent_fulfillment_status(prepared):
     owner, runtime, principal, _ = prepared
     credential_id = uuid4()

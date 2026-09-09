@@ -12,16 +12,17 @@ Branch `codex/arch-t3-operations`; исходная база `c88a474`.
 Avito return matching, Catalog resolution, WB/Avito order identities, XLSX и
 обычная печать не относятся к удаляемому КИЗ subsystem и сохранены.
 Backend app scan не обнаружил kiz/chz/КИЗ/Честный знак runtime references.
-Frontend placeholders требуют отдельной правки владельца T4; координатор уведомлён.
+Frontend cleanup выполнен владельцем T4 в его ветке, включая `8d4a5b9`;
+общая интеграция остаётся отдельным gate. T3 frontend не менял.
 Backup/user data и исторические Git commits не удалялись.
 
 | Этап / requirement | Реализованные commits / проверки | Remaining / blocker |
 |---|---|---|
 | 1 Discovery / parity / schema request | `4323821` Stage1; `3a30b16` offline/XLSX; `f4d6d55` returns/XLSX edge characterization | Полного production prototype нет; только частичные исходники. КИЗ/matcher исключены, не blocker |
-| 2 Identity / normalized ingestion | Pure contract/manifest/serialization; `51e0b3c` account-serialized exact replay; `a197a65` parent CAS; `03a30b8` item CAS; T1 actual0064 merged `2d9a400`, consumer+DDL106PASS; T1 guard4860c53 consumed | Atomic manifest/status/coverage/run publication and source-progression composition unfinished; fetch adapter completeness and publication integration still require proof |
-| 3 Catalog / read API | Read models/decoder; `cd5c277` immutable snapshots, `32d5af5` parent fence; `e3d0033` fixed-permission live guarded read service, actual logout race | Repository resolution, signed cursors/API authentication adapter/wiring pending; service is not an HTTP endpoint |
-| 4 Production work items / commands | `1afd5a2` pure assignment preconditions; DB09-DB13 specification | Production schema/receipts/audit отсутствуют в Orders candidate; нужны отдельный binding и T1 DDL; concurrency proof NOT_RUN |
-| 5 Batches / groups / frozen sheets | Только discovery/parity requirements | Полный legacy schedule/grouping source не восстановлен; Orders read snapshot не равен Production sheet |
+| 2 Identity / normalized ingestion | `9d1f88b` atomic guarded manifest/status/coverage/audit publication; exact replay/CAS repositories; actual0064 consumer acceptance | Source progression deliberately reconciles; immutable run binding request `0b8ae9d`, real adapter completeness/paired-fetch activation and worker authority still require proof |
+| 3 Catalog / read API | Exact account-scoped Catalog resolver, conservative read assembly, signed cursor, dormant typed GET adapter; current combined89PASS | Router unregistered; mutable legacy receipt stamp is not immutable provenance; unbound history rejected; source/adapter mixed coverage needs contract; no filter engine or production readiness |
+| 4 Production work items / commands | Pure assignment preconditions + canonical receipt byte codec; `0aa2c48` exact creation/witness/accountRLS amendment | T1 confirms Production DDL not READY; actual CAS/concurrency NOT_RUN; command permission requires owner policy |
+| 5 Batches / groups / frozen sheets | `142cf46` actual HTML synthetic characterization; `0aa2c48` P2/P3/P4 storage requests | Полный legacy schedule/grouping source не восстановлен; Orders read snapshot не равен Production sheet |
 | 6 XLSX | Renderer characterization: inline text, leading zeros, Cyrillic, quantities, 1000 rows; `f013dec` rejects XML-invalid controls | Frozen sheet adapter/артефакт persistence требуют Production contract |
 | 6 A4 PDF | Source gap описан | Нет полного renderer/fixtures, не реконструировать по screenshots; multipage/48+ rows NOT_RUN |
 | 6 Stickers 120x75 / 58x40 | Source gap documented; no substitute renderer invented | Нужны исходники обычных WB/Avito renderers; selected unit identity/barcode/quantity parity NOT_RUN. КИЗ/matcher не требуются |

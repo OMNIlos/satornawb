@@ -9,7 +9,9 @@ from sqlalchemy import event, text
 from sqlalchemy.orm import Session
 
 from app.cabinet.orm import LkSessionRow, LkUserRow
-from app.orders.read_service import read_orders_snapshot
+from app.orders.bindings import bound_high_water_mark
+from app.orders.cursor import OrdersCursorCodec
+from app.orders.read_service import read_orders_page, read_orders_snapshot
 from app.orders.snapshot_repository import OrdersSnapshotRepository
 from app.platform.identity.orm import IamMembershipRow
 from app.platform.integrations.publication_guard import (
@@ -23,6 +25,57 @@ from tests.test_orders_snapshot_repository import coverage, stored_rows
 
 read_db = _db_fixture
 ACCOUNTS = (ExpectedAccountBinding(91101, "avito", "synthetic-a", None),)
+
+
+def test_signed_pages_keep_snapshot_and_recheck_logout(prepared):
+    owner, runtime, principal, snapshot = prepared
+    codec = OrdersCursorCodec(b"synthetic-not-a-secret-key-value-32")
+    arguments = {
+        "principal": principal,
+        "accounts": ACCOUNTS,
+        "query_checksum": "a" * 64,
+        "codec": codec,
+        "limit": 1,
+    }
+    with Session(runtime) as session:
+        first = read_orders_page(session, snapshot_id=snapshot, **arguments)
+        assert first.next_cursor and len(first.rows) == 1
+        second = read_orders_page(session, cursor=first.next_cursor, **arguments)
+        assert second.next_cursor is None and len(second.rows) == 1
+        assert first.snapshot_id == second.snapshot_id == str(snapshot)
+        assert first.high_water_mark == second.high_water_mark
+        assert first.rows[0].item_identity != second.rows[0].item_identity
+        assert not session.in_transaction()
+    with owner.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE lk_sessions SET revoked_at=clock_timestamp() WHERE session_id=:id"
+            ),
+            {"id": principal.session_id},
+        )
+    with Session(runtime) as session, pytest.raises(PublicationGuardError):
+        read_orders_page(session, cursor=first.next_cursor, **arguments)
+
+
+def test_signed_page_rejects_tampering_and_ambiguous_selection_before_sql(prepared):
+    _, runtime, principal, snapshot = prepared
+    codec = OrdersCursorCodec(b"synthetic-not-a-secret-key-value-32")
+    with Session(runtime) as session:
+        arguments = {
+            "principal": principal,
+            "accounts": ACCOUNTS,
+            "query_checksum": "a" * 64,
+            "codec": codec,
+        }
+        with pytest.raises(ValueError, match="cursor"):
+            read_orders_page(session, cursor="synthetic-invalid", **arguments)
+        with pytest.raises(ValueError, match="selection"):
+            read_orders_page(
+                session, snapshot_id=snapshot, cursor="synthetic-invalid", **arguments
+            )
+        with pytest.raises(ValueError, match="selection"):
+            read_orders_page(session, **arguments)
+        assert not session.in_transaction()
 
 
 @pytest.fixture
@@ -68,7 +121,7 @@ def prepared(read_db):
         snapshot = OrdersSnapshotRepository(session, 91001).freeze(
             rows,
             coverage(),
-            "synthetic-hwm",
+            bound_high_water_mark("b" * 64, 91001, ACCOUNTS),
             "a" * 64,
             parent_versions={rows[0].observation.identity: 2},
         )
