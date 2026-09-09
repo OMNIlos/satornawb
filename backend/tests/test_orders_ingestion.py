@@ -1,5 +1,6 @@
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -19,6 +20,23 @@ from app.orders.ingestion import (
 )
 
 NOW = datetime(2026, 9, 8, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "previous_fold,incoming_fold,expected", [(0, 1, "changed"), (1, 0, "out_of_order")]
+)
+def test_observation_order_uses_instants_during_repeated_local_hour(
+    previous_fold, incoming_fold, expected
+):
+    local = datetime(2024, 10, 27, 2, 30, tzinfo=ZoneInfo("Europe/Berlin"))
+    previous = replace(
+        observation(),
+        source_revision=None,
+        effective_at=local.replace(fold=previous_fold),
+    )
+    incoming = replace(previous, effective_at=local.replace(fold=incoming_fold))
+    assert previous.effective_at.utcoffset() != incoming.effective_at.utcoffset()
+    assert compare_observations(previous, incoming) == expected
 
 
 def observation(order_id="synthetic-order", account=1001):

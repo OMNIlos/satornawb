@@ -311,8 +311,10 @@ def compare_observations(
         return "reconciliation_required"
     if previous.effective_at is None or incoming.effective_at is None:
         return "reconciliation_required"
-    if incoming.effective_at < previous.effective_at:
+    previous_instant = previous.effective_at.astimezone(UTC)
+    incoming_instant = incoming.effective_at.astimezone(UTC)
+    if incoming_instant < previous_instant:
         return "out_of_order"
-    if incoming.effective_at == previous.effective_at:
+    if incoming_instant == previous_instant:
         return "reconciliation_required"
     return "changed"

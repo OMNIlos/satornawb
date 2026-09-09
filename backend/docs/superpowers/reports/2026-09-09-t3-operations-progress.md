@@ -31,6 +31,19 @@ Backup/user data и исторические Git commits не удалялись
 
 ## Strict storage decoder slice
 
+### Independent instant-order correction
+
+Pure contract audit found same-ZoneInfo datetime comparisons use local wall time
+across a repeated hour. Four actual RED cases: two observation directions, valid
+nonempty coverage wrongly rejected, reversed instants wrongly accepted (4failed,
+64passed,0.15s). `AccountCoverage` bounds and `compare_observations` now compare
+UTC instants without replacing source values, inventing a calendar rule or granting
+projection progression. No computed deadline or weekend schedule was introduced.
+Final nine-file pure/serialization/legacy regression:240PASS1.82s/exit0. Scoped
+Ruff/compile/diff0; independent critic reports no important defects.
+Actual0067 publication/assembly regression:18PASS99.07s/exit0, own disposable
+database/role absence verified. No provider or operational actions.
+
 ### 0067 consumer acceptance (supersedes preparation notes below)
 
 Merged exact T1 feature and mandatory fix through
