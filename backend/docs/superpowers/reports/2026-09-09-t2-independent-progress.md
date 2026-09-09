@@ -290,3 +290,20 @@ only. Complete-run/evidence auth/parent-linked CAS/daily eligibility remain sepa
 unproved gates. Existing source hashes/compare_runs/formulas/flags untouched.
 Final lightweight codec+existing SourceDiff run **69PASS0.07s**, exit0; scoped
 Ruff/compileall/diff checks exit0. No accepted SQL parity or DB gate implied.
+
+### Source page chronology: same-zone DST regression
+
+Independent strict-boundary review found the same wall-clock comparison issue in
+both canonical price/warehouse-stock run assemblers. RED6FAIL0.08s: each rejected
+valid increasing fall-back instants, accepted reversed actual instants, and accepted
+a UTC-unrepresentable receipt. Fixed only comparison locals to UTC, safe domain
+overflow rejection; original pages/times/raw checksums/manifest algorithm unchanged.
+Added `tests/test_wb_source_page_chronology.py`, preserving page object identity and
+comparing manifest checksum against an equivalent UTC representation.
+
+Fresh lightweight new chronology+existing price/stock parser group **104PASS0.10s**,
+exit0; scoped Ruff/compileall/diff0. Read-only critic no findings, no test process.
+No heavy slot used, no actual source request, schema or current publication/wiring.
+Rollback is a code-only revert, no migrated facts. New schema dependencies requested
+directly from T1; uncommitted0069 Production work is unrelated, not consumed as a
+repricer/source READY handoff. Continue independent work while awaiting exact acceptance.

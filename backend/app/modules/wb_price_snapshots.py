@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, DecimalException
 from typing import Literal
 
@@ -266,14 +266,18 @@ def _price_run_values(pages: tuple[GoodsPricePage,...]) -> tuple[tuple[PriceProd
     first = pages[0]
     context = (first.organization_id,first.marketplace_account_id,first.limit,first.request_checksum)
     expected_offset = 0
-    previous_time = first.received_at
+    previous_time = None
     products = []
     seen = set()
     manifests = []
     for page in pages:
         if (page.organization_id,page.marketplace_account_id,page.limit,page.request_checksum) != context:
             raise PriceSourceValidationError("price page context mismatch")
-        if page.offset != expected_offset or page.received_at < previous_time:
+        try:
+            received_time = page.received_at.astimezone(UTC)
+        except OverflowError:
+            raise PriceSourceValidationError("receipt outside supported UTC range") from None
+        if page.offset != expected_offset or (previous_time is not None and received_time < previous_time):
             raise PriceSourceValidationError("price page continuity mismatch")
         for product in page.products:
             if product.nm_id in seen:
@@ -282,7 +286,7 @@ def _price_run_values(pages: tuple[GoodsPricePage,...]) -> tuple[tuple[PriceProd
             products.append(product)
         manifests.append((page.offset,page.limit,page.raw_checksum))
         expected_offset = page.next_offset
-        previous_time = page.received_at
+        previous_time = received_time
     manifest = json.dumps(["wb-goods-prices/v1",context,manifests],
                           separators=(",",":"),ensure_ascii=True).encode("ascii")
     return tuple(products),pages[-1].terminal,hashlib.sha256(manifest).hexdigest()

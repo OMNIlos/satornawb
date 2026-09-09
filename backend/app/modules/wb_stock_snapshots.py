@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, DecimalException
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -168,12 +168,18 @@ class StockRun:
             raise StockSourceError("immutable nonempty page sequence required")
         identities = set()
         first = self.pages[0]
+        previous_time = None
         for index, page in enumerate(self.pages):
+            try:
+                received_time = page.received_at.astimezone(UTC)
+            except OverflowError:
+                raise StockSourceError("receipt outside supported UTC range") from None
             if page.request != first.request or page.offset != index * first.request.page_limit:
                 raise StockSourceError("noncontiguous or mixed collection")
             if index and (self.pages[index - 1].terminal
-                          or page.received_at < self.pages[index - 1].received_at):
+                          or received_time < previous_time):
                 raise StockSourceError("invalid terminal/time sequence")
+            previous_time = received_time
             for row in page.observations:
                 if row.identity in identities:
                     raise StockSourceError("duplicate stock identity across pages")
