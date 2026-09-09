@@ -358,8 +358,10 @@ def test_pnl_finance_cache_normalizes_negative_revenue_rows(monkeypatch):
 
 
 def test_pnl_report_response_is_cached_for_two_hours(monkeypatch):
+    """Retain the historical node ID; current cache contract is 24h, no stale window."""
     source_cache: dict[str, dict] = {}
     finance_reads = {"count": 0}
+    monkeypatch.setattr("app.wb_reports_sprint_d.list_source_cache_ranges_by_prefix", lambda *_args, **_kwargs: [])
 
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
         if source_key.startswith("pnl_report_"):
@@ -367,6 +369,8 @@ def test_pnl_report_response_is_cached_for_two_hours(monkeypatch):
         if source_key == "finance_2026-06-01_2026-06-30":
             finance_reads["count"] += 1
             return {
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "aggregates": {
                     "123456": {
@@ -411,13 +415,13 @@ def test_pnl_report_response_is_cached_for_two_hours(monkeypatch):
     assert first.rows[0].revenueKopecks == second.rows[0].revenueKopecks == 100_000
     assert any(key.startswith("pnl_report_") for key in source_cache)
     cached_payload = next(iter(source_cache.values()))
-    assert cached_payload["ttlSeconds"] == 7200
+    assert cached_payload["ttlSeconds"] == 86400
     assert cached_payload["staleTtlSeconds"] == 86400
 
     cached_payload["fetchedAt"] = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
     finance_reads["count"] = 0
 
-    stale = build_pnl_report(
+    still_cached = build_pnl_report(
         date_from=date(2026, 6, 1),
         date_to=date(2026, 6, 30),
         group_by="sku",
@@ -427,10 +431,17 @@ def test_pnl_report_response_is_cached_for_two_hours(monkeypatch):
     )
 
     assert finance_reads["count"] == 0
-    assert stale.sourceStatus == "stale"
-    assert stale.totals.sourceStatus == "stale"
-    assert stale.rows[0].sourceStatus == "stale"
-    assert stale.rows[0].revenueKopecks == 100_000
+    assert still_cached == first
+
+    cached_payload["fetchedAt"] = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    rebuilt = build_pnl_report(
+        date_from=date(2026, 6, 1), date_to=date(2026, 6, 30),
+        group_by="sku", requested_state="preliminary", finance_allowed=True,
+        organization_id=77,
+    )
+    assert finance_reads["count"] == 1
+    assert rebuilt.rows[0].revenueKopecks == 100_000
+    assert next(iter(source_cache.values()))["fetchedAt"] != cached_payload["fetchedAt"]
 
 
 def test_abc_report_uses_repricer_period_cache_without_own_report_cache(monkeypatch):

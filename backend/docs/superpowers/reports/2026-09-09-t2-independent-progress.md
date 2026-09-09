@@ -101,6 +101,39 @@ separate from this owner acceptance.
 
 ### Canonical SKU policy — one compatibility record
 
+### P&L cache-only TTL fixture and combined local gate (2026-09-09)
+
+Historical `test_sprint_d_reports.py::test_pnl_report_response_is_cached_for_two_hours`
+first failed on finance reread count2vs1 (missing fixture basis), then on TTL86400vs7200.
+Current runtime already sets fresh/stale TTL24h/24h, with no usable stale window;
+runtime TTL, formula and source behavior are unchanged. Added synthetic range-list
+stub (no DB fallback), current basis fixture, retained historical node ID/documented
+24h contract. Through3h assert exact cached response/no reread; at25h assert rebuild,
+one reread, preserved revenue and replacement timestamp. Actual RED1FAIL2.12s then
+RED1FAIL1.71s → **1PASS1.47s**, two inherited warnings. Critic no issues/no tests.
+Compile/diff0; scoped legacy Ruff1 same2 inherited UP017 as HEAD.
+
+Final combined offline command under the same isolated env/sandbox/plugin:
+
+```text
+python -m pytest -q -p tests.repricer_offline_plugin
+tests/test_reports_sources_runtime.py tests/test_repricer_finance_readiness_guard.py
+tests/test_repricer_tasks.py tests/test_wb_reports_bff.py
+tests/test_sprint_d_reports.py::test_pnl_report_response_is_cached_for_two_hours
+tests/test_wb_repricer_bff.py::test_manual_cold_full_sync_enqueues_onboarding_task
+tests/test_background_test_isolation.py
+-k 'reports_sources_runtime or partitioned_finance or rnp_daily_baskets_ready or onboarding_readiness or report_snapshot_source_ready or report_daily_sources_ready or test_pnl_report_response_is_cached_for_two_hours or test_manual_cold_full_sync_enqueues_onboarding_task or background_test_isolation'
+--tb=short
+```
+
+Actual **29PASS76deselected4.83s**, naturalexit0, two inherited Starlette warnings.
+Selector also covers the two report-router RNP readiness cases. No fullsuite/baseline
+list or root integration claim, no provider/real job/production/PG allocator.
+Report readiness fix `5f97bdf83f0444591653da9619da8de091f644c8` is test-only.
+Rollback of this TTL slice is test/docs-only, without data/schema changes.
+
+### Canonical SKU policy contract
+
 Root explicitly approved: independent get/history require fixed `settings:read`;
 replace and exact-command replay require **both** `settings:read` + `settings:write`
 before reading receipt or acquiring domain locks. A write-only custom principal is
