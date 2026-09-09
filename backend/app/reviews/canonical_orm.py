@@ -1,0 +1,97 @@
+"""Typed runtime mappings; install only via Alembic (RLS/triggers are mandatory).
+
+These column mappings are not a replacement schema or a create_all bootstrap.
+No relationship cascade or legacy review mapping is introduced.
+"""
+
+from datetime import datetime
+from uuid import UUID
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Identity,
+    Integer,
+    SmallInteger,
+    String,
+    Text,
+    Uuid,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.infra.models import Base
+
+
+class ReviewOwnerColumns:
+    organization_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    marketplace_account_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    marketplace: Mapped[str] = mapped_column(String(16), nullable=False)
+
+
+class CanonicalReviewRunRow(ReviewOwnerColumns, Base):
+    __tablename__ = "review_sync_runs_v2"
+
+    sync_run_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    source_run_id: Mapped[str] = mapped_column(Text)
+    run_sequence: Mapped[int] = mapped_column(BigInteger, Identity(always=True))
+    request_checksum: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16))
+    completeness: Mapped[str] = mapped_column(String(16))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    observed_count: Mapped[int] = mapped_column(BigInteger)
+    manifest_checksum: Mapped[str | None] = mapped_column(String(64))
+    coverage: Mapped[dict] = mapped_column(JSONB)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+
+
+class CanonicalReviewFactRow(ReviewOwnerColumns, Base):
+    __tablename__ = "review_facts"
+
+    review_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    external_review_id: Mapped[str] = mapped_column(Text)
+    current_observation_id: Mapped[UUID | None] = mapped_column(Uuid)
+    version: Mapped[int] = mapped_column(BigInteger)
+    last_source_run_id: Mapped[UUID | None] = mapped_column(Uuid)
+    last_source_run_sequence: Mapped[int | None] = mapped_column(BigInteger)
+    source_order_state: Mapped[str] = mapped_column(String(16))
+    ambiguous_observation_id: Mapped[UUID | None] = mapped_column(Uuid)
+    first_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class CanonicalReviewObservationRow(ReviewOwnerColumns, Base):
+    __tablename__ = "review_observations"
+
+    observation_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    review_id: Mapped[UUID] = mapped_column(Uuid)
+    revision: Mapped[int] = mapped_column(BigInteger)
+    source_run_id: Mapped[UUID] = mapped_column(Uuid)
+    external_product_id: Mapped[str | None] = mapped_column(Text)
+    source_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rating: Mapped[int | None] = mapped_column(SmallInteger)
+    text: Mapped[str | None] = mapped_column(Text)
+    answered: Mapped[bool] = mapped_column(Boolean)
+    can_answer: Mapped[bool | None] = mapped_column(Boolean)
+    source_status: Mapped[str | None] = mapped_column(Text)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source_schema_version: Mapped[str] = mapped_column(Text)
+    normalization_version: Mapped[str] = mapped_column(Text)
+    content_checksum: Mapped[str] = mapped_column(String(64))
+
+
+class CanonicalReviewRunItemRow(Base):
+    __tablename__ = "review_sync_run_items"
+
+    organization_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    marketplace_account_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    marketplace: Mapped[str] = mapped_column(String(16), primary_key=True)
+    sync_run_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    review_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    observation_id: Mapped[UUID] = mapped_column(Uuid)
+    content_checksum: Mapped[str] = mapped_column(String(64))
+    ordinal: Mapped[int] = mapped_column(BigInteger)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
