@@ -36,6 +36,34 @@ implementation/testing; no provider calls, flag changes, deploy or push in T2.
 
 ### Canonical SKU policy — one compatibility record
 
+### Independent finance readiness regression (2026-09-09)
+
+Historical root-assigned IDs are not fresh baseline failures. Local scoped probe
+reproduced two readiness fixture failures (missing current finance metadata) and
+the obsolete unscoped P&L expectation. Source tests now preserve the existing
+cache-only blocked contract; positive parsing/reconciliation coverage remains.
+Retry delay assertions use the existing injected sleeper, never actual sleeps.
+
+A separate real guard defect was reproduced: the daily-date union fallback of
+`_range_source_ready` accepted legacy/wrong-basis finance caches even though the
+covering-range path rejected them. New six-case regression: **4FAIL2PASS1.08s**
+before the fix; the fallback now applies the identical existing basis predicate.
+Explicit `require_current_finance_basis=False` onboarding compatibility remains.
+No formula, basis constant, source fetch, writer activation or schema change.
+
+Fresh combined lightweight gate: **19PASS23deselected1.03s**, natural exit0:
+`tests/test_reports_sources_runtime.py tests/test_repricer_finance_readiness_guard.py
+tests/test_repricer_tasks.py -k 'reports_sources_runtime or partitioned_finance or
+rnp_daily_baskets_ready or onboarding_readiness or report_snapshot_source_ready'`.
+Used isolated env, fake mode/in-memory SQLite, OS sandbox and
+`-p tests.repricer_offline_plugin`; no actual tasks/provider calls or PG allocator.
+Three test files Ruff0; compileall0. Runtime Ruff1: same29 inherited diagnostics
+as HEAD, no new diagnostic. Read-only critic found no defects; no independent
+test run implied. This is a bounded stage8 fix, not full-suite baseline closure.
+Rollback: revert this code/test slice; no persisted facts or schema to roll back.
+
+### Canonical SKU policy details
+
 Root explicitly approved: independent get/history require fixed `settings:read`;
 replace and exact-command replay require **both** `settings:read` + `settings:write`
 before reading receipt or acquiring domain locks. A write-only custom principal is
