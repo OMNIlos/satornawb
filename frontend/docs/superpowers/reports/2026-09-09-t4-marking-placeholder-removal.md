@@ -113,3 +113,33 @@ generated snapshot and `vellaBackendContracts.ts`; their compatibility assessmen
 remains separate, and no stored field or historical status was erased.
 Independent scoped review: PASS. These browser checks do not claim live backend
 authorization, complete account isolation, hosted parity or successful printing.
+
+## Shared HTML compatibility cut
+
+Removed the shared picking table column, matching edit field, manual single/table
+inputs and the option to assign the retired marking status to new orders. Existing
+`missing_honest_sign` is explicitly preserved by normalization and offered only
+when already selected on a historical row. It remains in the problem filter and
+cannot silently become ready. Historical fields, sample records, search, drawer
+code display, sticker fallback and WB/Avito status identities are retained.
+The false promise of a separate marking service becomes an explicit historical
+status warning. Settings prototype scope and desktop table description no longer
+advertise the removed UI; other scopes/permissions are unchanged.
+
+The browser regression loads the full source HTML on a reserved synthetic origin,
+blocks every other request, and evaluates the real normalize/render/read-edit/
+finalize functions. No save, print, export or provider action is invoked. Pure
+sticker markup is checked for preserved historical code without opening a print
+window or downloading a document. It checks 15-column alignment, unchanged old
+status/code, absent new controls and retained normal sticker/barcode inputs.
+RED reproduced the old selectable status and stale desktop copy; final test passes.
+The generator was run intentionally after the source change. Independent critic
+verified exact embedded HTML/hash parity and found no important issue.
+
+Fresh full suite: **277 passed / 26 failed / 0 pending**, exit 1. Compared with
+274/26: zero new or resolved failure IDs; three new browser cases explain passes.
+Report `/tmp/satorna-t4-shared-marking-full.json`. The 26 failures remain unwaived.
+Initial new-test typecheck failed because string-based page.evaluate returned
+unknown; a typed result contract fixes that test-only issue. No application
+type weakening, dependency or new HTTP endpoint was introduced.
+Fresh direct `tsc -b --noEmit` and diff check after the correction: exit 0.
