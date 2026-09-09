@@ -2,6 +2,14 @@
 
 ## Current checkpoint: frontend response isolation; Review historical binding open
 
+T1-requested Review binding purecodec READY: historical_binding.py frozenexact
+descriptor +sortedASCIIJSONencoder +mandatorychecksum strictdecoder,6literal
+Unicode/control/null-emptyvectors matched byindependentNodeencoder/hash andcritic.
+61focusedPASS/283adjacentpurePASS0.48s/no skips, networkdenied, Ruff/compile/diff0.
+Report2026-09-09-t4-review-binding-codec-handoff.md. ExactreadySHA sentdirectlyT1
+forSQLparity, notrootper-slice. NoSQL/servicewiring; pureNULacceptance is notVARCHAR
+admission; immutablehistory andpublicread/operationalactivation gates remainOPEN.
+
 Latest test-only strategy-scope follow-up to c114a18: obsolete dependencyliteral
 replaced byactualReactinactivepage APIassertion, precisein-memorymutation detects
 unexpected GET/strategies/catalog. Finalfull350PASS/19FAIL/0pending versus349/20,
