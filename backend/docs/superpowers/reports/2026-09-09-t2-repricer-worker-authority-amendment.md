@@ -105,3 +105,129 @@ fence, not a provider idempotency guarantee. Final authority check cannot elimin
 the distributed revocation/POST gap; cancellation semantics at that boundary need
 an explicit accepted contract. No scheduler, real provider request, schema, config,
 frontend or current repricer change is part of this amendment.
+
+## Existing identity evidence and bounded ownership split
+
+Rechecked after T1 requested the exact job table/PK/type/lifecycle/trust source.
+There is **no accepted price-worker job/principal contract** in this branch or the
+inspected T1 proposal. The original T2 assignment explicitly says obtain the resolver
+from T1; T1 has confirmed the worker contract remains pending. This assigns the
+resolver to T1, not automatically all domain job-table/lifecycle design. T2 can
+independently propose that domain table for T1 acceptance; trusted executor
+resolution and activation require the missing shared contract.
+
+| Candidate evidence | Why it does not supply the required reference |
+| --- | --- |
+| `3477fb88a4b2120a5801401b8860338082bf72bb:backend/docs/superpowers/reports/2026-09-09-t1-user-job-authority-proposal.md` (also latest modification of that file in inspected T1 worktree) | Proposal-only `user_orders_jobs`, UUID4, fixed orders.sync.v1/sync:run; explicitly excludes price/send mutation and detached service authority. Its claimed/lease/read-retry lifecycle cannot authorize repricer resend or post-revocation receipt closing |
+| `app/control_plane/orm.py:41–63` `cp_sync_jobs` | Existing INTEGER job_id, generic sync status fields; declared model does not establish the needed price org/account/initiator/attempt delegation. A convenient existing integer PK is not trusted job authority |
+| `app/repricer_sprint_b.py:196–217,769,796,896–898` | `ApplyJobView.jobId` is text `job_<uuidhex>` stored in `_MEMORY.jobs`; not a durable scoped PostgreSQL job FK or executor principal |
+| Accepted0066 `wb_repricer_price_apply_attempts` | Real scoped UUID4 attempt, immutable action/request/dispatch keys and one-lifetime-attempt state exist. This is an execution fact, not an accepted job delegation or worker authentication source; do not relabel attempt_id as job_id without an explicit architecture decision |
+| `app/platform/integrations/publication_guard.py` | Accepted UserSessionPrincipal guard only. `repricer_worker` in0066 audit and the pure domain is an actor classification, not a trusted worker principal |
+
+Therefore no exact table/PK/FK can honestly be supplied **as already accepted**.
+Do not select an arbitrary UUID/string/int job key, use a nullable user, serialize
+membership from Celery as authority, infer a service role from an audit enum, or
+reuse Orders read-retry semantics for provider POST. The previously requested
+marker-before-provider and fresh-root receipt boundary remain mandatory; no FK
+alone proves a previous physical commit.
+
+The following proposed domain table removes the missing physical reference without
+claiming it already exists or authenticates a worker. T1 accepts/implements the
+table and owns the trusted executor resolver. T2 owns its domain binding/consumer.
+
+## Proposed v1 job contract for T1 acceptance (not schema READY)
+
+Use one **immutable job binding per approval**, not a second mutable lifecycle that
+duplicates0066. Proposed table `wb_repricing_jobs`; server-generated canonical UUID4
+`job_id` PK, additionally UNIQUE(org,account,job_id). UUID4 is the same explicit new
+identity convention as0066 attempt/receipt IDs, not a reinterpretation of legacy
+`job_<uuidhex>` or cp_sync_jobs INTEGER. Legacy jobs are not auto-imported.
+
+| Required columns | Type / exact constraints |
+| --- | --- |
+| organization_id, marketplace_account_id | positive INT4; existing composite account/org/WB FK |
+| approval_row_id | UUID4; exact composite0066 approval FK; UNIQUE(org,account,approval_row_id), one job per canonical action |
+| action_key, request_checksum | lowercase64 SHA256 TEXT; equality to referenced immutable approval; job does not rebuild or own a competing action key |
+| operation_kind | TEXT fixed `wb.price_apply.v1`; closed service registry selects it, never the queue |
+| initiator_user_id, initiator_session_id | VARCHAR(64) NOT NULL; exact existing user/session identities; session must belong to that user |
+| initiator_membership_id | positive INT4 NOT NULL; composite org/member/user FK or equivalent deferred equality to existing IAM rows |
+| created_at | finite TIMESTAMPTZ NOT NULL, DB clock |
+| created_audit_id | UUID4 NOT NULL, reciprocal deferred creation witness |
+
+No nullable fake initiator, standalone job state/version, retry counter, lease duration,
+priority, expiry default, credentials or generic kwargs are proposed. The row captures
+the immutable request linkage and authenticated origin; all price status/version and
+attempt dispatch/outcome facts continue to belong to0066. Detailed credential/user
+delegation metadata needed by T1's authority resolver belongs to that accepted
+authority contract, not a made-up permissive blob on this job row.
+
+Creation requires an existing v1 pending approval (or creation of that approval in
+the same root), live authenticated principal with fixed price:send and exact account
+binding. It writes job+`repricer_job.created` audit atomically; actor_kind membership,
+actor_membership_id equals initiator, event references full scoped job/approval,
+occurred_at=job.created_at. Unique scoped job creation witness, no orphan/ghost event.
+No actor name or raw payload. Replay by the same approval additionally compares exact
+initiator user/member/session and immutable keys; matching request returns original
+job/audit, conflicting origin/key is conflict. Replay does not reauthorize execution.
+The create-command replay lookup follows fresh authenticated price:send/account
+checks and precedes the pending-only **new row** guard. Exact existing job replay
+may therefore return its original row after applying or terminal status; it neither
+creates a new job nor authorizes another execution. No broader status-read permission
+is defined by this rule.
+
+Execution lifecycle is derived, not independently writable:
+
+`approval pending → approval applying (claim CAS) → attempt reserved → dispatched
+→ applied/failed/ambiguous`; rejection/blocking follows existing approval transitions.
+There is at most one0066 attempt for the approval, so job-to-attempt linkage resolves
+by full org/account/approval scope. A job record itself never grants another claim,
+attempt or resend. Terminal facts cannot reopen. Job-specific cancellation/renewal,
+lease reclaim and detached scheduling are **unsupported v1 operations**, not aliases
+for approval reject or a new implicit retry policy. Current user commands are not
+silently changed to create jobs by this proposal.
+
+V1 actor alignment: job.initiator_membership_id must equal the approval/attempt
+claimed_by_membership_id for any claim/reserve/dispatch driven by this job. The
+trusted domain command checks the frozen initiator and claim CAS in the same root;
+receipt binding must also reject a differently claimed attempt. If another manual
+actor claims an approval already bound to this job, execution fails closed; it must
+not rewrite the job origin or impersonate either actor. Delegation transfer is an
+unsupported separate design. Wiring/cutover needs a regression for job by A versus
+manual claim by B and a one-writer fence. This does not change current standalone
+user commands or invent new permissions for safe terminal rejection/blocking.
+
+Receipt and receipt audit reference `(org,account,job_id)` using the concrete UUID
+column above. Deferred binding also requires job.approval_row_id equals the receipt's
+approval and the referenced attempt's approval; action/checksum/dispatch remain exact.
+The receipt may arrive after ambiguous because the job row and binding are immutable;
+it never changes either approval lifecycle or job-origin evidence. FORCE org/account
+RLS, restrictive scoped FKs, immutable job/audit and empty-only downgrade are required.
+
+### Trust source and the remaining T1 resolver boundary
+
+The **origin of the job record** is trusted authenticated creation plus enforced
+atomic audit and restricted writes; neither row existence nor job ID authenticates
+an executor. Queue envelope contains org/account/job IDs only. The trusted registered
+worker must obtain T1's execution/closing authority by resolving that stored binding
+and the applicable live account/user/credential facts. No UserSessionPrincipal is
+fabricated from arbitrary queue fields; no resolver implementation or service identity
+is invented here. If T1 requires an additional platform authority row, its concrete
+scoped reference must be accepted before activation, not replaced by NULL.
+
+Initiation authority stops new POST after relevant revocation; state-closing authority
+must separately permit only owned receipt/outcome evidence when initiation is no
+longer valid. Only T1's reviewed resolver supplies that distinction. This proposal
+does not grant closing rights merely because actor_kind=repricer_worker or a process
+knows job_id. A job cannot extend expired/revoked authority or substitute credentials.
+No owner-approved authority policy means production job execution remains disabled.
+
+Provider call sequence stays: committed approval/job → claim/reserve → physical
+marker commit → authorized POST → fresh-root receipt/outcome publication. Tests must
+observe those separate physical roots and zero fake calls on failed CAS/authority;
+FKs cannot prove previous commit. Add two-session job creation/replay, foreign
+job/approval/attempt binding, forged origin, audit rollback, terminal non-resurrection,
+revoke-before-marker and close-after-revoke tests once T1 provides the authority.
+
+This is a complete bounded **domain job-reference proposal**, not the missing trusted
+worker implementation. It allows T1 to choose/accept the exact FK target without
+waiting for a fabricated principal. No shared code/schema or production was changed.

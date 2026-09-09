@@ -202,3 +202,12 @@ Fresh projection+assignment+dispatch group **165 passed in0.52s, exit0**; scoped
 Ruff/compile/diff0. Independent critic47PASS and no material findings. Pure helper
 does not establish raw JSON duplicate-key validation, trusted transport provenance,
 job authority, committed dispatch proof or receipt persistence; those remain gates.
+
+Worker dependency ownership clarified after critique: resolver belongs to T1, but
+T2 can propose domain job rows/lifecycle independently. The worker amendment now
+contains exact proposed `wb_repricing_jobs` UUID4 binding, composite approval/origin
+references and creation audit. Lifecycle remains derived from0066, not a second
+mutable state machine. Receipt gets a proposed concrete scoped job FK. Existing
+ORM/memory/Orders proposal are not misrepresented as accepted price-worker authority;
+trusted executor/closing resolver remains T1-owned and pending. No production or
+shared schema changes and no fabricated worker principal.
