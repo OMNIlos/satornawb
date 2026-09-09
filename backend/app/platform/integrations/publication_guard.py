@@ -210,6 +210,8 @@ class PublicationGuard:
         self._ended = False
         self._orders_fences = ()
         self._repricer_fences = ()
+        self._review_fences = ()
+        self._review_approver = None
         self._finalizing = False
 
     def __repr__(self):
@@ -251,6 +253,19 @@ class PublicationGuard:
     def _validate(self):
         session = self._context()
         p = self._principal
+        if self._review_approver is not None:
+            self._validate_review_memberships(session)
+        else:
+            self._validate_membership(session)
+        login = session.execute(select(LkSessionRow.session_id, LkSessionRow.user_id,
+            LkSessionRow.revoked_at, LkSessionRow.expires_at).where(
+                LkSessionRow.session_id == p.session_id).with_for_update(read=True)).one_or_none()
+        if login is None or login.user_id != p.user_id or login.revoked_at is not None:
+            raise PublicationGuardError("publication_access_denied")
+        return self._validate_accounts(session, [login.expires_at])
+
+    def _validate_membership(self, session):
+        p = self._principal
         user = session.execute(select(LkUserRow.user_id, LkUserRow.organization_id, LkUserRow.is_active).where(
             LkUserRow.user_id == p.user_id).with_for_update(read=True)).one_or_none()
         if user is None or user.organization_id != p.organization_id or user.is_active is not True:
@@ -263,12 +278,42 @@ class PublicationGuard:
                 or membership.user_id != p.user_id or membership.is_active is not True):
             raise PublicationGuardError("publication_access_denied")
         _scope(membership, self._accounts, self._permissions)
-        login = session.execute(select(LkSessionRow.session_id, LkSessionRow.user_id,
-            LkSessionRow.revoked_at, LkSessionRow.expires_at).where(
-                LkSessionRow.session_id == p.session_id).with_for_update(read=True)).one_or_none()
-        if login is None or login.user_id != p.user_id or login.revoked_at is not None:
+
+    def _validate_review_memberships(self, session):
+        # Only the Review creation/execution constructor installs this exact
+        # dependency. No additional principal or caller-selected permissions.
+        from app.platform.integrations.review_job_store import approver
+
+        intent, approver_member, approver_user = self._review_approver
+        p = self._principal
+        users = {p.user_id, approver_user}
+        for user_id in sorted(users):
+            u = session.execute(select(LkUserRow.organization_id, LkUserRow.is_active).where(
+                LkUserRow.user_id == user_id).with_for_update(read=True)).one_or_none()
+            if u is None or tuple(u) != (p.organization_id, True):
+                raise PublicationGuardError("publication_access_denied")
+        members = {p.membership_id: (p.user_id, frozenset({"reviews:send"}))}
+        if approver_member == p.membership_id:
+            if approver_user != p.user_id:
+                raise PublicationGuardError("publication_access_denied")
+            members[p.membership_id] = (p.user_id, frozenset({"reviews:send", "reviews:approve"}))
+        else:
+            members[approver_member] = (approver_user, frozenset({"reviews:approve"}))
+        m = IamMembershipRow
+        for member_id in sorted(members):
+            user_id, permissions = members[member_id]
+            membership = session.execute(select(m.membership_id, m.organization_id, m.user_id, m.is_active,
+                m.role, m.permissions, m.scope_mode, m.allowed_account_ids).where(
+                    m.membership_id == member_id).with_for_update(read=True)).one_or_none()
+            if (membership is None or membership.organization_id != p.organization_id
+                    or membership.user_id != user_id or membership.is_active is not True):
+                raise PublicationGuardError("publication_access_denied")
+            _scope(membership, self._accounts, permissions)
+        if approver(session, intent) != (approver_member, approver_user):
             raise PublicationGuardError("publication_access_denied")
-        expiries = [login.expires_at]
+
+    def _validate_accounts(self, session, expiries):
+        p = self._principal
         a = MarketplaceAccountRow
         for expected in self._accounts:
             account = session.execute(select(a.organization_id, a.marketplace, a.external_account_id,
@@ -328,6 +373,8 @@ def _before_commit(session):
             fence._validate_final()
         for fence in guard._repricer_fences:
             fence._validate_final()
+        for fence in getattr(guard, "_review_fences", ()):
+            fence._validate_final()
         if session.new or session.dirty or session.deleted:
             raise PublicationGuardError("publication_context_invalid")
     except PublicationGuardError:
@@ -352,7 +399,7 @@ def _register_user_orders_fence(guard, fence):
 
     try:
         if (type(guard) is not PublicationGuard or type(fence) is not UserOrdersPublicationHandle
-                or guard._finalizing or guard._orders_fences or guard._repricer_fences or fence._guard is not guard
+                or guard._finalizing or guard._orders_fences or guard._repricer_fences or guard._review_fences or fence._guard is not guard
                 or fence._session_ref() is not guard._context()):
             raise PublicationGuardError("publication_context_invalid")
         guard._orders_fences = (fence,)
@@ -367,7 +414,7 @@ def _register_repricer_fence(guard, fence):
 
     try:
         if (type(guard) is not PublicationGuard or type(fence) is not RepricerInitiationHandle
-                or guard._finalizing or guard._orders_fences or guard._repricer_fences
+                or guard._finalizing or guard._orders_fences or guard._repricer_fences or guard._review_fences
                 or fence._guard is not guard or fence._session_ref() is not guard._context()):
             raise PublicationGuardError("publication_context_invalid")
         guard._repricer_fences = (fence,)
@@ -401,6 +448,77 @@ def _install_listeners(session):
                            ("after_transaction_end", _transaction_ended)):
         if not event.contains(session, name, listener):
             event.listen(session, name, listener)
+
+
+def _register_review_fence(guard, fence):
+    from app.platform.integrations.review_job_authority import ReviewPublicationHandle
+
+    try:
+        if (type(guard) is not PublicationGuard or type(fence) is not ReviewPublicationHandle
+                or guard._finalizing or guard._orders_fences or guard._repricer_fences or guard._review_fences
+                or fence._guard is not guard or fence._session_ref() is not guard._context()):
+            raise PublicationGuardError("publication_context_invalid")
+        guard._review_fences = (fence,)
+    except Exception:
+        guard._failed = True
+        raise
+
+
+def _install_review_closing_guard(session, handle):
+    from app.platform.integrations.review_job_authority import ReviewClosingHandle
+
+    if (type(handle) is not ReviewClosingHandle or not isinstance(session, Session)
+            or not session.in_transaction() or not session.is_active or session.in_nested_transaction()
+            or session.new or session.dirty or session.deleted or getattr(session, _STATE, None) is not None
+            or handle._session_ref() is not session or handle._transaction is not session.get_transaction()
+            or _physical_connection(session).get_isolation_level() != "READ COMMITTED"):
+        raise PublicationGuardError("publication_context_invalid")
+    _install_listeners(session)
+    setattr(session, _STATE, handle)
+    try:
+        handle.revalidate_before_write()
+    except Exception:
+        handle._failed = True
+        raise
+
+
+def _acquire_review_publication_guard(session, *, principal, intent, account, credential):
+    """Review-only sorted sender/current-approver admission. Public API unchanged."""
+    from app.platform.integrations.review_job_contract import ReviewSendIntent
+    from app.platform.integrations.review_job_store import approver
+
+    if type(intent) is not ReviewSendIntent:
+        raise PublicationGuardError("publication_context_invalid")
+    intent.__post_init__()
+    permissions = frozenset({"reviews:send"})
+    accounts, credentials, tokens = _contracts(principal, permissions, (account,), (credential,))
+    if (principal.organization_id != intent.locator.organization_id
+            or account.marketplace_account_id != intent.locator.marketplace_account_id
+            or account.provider != intent.locator.marketplace
+            or credential.kind != ("wb_api" if account.provider == "wb" else "avito_oauth_access")
+            or not isinstance(session, Session) or not session.in_transaction() or not session.is_active
+            or session.in_nested_transaction() or session.new or session.dirty or session.deleted
+            or getattr(session, _STATE, None) is not None):
+        raise PublicationGuardError("publication_context_invalid")
+    with session.no_autoflush:
+        if _physical_connection(session).get_isolation_level() != "READ COMMITTED":
+            raise PublicationGuardError("publication_context_invalid")
+        # scope() is the Review root owner's required context setup. Do not
+        # overwrite foreign context before the exact guard has inspected it.
+        marker = (session.get_transaction(), principal.organization_id)
+        if session.info.get("satorna_tenant_context") != marker:
+            raise PublicationGuardError("publication_context_invalid")
+        member_id, user_id = approver(session, intent)
+        guard = PublicationGuard(session, principal, permissions, accounts, credentials, tokens)
+        guard._review_approver = (intent, member_id, user_id)
+        _install_listeners(session)
+        setattr(session, _STATE, guard)
+        try:
+            guard.revalidate_before_write()
+        except Exception:
+            guard._failed = True
+            raise
+        return guard
 
 
 def _transaction_created(session, transaction):
