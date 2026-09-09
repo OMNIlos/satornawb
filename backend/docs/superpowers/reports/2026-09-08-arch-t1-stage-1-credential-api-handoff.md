@@ -45,6 +45,28 @@ state tables, columns/types, foreign keys, unique/check/index requirements, RLS,
 backfill semantics and downgrade guards. Terminal 1 serializes migration
 revisions; domain owners do not edit shared migrations concurrently.
 
+2026-09-09 scoped delegation amendment, explicitly authorized by the integration
+coordinator to unblock parallel source implementation (not Stage1 verification):
+
+- T2 temporarily owned ONLY the paired-fetch core/dedicated executor callable in
+  `backend/app/platform/integrations/credential_store.py` and new
+  `2026-09-09-t1-executor-credential-resolver-handoff.md`. Delivered
+  `00961055428365f83d7dd05bd07f46786709c975`, imported unchanged with provenance as
+  `b70f2d2afdd545005b59b65d7a40c66595b4bfcd`; ownership returned T1.
+- T4 temporarily owned ONLY the additive verified OAuth method in
+  `backend/app/avito/auth.py`, new `backend/app/avito/credential_exchange.py` and
+  new `2026-09-09-t4-avito-account-oauth-adapter-handoff.md`. Delivered
+  `d1fd534f53b879f1e741d39b13c6ce76fdad5e2f`, imported unchanged with provenance as
+  `564515291612520e3ba5d585e870a37355c90e0b`; ownership returned T1. Existing legacy
+  methods and consumers are unchanged.
+
+Both source packages are IMPLEMENTED / UNVERIFIED under the user's source-first
+sequence. No new tests/review/compile/import/PG gates, operational role/flag/key or
+provider actions were performed for these imports. This does not broaden domain
+owners' standing rights over store writers, schema, shared guard/config/grants,
+routers, other Avito consumers or deployment. T1 retains serialized shared schema
+and authority; the separate coordinator owns final integration/admission.
+
 ## Account-owned credential API
 
 The registered path is:
