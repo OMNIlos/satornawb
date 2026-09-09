@@ -5,10 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 from itertools import count
 from threading import Event, current_thread
 from time import monotonic, sleep
-from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, event, select, text
+from sqlalchemy import event, select, text
 from sqlalchemy.orm import sessionmaker
 
 from app.cabinet.orm import LkOrganizationRow, LkUserRow, LkUserWbTokenRow
@@ -17,33 +16,11 @@ from app.platform.integrations import credential_store as store
 from app.platform.integrations import wb_credentials as wb
 from app.platform.integrations.orm import MarketplaceAccountRow
 from app.security.marketplace_credentials import CredentialKeyring
-from tests import test_orders_schema_candidate as candidate
+from tests.test_credential_maintenance_inert_postgres import cluster, pg_database  # noqa: F401
 
-cluster = candidate.cluster
 COUNTER = count(92000)
 CANARY = "synthetic-paired-fetch-token"
 SELLER = "64f8d3e5-3d25-4b5c-9f23-0fd3937af451"
-
-
-@pytest.fixture(scope="module")
-def pg_database(cluster):
-    role = "fetch_authority_" + uuid4().hex
-    with candidate.disposable_database(cluster, (role,)) as database:
-        migration = candidate.migrate(database.url, "upgrade", "20260908_0061")
-        assert migration.returncode == 0, migration.stderr
-        session_limits = {"options": "-c statement_timeout=10000 -c lock_timeout=5000"}
-        owner_engine = create_engine(database.url, hide_parameters=True, connect_args=session_limits)
-        runtime = create_engine(owner_engine.url.set(username=role), hide_parameters=True,
-                                connect_args=session_limits)
-        try:
-            with owner_engine.begin() as connection:
-                connection.exec_driver_sql(f"GRANT USAGE ON SCHEMA public TO {role}")
-                connection.exec_driver_sql(f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role}")
-                connection.exec_driver_sql(f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {role}")
-            yield owner_engine, runtime
-        finally:
-            runtime.dispose()
-            owner_engine.dispose()
 
 
 @pytest.fixture

@@ -157,3 +157,4 @@ def test_physical_admission_sanitizes_inspection_failure(physical_admission_sess
     with pytest.raises(api().PublicationGuardError, match="^publication_persistence_failed$") as caught:
         acquire_for_admission(session)
     assert "synthetic-physical-secret-canary" not in "".join(traceback.format_exception(caught.value))
+    assert caught.value.__cause__ is None and caught.value.__context__ is None

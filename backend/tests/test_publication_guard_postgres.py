@@ -56,7 +56,9 @@ def data(pg_store):
         session.add(MarketplaceAccountIngestionTokenRow(token_id=token_id,
                     organization_id=org, marketplace_account_id=org + 100000, provider="avito",
                     scope="avito.browser_snapshot.write", verifier=b"v" * 32,
-                    issued_at=datetime.now(UTC), expires_at=expiry))
+                    issued_at=datetime.now(UTC), expires_at=expiry,
+                    binding_schema_version=1, binding_external_account_id="avito-seller",
+                    binding_credential_ref=None, binding_version=1))
     return SimpleNamespace(owner=owner, org=org, factory=factory, engine=owner_engine,
                            expiry=expiry, credential=credential, token_id=token_id)
 
@@ -681,8 +683,15 @@ def test_expiring_authority_during_account_lock_wait(data, authority):
     credential_id = uuid4()
     with Session(d.engine) as session, session.begin():
         if authority == "token":
-            session.execute(update(MarketplaceAccountIngestionTokenRow).where(
-                MarketplaceAccountIngestionTokenRow.token_id == d.token_id).values(expires_at=expiry))
+            # Issued token expiry is immutable. Create the short-lived authority
+            # for this wait test instead of rewriting an existing token's history.
+            d.token_id = uuid4()
+            session.add(MarketplaceAccountIngestionTokenRow(token_id=d.token_id,
+                        organization_id=d.org, marketplace_account_id=d.org + 100000,
+                        provider="avito", scope="avito.browser_snapshot.write", verifier=b"v" * 32,
+                        issued_at=datetime.now(UTC), expires_at=expiry,
+                        binding_schema_version=1, binding_external_account_id="avito-seller",
+                        binding_credential_ref=None, binding_version=1))
         else:
             session.add(MarketplaceAccountCredentialRow(credential_id=credential_id,
                         organization_id=d.org, marketplace_account_id=d.org + 100000, provider="avito",

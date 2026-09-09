@@ -237,9 +237,13 @@ class CredentialManagementService:
         except IntegrityError:
             code = "credential_concurrent_update"
         except SQLAlchemyError:
-            code = "credential_management_readback_required" if writing and committing else "credential_persistence_failed"
+            code = ("credential_management_readback_required"
+                    if writing and committing and not (guard is not None and guard._failed)
+                    else "credential_persistence_failed")
         except Exception:  # noqa: BLE001 - unknown commit outcome is not permission to retry.
-            code = "credential_management_readback_required" if writing and committing else "credential_persistence_failed"
+            code = ("credential_management_readback_required"
+                    if writing and committing and not (guard is not None and guard._failed)
+                    else "credential_persistence_failed")
         finally:
             # A typed exception from an after-commit listener is still uncertain
             # to the caller. Only the shared poisoned final fence proves rejection.

@@ -209,11 +209,18 @@ def _require_clean_publication_root(session):
     existing = getattr(session, _STATE, None)
     if existing is not None:
         existing._failed = True
-    if (not isinstance(session, Session) or not session.in_transaction() or not session.is_active
-            or session.in_nested_transaction() or session.new or session.dirty or session.deleted
-            or existing is not None
-            or _physical_connection(session).get_isolation_level() != "READ COMMITTED"):
-        raise PublicationGuardError("publication_context_invalid")
+    try:
+        if (not isinstance(session, Session) or not session.in_transaction() or not session.is_active
+                or session.in_nested_transaction() or session.new or session.dirty or session.deleted
+                or existing is not None
+                or _physical_connection(session).get_isolation_level() != "READ COMMITTED"):
+            raise PublicationGuardError("publication_context_invalid")
+        return
+    except SQLAlchemyError:
+        pass
+    # Raise after leaving the handler so driver diagnostics are not retained as
+    # an exception context by any caller of this shared admission boundary.
+    raise PublicationGuardError("publication_persistence_failed")
 
 
 def _initialize_publication_root(guard, session):

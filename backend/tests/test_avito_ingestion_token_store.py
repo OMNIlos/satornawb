@@ -22,7 +22,6 @@ from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
-from alembic.config import Config
 from fastapi.encoders import jsonable_encoder
 from pydantic_core import to_json
 from sqlalchemy import create_engine, event, text
@@ -30,10 +29,10 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
-from alembic import command
 from app.platform.integrations import ingestion_tokens
 from app.platform.integrations.credential_store import MarketplaceAccountCredentialOwner
 from tests import test_orders_schema_candidate as candidate
+from tests.test_credential_maintenance_inert_postgres import REVISION
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROLE = "satorna_ingestion_runtime_" + uuid4().hex
@@ -51,53 +50,10 @@ def _free_loopback_port() -> int:
 def _bootstrap_postgres(
     owner_engine: Engine, owner_url: str, *, create_runtime_role: bool
 ) -> None:
-    with owner_engine.begin() as connection:
-        connection.execute(text("""
-                CREATE TABLE lk_organizations (
-                    organization_id INTEGER PRIMARY KEY,
-                    slug VARCHAR(64) NOT NULL UNIQUE,
-                    name VARCHAR(255) NOT NULL
-                );
-                CREATE TABLE lk_users (
-                    user_id VARCHAR(128) PRIMARY KEY,
-                    organization_id INTEGER NOT NULL REFERENCES lk_organizations(organization_id)
-                );
-                CREATE TABLE lk_audit_events (
-                    event_id SERIAL PRIMARY KEY,
-                    organization_id INTEGER NOT NULL REFERENCES lk_organizations(organization_id),
-                    actor_user_id VARCHAR(128) REFERENCES lk_users(user_id),
-                    action VARCHAR(128) NOT NULL,
-                    object_type VARCHAR(64) NOT NULL,
-                    object_id VARCHAR(128) NOT NULL,
-                    details JSON,
-                    before_state JSON,
-                    after_state JSON,
-                    reason TEXT,
-                    ip_address VARCHAR(64),
-                    user_agent VARCHAR(255),
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE TABLE marketplace_accounts (
-                    marketplace_account_id INTEGER PRIMARY KEY,
-                    organization_id INTEGER NOT NULL REFERENCES lk_organizations(organization_id),
-                    marketplace VARCHAR(16) NOT NULL,
-                    external_account_id VARCHAR(128) NOT NULL,
-                    status VARCHAR(32) NOT NULL,
-                    credential_ref VARCHAR(255),
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    CONSTRAINT uq_marketplace_accounts_org_id UNIQUE (organization_id, marketplace_account_id),
-                    CONSTRAINT uq_marketplace_accounts_org_marketplace_external
-                        UNIQUE (organization_id, marketplace, external_account_id)
-                );
-                """))
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("sqlalchemy.url", owner_url)
-    with patch.dict(os.environ, {"VELLA_DATABASE_URL": owner_url}):
-        command.stamp(config, "20260905_0060")
-        command.upgrade(config, "20260908_0061")
-        command.downgrade(config, "20260905_0060")
-        command.upgrade(config, "20260908_0061")
+    # Current token services require the 0076 account incarnation and token
+    # binding columns. Historical 0061 DDL remains covered by credential RLS.
+    migration = candidate.migrate(owner_url, "upgrade", REVISION)
+    assert migration.returncode == 0, migration.stderr
     quoted_role = owner_engine.dialect.identifier_preparer.quote(RUNTIME_ROLE)
     with owner_engine.begin() as connection:
         if create_runtime_role:
@@ -117,9 +73,14 @@ def _bootstrap_postgres(
             text(f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {quoted_role}")
         )
         connection.execute(
-            text("INSERT INTO lk_organizations VALUES (1, 'one', 'One'), (2, 'two', 'Two')")
+            text("INSERT INTO lk_organizations (organization_id, slug, name) "
+                 "VALUES (1, 'one', 'One'), (2, 'two', 'Two')")
         )
-        connection.execute(text("INSERT INTO lk_users VALUES ('actor-1', 1), ('actor-2', 2)"))
+        connection.execute(text("""
+            INSERT INTO lk_users (user_id, organization_id, email, password_hash, full_name, permission_profile)
+            VALUES ('actor-1', 1, 'one@example.invalid', 'unused-synthetic', 'One', 'admin'),
+                   ('actor-2', 2, 'two@example.invalid', 'unused-synthetic', 'Two', 'admin')
+        """))
         connection.execute(text("""
                 INSERT INTO marketplace_accounts
                     (marketplace_account_id, organization_id, marketplace, external_account_id, status)
@@ -253,7 +214,7 @@ def _local_postgres(cluster):
             owner_engine.dispose()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def disposable_postgres(
     tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest
 ):
@@ -319,20 +280,16 @@ def token_store(disposable_postgres, monkeypatch):
     owner_engine = create_engine(disposable_postgres["owner"])
     runtime_engine = create_engine(disposable_postgres["runtime"])
     factory = sessionmaker(bind=runtime_engine, expire_on_commit=False)
-    with owner_engine.begin() as connection:
-        connection.execute(text("DELETE FROM lk_audit_events"))
-        connection.execute(text("DELETE FROM marketplace_account_ingestion_tokens"))
-        connection.execute(
-            text(
-                "UPDATE marketplace_accounts SET status = CASE "
-                "WHEN marketplace_account_id = 104 THEN 'disconnected' ELSE 'connected' END"
-            )
-        )
-    clock = _Clock()
+    # Bound token history cannot be deleted. Each test owns a fresh database;
+    # seed its controlled service clock from PostgreSQL so trigger expiry checks
+    # remain real while lock-wait tests can advance time deterministically.
+    with owner_engine.connect() as connection:
+        monkeypatch.setattr(f"{__name__}.NOW", connection.scalar(text("SELECT clock_timestamp()")))
+    clock = _Clock(NOW)
     monkeypatch.setattr(
         ingestion_tokens, "get_session_factory", lambda: factory, raising=False
     )
-    monkeypatch.setattr(ingestion_tokens, "_utc_now", clock.now, raising=False)
+    monkeypatch.setattr(ingestion_tokens, "_database_now", lambda _session: clock.now())
     try:
         yield {
             "clock": clock,
@@ -391,7 +348,7 @@ def _assert_invalid(raw_bearer: object) -> None:
         assert raw_bearer not in repr(caught.value)
 
 
-def test_fixture_is_fresh_owned_postgres_pinned_to_0061(disposable_postgres) -> None:
+def test_fixture_is_fresh_owned_postgres_pinned_to_current_platform(disposable_postgres) -> None:
     runtime_url = make_url(disposable_postgres["runtime"])
     assert runtime_url.database == disposable_postgres["database"]
     assert runtime_url.username == disposable_postgres["runtime_role"]
@@ -432,7 +389,7 @@ def test_fixture_is_fresh_owned_postgres_pinned_to_0061(disposable_postgres) -> 
         with engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20260908_0061"
+                == REVISION
             )
             assert connection.execute(
                 text(
@@ -753,7 +710,7 @@ def test_nonconnected_account_blocks_issue_and_verify_but_can_revoke_permanently
     _assert_invalid(raw_bearer)
 
 
-def test_owner_expiry_and_reason_contracts_fail_before_database_access(
+def test_owner_and_reason_contracts_fail_before_database_access(
     token_store,
 ) -> None:
     statements: list[str] = []
@@ -782,10 +739,6 @@ def test_owner_expiry_and_reason_contracts_fail_before_database_access(
             _owner(account_id=2_147_483_648),
             expires_at=NOW + timedelta(hours=1),
         ),
-        lambda: ingestion_tokens.issue_ingestion_token(
-            _owner(), expires_at=NOW.replace(tzinfo=None)
-        ),
-        lambda: ingestion_tokens.issue_ingestion_token(_owner(), expires_at=NOW),
     )
     try:
         for call in invalid_calls:
@@ -799,6 +752,16 @@ def test_owner_expiry_and_reason_contracts_fail_before_database_access(
     finally:
         event.remove(token_store["runtime_engine"], "before_cursor_execute", capture)
     assert statements == []
+
+
+@pytest.mark.parametrize("naive", [False, True])
+def test_expiry_contract_uses_database_clock_without_persisting_token(token_store, naive):
+    expiry = NOW.replace(tzinfo=None) if naive else NOW
+    with pytest.raises(ingestion_tokens.IngestionTokenStoreError, match="^ingestion_token_contract_invalid$"):
+        ingestion_tokens.issue_ingestion_token(_owner(), expires_at=expiry)
+    with token_store["owner_engine"].connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM marketplace_account_ingestion_tokens")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM lk_audit_events")) == 0
 
 
 def test_status_and_revoke_are_redacted_and_revoke_is_idempotent(token_store) -> None:
