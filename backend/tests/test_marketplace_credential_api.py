@@ -1,26 +1,26 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, select
+from sqlalchemy import event, select
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
+from app.cabinet import store as cabinet_store
 from app.cabinet.orm import (
     LkAuditEventRow,
     LkOrganizationRow,
+    LkSessionRow,
     LkUserRow,
     LkUserWbTokenRow,
 )
 from app.cabinet.permissions import permissions_from_profile
 from app.control_plane.auth import ActorContext
 from app.infra.db import get_db_session
-from app.infra.models import Base
 from app.main import create_app
 from app.platform.identity.orm import IamMembershipRow
 from app.platform.integrations import credential_store
@@ -34,6 +34,10 @@ from app.platform.integrations.orm import (
     MarketplaceAccountRow,
 )
 from app.security.marketplace_credentials import CredentialKeyring
+from tests.test_credential_maintenance_inert_postgres import (
+    cluster,  # noqa: F401
+    pg_database as current_pg_database,
+)
 
 
 CANARY = "synthetic-marketplace-api-secret-72f1"
@@ -48,23 +52,19 @@ def _headers(user_id: str) -> dict[str, str]:
 
 
 @pytest.fixture
-def credential_api(monkeypatch: pytest.MonkeyPatch):
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+def credential_pg_database(cluster):
+    # Reuse the current 0079 allocator, runtime role and verified cleanup with
+    # function scope. Each API case owns its committed history; no row deletion
+    # or externally owned transaction/savepoint is needed between cases.
+    yield from current_pg_database.__wrapped__(cluster)
 
-    @event.listens_for(engine, "connect")
-    def _sqlite_functions(dbapi_connection, _connection_record) -> None:
-        dbapi_connection.create_function(
-            "octet_length",
-            1,
-            lambda value: len(value) if value is not None else None,
-        )
 
-    Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, expire_on_commit=False)
+@pytest.fixture
+def credential_api(credential_pg_database, monkeypatch: pytest.MonkeyPatch):
+    owner_engine, runtime_engine = credential_pg_database
+    factory = sessionmaker(bind=runtime_engine, expire_on_commit=False)
+    inspection_factory = sessionmaker(bind=owner_engine, expire_on_commit=False)
+
     actors = {
         "admin-all": (1, "admin"),
         "admin-scoped": (1, "admin"),
@@ -83,22 +83,42 @@ def credential_api(monkeypatch: pytest.MonkeyPatch):
         "stale-admin": ("all", [], True, "viewer"),
         "other-org-admin": ("all", [], True, "admin"),
     }
-    with factory() as session:
+    now = datetime.now(timezone.utc)
+    with inspection_factory() as session:
+        session.add_all([
+            LkOrganizationRow(organization_id=1, slug="one", name="One"),
+            LkOrganizationRow(organization_id=2, slug="two", name="Two"),
+        ])
+        session.flush()
         session.add_all(
             [
-                LkOrganizationRow(organization_id=1, slug="one", name="One"),
-                LkOrganizationRow(organization_id=2, slug="two", name="Two"),
+                LkUserRow(
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    email=f"{user_id}@example.invalid",
+                    password_hash="unused-synthetic",
+                    full_name=user_id,
+                    permission_profile=profile,
+                    is_active=True,
+                )
+                for user_id, (organization_id, profile) in actors.items()
+            ]
+        )
+        session.flush()
+        session.add_all(
+            [
                 *[
-                    LkUserRow(
+                    LkSessionRow(
+                        session_id=f"synthetic-login-{user_id}",
                         user_id=user_id,
-                        organization_id=organization_id,
-                        email=f"{user_id}@example.local",
-                        password_hash="unused",
-                        full_name=user_id,
-                        permission_profile=profile,
-                        is_active=True,
+                        issued_at=now,
+                        last_seen_at=now,
+                        expires_at=now + timedelta(hours=1),
+                        refresh_token_hash="synthetic-unused-refresh-hash",
+                        user_agent="synthetic-credential-api-test",
+                        ip_address="192.0.2.1",
                     )
-                    for user_id, (organization_id, profile) in actors.items()
+                    for user_id in actors
                 ],
                 *[
                     IamMembershipRow(
@@ -180,15 +200,31 @@ def credential_api(monkeypatch: pytest.MonkeyPatch):
             organization_id=organization_id,
             permission_profile=profile,
             permissions=permissions_from_profile(profile),
+            session_id=f"synthetic-login-{user_id}",
         )
 
     from app.routers import cabinet as cabinet_router
 
+    def unexpected_wb_verification(_token: str) -> str:
+        raise AssertionError("WB verification must be explicitly faked by the case")
+
     monkeypatch.setattr(cabinet_router, "actor_from_request", override_actor)
+    monkeypatch.setattr(cabinet_router, "get_session_factory", lambda: factory)
+    monkeypatch.setattr(cabinet_router, "fetch_wb_seller_id", unexpected_wb_verification)
+    # The real route dependency imports its own symbols. Forward the key loader
+    # so per-case key-readiness failures still reach the real management service.
+    monkeypatch.setattr(cabinet_router, "_load_keyring", lambda: credential_store._load_keyring())
+    monkeypatch.setattr(cabinet_store, "get_engine", lambda: owner_engine)
+    monkeypatch.setattr(cabinet_store, "get_session_factory", lambda: inspection_factory)
     app = create_app()
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_marketplace_credential_actor] = override_actor
-    return SimpleNamespace(client=TestClient(app), factory=factory)
+    client = TestClient(app)
+    try:
+        yield SimpleNamespace(client=client, factory=inspection_factory)
+    finally:
+        client.close()
+        app.dependency_overrides.clear()
 
 
 def _path(account_id: int, provider: str, kind: str) -> str:
@@ -247,16 +283,16 @@ def test_credential_access_is_tenant_account_and_provider_scoped(
     )
 
     assert cross_tenant.status_code == 404
-    assert cross_tenant.json()["error"]["code"] == "MARKETPLACE_ACCOUNT_NOT_FOUND"
+    assert cross_tenant.json()["error"]["code"] == "credential_account_not_found"
     assert outside_allowed_accounts.status_code == 403
     assert (
         outside_allowed_accounts.json()["error"]["code"]
-        == "ACCOUNT_SCOPE_DENIED"
+        == "credential_management_access_denied"
     )
     assert wrong_provider.status_code == 409
     assert (
         wrong_provider.json()["error"]["code"]
-        == "MARKETPLACE_ACCOUNT_PROVIDER_MISMATCH"
+        == "credential_account_identity_mismatch"
     )
 
     unsupported_kind = credential_api.client.get(
@@ -567,6 +603,14 @@ def test_validation_errors_and_openapi_hide_secret_values_and_storage_metadata(
 
 
 def test_legacy_cabinet_endpoint_contract_remains_registered(credential_api) -> None:
+    @event.listens_for(credential_api.factory, "after_begin")
+    def _non_utc_transaction(_session, _transaction, connection):
+        connection.exec_driver_sql("SET LOCAL TIME ZONE 'Europe/Moscow'")
+
+    with credential_api.factory() as session:
+        updated_at = session.get(LkUserWbTokenRow, 1).updated_at
+        assert updated_at.utcoffset() == timedelta(hours=3)
+
     response = credential_api.client.get(
         "/api/v1/cabinet/wb-token",
         headers=_headers("admin-all"),
@@ -579,3 +623,6 @@ def test_legacy_cabinet_endpoint_contract_remains_registered(credential_api) -> 
         "tokenMasked",
         "updatedAt",
     }
+    published_at = datetime.fromisoformat(response.json()["data"]["updatedAt"])
+    assert published_at.utcoffset() == timedelta(0)
+    assert published_at == updated_at

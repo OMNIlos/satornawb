@@ -1543,7 +1543,11 @@ def get_user_wb_token(user_id: str) -> UserWbTokenView:
             userId=row.user_id,
             hasToken=True,
             tokenMasked=row.token_masked,
-            updatedAt=row.updated_at,
+            updatedAt=(
+                row.updated_at.astimezone(timezone.utc)
+                if row.updated_at.utcoffset() is not None
+                else row.updated_at
+            ),
         )
 
     result = _run_db(_db)
