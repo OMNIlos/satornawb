@@ -99,8 +99,6 @@ after reading it, attributing T2 test evidence. Root notified: do not import its
 marker alone into a branch retaining the old domain test. Root admission remains
 separate from this owner acceptance.
 
-### Canonical SKU policy — one compatibility record
-
 ### P&L cache-only TTL fixture and combined local gate (2026-09-09)
 
 Historical `test_sprint_d_reports.py::test_pnl_report_response_is_cached_for_two_hours`
@@ -153,6 +151,33 @@ but committed17b0172 added a third. Current slice replaces only that new occurre
 with `UTC`; actual scoped Ruff now2 original UP017 again. No blanket formatting.
 
 ### Canonical SKU policy — one compatibility record
+
+### Stock grouping / WoW cache-only legacy contracts (2026-09-09)
+
+Stock grouping test safely isolated legacy history helper before calling renderer;
+that helper otherwise mutates process memory and backfills past days from current
+stock. No runtime history change or evidence claim. ActualRED1FAIL1.61s only on
+obsolete `marketplaceStockUnits` column expectation. T4 read mounted StockTableShell
+and backend contract: actual columns totalStockUnits/wbStockUnits; marketplace
+remains row/KPI data. Changed assertion to WB column, preserving raw80/100/20,
+KPI80/100, warehouse grouping and missing-KTR assertions; captured history arguments.
+
+WoW historical live-builder test actualRED1 absent import1.66s, then combined
+1FAIL1PASS1.64s cache-only versus live expectation. Actual current fallback reads
+scoped current/previous cached source and ads snapshots. Test pins those calls,
+org and date pairs, forbids actual live adapters and ABC/repricer row fallback,
+retains numerical orders/sales/delta assertions; metadata stage names now match
+existing cache-only runtime. No source/formula/job/provider implementation changes.
+Final pair **2PASS1.75s**, natural0/two inherited warnings. Compileall/diff0,
+Ruff1 same20 inherited diagnostics; read-only critic no findings/no tests.
+
+T1 requested Review0071 smoke slot after this pair naturally completed; T2 ACK:
+no active heavy/test/reservation/cleanup, only preparation while their slot held.
+Separate remaining WoW task ID statically traces to existing background ABC/funnel
+composition, not this cache-only fallback. Do not conflate their contracts or run
+the legacy task with unmocked dependencies. No blanket rerun or baseline edit.
+
+### Canonical SKU policy contract
 
 Root explicitly approved: independent get/history require fixed `settings:read`;
 replace and exact-command replay require **both** `settings:read` + `settings:write`

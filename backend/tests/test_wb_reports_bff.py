@@ -1051,17 +1051,20 @@ def test_week_over_week_enriches_rows_from_period_stats():
 
 
 def test_week_over_week_live_builder_uses_own_sources_not_abc_or_repricer(monkeypatch):
+    """Historical node ID; current fallback composes scoped caches, never live APIs."""
     from app.routers import wb_reports_bff
 
     actor = SimpleNamespace(organization_id=1, user_id="viewer")
     snapshot_calls: list[tuple[date, date]] = []
+    ads_calls: list[tuple[date, date]] = []
     monkeypatch.setattr(wb_reports_bff, "list_cached_goods", lambda _organization_id: [])
     monkeypatch.setattr(wb_reports_bff, "get_source_cache", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(wb_reports_bff, "ensure_daily_stock_history", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(wb_reports_bff, "build_abc_report", lambda **_kwargs: pytest.fail("WoW metrics must not use ABC report"))
     monkeypatch.setattr(wb_reports_bff, "_repricer_rows_for_abc_report", lambda **_kwargs: pytest.fail("WoW metrics must not use repricer rows"))
 
-    def fake_sources_snapshot(*, date_from, date_to, **_kwargs):
+    def fake_sources_snapshot(*, organization_id, date_from, date_to):
+        assert organization_id == 1
         snapshot_calls.append((date_from, date_to))
         if date_from == date(2026, 6, 13):
             return SimpleNamespace(
@@ -1077,8 +1080,17 @@ def test_week_over_week_live_builder_uses_own_sources_not_abc_or_repricer(monkey
             stocks=[],
         )
 
-    monkeypatch.setattr(wb_reports_bff, "build_wb_reports_sources_snapshot", fake_sources_snapshot)
-    monkeypatch.setattr(wb_reports_bff, "build_ads_attribution_snapshot", lambda **_kwargs: SimpleNamespace(rows=[]))
+    assert not hasattr(wb_reports_bff, "build_wb_reports_sources_snapshot")
+    monkeypatch.setattr("app.wb_api.reports_sources_runtime.build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("WoW must not fetch live sources"))
+    monkeypatch.setattr("app.wb_api.ads_runtime.build_ads_attribution_snapshot", lambda **_kwargs: pytest.fail("WoW must not fetch live ads"))
+    monkeypatch.setattr(wb_reports_bff, "build_cached_wb_reports_sources_snapshot", fake_sources_snapshot)
+    def fake_ads_snapshot(*, organization_id, date_from, date_to, group_by):
+        assert organization_id == 1
+        assert group_by == "sku"
+        ads_calls.append((date_from, date_to))
+        return SimpleNamespace(rows=[])
+
+    monkeypatch.setattr(wb_reports_bff, "build_cached_ads_attribution_snapshot", fake_ads_snapshot)
 
     payload = wb_reports_bff._build_week_over_week_fallback_report(
         request=SimpleNamespace(query_params={}),
@@ -1091,8 +1103,9 @@ def test_week_over_week_live_builder_uses_own_sources_not_abc_or_repricer(monkey
     )
 
     assert snapshot_calls == [(date(2026, 6, 13), date(2026, 7, 14)), (date(2026, 5, 12), date(2026, 6, 12))]
-    assert payload["cache"]["status"] == "live"
-    assert [step["stage"] for step in payload["diagnostics"]["requests"]] == ["current_sources", "previous_sources", "current_ads", "previous_ads"]
+    assert ads_calls == snapshot_calls
+    assert payload["cache"]["status"] == "cache-only"
+    assert [step["stage"] for step in payload["diagnostics"]["requests"]] == ["current_sources_cache", "previous_sources_cache", "current_ads_cache", "previous_ads_cache"]
     assert payload["diagnostics"]["requests"][0]["rows"]["orders"] == 2
     assert payload["rows"][0]["orders"]["units"] == 2
     assert payload["rows"][0]["orders"]["deltaPct"] == 100.0
@@ -1432,6 +1445,14 @@ def test_stock_report_payload_cache_requires_current_version():
 
 
 def test_stock_report_payload_groups_warehouses_by_product_with_catalog_meta(monkeypatch):
+    history_calls = []
+
+    def history_stub(snapshot_date, rows):
+        history_calls.append((snapshot_date, rows))
+        return {}
+
+    # Grouping is independent of legacy history capture/backfill side effects.
+    monkeypatch.setattr("app.routers.wb_reports_bff.ensure_daily_stock_history", history_stub)
     snapshot = SimpleNamespace(
         source_status="fresh",
         stocks=[
@@ -1508,6 +1529,7 @@ def test_stock_report_payload_groups_warehouses_by_product_with_catalog_meta(mon
     )
 
     assert payload["filters"]["groupBy"] == "sku"
+    assert history_calls == [(date(2026, 7, 20), snapshot.stocks)]
     assert payload["kpis"][0]["label"] == "Товаров"
     assert len(payload["rows"]) == 1
     row = payload["rows"][0]
@@ -1529,7 +1551,7 @@ def test_stock_report_payload_groups_warehouses_by_product_with_catalog_meta(mon
     assert [item["warehouseName"] for item in row["warehouses"]] == ["Коледино", "Подольск"]
     assert any(kpi["id"] == "marketplace_stock_units" and kpi["value"] == "80" for kpi in payload["kpis"])
     assert any(kpi["id"] == "total_stock_units" and kpi["value"] == "100" for kpi in payload["kpis"])
-    assert "marketplaceStockUnits" in {column["key"] for column in payload["columns"]}
+    assert "wbStockUnits" in {column["key"] for column in payload["columns"]}
     assert "totalStockUnits" in {column["key"] for column in payload["columns"]}
     assert next(card for card in payload["managementCards"] if card["title"] == "Local orders")["value"] == "derived"
 
