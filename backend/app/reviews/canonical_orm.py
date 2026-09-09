@@ -2,6 +2,9 @@
 
 These column mappings are not a replacement schema or a create_all bootstrap.
 No relationship cascade or legacy review mapping is introduced.
+Keep their registry private: importing a canonical consumer must not enroll
+PostgreSQL-only tables in the legacy application's Base.metadata/create_all.
+Alembic remains the sole owner of the complete physical Review schema.
 """
 
 from datetime import datetime
@@ -20,9 +23,11 @@ from sqlalchemy import (
     Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from app.infra.models import Base
+
+class _CanonicalReviewBase(DeclarativeBase):
+    """Isolated runtime mappings, never an application schema bootstrap."""
 
 
 class ReviewOwnerColumns:
@@ -31,7 +36,7 @@ class ReviewOwnerColumns:
     marketplace: Mapped[str] = mapped_column(String(16), nullable=False)
 
 
-class CanonicalReviewRunRow(ReviewOwnerColumns, Base):
+class CanonicalReviewRunRow(ReviewOwnerColumns, _CanonicalReviewBase):
     __tablename__ = "review_sync_runs_v2"
 
     sync_run_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
@@ -55,7 +60,7 @@ class CanonicalReviewRunRow(ReviewOwnerColumns, Base):
     account_binding_checksum: Mapped[str | None] = mapped_column(Text)
 
 
-class CanonicalReviewFactRow(ReviewOwnerColumns, Base):
+class CanonicalReviewFactRow(ReviewOwnerColumns, _CanonicalReviewBase):
     __tablename__ = "review_facts"
 
     review_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
@@ -71,7 +76,7 @@ class CanonicalReviewFactRow(ReviewOwnerColumns, Base):
     last_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
-class CanonicalReviewObservationRow(ReviewOwnerColumns, Base):
+class CanonicalReviewObservationRow(ReviewOwnerColumns, _CanonicalReviewBase):
     __tablename__ = "review_observations"
 
     observation_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
@@ -97,7 +102,7 @@ class CanonicalReviewObservationRow(ReviewOwnerColumns, Base):
     content_checksum: Mapped[str] = mapped_column(String(64))
 
 
-class CanonicalReviewRunItemRow(Base):
+class CanonicalReviewRunItemRow(_CanonicalReviewBase):
     __tablename__ = "review_sync_run_items"
 
     organization_id: Mapped[int] = mapped_column(Integer, primary_key=True)
