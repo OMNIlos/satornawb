@@ -132,7 +132,27 @@ list or root integration claim, no provider/real job/production/PG allocator.
 Report readiness fix `5f97bdf83f0444591653da9619da8de091f644c8` is test-only.
 Rollback of this TTL slice is test/docs-only, without data/schema changes.
 
-### Canonical SKU policy contract
+Additional bounded P&L fixture group: negative-revenue historical ID actualRED1
+IndexError1.69s → preserved original negative-money assertions; missing-ads-token
+ID actualRED1 absent module attribute1.62s → assert removed live import stays absent,
+poison actual adapter and assert zero calls even if exceptions get caught. Current
+basis and synthetic range/cache-write stubs avoid implicit storage. Positive and
+fallback caches actualRED2 empty rows1.60s; after metadata4PASS1FAIL1.54s exposed
+obsolete commission expectation20k versus actual18k. Existing local history
+`58c32d83b9bce69ce1957e48e45b24001cc107c6`, helper159–166 and field mapping1186
+already prefer reported commission: explicit reportedCommissionRows1 now pins18k
+and legacy computed54,700 profit; fallback retains20k. No new canonical financial
+rule or production formula change. Final five P&L cases **5PASS17deselected1.50s**,
+natural0/two inherited warnings. Finance owner decision for canonical final profit
+remains pending; this is compatibility coverage, not business approval.
+Final rerun after the UTC-only lint correction: **5PASS17deselected1.52s**, natural0;
+compileall/diff0. Read-only critic found no issues and did not run tests.
+
+Lint correction: earlier TTL entry measured2 UP017 before the final25h assertion,
+but committed17b0172 added a third. Current slice replaces only that new occurrence
+with `UTC`; actual scoped Ruff now2 original UP017 again. No blanket formatting.
+
+### Canonical SKU policy — one compatibility record
 
 Root explicitly approved: independent get/history require fixed `settings:read`;
 replace and exact-command replay require **both** `settings:read` + `settings:write`

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
@@ -161,9 +161,13 @@ def test_viewer_sees_all_financial_sections_except_monthly_company_costs():
 
 
 def test_pnl_uses_repricer_finance_cache_before_legacy_runtime(monkeypatch):
+    monkeypatch.setattr("app.wb_reports_sprint_d.list_source_cache_ranges_by_prefix", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("app.wb_reports_sprint_d.save_source_cache", lambda *_args, **_kwargs: None)
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "dateFrom": "2026-06-01",
                 "dateTo": "2026-06-30",
@@ -174,6 +178,7 @@ def test_pnl_uses_repricer_finance_cache_before_legacy_runtime(monkeypatch):
                         "buyerRevenueKopecks": 190_000,
                         "commissionFormulaKopecks": 20_000,
                         "commissionKopecks": 18_000,
+                        "reportedCommissionRows": 1,
                         "logisticsKopecks": 7_000,
                         "storageKopecks": 1_000,
                         "acceptanceKopecks": 500,
@@ -222,22 +227,30 @@ def test_pnl_uses_repricer_finance_cache_before_legacy_runtime(monkeypatch):
     row = payload.rows[0]
     assert row.rowId == "nm-123456"
     assert row.cogsKopecks == 90_000
-    assert row.commissionKopecks == 20_000
+    # Existing v3 contract prefers reported commission over the formula estimate.
+    assert row.commissionKopecks == 18_000
     assert row.logisticsKopecks == 7_000
     assert row.storageKopecks == 1_700
     assert row.adSpendKopecks == 4_000
     assert row.taxKopecks == 12_000
     assert row.overheadKopecks == 10_000
-    assert row.netProfitKopecks == 52_700
+    assert row.netProfitKopecks == 54_700
     assert payload.reportState == "final"
     assert payload.sourceEvidence[0].sourceId == "wb-finance-sales-reports-detailed-cache"
     assert all(mapping.sourceId != "wb-statistics-realization-details" for mapping in payload.fieldMapping)
 
 
 def test_pnl_finance_cache_does_not_require_live_ads_token(monkeypatch):
+    from app import wb_reports_sprint_d
+
+    assert not hasattr(wb_reports_sprint_d, "build_ads_attribution_snapshot")
+    monkeypatch.setattr(wb_reports_sprint_d, "list_source_cache_ranges_by_prefix", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(wb_reports_sprint_d, "save_source_cache", lambda *_args, **_kwargs: None)
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "aggregates": {
                     "123456": {
@@ -250,11 +263,14 @@ def test_pnl_finance_cache_does_not_require_live_ads_token(monkeypatch):
             }
         return None
 
+    live_calls = []
+
     def fail_live_ads_call(*_args, **_kwargs):
-        raise RuntimeError("VELLA_WB_ADS_API_TOKEN is required when VELLA_WB_API_MODE=real")
+        live_calls.append(True)
+        raise AssertionError("P&L must use cache only")
 
     monkeypatch.setattr("app.wb_reports_sprint_d.get_source_cache", fake_get_source_cache)
-    monkeypatch.setattr("app.wb_reports_sprint_d.build_ads_attribution_snapshot", fail_live_ads_call)
+    monkeypatch.setattr("app.wb_api.ads_runtime.build_ads_attribution_snapshot", fail_live_ads_call)
     monkeypatch.setattr("app.wb_reports_sprint_d.list_cached_goods", lambda _organization_id: [{"nmID": 123456, "vendorCode": "FBBT_42"}])
     monkeypatch.setattr("app.wb_reports_sprint_d.load_runtime_state", lambda _organization_id: {})
     monkeypatch.setattr("app.wb_reports_sprint_d.load_algorithm_settings", lambda _organization_id: {"taxPct": 0})
@@ -274,12 +290,17 @@ def test_pnl_finance_cache_does_not_require_live_ads_token(monkeypatch):
     assert payload.reportState == "preliminary"
     assert payload.rows[0].adSpendKopecks == 0
     assert any(evidence.sourceId == "wb-ads-attribution-cache" for evidence in payload.sourceEvidence)
+    assert live_calls == []
 
 
 def test_pnl_uses_repricing_period_cache_when_exact_range_cache_is_missing(monkeypatch):
+    monkeypatch.setattr("app.wb_reports_sprint_d.list_source_cache_ranges_by_prefix", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("app.wb_reports_sprint_d.save_source_cache", lambda *_args, **_kwargs: None)
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
         if source_key == "finance_30":
             return {
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "aggregates": {
                     "123456": {
@@ -314,9 +335,13 @@ def test_pnl_uses_repricing_period_cache_when_exact_range_cache_is_missing(monke
 
 
 def test_pnl_finance_cache_normalizes_negative_revenue_rows(monkeypatch):
+    monkeypatch.setattr("app.wb_reports_sprint_d.list_source_cache_ranges_by_prefix", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("app.wb_reports_sprint_d.save_source_cache", lambda *_args, **_kwargs: None)
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "aggregates": {
                     "123456": {
@@ -433,7 +458,7 @@ def test_pnl_report_response_is_cached_for_two_hours(monkeypatch):
     assert finance_reads["count"] == 0
     assert still_cached == first
 
-    cached_payload["fetchedAt"] = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    cached_payload["fetchedAt"] = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
     rebuilt = build_pnl_report(
         date_from=date(2026, 6, 1), date_to=date(2026, 6, 30),
         group_by="sku", requested_state="preliminary", finance_allowed=True,
