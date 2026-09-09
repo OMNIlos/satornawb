@@ -13,7 +13,8 @@
 - No production/app DB, existing application roles/data, working Redis, providers/network/real credentials/.env, keys/flags, backfill, push/deploy or host configuration changes.
 - Only fresh random own databases/runtime roles via existing `tests.test_orders_schema_candidate` allocator. Maintenance postgres only creates/drops/checks exact owned resources over `/private/tmp/.s.PGSQL.5432`; no existing app queries.
 - Own backend/.venv; env-i PATH=/usr/local/bin:/usr/bin:/bin, PGPASSFILE/PGSERVICEFILE/NETRC=/dev/null, PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, ORDERS_TEST_USE_LOCAL_CLUSTER=1, plan-owned secret/IP-denying Unix-only sandbox. Alternate Ruff interpreter is lint-only. No skips/xfails/baseline expansion or SQLite RLS substitute.
-- At plan preparation, accepted sole head is20260909_0067 atc4e3e373f97be19171f80ebdad2ce919dd7c84dc. Allocate20260909_0068 ONLY if that remains the sole head and0068 is absent at dispatch. If either differs, stop this task for controller graph reconciliation; no silent renumbering. This is not a reservation against another accepted schema request.
+- Controller amendment after accepted Review binding4d95b24b549f0b1f773095ec583a85f18172fdbc: actual sole head is20260909_0068. Allocate20260909_0069 ONLY if that remains the sole head and0069 is absent at dispatch. If either differs, stop this task for controller graph reconciliation; no silent renumbering. This explicitly supersedes the original conditional0068 candidate, not a reservation against another accepted schema request.
+- Heavy PostgreSQL/test/build/browser gates now use the coordinator's single team slot. Read/plan work may proceed; before running RED or any later heavy gate obtain controller confirmation of slot ownership. Do not start a concurrent heavy gate, change timeouts, silently retry a failed full gate, or signal another task's process. Preserve natural exit and owned-resource cleanup evidence.
 - No older migration edits. All three new tables FORCE org+account RLS; context is not authorization. Production permission remains an explicit activation gate, never invented here.
 - Exactly creation and manual assignment; no source refresh/unassign/planned-quantity changes, automatic mapping, print/artifact/calendar/provider or scheduler behavior.
 - Runtime service must separately prove immutable Orders item→parent current run binding, exact live owner and source-version coherence before creation/assignment/replay. Unbound/mismatched history fails closed; this physical schema is not that authentication/provenance service.
@@ -21,7 +22,7 @@
 ## Task 1: Implement the three-relation storage prerequisite
 
 **Files:**
-- Create `backend/alembic/versions/20260909_0068_production_assignment.py`.
+- Create `backend/alembic/versions/20260909_0069_production_assignment.py`.
 - Modify `backend/ops/runtime-db-role.sql` only new table/sequence/helper overrides and FORCE-RLS preflight entries.
 - Create `backend/tests/test_production_assignment_schema.py`.
 - Create `backend/tests/test_production_assignment_lifecycle.py`.
@@ -40,8 +41,8 @@ public.production_assignment_bytes(bigint,bigint,integer,text,text)->bytea
 # work_item_id,expected_version,catalog_sku_id,idempotency_key,reason
 ```
 
-- [ ] Read full spec and exact source request/amendment/codec, actual Orders0062 quantity/version/identity guards and parent FK, existing allocator and ACL/downgrade examples. Confirm clean owned paths, exact head and0068 absence before writing. Tests must not import/copy T3 domain code.
-- [ ] Write initial tests against previous0067 before any new DDL. Real PostgreSQL invocation of new helper and new table INSERT must fail UndefinedFunction/UndefinedTable, with an existing Orders unbound positive control. Record command/exit and setup success separately; fixture/import failures are not RED. Then write the remaining invariant tests before implementation.
+- [ ] Read full spec and exact source request/amendment/codec, actual Orders0062 quantity/version/identity guards and parent FK, existing allocator and ACL/downgrade examples. Confirm clean owned paths, exact head and0069 absence before writing. Tests must not import/copy T3 domain code. T3 actual0067 consumer33c95c17+decoder8010112 is accepted as a domain handoff, not a reason to import/copy its implementation here; P1 source-chain/permission acceptance stays separate.
+- [ ] Write initial tests against previous0068 before any new DDL. Real PostgreSQL invocation of new helper and new table INSERT must fail UndefinedFunction/UndefinedTable, with an existing Orders unbound positive control. Record command/exit and setup success separately; fixture/import failures are not RED. Then write the remaining invariant tests before implementation.
 
 ```python
 GOLDEN = b'{"command":{"catalog_sku_id":3,"expected_version":2,"idempotency_key":"synthetic-key","reason":"synthetic-reason","work_item_id":1},"schema_version":1}'
@@ -93,13 +94,13 @@ Use actual fixture/SQL helpers local to these three tests, concrete safe excepti
 - [ ] FORCE org AND account RLS on all3: no-context/malformed/wrongorg/wrongaccount SELECT empty and INSERT/UPDATE/DELETE denied with positive controls. Privileges independently checked so ACL denial is not passed off as RLS proof. Runtime nonowner/NOSUPERUSER/NOBYPASSRLS; workitems SELECT/INSERT/UPDATE, receipts/history SELECT/INSERT, no DELETE/TRUNCATE/REFERENCES/TRIGGER/schemaCREATE/ownerSETROLE/grantoptions. Identity sequences USAGE only, setval denied. No authentication derived from GUC/actor FK.
 - [ ] Narrow only NEW table/column/sequence/function inherited grants to allowed intersection, PUBLIC none/no grant options, limited readers not promoted to writers. Revoke trigger-only helper execution, grant only needed pure helper rights to entitled grantees. Preserve exact old/default ACL snapshots; runtime script new overrides/preflight only, actual script failure must rollback its changes. Test broad defaults, limited-column grants and sequence defaults independently after previous valid head.
 - [ ] Downgrade locks all3 in fixed order ACCESS EXCLUSIVE, sets row_security=off as refusal defense and checks truly unfiltered emptiness BEFORE DDL. Visible rows and FORCE-RLS-hidden data each refuse; no CASCADE/delete/truncate to pass. Empty downgrade removes named cyclic constraints/objects in dependency order. Expanded-schema rollback with dormant old binary is documented; no erasure of history.
-- [ ] Migration tests separately prove empty chain without stamp and previous-head production-shaped synthetic preservation through upgrade→empty-new-tables downgrade→upgrade. Seed representative old Orders and Reviews (including0065 lossless bytes), retain exact row/ACL snapshots across each step; every asserted seeded relation must be nonempty. Keep historical feature fixture pinned0068, runtime-script fixture follows actual latest head. Graph test accepts one synthetic future successor, not permanently0068-as-globalhead.
+- [ ] Migration tests separately prove empty chain without stamp and previous-head production-shaped synthetic preservation through upgrade→empty-new-tables downgrade→upgrade. Seed representative old Orders and Reviews (including0065 lossless bytes), retain exact row/ACL snapshots across each step; every asserted seeded relation must be nonempty. Keep historical feature fixture pinned0069, runtime-script fixture follows actual latest head. Graph test accepts one synthetic future successor, not permanently0069-as-globalhead.
 - [ ] Run all three files with natural exit under exact scrubbed Unix sandbox, then once adjacent Orders/Reviews/repricer migration gates (select the concrete files below, no full backend expansion):
 
 ```sh
 .venv/bin/python -m pytest -q -s --tb=short tests/test_production_assignment_schema.py tests/test_production_assignment_lifecycle.py tests/test_production_assignment_rls.py
 .venv/bin/python -m pytest -q -s --tb=short tests/test_orders_run_binding_migration.py tests/test_orders_run_binding_rls.py tests/test_orders_schema_integration.py tests/test_review_lossless_migration.py tests/test_repricer_approvals_schema.py tests/test_repricer_approvals_lifecycle.py tests/test_repricer_approvals_rls.py
-.venv/bin/python -m compileall -q alembic/versions/20260909_0068_production_assignment.py tests/test_production_assignment_schema.py tests/test_production_assignment_lifecycle.py tests/test_production_assignment_rls.py
+.venv/bin/python -m compileall -q alembic/versions/20260909_0069_production_assignment.py tests/test_production_assignment_schema.py tests/test_production_assignment_lifecycle.py tests/test_production_assignment_rls.py
 .venv/bin/python -m alembic heads
 git diff --check
 ```
