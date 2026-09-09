@@ -227,3 +227,20 @@ The existing transport does not call this helper: trusted POST provenance, job
 authority, marker-commit proof and receipt DB publication remain separate gates.
 T4's available/blocked matrix was sent before implementation, not used as a stopping
 point; no frontend or active T1 schema/resolver work was duplicated.
+
+### Independent full-row SKU override command codec
+
+Added dormant `wb_repricing_overrides.py` and61 synthetic tests. Full immutable
+nullable row, strict internal ownership/member IDs, UUID4 command, expected version,
+lossless money/Decimal canonical bytes and SHA-256. No new percentage bounds or
+cross-field formula rules; existing formula guards are unchanged. Explicit trusted
+byte budget rejects compact exponent expansion. No current override registry read
+or write, no persistence/auth claims and no dependency on unaccepted schema.
+
+RED missing module: collection exit2. GREEN focused56PASS; five extra decimal
+position cases added. Fresh combined override/assignment/decoded+raw receipt run:
+**212 passed in0.88s, exit0** under offline plugin. Scoped Ruff (two mechanical
+test literal fixes), compileall and diff checks exit0. Independent critic reran
+the original56 cases, exit0, and found no defects. Existing schema request records
+the exact codec boundary; Stage4 persistence, immutable calculation context and
+one-writer fence remain unimplemented gates, not implied by these tests.

@@ -232,3 +232,21 @@ shared globals; no fence/cutover/replicas increase until all used branches prove
 four-strategy assignments, campaign revisions/heads/audit. Context FK-finalization
 waits Catalog/source/economics references; it is not a blocker to the other tables.
 This request explicitly lists unresolved extensions; it is not full Stage4 completion.
+
+### Dormant override command bytes (T2 independent implementation)
+
+`app/modules/wb_repricing_overrides.py` defines immutable full-row `OverrideValues`
+and `OverrideChange`, not PATCH or persistence. All fourteen nullable fields must
+be supplied; explicit zero/false differs from NULL. Strict positive internal INT4
+org/account/SKU/member, canonical UUID4 command and nonnegative expected version
+are included in sorted compact ASCII JSON (`wb-repricing-sku-overrides/v1`,
+`replace_overrides`). Keys use camelCase for command ownership and snake_case for
+the complete `values` row. Version/money are exact decimal strings; finite Decimal
+percentages use context-independent canonical fixed-point strings, with trailing
+zeros and signed zero normalized. No float coercion or new formula clamp.
+
+`canonical_bytes(max_bytes=...)` and `checksum(max_bytes=...)` require an explicit
+positive trusted resource budget; compact decimal exponents are checked before
+expansion. SHA-256 covers complete command bytes. This is not authorization,
+revision/head CAS, a backfill serializer or permission to activate legacy writers.
+T1 DDL acceptance and real persistence tests remain required.
