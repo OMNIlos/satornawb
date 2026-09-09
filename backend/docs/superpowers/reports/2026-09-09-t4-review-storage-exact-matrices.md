@@ -367,6 +367,39 @@ denied; stale versions denied; same text new revision clears decision; two edito
 не меняет head; source/policy смена требует new prepared capture. Данный docs-only
 commit не заявляет эти DB tests выполненными; codec и golden bytes неизменны.
 
+### Generation identity: один опубликованный output на owner/generation
+
+По запросу T1 уточняется фраза `8f4a6c4` о generation replay. Для fake и manual_edit
+одинаково: UNIQUE(organization_id,marketplace_account_id,generation_id) среди immutable
+published drafts. Provider согласован с account; generation закрепляется за exact
+same-review draft и prepared provenance/text, а не переиспользуется для другого review.
+Generation ID — не UUID local command, не draft ID и не authorization capability.
+
+Исходный localCommandId + exact intent после fresh auth/binding lookup возвращает
+оригинальный receipt до новых generation/head checks, даже после следующих revisions.
+**Новый** localCommandId с уже опубликованным generationId всегда conflict409, даже
+если provenance bytes и text checksum совпадают. Никаких второго draft/revision,
+head update, audit, receipt или notification. Changed bytes также conflict, не
+перезапись. Это command-level уточнение replay; pure generation codec не меняется.
+Unique включает owner, но не review/actor/mode: смена review, исполнителя или mode не
+обходит уже занятый generationId. Foreign owner остаётся недоступным; одинаковый UUID
+в разных разрешённых аккаунтах независим, не основание cross-owner lookup.
+
+Уникальность generation и публикация draft/head/audit/receipt атомарны в той же root.
+Concurrent different command keys с одним generation дают одного winner; loser не
+оставляет partial rows. Полный rollback не занимает ID. Для нового намеренного
+generation output нужен новый generationId и новый localCommandId с актуальным CAS;
+это не способ оживить прежнее approval. Таблица неподтверждённых generation jobs/
+leases не добавляется этим контрактом. Для timestamps остаётся существующее
+completedAt>=startedAt и exact UTC representation; новых TTL/retention/clock-skew
+ограничений здесь нет.
+
+Дополнительные будущие service/PG cases: same original key replay stable; new key
+same generation/same bytes409; new key changed bytes409; reuse across same-owner
+reviews/modes denied; concurrent keys single winner; failed publication rollback
+leaves no reservation; same UUID independent authorized account isolated. Эти gates
+не исполнены данным docs-only изменением; existing encoder/golden bytes неизменны.
+
 External notification destination/receipt/policy relations и org-wide system registry остаются
 platform contracts T1; их FK/production values здесь не выдумываются. Account-scoped in-app
 events/receipts от них не зависят. Policies/drafts/send schema может выпускаться отдельно.
