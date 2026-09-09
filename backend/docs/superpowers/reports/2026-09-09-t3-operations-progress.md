@@ -258,3 +258,25 @@ Self-review read actual171-line migration and checked account-before-domain lock
 C-comparison predicates, bounded membership arbiter and scope preservation.
 This closes the0064 repository compatibility dependency, NOT publication/auth,
 complete source coverage, worker authority, Production parity or application activation.
+
+## Guarded persisted read service
+
+Consumed T1 paired-fetch `7bfb631d30426dd39a4f4dae7aab4754155b6a62`, guard0900f8e
+and mandatory finalizer fix `4860c53df7e12543c7f8afb7569ada773bea37d3` by clean merge.
+`read_orders_snapshot` owns a fresh root transaction on the supplied unused Session,
+uses fixed cabinet:read and no credential authority, delegates to immutable snapshot
+read, then returns only after revalidation and guarded Session commit succeeds.
+Does not commit a caller's existing transaction. Physical SQLAlchemy COMMIT errors
+are sanitized. Principal must come from authenticated session/canonical membership;
+the passed principal object is not authentication. Exact account bindings and live
+scope are checked on every page. Current T1 guard requires connected accounts;
+no active marketplace credential is required to read stored facts.
+
+RED missing module; fresh GREEN34PASS15.94s: eight read-service cases plus26
+repository cases. Covers no-credential read, Session reuse, membership/permission/
+scope/logout revocation between pages, final-commit mutation rejection/rollback,
+and actual two-session logout lock wait (distinct PIDs, pg_blocking_pids observed).
+Own disposable cleanup verified, Ruff/compileall exit0. Self-review corrected the
+snapshot ID annotation to int and confirmed result cannot escape before commit.
+Not an HTTP route/signed cursor/authentication adapter; no provider/business-state
+write, worker authority, current queue activation or Production parity claimed.
