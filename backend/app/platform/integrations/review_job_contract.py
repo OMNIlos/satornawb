@@ -154,6 +154,7 @@ class ReviewExpectedState(Redacted):
 
 class ReviewAction(str, Enum):
     CREATE = "create"
+    CANCEL = "cancel"
     CLAIM = "claim"
     RENEW = "renew"
     DISPATCH = "dispatch"
@@ -234,6 +235,7 @@ class ReviewAuthorityCapture(Redacted):
 class ReviewReadAuthority(Redacted):
     """In-process fresh read capture, never accepted from HTTP or a queue."""
     locator: ReviewJobLocator
+    intent: ReviewSendIntent
     expected: ReviewExpectedState
     principal: UserSessionPrincipal
     account: ExpectedAccountBinding
@@ -244,10 +246,12 @@ class ReviewReadAuthority(Redacted):
     _used: bool
     _owner: object
 
-    def __init__(self, *, locator, expected, principal, account, credential, read_id,
+    def __init__(self, *, locator, intent, expected, principal, account, credential, read_id,
                  started_at, resolved_credential, owner, mint):
         require(mint is _MINT, "REVIEW_FENCE_INVALID")
-        for key, value in (("locator", locator), ("expected", expected), ("principal", principal),
+        require(type(intent) is ReviewSendIntent and intent.locator == locator, "REVIEW_FENCE_INVALID")
+        intent.__post_init__()
+        for key, value in (("locator", locator), ("intent", intent), ("expected", expected), ("principal", principal),
                 ("account", account), ("credential", credential), ("read_id", read_id), ("started_at", started_at),
                 ("resolved_credential", resolved_credential), ("_used", False), ("_owner", owner)):
             object.__setattr__(self, key, value)
