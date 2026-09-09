@@ -1,5 +1,20 @@
 # T4 — requirement → commit → evidence → remaining work
 
+## Current complete frontend gate: 430PASS / 0FAIL / 0PENDING
+
+One fresh serial fullfrontend run completed naturally0 in133.91s, JSONsuccess
+true. This supersedes old405/4 and all intervening scoped-only debt checkpoints.
+No skips/test-timeout expansion. Report:
+`frontend/docs/superpowers/reports/2026-09-09-t4-full-frontend-acceptance.md`.
+Includes22e3e30/322aa89/cfe4104/b32ec42 and whitespace-only final test indentation.
+T4 independently reran T2f3c61d7 calculation characterization102PASS0.70s under
+OSnetworkdenial; no financial-policy approval or T2 writes. Heavy interval
+explicitly released to owners, T1 permissions retry next. Remaining T4 local
+storage/service and other canonical frontend activation paths still require
+exact DDL/HTTP/authority contracts, not a speculative API. No backendfullgreen,
+productioncanary, release or completearchitecture claim; coordinator finalreview
+remains. Historical checkpoints below retain their original limits.
+
 ## Latest: remaining generic-filter/Digest cases pass in scoped gate
 
 Test-only reconciliation: explicit twelve-row DOM fixture uses real filtering,

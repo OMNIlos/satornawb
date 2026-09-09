@@ -758,25 +758,25 @@ describe('vella source of truth', () => {
           && surface?.querySelector<HTMLElement>('.search input')?.dataset.demoSearchBound === '1'
       }, tab)
       return page.evaluate((tabId) => {
-      const surface = document.getElementById(`tab-${tabId}`)!
-      const body = surface.querySelector('tbody')!
-      body.replaceChildren()
-      for (let index = 0; index < 12; index++) {
-        const row = document.createElement('tr')
-        const warehouse = index === 2 ? 'Екатеринбург' : 'Казань'
-        Object.assign(row.dataset, {
-          reportRow: tabId, search: `Synthetic ${index < 2 ? 'FBBT_42' : 'OTHER'} ${warehouse} ${index}`,
-          reportTags: tabId === 'pnl' ? 'операционный' : '',
-          manager: index % 2 === 0 ? 'МД' : 'АП',
-          daysToOos: index === 0 ? '6' : index === 1 ? '61' : '20',
-          availableUnits: '10', ktr: index === 2 ? '1.6' : '1', warehouse,
-        })
-        const cell = document.createElement('td')
-        cell.textContent = row.dataset.search!
-        row.appendChild(cell)
-        body.appendChild(row)
-      }
-      ;(window as any).applyGenericReportFilter(surface)
+        const surface = document.getElementById(`tab-${tabId}`)!
+        const body = surface.querySelector('tbody')!
+        body.replaceChildren()
+        for (let index = 0; index < 12; index++) {
+          const row = document.createElement('tr')
+          const warehouse = index === 2 ? 'Екатеринбург' : 'Казань'
+          Object.assign(row.dataset, {
+            reportRow: tabId, search: `Synthetic ${index < 2 ? 'FBBT_42' : 'OTHER'} ${warehouse} ${index}`,
+            reportTags: tabId === 'pnl' ? 'операционный' : '',
+            manager: index % 2 === 0 ? 'МД' : 'АП',
+            daysToOos: index === 0 ? '6' : index === 1 ? '61' : '20',
+            availableUnits: '10', ktr: index === 2 ? '1.6' : '1', warehouse,
+          })
+          const cell = document.createElement('td')
+          cell.textContent = row.dataset.search!
+          row.appendChild(cell)
+          body.appendChild(row)
+        }
+        ;(window as any).applyGenericReportFilter(surface)
       }, tab)
     }
 
