@@ -61,7 +61,17 @@ def _ratio(numerator: int | None, denominator: int | None) -> float | None:
 
 
 def _section_error(exc: Exception) -> dict[str, Any]:
-    return {"code": exc.__class__.__name__, "message": str(exc), "retryable": True}
+    # Preserve the existing cooldown classification without publishing exception
+    # text or dynamic class names. Failed exception formatting is also contained.
+    try:
+        rate_limited = _is_rate_limited_error(exc)
+    except Exception:
+        rate_limited = False
+    return {
+        "code": "rate_limited" if rate_limited else "avito_section_unavailable",
+        "message": "Avito rate limit is active" if rate_limited else "Avito section unavailable",
+        "retryable": True,
+    }
 
 
 def _cache_hit_payload(cached: dict[str, Any]) -> dict[str, Any]:
