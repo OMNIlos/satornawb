@@ -297,3 +297,63 @@ def test_explicit_strategy_resolution_does_not_read_global_default(legacy, monke
         raise AssertionError("explicit strategy must not read persisted default")
     monkeypatch.setattr(execution, "default_typed_strategy_for_mode", forbidden)
     assert execution._resolve_strategy_id({"meta": {}, "strategy": {"id": strategy}}) == want
+
+
+@pytest.mark.parametrize("settings,want", [
+    ({}, 1),
+    ({"pMinKopecks": 100, "pminKopecks": 200, "cogsKopecks": 900}, 100),
+    ({"pMinKopecks": 0, "pminKopecks": 200}, 200),
+    ({"pMinKopecks": 0, "cogsKopecks": 100}, 100),
+    ({"cogsKopecks": 10000, "logisticsKopecks": 1000,
+      "otherExpensePerSaleKopecks": 200, "storageCostPerSaleKopecks": 300,
+      "minMarginKopecks": 500, "wbCommissionPct": 10, "minMarginPct": 10}, 15000),
+    ({"cogsKopecks": 10000, "pickPackCostPercent": 2.5}, 10250),
+    ({"cogsKopecks": 10000, "minMarginKopecks": 500, "taxPct": 100}, 10500),
+    ({"cogsKopecks": 9000, "promoCostPercent": 10, "otherExpensePricePct": 5}, 10000),
+])
+def test_legacy_pmin_override_inheritance_and_expense_precedence(legacy, settings, want):
+    execution, _ = legacy
+    before = deepcopy(settings)
+    assert execution._settings_pmin_kopecks(settings) == want
+    assert settings == before
+
+
+@pytest.mark.parametrize("settings,want", [
+    ({"pMaxKopecks": 200, "rrpKopecks": 10000, "targetDiscountPct": 20}, 200),
+    ({"rrpKopecks": 10000, "targetDiscountPct": 20}, 8000),
+    ({"rrpKopecks": 10000, "targetDiscountPct": 150}, 100),
+    ({"rrpKopecks": 10000, "targetDiscountPct": 0}, 20000),
+    ({"cogsKopecks": 9000, "maxMarginKopecks": 1000, "maxMarginPct": 20}, 12500),
+    ({"cogsKopecks": 9000, "maxMarginKopecks": 1000, "maxMarginPct": 100}, 20000),
+    ({"pMaxKopecks": 0}, 20000),
+])
+def test_legacy_pmax_priority_and_invalid_denominator_fallback(legacy, settings, want):
+    execution, _ = legacy
+    before = deepcopy(settings)
+    assert execution._settings_pmax_kopecks(settings, 10000) == want
+    assert settings == before
+
+
+@pytest.mark.parametrize("settings,global_minutes,want", [
+    ({"priceStepMinutes": 1, "priceStepHours": 2}, 60, 5),
+    ({"priceStepMinutes": 15, "priceStepHours": 2}, 60, 15),
+    ({"priceStepMinutes": 0, "priceStepHours": 2}, 60, 120),
+    ({}, 0, 60), ({}, 1, 5),
+    ({"priceStepMinutes": "invalid", "priceStepHours": "invalid"}, 7, 7),
+])
+def test_legacy_interval_override_and_global_fallback(legacy, monkeypatch, settings, global_minutes, want):
+    execution, _ = legacy
+    state = {"syncIntervalMinutes": global_minutes}
+    before = deepcopy(settings)
+    monkeypatch.setattr(execution, "ALGORITHM_SETTINGS_STATE", state)
+    assert execution._settings_step_interval_minutes(settings) == want
+    assert settings == before and state == {"syncIntervalMinutes": global_minutes}
+
+
+def test_legacy_cost_float_precision_loss_is_evidence_not_new_money_policy(legacy):
+    execution, _ = legacy
+    amount = 2**53 + 1
+    # Direct explicit minimum is exact; legacy cost normalization crosses float.
+    # A future adapter must not claim end-to-end exactness from the storage codec.
+    assert execution._settings_pmin_kopecks({"pMinKopecks": amount}) == amount
+    assert execution._settings_pmin_kopecks({"cogsKopecks": amount}) == amount - 1

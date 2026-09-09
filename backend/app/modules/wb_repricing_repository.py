@@ -24,6 +24,7 @@ from app.modules.wb_repricing import (
     ApprovalStatus,
     ApprovalValidationError,
     PriceApprovalSnapshot,
+    _require_postgres_text,
 )
 
 UNRESOLVED_LEGACY_IDENTITY_BLOCKER = (
@@ -52,6 +53,7 @@ def _exact_text(value: object, field: str) -> str:
         raise ApprovalValidationError(
             f"{field} must be a non-empty string without edge whitespace"
         )
+    _require_postgres_text(value)
     return value
 
 
