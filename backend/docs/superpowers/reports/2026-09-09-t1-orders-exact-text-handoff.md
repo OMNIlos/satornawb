@@ -180,3 +180,40 @@ An isolated self-review checked the eight predicates against the design, null
 semantics, immutable parent binding, migration atomicity, scope, safe diagnostics
 and evidence limits. The configured `preflight-critic/SKILL.md` was absent from
 the local skills/plugin trees; controller independent review remains required.
+
+## Review correction: historical fixture lifetime
+
+Independent review found one P2 acceptance defect: the historical downgrade
+helper asserted that 0064 remained the literal latest head, and the feature's
+catalog checks shared a latest-head database with the current runtime script.
+A legitimate successor therefore failed the helper before PostgreSQL could
+exercise its hidden-RLS downgrade check. No migration SQL defect was identified.
+
+Feature tests and exact index inventory now use a database pinned to 0064; the
+historical helper resolves 0064 directly. A separate latest-head fixture is used
+only by the actual runtime-script acceptance test. The graph gate still requires
+one current head and 0064 in its ancestry. The earlier sole-head statements in
+this handoff are recorded verification-time facts, not permanent graph rules.
+All PostgreSQL assertions remain in place; no migration or runtime SQL changed.
+
+An in-memory Alembic successor regression changes only a private revision map,
+without writing migration files, loading env.py or connecting to PostgreSQL.
+Before the correction it failed at the old literal head assertion: **1 failed,
+78 deselected in 0.45s**, exit **1**. After correction, the successor/helper and
+current-ancestry gates passed: **2 passed, 78 deselected in 0.39s**, exit **0**.
+
+The focused commands use the same sanitized Unix-only prefix documented above:
+
+```sh
+env -i PATH=/usr/local/bin:/usr/bin:/bin PGPASSFILE=/dev/null PGSERVICEFILE=/dev/null NETRC=/dev/null PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ORDERS_TEST_USE_LOCAL_CLUSTER=1 /usr/bin/sandbox-exec -f ../.superpowers/sdd/2026-09-09-orders-exact-text-amendment/local-postgres.sb .venv/bin/python -m pytest -q -s --tb=short tests/test_orders_exact_text_migration.py -k historical_revision_accepts_synthetic_successor
+env -i PATH=/usr/local/bin:/usr/bin:/bin PGPASSFILE=/dev/null PGSERVICEFILE=/dev/null NETRC=/dev/null PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 ORDERS_TEST_USE_LOCAL_CLUSTER=1 /usr/bin/sandbox-exec -f ../.superpowers/sdd/2026-09-09-orders-exact-text-amendment/local-postgres.sb .venv/bin/python -m pytest -q -s --tb=short tests/test_orders_exact_text_migration.py -k 'historical_revision_accepts_synthetic_successor or current_chain_includes_orders_amendment'
+```
+
+The full five-file command above was rerun after the correction: **229 passed in
+69.15s**, exit **0** (80 amendment cases, including the two pure graph gates,
+plus 149 adjacent cases). PostgreSQL 16.15, natural completion, no skipped tests.
+All exact disposable DB/role absence assertions passed, including the now separate
+0064 feature and latest runtime-script databases. Compileall, scoped Ruff,
+`git diff --check` and the migration/runtime-script unchanged check each exited
+0. The P2 is addressed; independent follow-up review and T3 consumer acceptance
+remain separate requirements.

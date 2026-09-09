@@ -4,15 +4,17 @@
 
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from queue import Queue
 from time import monotonic, sleep
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from alembic.script import ScriptDirectory
+from alembic.script import Script, ScriptDirectory
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import DBAPIError
 
@@ -109,11 +111,11 @@ def setup(owner, role):
                    (91201,91002,'wb','synthetic-c','connected')""")
 
 
-@pytest.fixture(scope="module")
-def db(cluster):
+@contextmanager
+def migrated_database(cluster, target):
     role = "orders_exact_" + uuid4().hex
     with candidate.disposable_database(cluster, (role,)) as database:
-        result = candidate.migrate(database.url, "upgrade", "head")
+        result = candidate.migrate(database.url, "upgrade", target)
         assert result.returncode == 0, result.stderr
         owner = create_engine(database.url, hide_parameters=True)
         runtime = create_engine(owner.url.set(username=role), hide_parameters=True)
@@ -123,6 +125,20 @@ def db(cluster):
         finally:
             runtime.dispose()
             owner.dispose()
+
+
+@pytest.fixture(scope="module")
+def db(cluster):
+    """Historical feature and catalog contract remains bound to 0064."""
+    with migrated_database(cluster, "20260909_0064") as engines:
+        yield engines
+
+
+@pytest.fixture(scope="module")
+def latest_db(cluster):
+    """Only the actual current runtime script consumes the latest schema."""
+    with migrated_database(cluster, "head") as engines:
+        yield engines
 
 
 @pytest.mark.parametrize("index", range(8))
@@ -374,12 +390,38 @@ def schema(c):
     }
 
 
-def revision():
+def migration_scripts():
     config = Config(str(candidate.ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(candidate.ROOT / "alembic"))
-    scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["20260909_0064"]
-    return scripts.get_revision("20260909_0064").module
+    return ScriptDirectory.from_config(config)
+
+
+def revision():
+    return migration_scripts().get_revision("20260909_0064").module
+
+
+def assert_orders_ancestry(scripts):
+    heads = scripts.get_heads()
+    assert len(heads) == 1
+    assert "20260909_0064" in {
+        item.revision for item in scripts.iterate_revisions(heads[0], "base")
+    }
+
+
+def test_current_chain_includes_orders_amendment():
+    assert_orders_ancestry(migration_scripts())
+
+
+def test_historical_revision_accepts_synthetic_successor(monkeypatch):
+    # Only the in-memory revision map changes: no migration files, env.py or DB.
+    scripts = migration_scripts()
+    expected = scripts.get_revision("20260909_0064").module
+    successor = Script(SimpleNamespace(down_revision=scripts.get_current_head(),
+                       branch_labels=None, depends_on=None), "synthetic_orders_successor", "<in-memory>")
+    scripts.revision_map.add_revision(successor)
+    monkeypatch.setattr(ScriptDirectory, "from_config", lambda config: scripts)
+    assert revision() is expected
+    assert_orders_ancestry(migration_scripts())
 
 
 def test_empty_roundtrip_restores_exact_schema_and_acl(cluster):
@@ -544,13 +586,13 @@ def test_upgrade_refuses_changed_old_shape_atomically(cluster, drift):
             engine.dispose()
 
 
-def test_latest_runtime_grants_support_guarded_exact_inserts(db):
+def test_latest_runtime_grants_support_guarded_exact_inserts(latest_db):
     from tests.test_orders_schema_integration import (
         assert_narrow_privileges,
         runtime_script,
     )
 
-    owner, runtime = db
+    owner, runtime = latest_db
     result = runtime_script(owner, runtime.url.username)
     assert result.returncode == 0, result.stderr
     with owner.connect() as c:
