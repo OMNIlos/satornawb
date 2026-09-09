@@ -24,7 +24,8 @@ function readSourceFiles(dir: string): Array<{ path: string; text: string }> {
     const abs = join(root, path)
     if (statSync(abs).isDirectory()) return readSourceFiles(path)
     if (!/\.(ts|tsx)$/.test(name)) return []
-    if (normalizedPath.endsWith('vella-source.test.ts')) return []
+    // Assertions may name historical components without shipping them to users.
+    if (/\.(test|spec)\.tsx?$/.test(name)) return []
     if (normalizedPath.endsWith('features/vella-parity/VellaHtmlParityPage.tsx')) return []
     return [{ path, text: read(path) }]
   })

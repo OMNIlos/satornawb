@@ -88,3 +88,19 @@ Fresh full suite after shared-HTML compatibility: **278 pass / 25 fail / 0 pendi
 exit 1. Against 277/26: zero new IDs, exactly the expense help test resolved.
 Reports `/tmp/satorna-t4-help-full.json`, `/tmp/satorna-t4-report-help-mutation.json`.
 All remaining 25 failures are still unwaived.
+
+## Source scanner scope — test references are not shipped components
+
+The deprecated-component guard reported exactly five test files referencing
+KpiStrip; no ordinary runtime file was an offender. Exclude `.test/.spec.ts(x)`
+from this existing runtime-source scan instead of excluding only the scanner's
+own test. Existing runtime search and parity-file exception remain unchanged.
+Targeted RED1 → GREEN1. Temporary ordinary `sourceGuardMutation.ts` containing
+ReportLayout makes the same guard fail again; removed that synthetic file and
+ran the full suite. No production source change or permanent test skip.
+
+Fresh full suite **279 pass /24 fail /0 pending**, exit1: against278/25, zero new
+IDs, only the deprecated-component guard resolved. Typecheck exit0; independent
+critic scoped PASS. JSON `/tmp/satorna-t4-source-guard-full.json`; before/after/
+mutation reports share `/tmp/satorna-t4-source-guard-` prefix. Remaining24 failures
+are unwaived. This scan is an architecture guard, not proof of rendered UI parity.
