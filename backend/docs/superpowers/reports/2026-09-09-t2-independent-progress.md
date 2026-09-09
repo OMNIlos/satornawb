@@ -244,3 +244,10 @@ test literal fixes), compileall and diff checks exit0. Independent critic reran
 the original56 cases, exit0, and found no defects. Existing schema request records
 the exact codec boundary; Stage4 persistence, immutable calculation context and
 one-writer fence remain unimplemented gates, not implied by these tests.
+
+Follow-up contract pinning: fixed v1 all-NULL golden checksum, all14 override
+fields individually participate in the hash, and AST import allowlist prevents
+accidental runtime/client dependencies. Fresh combined group **228PASS in0.16s**;
+override suite now77 cases. Ruff from `backend` exits0. A root-cwd Ruff invocation
+reported I001 because import-root inference differs; the documented backend-cwd
+invocation passes without source changes. This is a scoped check, not whole-repo lint.

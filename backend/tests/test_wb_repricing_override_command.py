@@ -204,3 +204,51 @@ def test_exact_budget_and_large_money_version_are_lossless():
 def test_fixed_point_decimal_positions(source, expected):
     change = command(values=values(price_step_pct=Decimal(source)))
     assert json.loads(encode(change))["values"]["price_step_pct"] == expected
+
+
+def test_all_null_wire_contract_golden_checksum():
+    # Pinned v1 bytes: changing the wire format requires explicit compatibility review.
+    assert command().checksum(max_bytes=4096) == (
+        "b1f127a99e8a23a223df1ad78fa9f20d9411a3627021c030c3521837cb8eb253"
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("automation_enabled", False),
+        ("allow_negative_margin", False),
+        ("night_median_enabled", False),
+        ("p_min_kopecks", 0),
+        ("p_max_kopecks", 0),
+        ("rrp_kopecks", 0),
+        ("min_margin_kopecks", 0),
+        ("max_margin_kopecks", 0),
+        ("min_margin_pct", Decimal(0)),
+        ("max_margin_pct", Decimal(0)),
+        ("price_step_pct", Decimal(0)),
+        ("price_step_minutes", 1),
+        ("basket_norm_manual", 0),
+        ("basket_norm_mode", "auto"),
+    ],
+)
+def test_every_override_field_participates_in_checksum(field, value):
+    assert command(values=values(**{field: value})).checksum(max_bytes=4096) != (
+        command().checksum(max_bytes=4096)
+    )
+
+
+def test_module_has_only_pure_standard_library_imports():
+    import ast
+    from pathlib import Path
+
+    import app.modules.wb_repricing_overrides as module
+
+    tree = ast.parse(Path(module.__file__).read_text())
+    imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imports.add(node.module)
+    assert imports <= {"hashlib", "json", "re", "dataclasses", "decimal"}
