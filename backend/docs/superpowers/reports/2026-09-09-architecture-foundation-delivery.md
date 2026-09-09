@@ -1,6 +1,6 @@
 # Architecture foundation delivery
 
-Status: foundation acceptance completed within the finite scope below; ready for ordinary publication to filipp. The latest foundation-first instruction controls scope. The original complete product specification is not claimed finished.
+Status: foundation accepted within the finite scope below and published to filipp. Initial publication 167bd0c0919908d4012f1123a2819a85447f7ae6 was confirmed by ls-remote; this followup changes publication bookkeeping only. The latest foundation-first instruction controls scope. The original complete product specification is not claimed finished.
 
 ## Delivered source and boundaries
 

@@ -43,7 +43,7 @@ P0 = blocks safe foundation delivery. P1 = recorded for the next implementation 
 - [x] Root integrates exact immutable commits. Keep original T4 domain a331a1d separate from codex/t4-credential-management shared commits already imported by T1.
 - [x] Run the consolidated important gates after source completion. Terminal owners may finish implementation and prepare the existing gate inputs, but do not each launch duplicate full suites.
 - [x] Correct failures, recheck affected behavior, record final source SHA and actual gate result.
-- [ ] Publish the verified foundation with the explicit P1/P2 backlog. Never call source-only, skipped or policy-blocked behavior fully implemented.
+- [x] Publish the verified foundation with the explicit P1/P2 backlog. Never call source-only, skipped or policy-blocked behavior fully implemented.
 
 Heavy resource order: root/T1 migration and combined PostgreSQL, then root/T3 full backend, then root/T4 frontend/build. Only one active heavy owner; no reservation while planning and no interruption of running processes. Lightweight source work can proceed in parallel.
 
@@ -60,6 +60,6 @@ All four original source packages merged at 6939bc797662655fe1708e9b8c724f5d39e7
 - T4: all 12 residual Review cases passed on project-compatible Python 3.11 / Unicode 14, 20.97 s, natural exit and owned cleanup. No Unicode guard weakening.
 - Frontend: unchanged original suite 494 passed; subsequently added notification-client tests 14 passed on integrated tree. Actual npm build (snapshot generation, TypeScript project build, Vite) passed. Only generated timestamp changed and was restored; source snapshot hash identical. Existing chunk-size warning is deferred optimization, not a build failure.
 - Main/wheel/release entrypoints: 26 passed; later registered existing Review read/local routes separately passed 17 registration/auth/default-off cases. Final delta review is bounded to actual fixes.
-- Final residual results: worker15 PASS; combined metadata139 PASS; credential API/WB14 PASS plus corrected legacy UTC case1 PASS, then integrated same case1 PASS7.65s. T3 complete ID reconciliation found no unclassified new failure/error family. Root reviewed the final runtime diff. All implementation and important verification P0 items are complete; ordinary publication is the last step.
+- Final residual results: worker15 PASS; combined metadata139 PASS; credential API/WB14 PASS plus corrected legacy UTC case1 PASS, then integrated same case1 PASS7.65s. T3 complete ID reconciliation found no unclassified new failure/error family. Root reviewed the final runtime diff. All implementation and important verification P0 items are complete; ordinary publication completed; remote SHA confirmed.
 
-Foundation acceptance is complete with 70 explicit unchanged legacy failures; a new full green suite is not claimed. GitHub publication is the last step. Heavy gates are sequential; source fixes run concurrently. Existing passed independent gates are not rerun without an affected dependency. No new product features, maintenance CLI or excluded modules are being implemented.
+Foundation acceptance is complete with 70 explicit unchanged legacy failures; a new full green suite is not claimed. Published to origin/filipp; initial publication SHA 167bd0c0919908d4012f1123a2819a85447f7ae6 matched ls-remote. Heavy gates are sequential; source fixes run concurrently. Existing passed independent gates are not rerun without an affected dependency. No new product features, maintenance CLI or excluded modules are being implemented.
