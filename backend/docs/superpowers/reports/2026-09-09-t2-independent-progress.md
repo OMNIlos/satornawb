@@ -186,6 +186,23 @@ Compile/diff0, same20 inherited Ruff diagnostics, critic no findings/no tests.
 No durable/auth/queue claim. T1 next single ACL RED ACK given only after natural
 completion, no active T2 tests/reservation/cleanup.
 
+Latest stage8 fixture evidence (not a new service): three ABC cache cases repaired
+with current finance metadata and explicit synthetic sales-funnel observations,
+preserving every existing financial/ranking/date assertion. No business rule change.
+Original period-cache case1FAIL1.44s→1PASS1.47s; other two actual2FAIL1.75s→3ABC
+PASS in the combined probe. HTTP P&L positive cases originally2FAIL (blocked without
+evidence), while the three ABC cases passed: bounded5case **2FAIL3PASS1.99s**.
+Prepared exact default-period synthetic finance/ads cache inputs, retaining actual
+test login, permissions and original assertions. After fresh T1/T3/T4 admission:
+**5PASS17deselected3.85s**, natural0/two inherited warnings. Initial peer release
+mistyped elapsed1.82s; immediately corrected to actual3.85s, no count/exit ambiguity.
+Unused/uninvoked RNP fixture preparation was removed, not included as completed work.
+Critic found no issues in these five fixtures; HTTP GREEN subsequently confirmed.
+No runtime/source/flags/schema change or canonical final-profit approval. This is
+test-process memory/synthetic cache compatibility, not durable PostgreSQL proof.
+Exact selector in `tests/test_sprint_d_reports.py`:
+`pnl_finance_viewer_gets_financial_fields_and_preliminary_state or pnl_supports_operative_and_final_states or abc_report_uses_repricer_period_cache_without_own_report_cache or abc_report_net_profit_uses_full_finance_formula or abc_report_uses_covering_repricer_daily_cache`.
+
 ### Canonical SKU policy — one compatibility record
 
 Root explicitly approved: independent get/history require fixed `settings:read`;

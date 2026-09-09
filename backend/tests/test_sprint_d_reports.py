@@ -13,7 +13,31 @@ def client() -> TestClient:
     return TestClient(create_app())
 
 
-def test_pnl_finance_viewer_gets_financial_fields_and_preliminary_state():
+def _isolate_pnl_source_cache(monkeypatch):
+    """Synthetic cache inputs for legacy HTTP contracts; no live source or disk I/O."""
+    def cached_source(_organization_id, source_key, **_kwargs):
+        if source_key == "finance_2026-05-01_2026-05-28":
+            return {
+                "revenueBasis": "retailAmount", "financeSchemaVersion": "v3",
+                "aggregates": {"101": {
+                    "salesUnits": 1, "sellerRevenueKopecks": 100_000,
+                    "commissionKopecks": 10_000, "reportedCommissionRows": 1,
+                }},
+            }
+        if source_key == "ads_2026-05-01_2026-05-28":
+            return {"aggregates": {"101": {"adSpendKopecks": 1_000}}}
+        return None
+
+    monkeypatch.setattr("app.wb_reports_sprint_d.get_source_cache", cached_source)
+    monkeypatch.setattr("app.wb_reports_sprint_d.list_source_cache_ranges_by_prefix", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("app.wb_reports_sprint_d.save_source_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.wb_reports_sprint_d.list_cached_goods", lambda _org: [{"nmID": 101, "vendorCode": "TEST"}])
+    monkeypatch.setattr("app.wb_reports_sprint_d.load_runtime_state", lambda _org: {})
+    monkeypatch.setattr("app.wb_reports_sprint_d.load_algorithm_settings", lambda _org: {})
+
+
+def test_pnl_finance_viewer_gets_financial_fields_and_preliminary_state(monkeypatch):
+    _isolate_pnl_source_cache(monkeypatch)
     api = client()
     response = api.get("/api/v1/wb-reports/pnl", headers=auth_headers(api, "finance_viewer"))
 
@@ -25,7 +49,8 @@ def test_pnl_finance_viewer_gets_financial_fields_and_preliminary_state():
     assert "WB-11" not in payload["blockerIds"]
 
 
-def test_pnl_supports_operative_and_final_states():
+def test_pnl_supports_operative_and_final_states(monkeypatch):
+    _isolate_pnl_source_cache(monkeypatch)
     api = client()
 
     operative = api.get(
@@ -478,6 +503,8 @@ def test_abc_report_uses_repricer_period_cache_without_own_report_cache(monkeypa
         if source_key == "finance_2026-06-01_2026-06-30":
             finance_reads["count"] += 1
             return {
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "dateFrom": "2026-06-01",
                 "dateTo": "2026-06-30",
@@ -517,6 +544,13 @@ def test_abc_report_uses_repricer_period_cache_without_own_report_cache(monkeypa
                 "aggregates": {
                     "111": {"stockUnits": 15, "wbStockUnits": 15},
                     "222": {"stockUnits": 4, "wbStockUnits": 4},
+                }
+            }
+        if source_key == "baskets_2026-06-01_2026-06-30":
+            return {
+                "aggregates": {
+                    "111": {"orderCount": 12, "orderSumKopecks": 1_200_000},
+                    "222": {"orderCount": 2, "orderSumKopecks": 200_000},
                 }
             }
         if source_key == "period_stats_2026-06-01_2026-06-30":
@@ -664,6 +698,8 @@ def test_abc_report_net_profit_uses_full_finance_formula(monkeypatch):
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "aggregates": {
                     "111": {
                         "salesUnits": 2,
@@ -798,6 +834,7 @@ def test_abc_report_keeps_funnel_opens_separate_when_impressions_missing(monkeyp
 
 
 def test_abc_report_uses_covering_repricer_daily_cache(monkeypatch):
+    monkeypatch.setattr("app.wb_reports_sprint_d.list_source_cache_ranges_by_prefix", lambda *_args, **_kwargs: [])
     source_cache: dict[str, dict] = {}
 
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
@@ -812,6 +849,8 @@ def test_abc_report_uses_covering_repricer_daily_cache(monkeypatch):
             }
         if source_key == "finance_2026-06-01_2026-07-08":
             return {
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "fetchedAt": "2026-07-08T08:00:00+00:00",
                 "dateFrom": "2026-06-01",
                 "dateTo": "2026-07-08",
@@ -841,6 +880,14 @@ def test_abc_report_uses_covering_repricer_daily_cache(monkeypatch):
                             "storageKopecks": 2_000,
                         },
                     },
+                },
+            }
+        if source_key == "baskets_2026-06-01_2026-07-08":
+            return {
+                "dateFrom": "2026-06-01", "dateTo": "2026-07-08",
+                "dailyAggregates": {
+                    "2026-06-02": {"111": {"orderCount": 4, "orderSumKopecks": 400_000}},
+                    "2026-07-08": {"111": {"orderCount": 3, "orderSumKopecks": 300_000}},
                 },
             }
         if source_key == "period_stats_2026-06-01_2026-07-08":
