@@ -16,8 +16,8 @@ from app.orders.evidence_repository import OrdersEvidenceRepository
 from app.orders.ingestion import ObservedOrderItem
 from app.orders.snapshot_repository import OrdersSnapshotRepository
 from tests.test_orders_evidence_repository import fact, new_run
+from tests.test_orders_exact_text_migration import db as _db_fixture
 from tests.test_orders_schema_candidate import cluster, scope  # noqa: F401
-from tests.test_orders_schema_candidate import db as _db_fixture
 
 snapshot_db = _db_fixture
 

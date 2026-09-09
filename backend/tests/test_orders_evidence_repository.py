@@ -13,9 +13,9 @@ from sqlalchemy.orm import Session
 from app.modules.orders import ExternalOrderIdentity, map_avito_status
 from app.orders.evidence_repository import OrdersEvidenceRepository
 from app.orders.ingestion import OrderObservation
+from tests.test_orders_exact_text_migration import db as _db_fixture
 from tests.test_orders_ingestion import NOW
 from tests.test_orders_schema_candidate import cluster, scope  # noqa: F401
-from tests.test_orders_schema_candidate import db as _db_fixture
 
 evidence_db = _db_fixture
 
@@ -38,9 +38,12 @@ def new_run(session, row):
         text("""INSERT INTO order_sync_runs
         (organization_id,marketplace_account_id,marketplace,source_kind,source_run_key,
          adapter_version,mapping_version,source_contract_version,source_snapshot)
-        VALUES (91001,91101,'avito',:source,:key,:adapter,:mapping,'synthetic-v1','synthetic-snapshot')
+        VALUES (:org,:account,:marketplace,:source,:key,:adapter,:mapping,'synthetic-v1','synthetic-snapshot')
         RETURNING sync_run_id"""),
         {
+            "org": row.identity.organization_id,
+            "account": row.identity.marketplace_account_id,
+            "marketplace": row.identity.marketplace,
             "source": row.source_kind,
             "key": uuid4().hex,
             "adapter": row.adapter_version,
@@ -183,9 +186,12 @@ def test_append_rejects_stale_snapshot_isolation(evidence_db, isolation):
         )
 
 
-def test_waiter_refreshes_exact_replay_after_account_lock(evidence_db):
+@pytest.mark.parametrize("use_long_keys", [False, True])
+def test_waiter_refreshes_exact_replay_after_account_lock(evidence_db, use_long_keys):
+    from tests.test_orders_exact_repositories import long_fact
+
     _, runtime = evidence_db
-    row = fact()
+    row = long_fact() if use_long_keys else fact()
     with Session(runtime) as session, session.begin():
         scope(session)
         first_run, second_run = new_run(session, row), new_run(session, row)

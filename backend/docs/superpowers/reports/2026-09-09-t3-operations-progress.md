@@ -17,15 +17,15 @@ Backup/user data и исторические Git commits не удалялись
 
 | Этап / requirement | Реализованные commits / проверки | Remaining / blocker |
 |---|---|---|
-| 1 Discovery / parity / schema request | `4323821` Stage1; `3a30b16` offline/XLSX; `f4d6d55` returns/XLSX edge characterization | Полного production prototype/matcher нет; доступны только частичные исходники, см. recovery reports |
-| 2 Identity / normalized ingestion | Existing pure orders contract; `1afd5a2` manifest/replay validation; `2f1724a` observation serialization binding | Exact installed T1 schema не передана; ORM/durable publication/CAS/revocation DB tests не выполнены |
-| 3 Catalog / read API | `1afd5a2` item-scoped read models; `2f1724a` frozen payload; текущий decoder slice | Не реализованы repository resolution, permissions/cursors/API wiring; нужны schema и shared auth protocol |
+| 1 Discovery / parity / schema request | `4323821` Stage1; `3a30b16` offline/XLSX; `f4d6d55` returns/XLSX edge characterization | Полного production prototype нет; только частичные исходники. КИЗ/matcher исключены, не blocker |
+| 2 Identity / normalized ingestion | Pure contract/manifest/serialization; `51e0b3c` account-serialized exact replay; `a197a65` parent CAS; `03a30b8` item CAS; T1 actual0064 merged `2d9a400`, consumer+DDL106PASS | Atomic manifest/status/coverage/run publication and source-progression composition unfinished; T1 shared auth guard/revocation races pending |
+| 3 Catalog / read API | Item-scoped read models, exact decoder; `cd5c277` immutable snapshot repository, `32d5af5` parent fence; same-org cross-account Product FK negative | Repository resolution, live permissions/signed cursors/API wiring pending; persisted snapshot is not an authorized HTTP endpoint |
 | 4 Production work items / commands | `1afd5a2` pure assignment preconditions; DB09-DB13 specification | Production schema/receipts/audit отсутствуют в Orders candidate; нужны отдельный binding и T1 DDL; concurrency proof NOT_RUN |
 | 5 Batches / groups / frozen sheets | Только discovery/parity requirements | Полный legacy schedule/grouping source не восстановлен; Orders read snapshot не равен Production sheet |
-| 6 XLSX | Реальный renderer characterization: inline text, leading zeros, Cyrillic, quantities, 1000 rows, XML-invalid controls | Controls defect выделен в отдельное изменение; frozen sheet adapter/артефакт persistence требуют Production contract |
+| 6 XLSX | Renderer characterization: inline text, leading zeros, Cyrillic, quantities, 1000 rows; `f013dec` rejects XML-invalid controls | Frozen sheet adapter/артефакт persistence требуют Production contract |
 | 6 A4 PDF | Source gap описан | Нет полного renderer/fixtures, не реконструировать по screenshots; multipage/48+ rows NOT_RUN |
-| 6 Stickers 120x75 / 58x40 | Partial matcher evidence only | Доступный fragment 58x58 не доказывает эти форматы; selected unit identity/barcode/quantity tests blocked source |
-| 7 Archive / delivery / KIZ | Requirements and safety boundaries preserved | Immutable historical artifact, receipt/ambiguity и atomic allocations не реализованы; source+schema prerequisites |
+| 6 Stickers 120x75 / 58x40 | Source gap documented; no substitute renderer invented | Нужны исходники обычных WB/Avito renderers; selected unit identity/barcode/quantity parity NOT_RUN. КИЗ/matcher не требуются |
+| 7 Archive / delivery | Requirements and safety boundaries preserved; КИЗ excluded | Immutable historical artifact and delivery receipt/ambiguity require source+Production schema prerequisites |
 | 8 Cutover / retirement | Proposed T4 wire/error handoff `f4d6d55`, no activation | Нет полной parity/reconciliation/writer fence/rollback proof; prototype не удалён; switch запрещён |
 
 ## Strict storage decoder slice
@@ -231,3 +231,30 @@ Manual critic: not an operator assignment endpoint; manual override commands sti
 require Production CAS/idempotency/audit service. No-op replay, out-of-order source
 selection and atomic status/coverage/run publication remain service obligations.
 Long-key acceptance still waits exact0064 and its PG gate; no original0062 changes.
+
+## Actual0064 consumer acceptance
+
+Exact T1 implementation `0dbb85d8ccda4d528b4fc9b37d539a6e664cbabf` and test correction
+`d44c971148ab1e5d185adcc079c8d2ab9aced813` merged with prerequisite lineage in
+`2d9a40059f39ecf2b1b2d4f7123d8ff749e2126c`, no conflicts or manual shared-file edits.
+The earlier long-key NOT_RUN entries above are historical; this gate is now PASS.
+
+All three repository suites now use actual0064 pinned disposable fixtures. New
+consumer tests retain >4096-byte synthetic order/adapter/line values exactly,
+replay without changed IDs, create a new observation for changed evidence, keep
+same external ID in two accounts distinct, and roll back order/item/evidence
+together. The existing physical account-wait test now runs with short and long
+keys; both sessions have established snapshots before the waiter is released.
+A separate latest-head fixture applies the actual runtime role script and verifies
+narrow Orders privileges before evidence replay and parent/item projection calls.
+No latest-head assertion is baked into the historical0064 fixture.
+
+Fresh combined command (same sanitized Unix-only prefix documented above):
+`python -m pytest -q -s --tb=short tests/test_orders_exact_repositories.py tests/test_orders_evidence_repository.py tests/test_orders_projection_repository.py tests/test_orders_snapshot_repository.py tests/test_orders_exact_text_migration.py`
+Result: **106 passed in37.92s**, exit0, no skips; 26 consumer cases plus80 migration
+cases. All own disposable DB/role cleanup assertions passed. Ruff over app/orders
+and four consumer files, compileall, diff check and git fsck --no-dangling exit0.
+Self-review read actual171-line migration and checked account-before-domain locks,
+C-comparison predicates, bounded membership arbiter and scope preservation.
+This closes the0064 repository compatibility dependency, NOT publication/auth,
+complete source coverage, worker authority, Production parity or application activation.
