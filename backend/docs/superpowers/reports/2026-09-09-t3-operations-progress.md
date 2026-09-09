@@ -3,6 +3,42 @@
 Branch `codex/arch-t3-operations`; исходная база `c88a474`.
 Общая очередь не активирована. Legacy writers/prototype сохранены.
 
+## Current Requirements Matrix (2026-09-09, supersedes all history below)
+
+Implementation baseline: `35ea34e77d80920b0d8779a6b888e6f1d8e7bad0`.
+`implemented` means committed code exists; `released` means its owner supplied an
+exact reviewed READY commit; `consumer-accepted` requires the receiving service's
+own integration gate; `final-integrated` requires the consolidated root candidate.
+None of these authorizes production activation. Test counts are evidence for their
+named scope, not completion percentages or closure of a whole product stage.
+
+| Requirement | Actual implementation SHA / state | Evidence | Remaining / owner |
+|---|---|---|---|
+| 1 Discovery, synthetic identity/parity inventory | `4323821`, `f4d6d55`; implemented | Stage1 and UI/DB parity reports; current contract/returns/XLSX/Stage1 rerun 90 PASS, exit0 | Full Production sources are missing input, not schema dependencies; one recovery package below / root + T3 |
+| 2 Initial ingestion, replay, partial manifests, immutable owner binding | `9d1f88b`, `8010112`, `33c95c1`, `4c8b4c6`; Orders0067 consumer-accepted | Actual0067 seven-file198 PASS; guarded browser USER-session8 PASS; append-only facts and initial publication | Changed facts still reconcile instead of advancing current projection; source ordering/completeness contract and fake-source revision-to-read acceptance / T3 + source owner |
+| 2 Cancellation/return lifecycle | Pure contract and persisted cancellation/return evidence in `9d1f88b`; implemented, not full lifecycle parity | Status mapping and publication tests | Partial unit return, cancellation after work/sheet, current progression and reconciliation / T3; WB Statistics never proves fulfillment |
+| 3 Catalog resolution, snapshot pagination, cache-only read | `866d1a1`, `da7e017`, `33c95c1`; local consumer-accepted for stated scope | Scoped Catalog/projection/read gates; v3 provenance and decimal-string BIGINT wire | Exact filters and shared registration / T3 + T1; T4 UI consumer integration; readiness remains unproven, no production activation |
+| 4 Physical P1 work items, receipt/history, account RLS | T1 `d57c54418762583c41829dabd80969775b4fdb56` + mandatory `bb7a958d99f1458d7e10877406eaf5dfe03ae6bc`; released, NOT T3 consumer-accepted | T1 exact READY handoff: feature173, covering447, reviewed fixture follow-up; prerequisite0068 `4d95b24b549f0b1f773095ec583a85f18172fdbc`; actual head0069 | Integrate exact dependency unchanged and accept real P1 service/CAS with two sessions / T3; no source refresh, unassign or planning inferred |
+| 4 Permission/actor/replay policy and P1 service | Root-approved read/create/assign policy in `842bbed`; codecs `bd1b9d8`, `35ea34e`; implemented preparation | Committed first-consumer plan; strict result/command114 pure PASS; T1 reports main shared-permission265 PASS | Shared permission/guard exact reviewed READY pending; not an undecided policy. Then guarded read/create/assign, live source proof, CAS/receipt/audit and two-session acceptance / T1 then T3 |
+| 5 Batches/groups/calendar/selected frozen sheets | `142cf46` partial HTML characterization; P2 request `0aa2c48`; preparation only | Actual HTML characterization and frozen-artifact schema request | Full schedule/grouping source or explicitly approved replacement rules; P2 persistence and deterministic version-set assembly / root + T3 + T1 |
+| 6 Existing Avito XLSX | `f013dec`, `66c2420`; implemented and locally tested renderer | XML validity, values/types/leading zeros/Cyrillic/quantity/formula-text checks; deterministic ZIP retry; current scoped90 PASS | Frozen-sheet adapter, artifact storage/checksum/version, unified Production parity / T3 + T1; does not wait for A4 source |
+| 6 A4 PDF, 120x75 and 58x40 ordinary stickers | No complete production renderer recovered; source gap, not implemented parity | Single recovery package records existing HTML and excluded 58x58 fragment | Recover executable source/fixtures or approve new specification; separate multipage, dimension/unit/barcode and rollback gates / root + T3 |
+| 7 Archive/reprint/delivery | P3/P4 design request `0aa2c48`; preparation only | Immutable revision / durable intent / ambiguous outcome requirements recorded | Storage + actual delivery receipt contract; historical artifact reprint and fake-provider retry acceptance / T1 + T3 + root input |
+| 8 Cutover and retirement | Dormant Orders HTTP handoff, no switch; NOT final-integrated | Legacy prototype/writers preserved; no external actions | After P1 consumer acceptance supply ONE consolidated consumer SHA to root; full parity, reconciliation, writer fence and rollback remain separate / root + T1-T4 |
+| KIZ/separate matcher exclusion | T3 `4374bb5`; T4 owner cleanup (separate branch) | Backend runtime scan has no KIZ subsystem; ordinary return matching and barcodes preserved | No KIZ source or allocation dependency. Historical compatibility records remain; frontend integration belongs to root/T4 |
+
+Current missing input is collected once in
+`2026-09-09-t3-production-source-recovery-package.md`. Operational credentials,
+production canaries and physical printing are NOT prerequisites for safe local
+service development. No current T3 heavy process, reservation or pending cleanup.
+
+## Historical Evidence (not current status)
+
+All headings, tables, pending/blocked statements, test counts and next-step notes
+below describe their original checkpoint. In particular, old "P1 DDL not READY"
+and "permission requires owner policy" statements are superseded by the current
+matrix. Do not use the historical sections as a second current backlog.
+
 ## Scope override пользователя, 2026-09-09
 
 КИЗ/Честный знак и отдельный recovered matcher исключены из продукта по прямому
