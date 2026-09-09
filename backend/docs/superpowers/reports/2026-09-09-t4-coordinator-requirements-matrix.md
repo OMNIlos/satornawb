@@ -2,6 +2,18 @@
 
 ## Current checkpoint: frontend response isolation; Review historical binding open
 
+Latest test-only Stock/Week checkpoint: actual React page proves four scoped
+loading→empty/error→session-expired cases with one intercepted GET, no mock rows
+or additional API calls. Replaced only two obsolete progress-component source
+bans. Focused9PASS; full356PASS/17FAIL/0pending versus350/19, exact two source
+failures closed and zero new failed IDs. Initial 1s readiness timeout reproduced
+under load, corrected to bounded15s; final focused and broad runs pass new cases.
+TypeScript/diff0; independent critic found no important defects. Runtime, HTML,
+schema and flags unchanged. Report: frontend/docs/superpowers/reports/
+2026-09-09-t4-stock-week-state-tests.md. Remaining17failures unwaived.
+T1 candidate Review-run-binding design fully compared against1a3d344/45e2ccb;
+domain direction accepted directly to T1, not DDL readiness or activation.
+
 T1-requested Review binding purecodec READY: historical_binding.py frozenexact
 descriptor +sortedASCIIJSONencoder +mandatorychecksum strictdecoder,6literal
 Unicode/control/null-emptyvectors matched byindependentNodeencoder/hash andcritic.
