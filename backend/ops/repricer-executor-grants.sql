@@ -33,6 +33,25 @@ BEGIN
   IF has_table_privilege(executor.oid,'public.'||item.name,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
   THEN RAISE EXCEPTION 'executor_privileges_invalid'; END IF;
  END LOOP;
+ FOR item IN SELECT unnest(ARRAY['wb_repricing_jobs','wb_repricing_job_authorities','wb_repricing_job_audit']) AS name LOOP
+  IF has_table_privilege(executor.oid,'public.'||item.name,'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+   OR has_any_column_privilege(executor.oid,'public.'||item.name,'INSERT,UPDATE,REFERENCES')
+  THEN RAISE EXCEPTION 'executor_privileges_invalid'; END IF;
+ END LOOP;
+ FOR item IN SELECT unnest(ARRAY['wb_repricing_upload_receipts','wb_repricing_upload_receipt_audit']) AS name LOOP
+  IF has_table_privilege(executor.oid,'public.'||item.name,'UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+   OR has_any_column_privilege(executor.oid,'public.'||item.name,'UPDATE,REFERENCES')
+  THEN RAISE EXCEPTION 'executor_privileges_invalid'; END IF;
+ END LOOP;
+ -- Deny existing identity/expiry/permission/key mutation at column level too.
+ FOR item IN SELECT c.relname,a.attname FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+  WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+   ('lk_users','lk_sessions','iam_memberships','marketplace_accounts','marketplace_account_credentials')
+  AND a.attnum>0 AND NOT a.attisdropped AND
+  a.attname<>CASE WHEN c.relname='lk_sessions' THEN 'last_seen_at' ELSE 'updated_at' END LOOP
+  IF has_column_privilege(executor.oid,'public.'||item.relname,item.attname,'UPDATE,INSERT,REFERENCES')
+  THEN RAISE EXCEPTION 'executor_privileges_invalid'; END IF;
+ END LOOP;
 END $$;
 GRANT USAGE ON SCHEMA public TO :"executor_role";
 GRANT SELECT (user_id,organization_id,is_active) ON public.lk_users TO :"executor_role";
@@ -57,7 +76,9 @@ GRANT INSERT ON public.wb_repricing_upload_receipts, public.wb_repricing_upload_
 GRANT SELECT ON public.wb_repricer_price_approvals, public.wb_repricer_price_apply_attempts,
  public.wb_repricer_price_approval_audit TO :"executor_role";
 GRANT INSERT ON public.wb_repricer_price_apply_attempts, public.wb_repricer_price_approval_audit TO :"executor_role";
-GRANT UPDATE (status,version,updated_at,claimed_by_membership_id,claimed_audit_id,
+-- T2 _mutable sends these decision columns as NULL for claim/outcome as well.
+-- Executor action fence still forbids reject/block and participant scope changes.
+GRANT UPDATE (status,version,updated_at,claimed_by_membership_id,decided_by_membership_id,reason_code,claimed_audit_id,
  safe_error_code,wb_upload_id,result_code,outcome_audit_id)
  ON public.wb_repricer_price_approvals TO :"executor_role";
 GRANT UPDATE (status,version,updated_at,dispatch_at,finished_at,safe_error_code,

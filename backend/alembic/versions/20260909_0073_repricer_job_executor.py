@@ -174,6 +174,11 @@ BEGIN
  IF NOT FOUND OR (a.action_key,a.request_checksum) IS DISTINCT FROM (j.action_key,j.request_checksum) THEN RAISE EXCEPTION 'repricing_graph_invalid'; END IF;
  IF TG_TABLE_NAME IN ('wb_repricing_jobs','wb_repricing_job_authorities','wb_repricing_job_audit') THEN
   IF authority.authority_expires_at<=clock_timestamp() OR authority.authority_expires_at<=j.created_at THEN RAISE EXCEPTION 'repricing_authority_invalid'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.iam_memberships WHERE organization_id=j.organization_id AND membership_id=j.initiator_membership_id AND user_id=j.initiator_user_id AND is_active)
+   OR NOT EXISTS(SELECT 1 FROM public.lk_users WHERE user_id=j.initiator_user_id AND organization_id=j.organization_id AND is_active)
+   OR NOT EXISTS(SELECT 1 FROM public.lk_sessions WHERE session_id=j.initiator_session_id AND user_id=j.initiator_user_id
+     AND revoked_at IS NULL AND expires_at>=authority.authority_expires_at)
+   THEN RAISE EXCEPTION 'repricing_origin_invalid'; END IF;
   RETURN NULL;
  END IF;
  SELECT * INTO r FROM public.wb_repricing_upload_receipts WHERE organization_id=NEW.organization_id AND marketplace_account_id=NEW.marketplace_account_id AND receipt_id=NEW.receipt_id;
