@@ -54,6 +54,41 @@ the exports, not authenticated service or DB authorization; those remain require
 Required service matrix: read-only/write-only/both/neither, cross-account, revoke
 after wait, denied mutation and receipt non-disclosure. No repeat policy approval needed.
 
+Verified access-only consumer slice (not a repository/service release):
+`app/modules/wb_repricing_override_access.py` and `tests/test_wb_override_access.py`
+use the actual released permission exports, existing publication guard and existing
+Catalog offer rows. Separate read and replace entry points; mapping SHARE locks
+follow auth/account locks and persist through the caller-owned root. Actual final
+**19 PASS / 5.59s / natural exit0** on accepted0066 with non-owner runtime and OS
+network-deny sandbox, including observed mapping/revocation waits. Scoped Ruff,
+compileall and diff-check exit0. Exact temporary DB
+orders_test_df4ce14e8bad420794bf40e270aedd59 and role
+repricer_runtime_f0c44acef0814f2f9153aabfb978d300 cleanup absence verified.
+Existing libpq /dev/null passfile warnings retained. Read-only critic found no
+defects in the domain-error fix; PostgreSQL concurrency proof is this actual run.
+
+Historical RED steps for this slice (superseded by final19PASS above):
+Missing-module collection RED verified; scoped Ruff/compile0. First admitted actual
+PG gate stopped with **14 PASS / 1 FAIL, 3.40s, natural exit1**: shared guard safely
+normalized the unsupported domain mapping code to publication_persistence_failed.
+Fixed locally with a separate fixed-message OverrideMappingUnresolvedError, leaving
+the shared guard/allowlist unchanged. Exact owned DB orders_test_a941c45710c94013a90988060802ad43 and role
+repricer_runtime_c2c7919ec28545cfb91e6bb2e7b4ba1d cleanup absence verified; no pending
+cleanup. This is no substitute for the pending
+override repository/receipt/CAS/audit implementation and is excluded from frozen
+integration candidate f3c61d7. No new schema or general-purpose repository added.
+Second admitted gate: **18 PASS / 1 FAIL, 9.97s, natural exit1**; mapping blocker
+regression passed. The membership-race observer incorrectly matched FOR UPDATE,
+where the accepted guard uses with_for_update(read=True), i.e. FOR SHARE. Corrected
+that observer only; no timeout or guard change. Exact temporary DB
+orders_test_5729daa46d174241b2f6c65cd2538fb0 and role
+repricer_runtime_dadeca7a32b64e75929cdfe5e512b7e9 cleanup absence verified.
+Independent follow-up: all six invalid-authority cases now explicitly observe zero
+Catalog queries, not merely an eventual exception. Future service ordering is BOTH
+live authorization -> exact scoped receipt lookup -> current mapping lock only for
+a new revision. The combined replace helper is not a replay entry point; historical
+replay must not require a surviving current mapping. This boundary was sent to T1.
+
 ### Stable consumer candidate for the common milestone
 
 Immutable T2 code candidate: `f3c61d7704813790245ec73096c753ee5dd93915` on
