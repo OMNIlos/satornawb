@@ -23,11 +23,19 @@ cannot become a successful status. Caller must not reveal the returned wrapper i
 a status response. Exact keyring/owner class and aware time are required; it neither
 loads keys/time nor creates/commits/rolls back a session. Existing public
 `resolve_marketplace_credential(owner,kind)` keeps its own configured keyring,
-short session, UTC clock and typed error mapping, delegating to this core. The
-explicit evaluation timestamp is sampled immediately before invoking the query
-core; final authority remains the admin caller's responsibility. Test expiry at
-the supplied instant and delayed reads in the final gate; no freshness guarantee
-across provider I/O is implied. Paired fetch/executor and reencrypt are untouched.
+short session, UTC clock and typed error mapping. A subsequent source correction
+to `e2d51a5` restores exact legacy timing: public lookup runs BEFORE `_utc_now()`.
+Two store-internal shared pieces avoid duplicate queries/crypto:
+`_active_credential_for_resolution(session,owner,kind)` performs the existing scoped
+account/active lookup and returns an internal row only within store;
+`_decrypt_active_credential(row,*,keyring,now)` performs existing expiry/decrypt.
+Public wrapper runs lookup→clock→decrypt; explicit-now in-session helper runs
+the same lookup→decrypt with caller time. No callback/flag/default clock, second
+query or second decrypt is introduced. Final authority remains the admin caller's
+responsibility. Test expiry at supplied instant and public delayed-read ordering
+in the final gate; no freshness across provider I/O is implied. The intermediate
+e2d51a5 timing caveat is addressed in source, not independently verified.
+Paired fetch/executor and reencrypt are untouched.
 Follow-up source is also UNVERIFIED, with no tests/import/compile/review/PG run.
 
 ```python
