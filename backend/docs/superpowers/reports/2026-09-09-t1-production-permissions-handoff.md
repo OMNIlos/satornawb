@@ -10,6 +10,60 @@ Base: `28258e3f39eb388179fe0b27686d0b8840cfa8dc`
 - Существующие `PROFILE_PERMISSIONS`, `LEGACY_PROFILE_ALIASES`, нормализация профилей, union профиля с явными membership grants, SQL/lock/final-commit механика guard не изменены.
 - Ни один профиль или legacy alias не получил Production permission автоматически. Регистрация capabilities не выполняет operational grant.
 
+## Точный resolver contract для T3
+
+T3 импортирует эти четыре exports без aliases или локального пересчёта:
+
+```python
+PRODUCTION_PERMISSION_KEYS = frozenset(
+    {"production:read", "production:create", "production:assign"}
+)
+PRODUCTION_READ_PERMISSIONS = frozenset({"production:read"})
+PRODUCTION_CREATE_PERMISSIONS = frozenset(
+    {"production:read", "production:create"}
+)
+PRODUCTION_ASSIGN_PERMISSIONS = frozenset(
+    {"production:read", "production:assign"}
+)
+```
+
+Только trusted service выбирает константу: read использует `PRODUCTION_READ_PERMISSIONS`, create и его replay — `PRODUCTION_CREATE_PERMISSIONS`, assignment/change и его replay — `PRODUCTION_ASSIGN_PERMISSIONS`. Request data, role label, idempotency key и receipt не выбирают permissions.
+
+Guard вызывается с фактическим аутентифицированным `UserSessionPrincipal`, точным frozen `ExpectedAccountBinding` текущего выбранного аккаунта и пустыми `authorities` для credential-independent Production commands:
+
+```python
+principal = UserSessionPrincipal(
+    organization_id=authenticated_organization_id,
+    user_id=authenticated_user_id,
+    membership_id=authenticated_membership_id,
+    session_id=authenticated_session_id,
+)
+account = ExpectedAccountBinding(
+    marketplace_account_id=selected_marketplace_account_id,
+    provider=selected_provider,  # exactly "wb" or "avito"
+    external_account_id=expected_external_account_id,
+    credential_ref=expected_credential_ref,
+)
+
+with session.begin():
+    guard = acquire_publication_guard(
+        session,
+        principal=principal,
+        required_permissions=PRODUCTION_CREATE_PERMISSIONS,
+        accounts=(account,),
+        authorities=(),
+    )
+    # Receipt/replay data may be queried only after guard acquisition.
+    result = read_or_execute_inside_the_same_root_transaction(session)
+    guard.revalidate_before_write()
+# Return only here, after the guard's final before-commit validation and COMMIT.
+return result
+```
+
+Не создавать fake user/background principal и не подменять binding данными запроса. Acquire должен происходить до чтения receipt и до domain locks; root transaction сохраняется через всю операцию. Replay заново требует текущую operation+read permission даже для ранее успешной команды. Guard автоматически выполняет final revalidation в `before_commit`; T3 возвращает receipt/result только после успешного commit. Committed revocation до acquire отказывает; revocation, сериализованный после уже захваченной операции, не отменяет её ретроактивно.
+
+Публичные safe codes guard ограничены точными значениями: `publication_context_invalid`, `publication_access_denied`, `publication_binding_changed`, `publication_authority_invalid`, `publication_expired`, `publication_persistence_failed`. Неизвестный input/canary не отражается в ошибке.
+
 ## Проверенное поведение
 
 - Точные exports, тип `frozenset`, их union и полный literal snapshot прежних profiles/aliases.
