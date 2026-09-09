@@ -33,6 +33,13 @@ BEGIN
             ('wb_repricing_sku_override_versions'),
             ('wb_repricing_sku_override_heads'),
             ('wb_repricing_sku_override_audit'),
+            ('review_policy_versions'),
+            ('review_policy_heads'),
+            ('review_draft_revisions'),
+            ('review_decisions'),
+            ('review_workflow_heads'),
+            ('review_local_audit'),
+            ('review_local_command_receipts'),
             ('catalog_cost_versions'),
             ('catalog_economics_override_versions'),
             ('catalog_skus'),
@@ -247,5 +254,42 @@ GRANT EXECUTE ON FUNCTION public.wb_sku_override_decimal(numeric),
     public.wb_sku_override_integral(numeric),
     public.wb_sku_override_bytes(integer,integer,integer,integer,uuid,numeric,jsonb)
     TO :"runtime_role";
+
+-- Local Review completed receipts/history: exact rights after broad grants.
+REVOKE ALL ON TABLE public.review_policy_versions, public.review_policy_heads,
+    public.review_draft_revisions, public.review_decisions, public.review_workflow_heads,
+    public.review_local_audit, public.review_local_command_receipts FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON TABLE public.%I FROM PUBLIC, %I',
+    a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+    ('review_policy_versions','review_policy_heads','review_draft_revisions',
+     'review_decisions','review_workflow_heads','review_local_audit','review_local_command_receipts')
+    AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, INSERT ON TABLE public.review_policy_versions, public.review_draft_revisions,
+    public.review_decisions, public.review_local_audit, public.review_local_command_receipts TO :"runtime_role";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.review_policy_heads, public.review_workflow_heads TO :"runtime_role";
+REVOKE ALL ON FUNCTION public.review_local_account_lock(), public.review_local_row_guard(),
+    public.review_local_validate() FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, %I; GRANT EXECUTE ON FUNCTION %s TO %I',
+    p.oid::regprocedure,:'runtime_role',p.oid::regprocedure,:'runtime_role')
+FROM pg_proc p WHERE p.pronamespace='public'::regnamespace AND p.oid IN
+    ('public.review_local_integer_text(numeric,boolean)'::regprocedure,
+     'public.review_local_timestamp_text(timestamp with time zone)'::regprocedure,
+     'public.review_local_utf8_json_string(bytea)'::regprocedure,
+     'public.review_local_nonblank_utf8(bytea)'::regprocedure,
+     'public.review_local_string(text,boolean)'::regprocedure,
+     'public.review_local_uuid(uuid,boolean)'::regprocedure,
+     'public.review_local_number(numeric,boolean,boolean)'::regprocedure,
+     'public.review_local_label(text)'::regprocedure,
+     'public.review_local_checksum(text)'::regprocedure,
+     'public.review_local_policy_bytes(public.review_policy_versions)'::regprocedure,
+     'public.review_local_generation_bytes(public.review_draft_revisions)'::regprocedure,
+     'public.review_local_decision_binding_bytes(public.review_draft_revisions,bytea)'::regprocedure,
+     'public.review_local_audit_bytes(public.review_local_audit)'::regprocedure,
+     'public.review_local_result_bytes(public.review_local_command_receipts)'::regprocedure,
+     'public.review_local_request_bytes(public.review_local_command_receipts,public.review_policy_versions,public.review_draft_revisions,public.review_decisions,bytea)'::regprocedure)
+\gexec
 
 COMMIT;

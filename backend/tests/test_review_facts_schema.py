@@ -392,10 +392,18 @@ def test_run_and_evidence_guards_even_with_broad_privileges(db):
         candidate.scope(c)
         c.execute(text("UPDATE review_sync_runs_v2 SET observed_count=2 WHERE sync_run_id=:id"), {'id':run_id})
     # Savepoint-scoped broader grants prove triggers independently; grants roll back.
+    acl_sql = text("""SELECT c.oid,c.relacl::text,
+        ARRAY(SELECT has_table_privilege(:role,c.oid,p.privilege)
+              FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) AS p(privilege))
+        FROM pg_class c WHERE c.relnamespace='public'::regnamespace
+          AND c.relkind IN ('r','p') ORDER BY c.oid""")
     with owner.connect() as c:
         tx = c.begin()
         try:
+            before_acl = c.execute(acl_sql, {'role': runtime.url.username}).all()
             c.exec_driver_sql(f'GRANT UPDATE,DELETE,TRUNCATE ON review_sync_runs_v2,review_facts,review_observations,review_sync_run_items TO {runtime.url.username}')
+            # Only this owned disposable schema/root: include future FK CASCADE children.
+            c.exec_driver_sql(f'GRANT TRUNCATE ON ALL TABLES IN SCHEMA public TO {runtime.url.username}')
             c.exec_driver_sql(f'SET LOCAL ROLE {runtime.url.username}')
             candidate.scope(c)
             for table in TABLES[2:]:
@@ -405,6 +413,7 @@ def test_run_and_evidence_guards_even_with_broad_privileges(db):
                     assert error.value.orig.diag.message_primary == 'Review evidence is immutable'
         finally:
             tx.rollback()
+        assert c.execute(acl_sql, {'role': runtime.url.username}).all() == before_acl
 
 
 def test_expand_acl_intersection_and_empty_roundtrip_preserve_old_rows(cluster):
