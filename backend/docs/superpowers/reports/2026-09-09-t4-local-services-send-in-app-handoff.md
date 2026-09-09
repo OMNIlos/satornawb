@@ -152,6 +152,37 @@ No new Telegram/email policy, destination, provider receipt, retention or TTL.
 
 ## Verification and honest remaining work
 
+### Follow-up shared authority and physical receipt version clarification
+
+Existing `decision_contract.validate_review_send` at98d1331 requires sender
+reviews:send and approver reviews:approve; reviews:send already exists in cabinet
+permissions. Explicit service mapping: send.create and pre-marker claim/dispatch
+revalidate sender reviews:send plus current approver reviews:approve and all
+source/draft/decision/policy-epoch predicates. Ordinary inspection is reviews:read.
+User-initiated mutating reconciliation requires BOTH reviews:read and reviews:send
+for the fresh current operator/account, not a new approval of an already dispatched
+operation. Post-marker closing does not treat changed policy/source eligibility
+as permission to cancel, erase the marker or create another send.
+
+An immutable command-authority relation may retain real creator user/membership/
+session plus exact credential ID/generation (WB wb_api, Avito avito_oauth_access)
+and account binding. No raw credential or fake session constructed from queue
+fields. Pre-marker worker execution revalidates this authority and explicit
+policy reference/version, leaseSeconds and deadline; no defaults are assigned.
+Fresh authorized reconciliation must still be possible after the original creator
+session expires/is revoked, using a separate trusted read/closing authority. It
+must not rely forever on that old session or its expired lease. Missing closing
+authority means no write, not an unrestricted worker path.
+
+The original physical notification receipt `version` requirement remains: init1,
+increment once only if a previously null read/dismiss field becomes non-null;
+an exact no-op retains version. The new receipt codec intentionally encodes
+identity/content/timestamps, not physical CAS metadata; it does not remove the
+version column or conditional-write/locking requirements. Caller-supplied visible
+actions do not contain a mutable physical version. T1 owns the exact SQL fence.
+
+### Executed gates
+
 Implementation was completed before tests, as directly requested by the user.
 Initial local-service/codecs/read gate:91PASS/1FAIL/2warnings9.51s. Isolated diagnostic
 reproduced22003 BIGINT overflow3.17s. Actual compiled SQL showed Numeric comparison
