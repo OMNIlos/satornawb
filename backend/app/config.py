@@ -43,6 +43,59 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     return raw.strip().lower() == "true"
 
 
+_REVIEW_SHADOW_CONFIGURATION_INVALID = "review_shadow_configuration_invalid"
+_INT4_MAX = 2_147_483_647
+
+
+def _raise_review_shadow_configuration_invalid() -> None:
+    raise RuntimeError(_REVIEW_SHADOW_CONFIGURATION_INVALID) from None
+
+
+def _parse_review_shadow_enabled(value: str | None) -> bool:
+    if value is None:
+        return False
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    _raise_review_shadow_configuration_invalid()
+    return False
+
+
+def _parse_review_shadow_id(value: str) -> int:
+    if (
+        not 1 <= len(value) <= 10
+        or value[0] not in "123456789"
+        or any(character not in "0123456789" for character in value)
+    ):
+        _raise_review_shadow_configuration_invalid()
+    parsed = int(value)
+    if parsed > _INT4_MAX:
+        _raise_review_shadow_configuration_invalid()
+    return parsed
+
+
+def _parse_review_shadow_account_pairs(
+    value: str | None,
+) -> tuple[tuple[int, int], ...]:
+    if value is None or not value.strip():
+        return ()
+    result: list[tuple[int, int]] = []
+    for raw_pair in value.split(","):
+        parts = raw_pair.strip().split(":")
+        if len(parts) != 2:
+            _raise_review_shadow_configuration_invalid()
+        pair = (
+            _parse_review_shadow_id(parts[0]),
+            _parse_review_shadow_id(parts[1]),
+        )
+        if pair in result:
+            _raise_review_shadow_configuration_invalid()
+        result.append(pair)
+    return tuple(result)
+
+
 def _heartbeat_env_settings() -> dict[str, object]:
     """Retain malformed policy as invalid; never repair IDs or disable a bad flag."""
     prefix = "VELLA_PROCESS_HEARTBEAT_"
@@ -112,6 +165,8 @@ class Settings:
     advertising_shadow_ingest_organization_ids: tuple[int, ...] = ()
     canonical_shadow_collection_enabled: bool = False
     canonical_shadow_collection_organization_ids: tuple[int, ...] = ()
+    review_shadow_enabled: bool = False
+    review_shadow_account_pairs: tuple[tuple[int, int], ...] = ()
     marketplace_credentials_enabled: bool = False
     marketplace_credential_keyring_dir: str | None = None
     marketplace_credential_current_key_version: int | None = None
@@ -241,6 +296,12 @@ def get_settings() -> Settings:
         canonical_shadow_collection_organization_ids=_parse_int_csv_env(
             os.getenv("VELLA_CANONICAL_SHADOW_COLLECTION_ORGANIZATION_IDS")
         ),
+        review_shadow_enabled=_parse_review_shadow_enabled(
+            os.getenv("VELLA_REVIEW_SHADOW_ENABLED")
+        ),
+        review_shadow_account_pairs=_parse_review_shadow_account_pairs(
+            os.getenv("VELLA_REVIEW_SHADOW_ACCOUNT_PAIRS")
+        ),
         marketplace_credentials_enabled=_parse_bool_env(
             "VELLA_MARKETPLACE_CREDENTIALS_ENABLED", False
         ),
@@ -344,6 +405,36 @@ def get_settings() -> Settings:
             ),
         ),
     )
+
+
+def is_review_shadow_enabled(
+    settings: Settings,
+    *,
+    organization_id: int,
+    marketplace_account_id: int,
+) -> bool:
+    enabled = settings.review_shadow_enabled
+    pairs = settings.review_shadow_account_pairs
+    if type(enabled) is not bool or type(pairs) is not tuple:
+        _raise_review_shadow_configuration_invalid()
+    if any(
+        type(pair) is not tuple
+        or len(pair) != 2
+        or not all(type(value) is int and 1 <= value <= _INT4_MAX for value in pair)
+        for pair in pairs
+    ) or len(pairs) != len(set(pairs)):
+        _raise_review_shadow_configuration_invalid()
+    if not (
+        type(organization_id) is int
+        and 1 <= organization_id <= _INT4_MAX
+        and type(marketplace_account_id) is int
+        and 1 <= marketplace_account_id <= _INT4_MAX
+    ):
+        return False
+    return settings.review_shadow_enabled and (
+        organization_id,
+        marketplace_account_id,
+    ) in settings.review_shadow_account_pairs
 
 
 def load_marketplace_credential_keyring(settings: Settings) -> CredentialKeyring:
