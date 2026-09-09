@@ -12,7 +12,9 @@ from app.config import get_settings, validate_security_settings
 from app.contracts.envelopes import ErrorEnvelope, ErrorEnvelopeItem
 from app.infra.health import readiness_status
 from app.orders.router import router as canonical_orders_router
+from app.reviews.canonical_read import router as canonical_review_read_router
 from app.reviews.canonical_router import router as canonical_reviews_router
+from app.reviews.local_http import router as canonical_review_local_router
 from app.routers.account_health import router as account_health_router
 from app.routers.avito_chats import router as avito_chats_router
 from app.routers.avito_listings import router as avito_listings_router
@@ -159,6 +161,8 @@ def create_app() -> FastAPI:
     app.include_router(catalog_v2_router)
     app.include_router(canonical_orders_router)
     app.include_router(canonical_reviews_router)
+    app.include_router(canonical_review_read_router)
+    app.include_router(canonical_review_local_router)
     app.include_router(finance_v2_router)
     app.include_router(wb_reports_v2_router)
     app.include_router(notifications_router)
