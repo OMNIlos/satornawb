@@ -110,6 +110,24 @@ verified by the43-case gate below; no current writer wiring or full stage4 accep
 
 ### Dormant authenticated SKU override service — bounded release
 
+Implementation commit `a14581534ec439f88e27811dc901babf308b42dd`; T1 subsequently
+read the actual377-line service and access delta, verified exact schema/runtime/
+permission ancestry, and accepted the bounded interface. This downstream interface
+acceptance attributes T2's43PG evidence; T1 did not claim a separate service test run.
+It is not root final integration, whole-stage completion or writer activation.
+
+Post-release compatibility gate on the same0070 ancestry: existing
+`tests/test_wb_repricing_postgres_repository.py`,
+`tests/test_wb_repricing_approval_commands.py`,
+`tests/test_wb_repricing_legacy_import.py` **93 passed in14.84s, natural exit0**.
+Same exact scrubbed sandbox invocation below with these three test paths; no skips,
+no changed tests and no failure delta in this bounded group. Exact owned cleanup
+absence verified for all three databases/roles:
+
+- `orders_test_283b990aa8df4ba1ab5c916547f8265a` / `repricer_runtime_c4bd82cee6c34845a46ed858aec699c3`;
+- `orders_test_10b2c1008d474543bb58ef3e7b6c2acc` / `repricer_runtime_2354ed388ab6466b983948bdef14f836`;
+- `orders_test_2e81894f764d4f0d94305290579e8031` / `repricer_runtime_7e3143e4b58f41bebbc57866fa4175b5`.
+
 `app/modules/wb_repricing_override_service.py` owns a fresh PostgreSQL physical root
 per call. `SkuOverrideService(engine,max_request_bytes=...)` requires a PostgreSQL
 Engine and explicit trusted byte budget; methods are `replace(change,principal,
