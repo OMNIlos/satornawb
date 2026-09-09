@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from app.orders import bindings
 from app.orders.bindings import (
     ACCOUNT_BINDING_SCHEMA_VERSION,
     account_binding_checksum,
@@ -15,6 +16,81 @@ from app.orders.bindings import (
 from app.platform.integrations.publication_guard import ExpectedAccountBinding
 
 ACCOUNT = ExpectedAccountBinding(1, "avito", "synthetic-external", None)
+
+
+def run_binding_fields():
+    return {
+        "schema_version": 1,
+        "external_account_id": ACCOUNT.external_account_id,
+        "credential_ref": None,
+        "payload": serialize_account_bindings(1, (ACCOUNT,)),
+        "checksum": account_binding_checksum(1, (ACCOUNT,)),
+    }
+
+
+def test_run_binding_accepts_exact_single_account_provenance():
+    bindings.validate_run_binding(1, ACCOUNT, **run_binding_fields())
+
+
+@pytest.mark.parametrize(
+    "field", ["schema_version", "external_account_id", "payload", "checksum"]
+)
+def test_run_binding_rejects_missing_required_fields(field):
+    fields = run_binding_fields()
+    fields[field] = None
+    with pytest.raises(ValueError, match="run binding"):
+        bindings.validate_run_binding(1, ACCOUNT, **fields)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"schema_version": True},
+        {"schema_version": 2},
+        {"external_account_id": "synthetic-other"},
+        {"credential_ref": "synthetic-other"},
+        {"payload": b"[]"},
+        {"payload": bytearray(b"[]")},
+        {"checksum": "A" * 64},
+        {"checksum": "f" * 64},
+    ],
+)
+def test_run_binding_rejects_inconsistent_storage(changes):
+    with pytest.raises(ValueError, match="run binding"):
+        bindings.validate_run_binding(1, ACCOUNT, **(run_binding_fields() | changes))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"marketplace_account_id": 2},
+        {"provider": "wb"},
+        {"external_account_id": "synthetic-new"},
+        {"credential_ref": "synthetic-ref"},
+    ],
+)
+def test_run_binding_rejects_changed_live_account(changes):
+    with pytest.raises(ValueError, match="run binding"):
+        bindings.validate_run_binding(
+            1, replace(ACCOUNT, **changes), **run_binding_fields()
+        )
+
+
+def test_run_binding_rejects_legacy_unbound_and_other_org():
+    with pytest.raises(ValueError, match="run binding"):
+        bindings.validate_run_binding(1, ACCOUNT, **dict.fromkeys(run_binding_fields()))
+    with pytest.raises(ValueError, match="run binding"):
+        bindings.validate_run_binding(2, ACCOUNT, **run_binding_fields())
+
+
+def test_run_binding_rejects_valid_aggregate_payload():
+    accounts = (ACCOUNT, replace(ACCOUNT, marketplace_account_id=2))
+    fields = run_binding_fields() | {
+        "payload": serialize_account_bindings(1, accounts),
+        "checksum": account_binding_checksum(1, accounts),
+    }
+    with pytest.raises(ValueError, match="run binding"):
+        bindings.validate_run_binding(1, ACCOUNT, **fields)
 
 
 @pytest.mark.parametrize(
@@ -37,6 +113,16 @@ def test_binding_golden_bytes_checksum_and_roundtrip(vector):
         vector["organization_id"],
         tuple(sorted(accounts, key=lambda account: account.marketplace_account_id)),
     )
+    if len(accounts) == 1:
+        bindings.validate_run_binding(
+            vector["organization_id"],
+            accounts[0],
+            schema_version=1,
+            external_account_id=accounts[0].external_account_id,
+            credential_ref=accounts[0].credential_ref,
+            payload=raw,
+            checksum=vector["sha256"],
+        )
 
 
 def test_binding_codec_preserves_existing_v1_checksum_bytes():

@@ -344,3 +344,29 @@ rotated generation denies; final guard failure rolls back all publication effect
 WB statistics raw/canonical NULL remains unmapped. Earlier8case combined42PASS18.16s.
 Ruff/compileall/diff exit0, all own disposable resources cleaned. No schema/routers,
 provider calls, real marketplace actions, external print/export or production writes.
+
+## Immutable run decoder preparation (2026-09-09)
+
+T1 delivered 0067 feature d87e575f8fec32815dbeb459157339f8ad25220f plus mandatory
+fix c4e3e373f97be19171f80ebdad2ce919dd7c84dc. Its full schema handoff was read.
+`app/orders/bindings.py:validate_run_binding` now validates its five immutable
+fields against the exact independently guarded single-account binding. Legacy
+unbound, partial fields, changed ownership/provider/reference, aggregate payloads,
+noncanonical bytes and invalid version/checksum reject with a fixed domain error.
+All four single-account golden vectors pass, including Unicode and nullable refs.
+No audit JSON fallback exists in this helper. It is not yet connected to storage.
+
+TDD: missing function produced 19 failures (exit 1); the initial test matrix also
+contained one vacuous nullable-reference case, removed before implementation.
+Final focused command `python -m pytest -q tests/test_orders_bindings.py
+tests/test_orders_contract.py tests/test_orders_http_contracts.py`: 97 passed,
+0.75s, exit 0. Scoped Ruff and compileall: exit 0. Independent read-only critic:
+no important defects; suggested golden-positive coverage added and rerun.
+
+Available next: actual 0067 merge and publication/replay/read assembly acceptance,
+including forged mutable audit and unbound-history denial. Existing consumers
+still use audit provenance: that gate is NOT closed by this pure preparation.
+Blocked separately: Production P1 exact DDL/permission (f76ad06 is only a plan),
+missing full frozen renderer/schedule sources, WB fulfillment source authority,
+and parity/cutover gates. HTTP wire unchanged. No database, provider, production,
+physical print/export, frontend, schema, KIZ, push or activation changes here.

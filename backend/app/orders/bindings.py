@@ -63,6 +63,41 @@ def account_binding_checksum(organization_id, accounts):
     ).hexdigest()
 
 
+def validate_run_binding(
+    organization_id,
+    account,
+    *,
+    schema_version,
+    external_account_id,
+    credential_ref,
+    payload,
+    checksum,
+) -> None:
+    """Check immutable 0067 fields against an independently guarded live binding.
+
+    Legacy unbound runs cannot be upgraded using current metadata or audit data.
+    This validates provenance only, not authorization or provider completeness.
+    """
+    try:
+        expected = serialize_account_bindings(organization_id, (account,))
+        if (
+            type(schema_version) is not int
+            or schema_version != ACCOUNT_BINDING_SCHEMA_VERSION
+            or type(payload) is not bytes
+            or payload != expected
+            or type(external_account_id) is not str
+            or external_account_id != account.external_account_id
+            or (credential_ref is not None and type(credential_ref) is not str)
+            or credential_ref != account.credential_ref
+            or type(checksum) is not str
+            or not re.fullmatch(r"[0-9a-f]{64}", checksum)
+            or not hmac.compare_digest(checksum, hashlib.sha256(expected).hexdigest())
+        ):
+            raise ValueError
+    except (ValueError, TypeError):
+        raise OrderContractValidationError("Invalid source run binding") from None
+
+
 def bound_high_water_mark(content_checksum, organization_id, accounts):
     if type(content_checksum) is not str or not re.fullmatch(
         r"[0-9a-f]{64}", content_checksum
