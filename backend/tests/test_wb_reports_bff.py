@@ -1696,6 +1696,8 @@ def test_report_daily_sources_ready_rejects_aggregate_only_covering_cache(monkey
         lambda _organization_id, prefix, **_kwargs: [
             {
                 "sourceKey": "finance_2026-06-25_2026-07-24",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "dateFrom": "2026-06-25",
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "deferred",
@@ -1723,6 +1725,8 @@ def test_report_daily_sources_ready_accepts_covering_daily_detail(monkeypatch):
         lambda _organization_id, prefix, **_kwargs: [
             {
                 "sourceKey": "finance_2026-06-25_2026-07-24",
+                "revenueBasis": "retailAmount",
+                "financeSchemaVersion": "v3",
                 "dateFrom": "2026-06-25",
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "fetched",
@@ -1739,6 +1743,25 @@ def test_report_daily_sources_ready_accepts_covering_daily_detail(monkeypatch):
         date_from=date(2026, 7, 8),
         date_to=date(2026, 7, 21),
     ) == (True, [])
+
+
+@pytest.mark.parametrize("metadata", [
+    {},
+    {"revenueBasis": "retailAmount", "financeSchemaVersion": "v2"},
+    {"revenueBasis": "sellerPayout", "financeSchemaVersion": "v3"},
+])
+def test_report_daily_sources_ready_rejects_legacy_finance_basis(monkeypatch, metadata):
+    monkeypatch.setattr(
+        "app.routers.wb_reports_bff.list_source_cache_ranges_by_prefix",
+        lambda *_args, **_kwargs: [{
+            "dateFrom": "2026-06-25", "dateTo": "2026-07-24",
+            "dailyDetailStatus": "fetched", "dailyAggregatesDays": 30,
+            **metadata,
+        }],
+    )
+    assert _report_daily_sources_ready(
+        2, ("finance",), date_from=date(2026, 7, 8), date_to=date(2026, 7, 21),
+    ) == (False, ["finance"])
 
 
 def test_latest_rnp_cache_skips_ads_only_payload(monkeypatch):

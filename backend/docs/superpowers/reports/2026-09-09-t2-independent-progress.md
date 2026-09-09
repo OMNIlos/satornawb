@@ -82,6 +82,23 @@ containment code has only the marker change. Compile/diff verification recorded
 with this slice: compileall/diff exit0. Read-only critic found no defects and did
 not run tests. Test-only rollback; no data/schema/runtime rollback needed.
 
+### Report daily-source fixture compatibility (2026-09-09)
+
+Fresh exact historical acceptance case reproduced **1FAIL1PASS55deselected1.88s**:
+the fixture lacked the already-required `retailAmount`/`v3` finance metadata.
+Corrected both positive and daily-detail-negative fixtures, preserving rejection
+for daily count0; added three explicit missing/old-version/wrong-basis negatives.
+No router/source/formula changes. Focused report readiness group **5PASS55deselected
+1.59s**, naturalexit0, two inherited Starlette warnings, same offline fences.
+Compileall/diff0; legacy test Ruff1 same20 inherited diagnostics as HEAD.
+Read-only critic found no issues and did not run tests. This proves scoped fixture
+compatibility, not full report/finance acceptance.
+
+T1 explicitly accepted the shared containment delta in combined `e3d46fadb4e37738502882a8703eb51b00b380bb`
+after reading it, attributing T2 test evidence. Root notified: do not import its
+marker alone into a branch retaining the old domain test. Root admission remains
+separate from this owner acceptance.
+
 ### Canonical SKU policy — one compatibility record
 
 Root explicitly approved: independent get/history require fixed `settings:read`;
