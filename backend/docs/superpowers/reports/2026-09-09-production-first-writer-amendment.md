@@ -4,6 +4,29 @@
 Источник: исходный этап 4, `app/modules/production.py` AssignmentCommand и принятая
 Orders identity/CAS семантика. Не добавляет source-refresh/unassign/print действия.
 
+## Root-approved permission policy, 2026-09-09
+
+Server-selected capabilities: `production:read` for work-item/history reads;
+creation requires both `production:create` and `production:read`; assignment
+requires both `production:assign` and `production:read`. Every replay requires
+the same current capabilities as its originating operation, plus live user,
+session, membership and exact account scope checks before exposing its receipt.
+Idempotency key is never authority. Revalidation remains through commit.
+
+T1 owns shared registry/guard changes. Do not auto-grant these keys to any profile,
+including admin; preserve existing profile-plus-explicit-grants union and legacy
+aliases. `sync:run`, `catalog:write`, `settings_editor` or the legacy `production`
+profile alias are not substitutes. Synthetic explicit grants only in tests.
+Actor comes from the authenticated session/membership, never body metadata.
+Denial must not mutate business state or reveal stored receipt data. Audit must
+distinguish creation, assignment and replay; worker authority remains separate.
+
+The capability may cover future unassign, but this P1 operation/schema contract
+still disallows it. No nullable-SKU update, source refresh, planning or background
+user impersonation is introduced by recognition of these permissions. Routes and
+runtime activation stay default-off. Owner policy resolves permission naming,
+not pending exact DDL acceptance or source/provider completeness.
+
 ## Первый slice: ровно две операции
 
 1. **Creation** из существующего accepted current Orders item: scoped org/account/order/
