@@ -20,7 +20,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.platform.integrations.orm import MarketplaceAccountRow
 from app.reviews.canonical_contract import (
     ExternalReviewIdentity,
+    NormalizedReviewFact,
     ReviewNormalizationError,
+    review_fact_checksum,
     validate_review_source_run_id,
 )
 from app.reviews.canonical_orm import (
@@ -34,12 +36,28 @@ from app.reviews.ingestion_contract import (
     snapshot_manifest,
     timestamp,
 )
+from app.reviews.lossless_storage import decode_coverage_pair, decode_scalar_pair
 
 RUN = CanonicalReviewRunRow.__table__
 ACCOUNT = MarketplaceAccountRow.__table__
 FACT = CanonicalReviewFactRow.__table__
 OBS = CanonicalReviewObservationRow.__table__
 ITEM = CanonicalReviewRunItemRow.__table__
+
+
+def _exact_key(table, key, value):
+    return func.coalesce(
+        table.c[key + "_utf8"], func.convert_to(table.c[key], "UTF8")
+    ) == value.encode("utf-8")
+
+
+def _decode_run(row):
+    result = dict(row)
+    result["source_run_id"] = decode_scalar_pair(
+        row, "source_run_id", required=True, allow_empty=False
+    )
+    result["coverage"] = decode_coverage_pair(row)
+    return result
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -156,13 +174,14 @@ class ReviewFactsRepository:
                 self.connection.execute(
                     select(RUN).where(
                         *self._scope(RUN),
-                        RUN.c.source_run_id.collate("C") == source_run_id,
+                        _exact_key(RUN, "source_run_id", source_run_id),
                     )
                 )
                 .mappings()
                 .one_or_none()
             )
             if row is not None:
+                row = _decode_run(row)
                 if row["request_checksum"] != request_checksum:
                     raise ReviewRepositoryError("REVIEW_REPLAY_CONFLICT")
                 return ReviewRunReference(row["sync_run_id"], row["run_sequence"])
@@ -194,22 +213,40 @@ class ReviewFactsRepository:
             return ReviewRunReference(*row)
 
     def _identity(self, external_review_id):
-        return (
+        row = (
             self.connection.execute(
                 select(FACT).where(
                     *self._scope(FACT),
-                    FACT.c.external_review_id.collate("C") == external_review_id,
+                    _exact_key(FACT, "external_review_id", external_review_id),
                 )
             )
             .mappings()
             .one_or_none()
         )
+        if row is None:
+            return None
+        result = dict(row)
+        result["external_review_id"] = decode_scalar_pair(
+            row, "external_review_id", required=True, allow_empty=False
+        )
+        return result
 
     def _observation(self, review_id, observation_id):
-        return (
+        row = (
             self.connection.execute(
-                select(OBS).where(
+                select(
+                    OBS,
+                    FACT.c.external_review_id,
+                    FACT.c.external_review_id_utf8,
+                    RUN.c.source_run_id.label("source_key"),
+                    RUN.c.source_run_id_utf8.label("source_key_utf8"),
+                )
+                .join(FACT, FACT.c.review_id == OBS.c.review_id)
+                .join(RUN, RUN.c.sync_run_id == OBS.c.source_run_id)
+                .where(
                     *self._scope(OBS),
+                    *self._scope(FACT),
+                    *self._scope(RUN),
                     OBS.c.review_id == review_id,
                     OBS.c.observation_id == observation_id,
                 )
@@ -217,6 +254,56 @@ class ReviewFactsRepository:
             .mappings()
             .one()
         )
+        result = dict(row)
+        for key in (
+            "external_product_id",
+            "text",
+            "source_status",
+            "source_schema_version",
+            "normalization_version",
+        ):
+            result[key] = decode_scalar_pair(
+                row,
+                key,
+                required=key in ("source_schema_version", "normalization_version"),
+                allow_empty=key == "text",
+            )
+        try:
+            fact = NormalizedReviewFact(
+                identity=ExternalReviewIdentity(
+                    self.owner.organization_id,
+                    self.owner.marketplace_account_id,
+                    self.owner.marketplace,
+                    decode_scalar_pair(
+                        row, "external_review_id", required=True, allow_empty=False
+                    ),
+                ),
+                source_run_id=decode_scalar_pair(
+                    row, "source_key", required=True, allow_empty=False
+                ),
+                **{
+                    key: result[key]
+                    for key in (
+                        "external_product_id",
+                        "source_created_at",
+                        "source_updated_at",
+                        "rating",
+                        "text",
+                        "answered",
+                        "can_answer",
+                        "source_status",
+                        "observed_at",
+                        "source_schema_version",
+                        "normalization_version",
+                        "content_checksum",
+                    )
+                },
+            )
+            if review_fact_checksum(fact) != fact.content_checksum:
+                raise ReviewRepositoryError()
+        except (ReviewNormalizationError, UnicodeError, TypeError, ValueError):
+            raise ReviewRepositoryError() from None
+        return result
 
     def get_fact(self, external_review_id: str) -> ReviewFactSnapshot | None:
         if not isinstance(external_review_id, str) or not external_review_id:
@@ -276,6 +363,7 @@ class ReviewFactsRepository:
             )
             if run is None:
                 raise ReviewRepositoryError("REVIEW_SCOPE_DENIED")
+            run = _decode_run(run)
             if completed_at < run["started_at"]:
                 raise ReviewRepositoryError()
             for fact in ordered:

@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Identity,
     Integer,
+    LargeBinary,
     SmallInteger,
     String,
     Text,
@@ -34,7 +35,8 @@ class CanonicalReviewRunRow(ReviewOwnerColumns, Base):
     __tablename__ = "review_sync_runs_v2"
 
     sync_run_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    source_run_id: Mapped[str] = mapped_column(Text)
+    source_run_id: Mapped[str | None] = mapped_column(Text)
+    source_run_id_utf8: Mapped[bytes | None] = mapped_column(LargeBinary)
     run_sequence: Mapped[int] = mapped_column(BigInteger, Identity(always=True))
     request_checksum: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(16))
@@ -43,7 +45,8 @@ class CanonicalReviewRunRow(ReviewOwnerColumns, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     observed_count: Mapped[int] = mapped_column(BigInteger)
     manifest_checksum: Mapped[str | None] = mapped_column(String(64))
-    coverage: Mapped[dict] = mapped_column(JSONB)
+    coverage: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    coverage_utf8: Mapped[bytes | None] = mapped_column(LargeBinary)
     error_code: Mapped[str | None] = mapped_column(String(64))
 
 
@@ -51,7 +54,8 @@ class CanonicalReviewFactRow(ReviewOwnerColumns, Base):
     __tablename__ = "review_facts"
 
     review_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    external_review_id: Mapped[str] = mapped_column(Text)
+    external_review_id: Mapped[str | None] = mapped_column(Text)
+    external_review_id_utf8: Mapped[bytes | None] = mapped_column(LargeBinary)
     current_observation_id: Mapped[UUID | None] = mapped_column(Uuid)
     version: Mapped[int] = mapped_column(BigInteger)
     last_source_run_id: Mapped[UUID | None] = mapped_column(Uuid)
@@ -70,16 +74,21 @@ class CanonicalReviewObservationRow(ReviewOwnerColumns, Base):
     revision: Mapped[int] = mapped_column(BigInteger)
     source_run_id: Mapped[UUID] = mapped_column(Uuid)
     external_product_id: Mapped[str | None] = mapped_column(Text)
+    external_product_id_utf8: Mapped[bytes | None] = mapped_column(LargeBinary)
     source_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rating: Mapped[int | None] = mapped_column(SmallInteger)
     text: Mapped[str | None] = mapped_column(Text)
+    text_utf8: Mapped[bytes | None] = mapped_column(LargeBinary)
     answered: Mapped[bool] = mapped_column(Boolean)
     can_answer: Mapped[bool | None] = mapped_column(Boolean)
     source_status: Mapped[str | None] = mapped_column(Text)
+    source_status_utf8: Mapped[bytes | None] = mapped_column(LargeBinary)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    source_schema_version: Mapped[str] = mapped_column(Text)
-    normalization_version: Mapped[str] = mapped_column(Text)
+    source_schema_version: Mapped[str | None] = mapped_column(Text)
+    source_schema_version_utf8: Mapped[bytes | None] = mapped_column(LargeBinary)
+    normalization_version: Mapped[str | None] = mapped_column(Text)
+    normalization_version_utf8: Mapped[bytes | None] = mapped_column(LargeBinary)
     content_checksum: Mapped[str] = mapped_column(String(64))
 
 
