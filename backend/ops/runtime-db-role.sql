@@ -30,6 +30,9 @@ BEGIN
             ('production_work_items'),
             ('production_assignment_receipts'),
             ('production_assignment_history'),
+            ('wb_repricing_sku_override_versions'),
+            ('wb_repricing_sku_override_heads'),
+            ('wb_repricing_sku_override_audit'),
             ('catalog_cost_versions'),
             ('catalog_economics_override_versions'),
             ('catalog_skus'),
@@ -219,5 +222,30 @@ REVOKE ALL ON FUNCTION public.production_exact_text(text),
 GRANT EXECUTE ON FUNCTION public.production_exact_text(text),
     public.production_ascii_json_string(text),
     public.production_assignment_bytes(bigint,bigint,integer,text,text) TO :"runtime_role";
+
+-- Account-scoped SKU override rights, after the atomic broad-grant interval.
+REVOKE ALL ON TABLE public.wb_repricing_sku_override_versions,
+    public.wb_repricing_sku_override_heads, public.wb_repricing_sku_override_audit
+    FROM PUBLIC, :"runtime_role";
+SELECT format('REVOKE ALL (%I) ON TABLE public.%I FROM PUBLIC, %I',
+    a.attname,c.relname,:'runtime_role')
+FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+WHERE c.relnamespace='public'::regnamespace AND c.relname IN
+    ('wb_repricing_sku_override_versions','wb_repricing_sku_override_heads','wb_repricing_sku_override_audit')
+    AND a.attnum>0 AND NOT a.attisdropped
+\gexec
+GRANT SELECT, INSERT ON TABLE public.wb_repricing_sku_override_versions,
+    public.wb_repricing_sku_override_audit TO :"runtime_role";
+GRANT SELECT, INSERT, UPDATE ON TABLE public.wb_repricing_sku_override_heads TO :"runtime_role";
+REVOKE ALL ON FUNCTION public.wb_sku_override_account_lock(), public.wb_sku_override_row_guard(),
+    public.wb_sku_override_validate() FROM PUBLIC, :"runtime_role";
+REVOKE ALL ON FUNCTION public.wb_sku_override_decimal(numeric),
+    public.wb_sku_override_integral(numeric),
+    public.wb_sku_override_bytes(integer,integer,integer,integer,uuid,numeric,jsonb)
+    FROM PUBLIC, :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.wb_sku_override_decimal(numeric),
+    public.wb_sku_override_integral(numeric),
+    public.wb_sku_override_bytes(integer,integer,integer,integer,uuid,numeric,jsonb)
+    TO :"runtime_role";
 
 COMMIT;
