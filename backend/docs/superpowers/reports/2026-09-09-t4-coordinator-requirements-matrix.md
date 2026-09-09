@@ -2,7 +2,60 @@
 
 ## Current checkpoint: frontend response isolation; Review historical binding open
 
-Latest independent frontend batch:373PASS/7FAIL/0pending versus358/16, exact
+T1 Review0068 is now READY exact4d95b24b549f0b1f773095ec583a85f18172fdbc,
+superseding earlier not-ready entries below. Main read complete handoff/migration/
+three new test modules and grant diff; fixture Git blob matches45e2ccb. T1 reports
+actual131PASS with naturalcleanup/independentacceptance. T4 pure storage adapter
+04a5f66 adds exact normalized/bytes/hash validation, explicitallNULLlegacy and safe
+errors:208purePASS0.22s/networkdenied/Ruffdiff0/criticPASS. No schema integration or
+repository acceptance inferred; current/historical publicread still blocked.
+
+Current continuation:
+
+- Final frontend evidence before the last test-only readiness patch:
+  full405PASS4FAIL0pending, four earlier sourcefailure
+  IDs closed; three old broadsourcecases remain plus reportLoading logout test
+  readinessrace. Exact session assertion now polls, separatefocused4PASS0FAIL.
+  No inferred406/3/fullgreen claim. FinalruntimeTypeScript/Vite0, Stock15focused
+  PASS, Orders3PASS/Listings2PASS/overview2PASS, purelegacyownership6PASS;
+  critics scopedPASS.
+  Slots were individually admitted/serialized and explicitly released to all owners.
+  No active ownheavy gate. Digesthiddenempty and Stock exact7/60 boundaryparity
+  remain identified independent follow-ups; manager/Week/aggregation rules not
+  invented. Reports retain intermediate RED/timeouts and exact limits.
+- RNP actual cache/session proof committed37ac6c9: three new scenarios pass in
+  main serial run; only obsolete explanatory-copy assertion removed.
+- Listings actual stale rows/seven KPI/open detail: main2RED→2GREEN; load clears
+  prior response/selection, abort guard retained. Final TypeScript/Vitebuild0
+  includes Orders and Stock runtime changes. Independent critic scopedPASS.
+- Broad first376/9 includes5additional timeout IDs; serial380/5 resolves those,
+  leaves4old IDs plus actual overview error→logout readiness race. Exact seven
+  KPI assertion now waits for state transition; focused and final broad both pass.
+- Orders actual browserRED: duplicate legacy Orders/returns reads and unexpected
+  production-skus read alongside React; all intercepted. Narrow Avito ownership
+  guard implemented, pure actual-function test5PASS1FAIL→6PASS; standalone/WB
+  current/archive paths preserved with stubs. Generated snapshot refreshed.
+- Orders HTTP503 hidden by onboarding: reuse existing visible error/loading UI;
+  empty-row onboarding policy preserved. Actual3browserPASS and build0.
+- Stock metadata/label/unknown-as999 defects reproduced and fixed; actualfilter
+  browser plus14purecases15PASS. Zero-stock/null-days criticfinding also closed.
+  Missing manager/promotion/source fields are not invented. Exact7/60boundary
+  alignment and hidden Digest empty message remain separate follow-ups.
+- T4 independently reran T3 ingestion/read-contract/XLSX group88PASS under denied
+  networking. T2 and T3 remaining dependency matrices read; no speculative storage
+  or operational activation to substitute for missing contracts/sources.
+
+Root temporary heavy-resource queue honored: all own existing gates naturalexit
+and browser cleanup; every owner directly notified slot free. T1 subsequently
+completed/released P1RED; T4 admitted focused4case ended naturally and released.
+Every next heavy gate still requires coordinated admission. Pure VM checks use
+no real network, DOM renderer/export, browser or DB.
+Detailed evidence:frontend/docs/superpowers/reports/
+2026-09-09-t4-rnp-listings-state-verification.md.
+
+## Earlier checkpoints — historical evidence, superseded by the current section
+
+Previous independent frontend batch:373PASS/7FAIL/0pending versus358/16, exact
 nine old failed IDs closed, zero new failures; finaltsc/diff0. Actual overview
 period/modal/loading/empty/error/logout, protected secondary DOM node identity
 and exception restoration, Ads/Stock event scopes with intended mutation REDs,

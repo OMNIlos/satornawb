@@ -65,7 +65,9 @@ it.each(reports.flatMap(report => ['empty', 'failure'].map(outcome => ({ ...repo
       if (outcome === 'empty') await page.screenshot({ path: `/tmp/satorna-t4-${tab}-empty.png` })
       await page.getByRole('button', { name: 'Clear synthetic report session', exact: true }).click()
       await surface.getByText(error, { exact: true }).waitFor({ state: 'visible' })
-      expect(await surface.innerText()).toContain('Сессия истекла')
+      // Failure already displayed this heading before logout. Observe the actual
+      // session transition rather than racing the still-visible source error.
+      await expect.poll(() => surface.innerText()).toContain('Сессия истекла')
       expect(queries).toHaveLength(1)
       const query = new URLSearchParams(queries[0])
       expect([query.get('groupBy'), query.get('source'), query.get('preset')]).toEqual(['sku', 'operational', 'custom'])

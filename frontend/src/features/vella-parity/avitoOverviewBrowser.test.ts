@@ -90,7 +90,9 @@ it.each(['empty', 'failure'])('keeps actual Avito overview period, loading and %
     expect(await surface.getByText('SYNTHETIC-OVERVIEW-ITEM', { exact: true }).count()).toBe(0)
     await page.getByRole('button', { name: 'Clear synthetic report session', exact: true }).click()
     await surface.getByText('Обзор временно недоступен', { exact: true }).waitFor({ state: 'visible' })
-    expect(await surface.locator('.stat-val').allTextContents()).toEqual(Array(7).fill('—'))
+    // In the failure case this heading already existed before logout. Wait for
+    // the actual seven-value session transition, not that pre-existing heading.
+    await expect.poll(() => surface.locator('.stat-val').allTextContents()).toEqual(Array(7).fill('—'))
     expect(queries).toHaveLength(2)
     expect(chatQueries).toHaveLength(2)
     expect(chatQueries.every(query => query === '?limit=50&offset=0')).toBe(true)

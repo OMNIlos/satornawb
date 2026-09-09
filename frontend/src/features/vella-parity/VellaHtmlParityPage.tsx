@@ -11339,7 +11339,15 @@ function StockTableShellIsland({ replacementKey, state }: { replacementKey: stri
           data-vella-row-count={rows.length}
         >
           {visibleRows.map((row, index) => (
-            <tr key={`${row.nmId ?? row.sku ?? 'stock'}-${row.warehouseName ?? 'warehouses'}-${index}`} data-report-row="stock">
+            <tr
+              key={`${row.nmId ?? row.sku ?? 'stock'}-${row.warehouseName ?? 'warehouses'}-${index}`}
+              data-report-row="stock"
+              data-days-to-oos={typeof row.daysToOos === 'number' && Number.isFinite(row.daysToOos) ? row.daysToOos : undefined}
+              data-available-units={typeof row.availableUnits === 'number' && Number.isFinite(row.availableUnits) ? row.availableUnits : undefined}
+              data-ktr={typeof row.ktrIndex === 'number' && Number.isFinite(row.ktrIndex) ? row.ktrIndex : undefined}
+              data-warehouse={row.warehouseName ?? undefined}
+              data-decision={row.decision ?? undefined}
+            >
               <td className="report-sticky">
                 <ReportProductCell
                   photoUrl={stockProductPhoto(row)}
@@ -19790,7 +19798,10 @@ function AvitoListingsIsland({
     }
 
     const controller = new AbortController()
-    setAvitoListingsLiveState({ loading: true, error: null, data: window.__vellaAvitoListingsLiveState?.data ?? null })
+    // The previous response and its selected detail belong to the old request.
+    // Do not expose them under newly applied dates while replacement data loads.
+    window.__vellaSetAvitoListingsState?.({ selectedKey: '' })
+    setAvitoListingsLiveState({ loading: true, error: null, data: null })
     void loadLiveAvitoListings(
       accessToken,
       { dateFrom: state.dateFrom, dateTo: state.dateTo, pageSize: Number(state.pageSize) || 100, forceRefresh: state.forceRefresh },
@@ -21859,7 +21870,13 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
           .vella-html-parity-root .avito-order-detail-list { grid-template-columns: 1fr; }
         }
       `}</style>
-      {!hasExtensionRows ? (
+      {!hasExtensionRows && (live.loading || sourceError) ? (
+        live.loading ? (
+          <AvitoDataState kind="loading" title="Загружаем лист подбора" subtitle="Собираем заказы и товары Авито." />
+        ) : (
+          <AvitoDataState kind="error" title="Не удалось загрузить заказы" subtitle="Проверьте подключение Авито и обновите данные." />
+        )
+      ) : !hasExtensionRows ? (
         <section className="avito-orders-extension-empty" aria-label="Подключение расширения Avito Orders">
           <div className="avito-orders-extension-card">
             <div className="avito-orders-extension-title">

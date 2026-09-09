@@ -19109,6 +19109,8 @@ function renderOrdersPrintList(payload, options = {}){
 
 async function hydrateOrdersPrintList(options = {}){
   const source = options.source === 'avito' ? 'avito' : options.source === 'wb' ? 'wb' : getOrdersActiveSource();
+  // React owns this Avito screen's request scope and DOM. Preserve standalone/WB hydration.
+  if (source === 'avito' && document.querySelector('#tab-orders-print[data-vella-island="avito-orders"]')) return;
   const archive = typeof options.archive === 'boolean' ? options.archive : isOrdersArchiveMode();
   const date = String(options.date || getOrdersSelectedDate() || new Date().toISOString().slice(0, 10)).slice(0, 10);
   const loadKey = source + ':' + (archive ? 'archive' : 'current') + ':' + date;
@@ -22594,11 +22596,12 @@ function rowMatchesChip(tab, row, chipText){
   const tags = (row.dataset.reportTags || '').toLowerCase().split('|').filter(Boolean);
   const hasTag = (...needles) => needles.some(needle => tags.some(tag => tag.includes(needle)));
   if (tab.id === 'tab-stock') {
-    const days = Number(row.dataset.daysToOos || '999');
+    const days = row.dataset.daysToOos?.trim() ? Number(row.dataset.daysToOos) : NaN;
+    const available = row.dataset.availableUnits?.trim() ? Number(row.dataset.availableUnits) : NaN;
     const ktr = Number(row.dataset.ktr || '0');
     const warehouse = (row.dataset.warehouse || '').toLowerCase();
     const decision = (row.dataset.decision || '').toLowerCase();
-    if (normalized.includes('oos')) return days <= 7 || hasTag('oos риск');
+    if (normalized.includes('oos') || normalized.includes('риск нехватки')) return available <= 0 || days <= 7 || hasTag('oos риск');
     if (normalized.includes('избыт')) return days >= 60 || /не везти|не дозагружать/.test(decision) || hasTag('избыт');
     if (normalized.includes('акци')) return hasTag('в акции');
     if (normalized.includes('топ-склад')) return ['коледино','электросталь','краснодар','казань'].includes(warehouse) || hasTag('топ-склады');
