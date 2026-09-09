@@ -42,7 +42,10 @@ Add a synthetic nested regular package only in a temporary build source, never
 app itself. Its __init__.py and module expose a fixed harmless sentinel. Existing
 explicit-list build must miss it before the change; discovery must include it
 and permit isolated installed import afterward. Also prove an unrelated top-level
-synthetic package is not included. Real new guard/fetch modules are safe import
+synthetic package is not discovered by running actual configured setuptools
+find_packages against the raw temporary source. Clean staging intentionally never
+copies that unrelated root, so archive absence alone would not test the include
+filter. Keep these two proofs distinct. Real new guard/fetch modules are safe import
 representatives; validate their installed origins as well as archive presence.
 Do not import all runtime modules, since the production Celery factory registers
 business tasks and config side effects.

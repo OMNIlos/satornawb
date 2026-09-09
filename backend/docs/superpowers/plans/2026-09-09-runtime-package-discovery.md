@@ -57,8 +57,23 @@ probe.mkdir(parents=True)
 - [ ] Step3 expand safe representative archive/import sets with
   app.platform.integrations.credential_store and
   app.platform.integrations.publication_guard. Add unrelated top-level synthetic
-  regular-package negative case. Assert all import origins under exact target;
+  regular-package negative case against actual configured discovery, not only
+  archive absence after staging already excluded it. Assert all import origins under exact target;
   never let editable checkout path or stale build satisfy them.
+
+```python
+from setuptools.config.expand import find_packages
+config = tomllib.loads((synthetic_source / "pyproject.toml").read_text(encoding="utf-8"))
+discovered = find_packages(root_dir=str(synthetic_source),
+                          **config["tool"]["setuptools"]["packages"]["find"])
+assert "app.wheel_probe_nested.deeper" in discovered
+assert "synthetic_unrelated_package" not in discovered
+```
+
+Create synthetic_unrelated_package/__init__.py in that raw temporary source
+before this probe. An include-filter mutation to `include=["*"]` in the probe's
+copied dictionary must discover it, proving the negative test has a positive
+control. Never write that broad filter into real pyproject.
 - [ ] Step4 GREEN all existing/new wheel tests; independently inspect archive
   exclusion assertions and unchanged dependency/metadata configuration. Tests use
   no-index/no-deps temporary installation only, no project environment mutation.
