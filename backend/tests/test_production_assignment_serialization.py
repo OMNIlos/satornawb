@@ -44,3 +44,9 @@ def test_unicode_exact_command_remains_ascii_on_wire():
     assert encoded.isascii()
     assert b"\\ud83d\\ude00" in encoded and b"e\\u0301" in encoded
     assert deserialize_assignment_command(encoded) == command
+
+
+def test_deep_invalid_command_payload_has_typed_validation_error():
+    depth = 10000
+    with pytest.raises(ValueError, match="Invalid assignment receipt payload"):
+        deserialize_assignment_command(b"[" * depth + b"]" * depth)

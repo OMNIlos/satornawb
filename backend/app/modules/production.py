@@ -136,7 +136,7 @@ def deserialize_assignment_command(payload: bytes) -> AssignmentCommand:
         if serialize_assignment_command(command) != payload:
             raise ValueError
         return command
-    except (ValueError, TypeError, UnicodeError):
+    except (ValueError, TypeError, UnicodeError, RecursionError):
         raise OrderContractValidationError(
             "Invalid assignment receipt payload"
         ) from None

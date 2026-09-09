@@ -49,6 +49,12 @@ No new heavy gate was run while T1 owned the resource interval. Browser-token
 USER-session sink tests now pass the bounded8case actual0067 gate below;
 token-only issuance binding/auth/completeness remain explicitly unresolved.
 
+Decoder follow-up: 10,000 nested empty arrays (20KB) caused uncaught RecursionError
+in `deserialize_assignment_command`:1RED0.06s. Added conversion to its existing
+fixed typed validation error; final114purePASS0.13s/Ruff0, read-only critic no
+important concerns. Shallower initial probe already passed and is not RED evidence.
+No payload/memory limit or HTTP DoS protection is claimed by this exception fix.
+
 ### Normalized browser sink acceptance
 
 `tests/test_orders_browser_publication.py`:8PASS3.28s/natural0 after explicit T4
