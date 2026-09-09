@@ -58,3 +58,38 @@ Wrong account FK/RLS отдельно от application guard. Downgrade с не�
 
 Статус: schema request, DB acceptance **NOT_RUN**. T3 не меняет shared ORM/migrations,
 не подключает provider/production и не активирует новый HTTP router.
+
+## Exact v1 codec и golden vectors
+
+`app/orders/bindings.py`: ACCOUNT_BINDING_SCHEMA_VERSION=1,
+serialize_account_bindings(org, tuple[ExpectedAccountBinding,...])->bytes,
+deserialize_account_bindings(bytes)->(org, sorted tuple), account_binding_checksum.
+Representation сохраняет bytes уже committed866d1a1 consumer, не меняет его hashes:
+
+```text
+[organization_id,[[marketplace_account_id,provider,external_account_id,credential_ref],...]]
+```
+
+Это positional v1 array, НЕ предложенный named JSON object из раннего design sketch.
+Schema version хранится отдельно, не добавляется внутрь checksum bytes. Account tuples
+sort by numeric account ID, IDs distinct, positive INT4 exact integers (bool запрещён).
+Per-run binding содержит ровно один tuple совпадающего run account; multi-account
+форма нужна aggregate snapshot, не разрешает multi-account source run.
+
+Canonical encoding: Python JSON ensure_ascii=True, separators comma/colon без spaces,
+UTF8 ASCII bytes, Unicode escapes lowercasehex; supplementary scalar -> surrogate pair
+escape; без Unicode normalization/trim. Guard metadata rules сохраняются: provider wb/avito,
+external account ID nonblank <=128 codepoints, ref NULL или nonblank <=255, NUL/lone
+surrogate запрещены, допустимые leading/trailing whitespace и embedded tab/newline
+сохраняются exact. Это existing account guard bounds, НЕ лимит external order/item IDs.
+
+Checksum SHA256 этих bytes lowercase64hex. Decoder требует побайтово canonical input:
+дубликаты account IDs, alternate numeric types, unsorted/whitespace encodings отвергаются.
+NULL ref не становится empty string; empty ref не принят existing guard.
+
+`backend/tests/fixtures/orders/account_binding_golden_v1.json`: пять synthetic vectors
+null/ref/Unicode+supplementary+combining+control/INT4max/reversed two-account input.
+Для SQL извлечь `canonical_ascii` после ОДНОГО decode outer fixture JSON и взять ASCII
+bytes; не сериализовать эту строку вторично. Каждая vector содержит ожидаемый SHA256.
+Fresh pure codec + assignment + wire tests:41PASS0.42s, exit0. Actual schema parity
+остаётся T1 gate; producer RED missing exportedcodec -> GREEN записан в task.

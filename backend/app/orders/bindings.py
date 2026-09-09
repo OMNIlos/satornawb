@@ -6,9 +6,22 @@ import json
 import re
 
 from app.modules.orders import OrderContractValidationError
+from app.platform.integrations.publication_guard import ExpectedAccountBinding
+
+ACCOUNT_BINDING_SCHEMA_VERSION = 1
 
 
-def account_binding_checksum(organization_id, accounts):
+def serialize_account_bindings(organization_id, accounts) -> bytes:
+    if type(organization_id) is not int or not 0 < organization_id < 2**31:
+        raise OrderContractValidationError("Invalid account binding organization")
+    if (
+        type(accounts) is not tuple
+        or not accounts
+        or any(type(account) is not ExpectedAccountBinding for account in accounts)
+    ):
+        raise OrderContractValidationError("Exact account bindings required")
+    if len({account.marketplace_account_id for account in accounts}) != len(accounts):
+        raise OrderContractValidationError("Duplicate account binding")
     value = [
         organization_id,
         sorted(
@@ -24,8 +37,29 @@ def account_binding_checksum(organization_id, accounts):
             key=lambda account: account[0],
         ),
     ]
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+
+
+def deserialize_account_bindings(payload: bytes):
+    try:
+        if type(payload) is not bytes:
+            raise ValueError
+        value = json.loads(payload)
+        if type(value) is not list or len(value) != 2 or type(value[1]) is not list:
+            raise ValueError
+        if any(type(account) is not list or len(account) != 4 for account in value[1]):
+            raise ValueError
+        accounts = tuple(ExpectedAccountBinding(*account) for account in value[1])
+        if serialize_account_bindings(value[0], accounts) != payload:
+            raise ValueError
+        return value[0], accounts
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise OrderContractValidationError("Invalid account binding payload") from None
+
+
+def account_binding_checksum(organization_id, accounts):
     return hashlib.sha256(
-        json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+        serialize_account_bindings(organization_id, accounts)
     ).hexdigest()
 
 

@@ -1,11 +1,65 @@
+import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
-from app.orders.bindings import bound_high_water_mark, validate_snapshot_binding
+from app.orders.bindings import (
+    ACCOUNT_BINDING_SCHEMA_VERSION,
+    account_binding_checksum,
+    bound_high_water_mark,
+    deserialize_account_bindings,
+    serialize_account_bindings,
+    validate_snapshot_binding,
+)
 from app.platform.integrations.publication_guard import ExpectedAccountBinding
 
 ACCOUNT = ExpectedAccountBinding(1, "avito", "synthetic-external", None)
+
+
+@pytest.mark.parametrize(
+    "vector",
+    json.loads(
+        (
+            Path(__file__).parent / "fixtures/orders/account_binding_golden_v1.json"
+        ).read_text()
+    )["vectors"],
+)
+def test_binding_golden_bytes_checksum_and_roundtrip(vector):
+    accounts = tuple(ExpectedAccountBinding(*account) for account in vector["accounts"])
+    raw = vector["canonical_ascii"].encode("ascii")
+    assert serialize_account_bindings(vector["organization_id"], accounts) == raw
+    assert (
+        account_binding_checksum(vector["organization_id"], accounts)
+        == vector["sha256"]
+    )
+    assert deserialize_account_bindings(raw) == (
+        vector["organization_id"],
+        tuple(sorted(accounts, key=lambda account: account.marketplace_account_id)),
+    )
+
+
+def test_binding_codec_preserves_existing_v1_checksum_bytes():
+    expected = b'[1,[[1,"avito","synthetic-external",null]]]'
+    assert ACCOUNT_BINDING_SCHEMA_VERSION == 1
+    assert serialize_account_bindings(1, (ACCOUNT,)) == expected
+    assert deserialize_account_bindings(expected) == (1, (ACCOUNT,))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b'[true,[[1,"avito","synthetic-external",null]]]',
+        b'[1,[[true,"avito","synthetic-external",null]]]',
+        b"[1,[]]",
+        b'[1,[[1,"avito","synthetic-external",null]]] ',
+        b'[1,[[1,"avito","synthetic-external",null],[1,"avito","synthetic-external",null]]]',
+        b'[1,[[1,"avito","synthetic-external",""]]]',
+    ],
+)
+def test_binding_codec_rejects_noncanonical_or_invalid_metadata(payload):
+    with pytest.raises(ValueError):
+        deserialize_account_bindings(payload)
 
 
 def test_bound_mark_is_order_independent_and_contains_no_raw_binding():
