@@ -58,7 +58,7 @@ GRANT SELECT (user_id,organization_id,is_active) ON public.lk_users TO :"executo
 GRANT SELECT (membership_id,organization_id,user_id,is_active,role,permissions,scope_mode,allowed_account_ids)
  ON public.iam_memberships TO :"executor_role";
 GRANT SELECT (session_id,user_id,revoked_at,expires_at) ON public.lk_sessions TO :"executor_role";
-GRANT SELECT (marketplace_account_id,organization_id,marketplace,external_account_id,credential_ref,status)
+GRANT SELECT (marketplace_account_id,organization_id,marketplace,external_account_id,credential_ref,status,ingestion_binding_version)
  ON public.marketplace_accounts TO :"executor_role";
 -- Existing resolver selects the full encrypted ORM row: list every required column
 -- explicitly; there is no plaintext source, keyring, password or verifier grant.
