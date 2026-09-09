@@ -211,3 +211,37 @@ Existing pure regression test_wb_source_revision.py checks classification/bindin
 not these auth/storage gates. This request adds no code, migration or test weakening.
 Fresh existing source-revision/grain/stock parser group:87PASS in0.08s, exit0;
 `git diff --check` exit0. No new executable behavior or PostgreSQL test was run.
+
+## 7. Committed pure codec prerequisite (2026-09-09 continuation)
+
+T1 requested exact domain bytes before SQL parity. Dormant implementation:
+`app/modules/wb_stock_evidence_codec.py`; tests
+`tests/test_wb_stock_evidence_codec.py`; literal fixture
+`tests/fixtures/wb_stock_evidence_golden_v1.json`. The eight vectors are ASCII JSON
+containing full typed inputs, canonical ASCII text, byte count and SHA-256. Decode
+outer JSON with exact integers, then ASCII-encode canonical_ascii once; do not
+JSON-encode that string again or parse BIGINT through JavaScript Number. Tests load
+the literals; they never regenerate the fixture. Initial literals were generated
+once from the proposed encoder and pinned, not independently proven SQL output.
+
+`source_identity`/`row_bytes` accept existing WarehouseStockObservation. Count-only
+bytes exclude native identity, which is carried separately. `EvidenceDiffRow` fixes
+added/removed/changed hash shapes; `diff_bytes` rejects duplicate identities across
+categories and sorts exact string tuples. Empty diff encoding exists for diagnostics,
+but EvidenceProposal rejects empty evidence. Proposal derives diff/document hashes
+and category counts rather than trusting separately supplied totals. Scope/member
+are strict positive INT4, native stock IDs/counts retain existing BIGINT rules;
+root IDs canonical UUID4, date exactly date, revision positive integer. UTF-8 and
+exact nonblank PostgreSQL-compatible reference checked without Unicode normalization.
+
+Every encoding takes explicit positive `max_bytes`; the fixture uses8192 solely as
+a synthetic test budget, not operational policy. Document bytes must already be
+sanitized and reviewed by the caller: UTF-8 validation does not detect credentials,
+signed URLs or prove an explanation. No URL fetching, clock, DB, retained payload
+store, repository or scheduler integration. Time is intentionally absent from
+proposal bytes; the eventual service preserves original committed timestamps.
+Codec validates shape, not complete before/after set equality, parent linkage,
+manifest provenance, daily eligibility, auth or publication. All §§4–6 gates remain.
+
+Rollback before wiring is a code/fixture revert only: no data or migration was added.
+SQL parity and actual persistence tests remain T1/schema-dependent and NOT RUN here.

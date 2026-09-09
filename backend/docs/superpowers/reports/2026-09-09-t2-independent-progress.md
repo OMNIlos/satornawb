@@ -271,3 +271,22 @@ This is not a full-backend baseline claim. No current repricer wiring or formula
 Rollback is a code-only revert of this bounded fix; no data/schema/backfill exists
 for this dormant guard. Activating it still requires accepted canonical inputs and
 the existing approval/economics/one-writer gates.
+
+### T1-requested stock evidence codec and literal SQL vectors
+
+Implemented the existing0edde8b §3 row/diff/proposal wire contract, no new policy
+or abstraction outside that request. New `wb_stock_evidence_codec.py`, focused
+test and eight literal vectors (`wb_stock_evidence_golden_v1.json`), with full inputs,
+ASCII bytes/count/hash. Native identity separated from count-only payload; missing/
+null/zero, BIGINT, lexical sorting, all delta categories, Unicode/escaping covered.
+Proposal derives hashes/counts, rejects duplicate/empty evidence and invalid owners.
+Explicit encoding budget is caller-supplied, not invented permission/retention policy.
+
+RED missing module exit2 →40 focusedPASS0.05s, including actual fixture parity.
+Read-only critic found fixture-test gap during work (closed by non-regenerating test)
+and preallocation order (fixed). No critic test processes during T1 resource slot.
+No PostgreSQL/integration/browser/build/fullsuite run; scoped lightweight verification
+only. Complete-run/evidence auth/parent-linked CAS/daily eligibility remain separate
+unproved gates. Existing source hashes/compare_runs/formulas/flags untouched.
+Final lightweight codec+existing SourceDiff run **69PASS0.07s**, exit0; scoped
+Ruff/compileall/diff checks exit0. No accepted SQL parity or DB gate implied.
