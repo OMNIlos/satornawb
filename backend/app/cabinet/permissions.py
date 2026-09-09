@@ -9,6 +9,8 @@ PRODUCTION_PERMISSION_KEYS = frozenset({"production:read", "production:create", 
 PRODUCTION_READ_PERMISSIONS = frozenset({"production:read"})
 PRODUCTION_CREATE_PERMISSIONS = frozenset({"production:read", "production:create"})
 PRODUCTION_ASSIGN_PERMISSIONS = frozenset({"production:read", "production:assign"})
+WB_SKU_OVERRIDE_READ_PERMISSIONS = frozenset({"settings:read"})
+WB_SKU_OVERRIDE_REPLACE_PERMISSIONS = frozenset({"settings:read", "settings:write"})
 
 LEGACY_PROFILE_ALIASES: dict[str, PermissionProfile] = {
     "admin": "admin",
