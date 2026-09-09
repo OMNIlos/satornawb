@@ -319,6 +319,54 @@ deny; (g) historical decision receipt replay после switch сохраняе�
 (j) новая draft/current epoch + новое explicit approval проходят локальные fake
 gates. Эти случаи требуют будущей DDL/service проверки, не считаются уже пройденными.
 
+### Manual edit: только непосредственный текущий predecessor
+
+Уточнение по запросу T1 после `ad793f9`. Existing generation codec проверяет только
+форму previousDraftId; ни он, ни legacy mutable approve/reject service не доказывают
+current predecessor. Для canonical **нового исполнения** manual_edit выбираем exact
+immediately current draft этого owner/review, не произвольную историческую revision.
+Это explicit service/storage admission rule, не изменение existing generation bytes
+или ужесточение уже опубликованного pure codec задним числом.
+
+После fresh guard и отсутствия exact completed receipt: workflow head существует;
+expectedHeadVersion и expectedDraftRevision >0 и равны locked current values;
+generation.previousDraftId = locked workflow.current_draft_id. Ссылка scoped по
+organization/account/provider/review и immutable. Новая draftId отличается от
+previousDraftId, новая revision = current revision+1; запись старого текста/epoch не
+обновляется. DDL сохраняет typed nullable previous-draft FK: required для manual_edit,
+null для fake, совпадает с generation canonical bytes; enforcement currentness только
+в publication transaction, не FK к постоянно меняющемуся current pointer.
+
+First-draft manual_edit запрещён: отсутствие head не заменяется фиктивным predecessor.
+Хотящий начать с ручного текста требует отдельного будущего mode/contract, а не
+поддельного fake provenance. Historical restore/branch/merge тоже вне этой волны;
+старый same-review previousDraftId отклоняется как stale, даже с подставленными
+свежими expected versions. UI должен reload/rebase на current draft после409, не
+blind retry с обновлённой version поверх прежнего intent. Cross-review/account FK
+reject без чтения/выдачи чужого текста. Same-key exact historical receipt после
+более новой draft возвращается по правилам выше, не повторяет predecessor check
+как новую mutation и не возвращает head назад.
+
+При изменившейся policy/source новая явно подготовленная manual edit может создать
+новую draft от текущего текста с **новым** current source/policy-selection capture;
+все generation/current source/policy/epoch checks обязательны. Нельзя автоматически
+приписать свежий capture старой draft. Существующее approval очищается при любом
+успешном новом draft publication, даже если text bytes те же. Approval новой draft
+требует отдельной новой команды и current eligibility.
+
+Сохраняем существующие pure semantics: publication требует current/unambiguous
+source и current policy/context, но не требует answerable; approve дополнительно
+требует unanswered и can_answer=true; reject не требует answerable, однако fresh
+scope/current source/policy/epoch/draft checks не пропускаются. Не подменяем false/
+unknown can_answer выдуманным разрешением; publication не даёт права отправки.
+
+Нужные PG/service cases: current predecessor success; old same-review predecessor
+со свежими expected versions denied; first manual edit denied; foreign predecessor
+denied; stale versions denied; same text new revision clears decision; two editors
+дают одного CAS winner без loser audit/receipt; historical exact receipt replay
+не меняет head; source/policy смена требует new prepared capture. Данный docs-only
+commit не заявляет эти DB tests выполненными; codec и golden bytes неизменны.
+
 External notification destination/receipt/policy relations и org-wide system registry остаются
 platform contracts T1; их FK/production values здесь не выдумываются. Account-scoped in-app
 events/receipts от них не зависят. Policies/drafts/send schema может выпускаться отдельно.
