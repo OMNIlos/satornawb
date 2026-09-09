@@ -130,6 +130,28 @@ claimed. Runtime database administrators remain outside the row-level threat mod
 
 ## Service contract
 
+Implementation-time interface resolution: the preceding guard has only an exact
+Orders fence. Add private `_register_repricer_fence(guard, fence)` for the exact
+initiation-handle class, same physical root, once before finalization and mutually
+exclusive with an Orders fence. Existing final listener checks it after flush and
+live user authorization; listener-last, no subsequent pending flush, nested/root
+end/autocommit and caught-failure poisoning remain unchanged.
+Closing is a distinct exact Repricer closing class, not a UserSessionPrincipal or
+PublicationGuard subtype. Private `_install_repricer_closing_guard(session, handle)`
+checks exact type and clean Engine-bound PostgreSQL RC physical root and tenant
+context, occupies the same mutually exclusive guard state, and reuses the existing
+listener installation. Its context/revalidation implements actual executor login,
+scope, prior marker and permitted expected state, not live creator resurrection.
+There is no public callback bus, duck-typed authentication or generic principal registry.
+
+Immutable job lookup is plain SELECT under the canonical account FOR UPDATE lock;
+the latter serializes all legitimate job operations. Then lock actual approval and
+attempt rows. Do not grant job UPDATE or invent a mutable timestamp/advisory lock
+solely to satisfy PostgreSQL FOR UPDATE privilege requirements. Job immutability
+and FK/unique constraints remain database-enforced even for direct concurrent SQL.
+References below to a job lock mean this explicit account-serialized immutable
+lookup, not a falsely claimed row lock.
+
 Provide typed/redacted immutable job and receipt metadata, allowlisted errors and
 root-owned creation/readback/receipt operations. Callable names/signatures published
 in implementation handoff, not guessed by T2 before source exists.

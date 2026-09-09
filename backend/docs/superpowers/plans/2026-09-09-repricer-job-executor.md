@@ -38,11 +38,19 @@ identity boundary. No role is provisioned by this source-only implementation.
   actual DB login verifier shared by price and subsequent Review workers, not a
   generic principal/permission registry. Role names are
   `marketplace_executor_role` and `marketplace_api_runtime_role`, default None.
+- Modify `backend/app/platform/integrations/publication_guard.py`, only the exact
+  Repricer initiation fence and separate exact closing-root installation described
+  in the spec amendment below. Preserve the existing strict user entry point.
 - Create `backend/docs/superpowers/reports/2026-09-09-t1-repricer-job-executor-handoff.md`.
 
-No T2 domain/worker/adapter edits, publication guard rewrite, tests or other paths.
+No T2 domain/worker/adapter edits, broad publication guard rewrite, tests or other paths.
 Consume the preceding implemented transaction-fence extension; if a signature is
 missing, ask controller with the exact required capability before touching it.
+
+Dispatch amendment: actual predecessor only admits the Orders handle, so the
+controller explicitly authorizes the tenth guard path, not a fake Orders handle.
+The immutable job is read under canonical account FOR UPDATE serialization;
+no job UPDATE privilege or redundant advisory lock is granted merely for a lock.
 
 ### Code implementation
 
