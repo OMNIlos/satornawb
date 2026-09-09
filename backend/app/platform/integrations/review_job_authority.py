@@ -119,11 +119,19 @@ def _expected(snapshot, expected):
     require(snapshot.expected == expected, "REVIEW_CONFLICT")
 
 
+def _original_sender(snapshot, principal):
+    """A new live session of the same creator may cancel, never another user."""
+    origin = snapshot.capture.principal
+    require((principal.organization_id, principal.user_id, principal.membership_id) ==
+        (origin.organization_id, origin.user_id, origin.membership_id)
+        and snapshot.command["creator_membership_id"] == principal.membership_id, "REVIEW_ACCESS_DENIED")
+
+
 def _precondition(snapshot, action, now):
     c, a = snapshot.command, snapshot.attempt
     unmarked = a is not None and a["state"] == "claimed" and a["dispatched_at"] is None
     marked = a is not None and a["dispatched_at"] is not None
-    if action is ReviewAction.CLAIM:
+    if action in (ReviewAction.CLAIM, ReviewAction.CANCEL):
         valid = c["state"] == "queued" and a is None
     elif action in (ReviewAction.RENEW, ReviewAction.DISPATCH, ReviewAction.FETCH):
         valid = c["state"] == "leased" and unmarked and a["lease_expires_at"] > now
@@ -148,7 +156,7 @@ def _precondition(snapshot, action, now):
     require(valid, "REVIEW_CONFLICT")
 
 
-_EVENTS = {ReviewAction.CREATE: {"send.created"}, ReviewAction.CLAIM: {"send.claimed"},
+_EVENTS = {ReviewAction.CREATE: {"send.created"}, ReviewAction.CANCEL: {"send.cancelled"}, ReviewAction.CLAIM: {"send.claimed"},
     ReviewAction.RENEW: {"send.lease_renewed"}, ReviewAction.DISPATCH: {"send.dispatched"},
     ReviewAction.RECLAIM: {"send.reclaimed"}, ReviewAction.BLOCK: {"send.blocked"},
     ReviewAction.ACK: {"send.sent", "send.conflict"}, ReviewAction.AMBIGUOUS: {"send.ambiguous"},
@@ -178,6 +186,10 @@ def _seal_transition(session, handle):
         require(number(c["version"]) == number(oc["version"]) + 1, "REVIEW_FENCE_INVALID")
         if action is ReviewAction.CLAIM:
             valid = c["state"] == "leased" and a is not None and a["state"] == "claimed" and a["dispatched_at"] is None
+        elif action is ReviewAction.CANCEL:
+            valid = (oc["state"] == "queued" and oa is None and c["state"] == "cancelled" and a is None
+                and c["current_attempt_id"] is None and c["reason_code"] == "USER_CANCELLED"
+                and c["completed_at"] is not None and c["result_evidence_id"] is None)
         elif action is ReviewAction.RECLAIM:
             abandoned = db.attempt(session, old.locator, oa["attempt_id"])
             valid = (c["state"] == "queued" and a is None and abandoned["state"] == "abandoned"
@@ -201,7 +213,7 @@ def _seal_transition(session, handle):
         require(valid, "REVIEW_FENCE_INVALID")
     if action in _EVENTS and not read_only_reconciliation:
         audit = db.audit(session, new)
-        actor = handle._principal if action in {ReviewAction.CREATE, ReviewAction.RECONCILE} else None
+        actor = handle._principal if action in {ReviewAction.CREATE, ReviewAction.CANCEL, ReviewAction.RECONCILE} else None
         require(audit is not None and audit["event_kind"] in _EVENTS[action]
             and audit["aggregate_version"] == new.command["version"]
             and (audit["actor_kind"], audit["actor_membership_id"]) ==
@@ -235,7 +247,7 @@ class ReviewPublicationHandle(Redacted):
     """Exact user/initiator root participant. Never a provider credential."""
     def __init__(self, session, guard, *, locator, action, snapshot=None, intent=None, capture=None, identity=None, read=None):
         require(type(action) is ReviewAction and action in _INITIATION | {
-            ReviewAction.CREATE, ReviewAction.READBACK, ReviewAction.READ_CAPTURE, ReviewAction.RECONCILE}, "REVIEW_FENCE_INVALID")
+            ReviewAction.CREATE, ReviewAction.CANCEL, ReviewAction.READBACK, ReviewAction.READ_CAPTURE, ReviewAction.RECONCILE}, "REVIEW_FENCE_INVALID")
         if action in _INITIATION or action is ReviewAction.CREATE:
             require(guard._review_approver is not None and guard._permissions == frozenset({"reviews:send"}), "REVIEW_FENCE_INVALID")
         elif action in {ReviewAction.READ_CAPTURE, ReviewAction.RECONCILE}:
@@ -329,7 +341,11 @@ class ReviewPublicationHandle(Redacted):
             require(not self._guard._finalizing or self._sealed, "REVIEW_FENCE_INVALID")
             if self._snapshot is not None:
                 require(db.snapshot(session, self._locator, lock=True) == self._snapshot, "REVIEW_FENCE_INVALID")
-            if self._action not in {ReviewAction.READ_CAPTURE, ReviewAction.RECONCILE, ReviewAction.READBACK}:
+            if self._action is ReviewAction.CANCEL:
+                _original_sender(self._snapshot, self._principal)
+            if self._read is not None:
+                require(self._snapshot.intent == self._read.intent, "REVIEW_FENCE_INVALID")
+            if self._action not in {ReviewAction.CANCEL, ReviewAction.READ_CAPTURE, ReviewAction.RECONCILE, ReviewAction.READBACK}:
                 capture = self.capture
                 require(capture.authority_expires_at > now, "REVIEW_AUTHORITY_DENIED")
             if self._before is not None:
@@ -486,6 +502,27 @@ class ReviewJobCommands(Redacted):
                     raise
         return result
 
+    def cancel(self, *, authenticated_actor, locator, expected, participant):
+        """Original sender, fresh session, exact queued CAS. No send revival."""
+        require(type(locator) is ReviewJobLocator and callable(participant))
+        locator.__post_init__()
+        with _root(self._factory, locator) as session:
+            db.scope(session, locator)
+            principal = _principal(session, authenticated_actor, locator)
+            observed = db.snapshot(session, locator)
+            guard = acquire_publication_guard(session, principal=principal,
+                required_permissions=frozenset({"reviews:send"}),
+                accounts=(observed.capture.account,), authorities=())
+            locked = db.snapshot(session, locator, lock=True)
+            require(locked == observed, "REVIEW_CONFLICT")
+            _original_sender(locked, principal)
+            _expected(locked, expected)
+            _precondition(locked, ReviewAction.CANCEL, db.now(session))
+            handle = ReviewPublicationHandle(session, guard, locator=locator,
+                action=ReviewAction.CANCEL, snapshot=locked)
+            result = _participate(session, handle, participant)
+        return result
+
 
 class ReviewJobExecutor(Redacted):
     def __init__(self, *, executor_session_factory, identity, policy, credential_resolver):
@@ -618,6 +655,8 @@ class ReviewReconciliation(Redacted):
             required_permissions=frozenset({"reviews:read", "reviews:send"}), accounts=(account,), authorities=(credential,))
         locked = db.snapshot(session, locator, lock=True)
         require(locked == old, "REVIEW_CONFLICT")
+        if capture is not None:
+            require(locked.intent == capture.intent, "REVIEW_FENCE_INVALID")
         _expected(locked, expected)
         action = ReviewAction.READ_CAPTURE if capture is None else ReviewAction.RECONCILE
         _precondition(locked, action, db.now(session))
@@ -642,7 +681,7 @@ class ReviewReconciliation(Redacted):
         # exact paired credential after resolver I/O and before the provider GET.
         with _root(self._factory, locator) as session:
             handle, account, credential = self._guarded(session, authenticated_actor, locator, expected, resolved=resolved)
-            result = ReviewReadAuthority(locator=locator, expected=expected, principal=handle.principal,
+            result = ReviewReadAuthority(locator=locator, intent=handle.intent, expected=expected, principal=handle.principal,
                 account=account, credential=credential, read_id=uuid4(), started_at=db.now(session),
                 resolved_credential=resolved, owner=self, mint=_MINT)
             handle._seal()
