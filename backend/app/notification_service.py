@@ -96,6 +96,13 @@ class ReviewNotificationService:
                               "canRead": True, "canMarkRead": True, "canDismiss": True}
             else:
                 result = repository.mark_visible(event_ids=ids, recipient_membership_id=member, action=action)
+            if capabilities:
+                result["schemaVersion"] = "review-notification-capabilities-v1"
+            else:
+                result = {"schemaVersion": "review-notification-receipts-v1" if action else "review-notification-visible-v1",
+                          "organizationId": actor.organization_id, "marketplaceAccountId": account_id,
+                          "marketplace": marketplace, "recipientMembershipId": member, "eventIds": ids,
+                          "items": result, **({"action": action} if action else {})}
             guard.revalidate_before_write()
             committing = True
             session.commit()  # Existing final listener repeats live same-root checks.
