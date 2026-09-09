@@ -1,11 +1,15 @@
 """Pure contract rejection; transaction behavior is tested on real PostgreSQL."""
 
+import traceback
 from dataclasses import replace
 from datetime import UTC, datetime
 from importlib import import_module, util
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 
@@ -87,3 +91,69 @@ def test_no_root_transaction_is_rejected_without_autobegin():
                 required_permissions=frozenset({"cabinet:read"}),
                 accounts=(g.ExpectedAccountBinding(1, "wb", "seller", None),), authorities=())
         assert not session.in_transaction()
+
+
+@pytest.fixture
+def physical_admission_session(monkeypatch):
+    # Use a real Engine-bound Session; only connection inspection is replaced.
+    # The default double models the complete ordinary physical admission state.
+    engine = create_engine("postgresql+psycopg://", hide_parameters=True)
+    physical = SimpleNamespace(
+        get_transaction=lambda: SimpleNamespace(is_active=True),
+        in_nested_transaction=lambda: False,
+        connection=SimpleNamespace(dbapi_connection=SimpleNamespace(autocommit=False)),
+        get_isolation_level=lambda: "READ COMMITTED",
+    )
+
+    def unexpected_sql(*args, **kwargs):
+        pytest.fail("invalid physical admission issued application SQL")
+
+    try:
+        with Session(engine) as session, session.begin():
+            monkeypatch.setattr(session, "connection", lambda: physical)
+            monkeypatch.setattr(session, "scalar", unexpected_sql)
+            monkeypatch.setattr(session, "execute", unexpected_sql)
+            yield session, physical
+    finally:
+        engine.dispose()
+
+
+def acquire_for_admission(session):
+    g = api()
+    return g.acquire_publication_guard(
+        session, principal=g.UserSessionPrincipal(1, "user", 1, "session"),
+        required_permissions=frozenset({"cabinet:read"}),
+        accounts=(g.ExpectedAccountBinding(1, "wb", "seller", None),), authorities=())
+
+
+@pytest.mark.parametrize("state", ["missing_root", "inactive_root", "nested", "missing_driver_flag",
+                                  "unknown_driver_flag", "autocommit", "integer_zero", "integer_one"])
+def test_physical_admission_fails_closed_for_unverifiable_state(physical_admission_session, state):
+    session, physical = physical_admission_session
+    if state == "missing_root":
+        physical.get_transaction = lambda: None
+    elif state == "inactive_root":
+        physical.get_transaction = lambda: SimpleNamespace(is_active=False)
+    elif state == "nested":
+        physical.in_nested_transaction = lambda: True
+    elif state == "missing_driver_flag":
+        del physical.connection.dbapi_connection.autocommit
+    else:
+        physical.connection.dbapi_connection.autocommit = {
+            "unknown_driver_flag": None, "autocommit": True, "integer_zero": 0, "integer_one": 1,
+        }[state]
+    with pytest.raises(api().PublicationGuardError, match="^publication_context_invalid$"):
+        acquire_for_admission(session)
+
+
+@pytest.mark.parametrize("inspection", ["get_bind", "connection", "get_transaction", "in_nested_transaction", "get_isolation_level"])
+def test_physical_admission_sanitizes_inspection_failure(physical_admission_session, monkeypatch, inspection):
+    session, physical = physical_admission_session
+
+    def fail():
+        raise SQLAlchemyError("synthetic-physical-secret-canary")
+
+    monkeypatch.setattr(session if inspection in {"get_bind", "connection"} else physical, inspection, fail)
+    with pytest.raises(api().PublicationGuardError, match="^publication_persistence_failed$") as caught:
+        acquire_for_admission(session)
+    assert "synthetic-physical-secret-canary" not in "".join(traceback.format_exception(caught.value))

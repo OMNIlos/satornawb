@@ -168,6 +168,15 @@ Update eventual `backend/ops/runtime-db-role.sql` with these narrow grants/revok
 
 Safe errors are generic fixed codes. No full row/request/approval text inside RAISE EXCEPTION, JSON errors, task args or generic audit. DB parse errors can reflect values; reject hostile Unicode/UUID/input types in domain before casting and sanitize database exceptions in service.
 
+Account-helper lifetime amendment: support only Engine-bound Sessions produced
+by the normal Session factory. An external Connection root can outlive a joined
+Session commit (default conditional_savepoint resolves to rollback_only), leaving
+local GUCs after marker cleanup. Reject every Connection-bound Session before
+context SQL using the public get_bind Engine type, including join modes that might
+transfer commit ownership. Avoid private transaction maps and never commit/rollback
+external caller work. Test both default and explicit rollback_only joins with
+unchanged external settings/data on denial and real Engine-root lifecycle controls.
+
 ## 9. Empty-only downgrade
 
 Under authorized owner visibility, acquire ACCESS EXCLUSIVE locks on all three exact tables in a fixed order before counting. Inspect all rows regardless of tenant context; do not rely on an owner SELECT hidden by FORCE RLS. A migration session must have genuine all-row visibility (appropriate privileged migration role); `row_security=off` alone does not grant bypass and must not be presented as one. Refuse downgrade atomically if any table is nonempty.
@@ -200,4 +209,3 @@ Local implementation choices are concrete here: UUID surrogates/witnesses, integ
 Actual remaining external/domain activation gates: authenticated worker execution source, fresh price:send/service authorization and legacy writer cutover, trusted provider rejection/success evidence mapping, and owner retention/removal policy. They do not block the three-table local DDL. The dedicated account-context helper and runtime/import-role grant selection are shared T1 implementation work, not user business-policy questions.
 
 Critical pass challenged the long-text and huge-NUMERIC B-tree limits, account-lock snapshot timing, row-trigger lock inversion, Unicode serialization parity, a frozen claim-version FK mistake, ghost-audit insertion, role/default-ACL bypass and RLS-hidden downgrade counts. None is treated as already solved/tested by this prose; the proof matrix remains required before acceptance.
-

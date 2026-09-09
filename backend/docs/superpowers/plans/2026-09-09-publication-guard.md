@@ -129,3 +129,80 @@ git diff --check
 ```
 
 - [ ] Step6 bounded commit `feat: fence user publication with live account authority`; report exact imports/arguments/safeerrors/user-onlypermissions, consumer obligation to guard idempotent replay return and final writes; T3 wires its own service. Independent controller review and verification before ready handoff.
+
+## Task 3: Reject unsupported physical transaction modes
+
+**Files:**
+- Modify `backend/app/platform/integrations/publication_guard.py` only physical transaction admission/context checks.
+- Modify `backend/tests/test_publication_guard.py` only focused admission/safe-error controls.
+- Modify `backend/tests/test_publication_guard_postgres.py` only actual driver/SAVEPOINT regression cases.
+- Modify `backend/docs/superpowers/reports/2026-09-09-t1-publication-guard-handoff.md` append exact follow-up evidence and clarify supported protocol.
+
+**Consumes:** existing accepted Task2 guard0900f8e+4860c53; the spec's physical
+transaction follow-up. Account-helper implementation is read-only corroboration,
+not a helper to invoke here (guard must not require an account selection context).
+**Produces:** same public API/errors/lock/finalizer contract, with actual invalid
+driver modes rejected before SQL and again through commit.
+
+- [ ] Step1 write actual PostgreSQL RED for both autocommit entry configurations:
+
+```python
+autocommit_engine = engine.execution_options(isolation_level="AUTOCOMMIT")
+with Session(autocommit_engine) as session, session.begin():
+    with pytest.raises(PublicationGuardError, match="publication_context_invalid"):
+        acquire_publication_guard(session, **trusted_synthetic_arguments)
+```
+
+Also test Engine construction isolation_level and bound Connection execution_options
+paths without altering an existing engine/server globally. Existing fixture must
+allocate only own disposable resources. Distinguish SQLAlchemy logical root from
+actual driver autocommit; capture old guard acceptance as RED, not merely missing
+test import. Parameter names above denote the existing test fixture's trusted
+principal/accounts, not a new production function.
+
+- [ ] Step2 RED initial Connection.begin_nested before acquisition, and active
+Connection SAVEPOINT opened after acquisition before explicit revalidation or
+Session.commit. Include ordinary real Session READ COMMITTED positive control.
+
+Also reproduce the external-root join lifetime mismatch using a Connection whose
+owner already called begin(), with Session default conditional_savepoint and
+explicit rollback_only. Require Engine-bound Sessions using public get_bind type;
+reject all Connection-bound Sessions before authority/context SQL, even join modes
+that might transfer commit ownership. Negative tests leave external settings/data
+and its root untouched; normal Engine-root lifecycle stays positive. No private
+transaction maps or forced external commit/rollback.
+Denied commit rolls back every synthetic publication/audit row. No application
+context or authority query should execute on initial invalid admission; ordinary
+driver connection initialization is not an application authority query.
+- [ ] Step3 add minimal shared private admission check used at acquisition and
+_context, preserving all old checks/ordering and safe errors:
+
+```python
+connection = session.connection()
+root = connection.get_transaction()
+if (root is None or not root.is_active or connection.in_nested_transaction()
+        or getattr(connection.connection.dbapi_connection, "autocommit", None) is not False):
+    raise PublicationGuardError("publication_context_invalid")
+```
+
+Actual SQLAlchemy inspection errors are sanitized by existing callers. Do not
+repair mode, open a new transaction, commit/rollback caller work, install global
+hooks or alter account context. Unknown driver-state failure is deliberate.
+Existing unit doubles must faithfully represent an ordinary physical transaction;
+new positive evidence must remain actual PostgreSQL, not double-only.
+- [ ] Step4 GREEN focused regressions then all existing guard/fetch and account
+context tests once:
+
+```sh
+.venv/bin/python -m pytest -q -s --tb=short tests/test_publication_guard.py tests/test_publication_guard_postgres.py tests/test_marketplace_credential_fetch.py tests/test_marketplace_credential_fetch_postgres.py tests/test_marketplace_account_context.py tests/test_marketplace_account_context_postgres.py
+.venv/bin/python -m compileall -q app/platform/integrations/publication_guard.py tests/test_publication_guard.py tests/test_publication_guard_postgres.py
+git diff --check
+```
+
+Use scrubbed own .venv and this plan's secret/IP-denying UnixPG sandbox; lint-only
+approved Ruff interpreter. No new baseline/skip, external driver install, service
+or credentials. Record exact natural exit, counts/cleanup, retained warnings,
+redaction and invalid-mode failure before SQL. No claim that checks detect raw
+SAVEPOINTs opened/closed entirely between checks or sandbox arbitrary caller SQL.
+- [ ] Step5 self-review and commit `fix: require physical transactions for publication guard`;
+independent task review before ready follow-up delivery directly to T2–T4.

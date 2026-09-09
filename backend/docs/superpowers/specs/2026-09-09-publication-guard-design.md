@@ -152,3 +152,42 @@ production key access, real provider activity or KIZ/matcher work. Worker delega
 bearer-only ingestion authority and future historical binding epoch are separate
 contracts; none block this user-session implementation. Coordinator receives exact
 imports/arguments/tests and remaining limits before T3 wires its own repository.
+
+## Physical transaction admission follow-up
+
+Account-context testing demonstrated that a SQLAlchemy Session logical root and
+get_isolation_level()==READ COMMITTED can coexist with DBAPI AUTOCOMMIT. Such a
+connection does not satisfy this guard's existing transaction-local lock contract.
+Connection.begin_nested() is likewise not represented by Session nested hooks.
+These are admission gaps to test directly against the guard, not evidence that a
+configured ordinary READ COMMITTED consumer already bypasses authorization.
+
+Also require an Engine-bound Session via its public get_bind type. A Session
+joined to an externally started Connection root can finish its before_commit hook
+and logical transaction without physical COMMIT. Reject all Connection-bound
+Sessions, rather than guess join ownership or inspect private transaction maps.
+The standard get_session_factory Engine binding remains supported. Real default
+conditional_savepoint and explicit rollback_only external-root tests must deny
+before application context/authority SQL and leave external owner work untouched.
+
+At acquisition before context SQL and at every guard context revalidation, inspect
+the actual bound Connection: active root transaction, no Connection nested
+transaction, and publicly exposed DBAPI autocommit exactly False. Missing or
+unverifiable driver state denies with publication_context_invalid; SQLAlchemy
+inspection failures retain publication_persistence_failed. Keep Session checks,
+READ COMMITTED checks and finalizer unchanged. Do not use private transaction maps,
+global hooks or issue BEGIN/COMMIT/ROLLBACK to repair an unsupported caller mode.
+
+An unsupported mode observed after acquisition poisons the guard through its
+existing safe failure path and requires caller rollback. An arbitrary raw
+SAVEPOINT opened and closed entirely between checks is not claimed to be observed;
+direct SQL/DBAPI protocol bypasses remain unsupported. No new driver support,
+schema/permissions, consumer writes or provider actions.
+
+Actual PostgreSQL tests must show engine AUTOCOMMIT and connection
+execution_options AUTOCOMMIT rejection; initial Connection SAVEPOINT rejection;
+post-acquisition active Connection SAVEPOINT rejection during explicit validation
+and guarded commit; positive ordinary Session root and existing finalizer/lock
+tests unchanged. Observe no application context/authority SQL on initial invalid admission
+(ordinary driver connection initialization is not a guard authority query),
+and no durable synthetic publication on denied commit.
