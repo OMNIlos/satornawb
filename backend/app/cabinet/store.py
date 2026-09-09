@@ -9,7 +9,7 @@ from hmac import compare_digest
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, event
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -38,6 +38,7 @@ from app.cabinet.schemas import (
     UserPreferencesView,
 )
 from app.infra.db import get_engine, get_session_factory, set_tenant_context
+from app.config import get_settings
 from app.platform.identity.orm import IamMembershipRow
 from app.platform.integrations.wb_credentials import invalidate_wb_credential_bindings
 
@@ -151,13 +152,25 @@ def _slugify(value: str) -> str:
 def _run_db(db_fn):
     try:
         engine = get_engine()
+        if get_settings().wb_live_sync_enabled and engine.dialect.name != "postgresql":
+            raise HTTPException(503, detail={"code": "WB_LIVE_UNAVAILABLE"})
         with engine.connect() as connection:
             connection.exec_driver_sql("SELECT 1")
         session_factory = get_session_factory()
         with session_factory() as session:
+            if get_settings().wb_live_sync_enabled:
+                event.listen(session, "after_begin", _live_utc_transaction)
             return db_fn(session)
     except SQLAlchemyError:
+        if get_settings().wb_live_sync_enabled:
+            raise HTTPException(503, detail={"code": "WB_LIVE_UNAVAILABLE"}) from None
         return None
+
+
+def _live_utc_transaction(session, transaction, connection):
+    # DB timestamps must satisfy the existing UTC wire contract, including reads
+    # in the new transaction opened by refresh() after a registration commit.
+    connection.exec_driver_sql("SET LOCAL TIME ZONE 'UTC'")
 
 
 def _default_notification_settings() -> dict[str, Any]:
@@ -317,6 +330,10 @@ def _append_audit_event(
 
 
 def _ensure_defaults(session: Session | None = None) -> None:
+    if get_settings().wb_live_sync_enabled:
+        if session is None:
+            raise HTTPException(503, detail={"code": "WB_LIVE_UNAVAILABLE"})
+        return
     defaults = [
         ("viewer@vella.local", "Viewer Pass", "viewer", "pbkdf2_sha256$120000$viewer-v1$X8nL6oW3xibOEeoflBcI5RBmXfOMtyt3VrUhfA0eK3k"),
         ("editor@vella.local", "Settings Editor", "settings_editor", "pbkdf2_sha256$120000$editor-v1$cqH317m8tJt__yOEu-lHGapdxEFgVAjyGPC6c225q8M"),
@@ -627,6 +644,8 @@ def get_user_auth_record_by_email(email: str) -> UserAuthRecord | None:
         )
 
     result = _run_db(_db)
+    if get_settings().wb_live_sync_enabled:
+        return result
     if result is not None:
         return result
 
@@ -796,6 +815,8 @@ def resolve_active_session(*, session_id: str, user_id: str) -> tuple[UserAuthRe
         )
 
     result = _run_db(_db)
+    if get_settings().wb_live_sync_enabled:
+        return result
     if result is not None:
         return result
 
@@ -891,6 +912,8 @@ def resolve_refresh_session_by_token_hash(refresh_token_hash: str) -> tuple[User
         )
 
     result = _run_db(_db)
+    if get_settings().wb_live_sync_enabled:
+        return result
     if result is not None:
         return result
 
@@ -1851,6 +1874,8 @@ def upsert_user_wb_token(
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> UserWbTokenView:
+    if get_settings().wb_live_sync_enabled:
+        raise HTTPException(409, detail={"code": "WB_USE_ACCOUNT_CONNECTION"})
     normalized = wb_token.strip()
     if len(normalized) < 8:
         raise HTTPException(status_code=400, detail="WB_TOKEN_TOO_SHORT")
@@ -1953,6 +1978,8 @@ def delete_user_wb_token(
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> UserWbTokenView:
+    if get_settings().wb_live_sync_enabled:
+        raise HTTPException(409, detail={"code": "WB_USE_ACCOUNT_CONNECTION"})
     invalidated_bindings = 0
 
     def _db(session: Session) -> UserWbTokenView:

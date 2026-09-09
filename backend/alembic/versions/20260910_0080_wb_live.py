@@ -10,9 +10,13 @@ TABLES = ("wb_live_sync_jobs", "wb_live_sync_sources", "wb_live_sync_requests",
 
 def upgrade():
     op.execute("""
+ALTER TABLE marketplace_account_credentials ADD CONSTRAINT wb_live_credential_owner
+ UNIQUE(organization_id,marketplace_account_id,provider,credential_kind,credential_id);
 CREATE TABLE wb_live_sync_jobs (
  organization_id integer NOT NULL, marketplace_account_id integer NOT NULL,
- job_id uuid PRIMARY KEY, credential_id uuid NOT NULL REFERENCES marketplace_account_credentials(credential_id),
+ job_id uuid PRIMARY KEY, credential_id uuid NOT NULL,
+ provider text NOT NULL DEFAULT 'wb' CHECK(provider='wb'),
+ credential_kind text NOT NULL DEFAULT 'wb_api' CHECK(credential_kind='wb_api'),
  credential_generation bigint NOT NULL CHECK(credential_generation>0), account_incarnation bigint NOT NULL,
  external_account_id varchar(128) NOT NULL, credential_ref varchar(255),
  user_id varchar(64) NOT NULL REFERENCES lk_users(user_id), membership_id integer NOT NULL,
@@ -21,6 +25,8 @@ CREATE TABLE wb_live_sync_jobs (
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
  UNIQUE(organization_id,marketplace_account_id,job_id),
  FOREIGN KEY(organization_id,marketplace_account_id) REFERENCES marketplace_accounts(organization_id,marketplace_account_id),
+ FOREIGN KEY(organization_id,marketplace_account_id,provider,credential_kind,credential_id)
+ REFERENCES marketplace_account_credentials(organization_id,marketplace_account_id,provider,credential_kind,credential_id),
  FOREIGN KEY(organization_id,membership_id) REFERENCES iam_memberships(organization_id,membership_id)
 );
 CREATE UNIQUE INDEX wb_live_one_active_job ON wb_live_sync_jobs(organization_id,marketplace_account_id)
@@ -111,3 +117,4 @@ def downgrade():
     for table in reversed(TABLES):
         op.execute(f"DROP TABLE {table}")
     op.execute("ALTER TABLE marketplace_accounts DROP COLUMN display_name")
+    op.execute("ALTER TABLE marketplace_account_credentials DROP CONSTRAINT wb_live_credential_owner")

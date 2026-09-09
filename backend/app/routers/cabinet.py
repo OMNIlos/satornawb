@@ -389,6 +389,8 @@ def get_my_wb_token(request: Request) -> DataEnvelope[UserWbTokenView]:
 
 @router.put("/api/v1/cabinet/wb-token", response_model=DataEnvelope[UserWbTokenView])
 def put_my_wb_token(request: Request, payload: UserWbTokenUpsertRequest) -> DataEnvelope[UserWbTokenView]:
+    if get_settings().wb_live_sync_enabled:
+        raise HTTPException(409, detail={"code": "WB_USE_ACCOUNT_CONNECTION"})
     actor = _require_permission("cabinet:read", request)
     _validate_wb_token_for_user_request(payload.wbToken)
     updated = upsert_user_wb_token(
@@ -408,6 +410,8 @@ def put_my_wb_token(request: Request, payload: UserWbTokenUpsertRequest) -> Data
 
 @router.delete("/api/v1/cabinet/wb-token", response_model=DataEnvelope[UserWbTokenView])
 def delete_my_wb_token(request: Request) -> DataEnvelope[UserWbTokenView]:
+    if get_settings().wb_live_sync_enabled:
+        raise HTTPException(409, detail={"code": "WB_USE_ACCOUNT_CONNECTION"})
     actor = _require_permission("cabinet:read", request)
     cleared = delete_user_wb_token(
         user_id=actor.user_id,

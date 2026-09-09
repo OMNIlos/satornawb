@@ -5,8 +5,8 @@ from app.infra.db import set_tenant_context, set_marketplace_account_context
 from app.platform.identity.orm import IamMembershipRow
 from app.platform.integrations.orm import MarketplaceAccountRow
 from app.platform.integrations.publication_guard import (
-    UserSessionPrincipal, ExpectedAccountBinding, PublicationGuardError,
-    _scope, acquire_publication_guard,
+    UserSessionPrincipal, ExpectedAccountBinding, ExpectedCredential, PublicationGuardError, PublicationGuard,
+    _scope, acquire_publication_guard, _install_listeners, _STATE, _require_clean_publication_root,
 )
 from app.wb_live.contracts import WbLiveError
 
@@ -44,4 +44,44 @@ def acquire_read_context(session, actor, *, marketplace_account_id):
     guard = acquire_publication_guard(session, principal=principal, required_permissions=frozenset({"catalog:read"}),
         accounts=(ExpectedAccountBinding(marketplace_account_id, "wb", a.external_account_id, a.credential_ref),), authorities=())
     set_marketplace_account_context(session, organization_id=actor.organization_id, marketplace_account_id=marketplace_account_id)
+    return guard
+
+class _WbReadJobGuard(PublicationGuard):
+    """Persisted read subscription; initiation login is evidence, not a lease.
+
+    This private composition grants only a WB live repository root. Current user,
+    membership, account scope and paired credential remain locked and rechecked.
+    It does not change the user/publication or external-operation guard.
+    """
+    def __init__(self, session, job):
+        self._job_id = job.job_id
+        self._binding = (job.organization_id, job.marketplace_account_id, job.credential_id,
+            job.credential_generation, job.account_incarnation, job.external_account_id, job.credential_ref,
+            job.user_id, job.membership_id, job.session_id)
+        super().__init__(session, UserSessionPrincipal(job.organization_id, job.user_id, job.membership_id, job.session_id),
+            frozenset({"integrations:write"}),
+            (ExpectedAccountBinding(job.marketplace_account_id, "wb", job.external_account_id, job.credential_ref),),
+            (ExpectedCredential(job.marketplace_account_id, job.credential_id, "wb_api", job.credential_generation, 1, None),), ())
+
+    def _validate(self):
+        from app.wb_live.orm import WbLiveSyncJobRow as J
+        s = self._context()
+        self._validate_membership(s)
+        now = self._validate_accounts(s, [])
+        binding = s.execute(select(J.organization_id, J.marketplace_account_id, J.credential_id,
+            J.credential_generation, J.account_incarnation, J.external_account_id, J.credential_ref,
+            J.user_id, J.membership_id, J.session_id).where(J.job_id == self._job_id,
+                J.organization_id == self._principal.organization_id).with_for_update()).one_or_none()
+        incarnation = s.scalar(select(MarketplaceAccountRow.ingestion_binding_version).where(
+            MarketplaceAccountRow.organization_id == self._binding[0], MarketplaceAccountRow.marketplace_account_id == self._binding[1]))
+        if binding is None or tuple(binding) != self._binding or incarnation != self._binding[4]:
+            raise PublicationGuardError("publication_binding_changed")
+        return now
+
+def acquire_read_job_guard(session, job):
+    _require_clean_publication_root(session)
+    guard = _WbReadJobGuard(session, job)
+    _install_listeners(session)
+    setattr(session, _STATE, guard)
+    guard.revalidate_before_write()
     return guard
