@@ -1,5 +1,64 @@
 # T2 — independent progress / dependency handoff
 
+## CURRENT — original requirements, local readiness and owners
+
+Updated 2026-09-09 after root process-audit direction. This is the **only current
+requirement status table**. Everything under HISTORY below is dated evidence, not
+current readiness. Counts prove only named tests, never completion of a stage.
+
+`implemented` = code exists at the stated SHA; `released` = bounded owner handoff;
+`consumer-accepted` = downstream owner actually accepted that exact contract;
+`final-integrated` = common candidate verified by root. The latter is **not yet
+established for T2**. Production activation is NOT AUTHORIZED, separately from local
+implementation/testing; no provider calls, flag changes, deploy or push in T2.
+
+| Requirement | Actual implementation / released input SHA | Verified evidence and acceptance | Remaining / exact owner |
+| --- | --- | --- | --- |
+| 1 Writers, identity bridge, repository contract | `769f3cf44742622824233eefe8f81d4e360f8484`, `ccaed3410e32c50b3604f02e5b1171fd7243ce49`, `45f94a39627ebe2916903e9e5e0930844f3daaf5` | Inventory/explicit identity bridge/scoped contract implemented; T1 approval0066 consumed by merge `1464fcdfaab15b053678dd4f6d0337d958dab7f7`; valid action keys unchanged | T2 current writers still disconnected; account/membership bridge is not authorization or writer cutover |
+| 2 Durable approvals | `bd3bb60a0baadc8d7683c8efd8bf4eff444c9643`, legacy import `9c7e5baa6dc3b3b2f113671b03db6c301942b1e7` | Actual PG participant + committed user-session create/claim/reject/block; recorded93PG cases include CAS/races/scope/restart/rollback/import; locally accepted0066 only | T2 full Protocol/worker-authorized outcome service and current-flow integration incomplete; T1 accepted worker authority/schema needed, then T2 service acceptance |
+| 3 Jobs, attempts, receipt, crash recovery | Participant at `bd3bb60`; job-domain request `3c99f1eddb4750faa2be0ce79806c2d6f26cbc7e`; raw receipt codec `43e2cab31707192f2a30ab9b00ca7e56c6b11c4d` | Durable attempt/marker/outcome primitives tested;95synthetic receipt cases. Job/receipt domain inputs released to T1, not DDL or worker-service READY | T1 exact jobs/receipt DDL + trusted worker/closing resolver; T2 actual dispatch/reconciliation/crash matrix through fake-provider service, duplicate delivery proof, one action owner. No external exactly-once claim |
+| 4 Normalized settings / removal of globals | Override codec `bfc6c0eb156ef5b6a1d0a5b14066a6c7bb0ad01a`, vectors `a6b9fd1975d509911abc9da666bc0049e49228ce`, characterization `f3c61d7704813790245ec73096c753ee5dd93915` |78override cases; T1 independently reconstructed6vectors and accepted bytes as DDL prerequisite.102legacy calculation cases actually run; not durable state. Root BOTH-policy accepted below | T1 selected override-only versions/heads/separate audit design; exact DDL/ACL and shared constants release pending. T2 scoped PG repository + authenticated service next. Org settings/assignments/liquidation/context rows and mapping versions remain T1/T2 work; one-writer fence/cutover NOT done |
+| 5 Price snapshots / stock snapshots / daily / typed reads | Price `4e14e21ce79ebda29144d17db0b4a798f4bd2ec4`, stock `f7a5d62548d86f39c588c531c143936f0af8e55a`, chronology fix `901c1796e9a0ab04c0a4c7256e19bcce64dbaef1`; DDL request `907ec7b46ea5b6427385c7e80a204cb80f4adcad` | Immutable typed adapters/manifests/grain/presence and UTC chronology implemented;104scoped parser cases. Not actual publication or historical stock persistence | T1 source DDL; T2 atomic publication/current-head CAS, stock daily revisions and typed DB reads, fake collection/restart tests. FBS exact identity contract and source freshness policy unresolved; today's stock is not historical evidence |
+| 6 KTR and source revision policy | `94b540f592a0fed3a29ce476fdb3dbd7ce58a604`; stock evidence request `0edde8bcc735999eaec0361620af47eee0b2c8a0`, codec/vectors `0c8fca9c5f8bdf62e630398cb1bd663acfb2cee0` | SourceDiff classification and stock count-only bytes implemented;69pure codec/diff cases. T1 accepted8vectors as prerequisite, not SQL/auth/publication proof; exact requests delivered | Owner source evidence: KTR artifact/effective bands + local/all-orders grain; T1 evidence DDL/auth, T2 complete diff+parent-linked daily correction service. Finance rrd/fingerprint limitation preserved; scheduler off |
+| 7 Final profitability | Decision package `94b540f592a0fed3a29ce476fdb3dbd7ce58a604` | Synthetic alternatives delivered; no financial rule selected, no final-profit implementation/acceptance claimed | Financial owner approval + complete source evidence, then T2 canonical service/golden tests. netProfitKopecks/profitClass/abcCode remain null; no guessed allocation/account/backdate/rrdId/hash adjustment |
+| 8 Test debt, rollback and common integration | Current code candidate `f3c61d7704813790245ec73096c753ee5dd93915`; scoped fixes/commands below | Named unit and owned-disposable PG evidence only; inherited lint deltas disclosed. T4 independently reran102characterization cases with OS network deny. No full backend/combined platform acceptance | Root one common integration milestone after T1 platform release; T2 consumer regression on accepted dependencies, remaining assigned failures and rollback verification. No further abstractions/characterization without a concrete service need |
+
+### Canonical SKU policy — one compatibility record
+
+Root explicitly approved: independent get/history require fixed `settings:read`;
+replace and exact-command replay require **both** `settings:read` + `settings:write`
+before reading receipt or acquiring domain locks. A write-only custom principal is
+now denied by the new canonical API, even if a legacy write path would allow it.
+This is intentional compatibility impact, not inferred historical behavior. Existing
+profiles/aliases, profile+explicit-grant union, operational grants and legacy routes
+remain unchanged. No price:send/team:write fallback or client-selected permission.
+Fresh authenticated user/session/membership/exact account scope and final commit
+revalidation apply to each call/replay; idempotency key grants no authority.
+T1 owns released shared constants, T2 consumes them only after exact READY handoff.
+Required service matrix: read-only/write-only/both/neither, cross-account, revoke
+after wait, denied mutation and receipt non-disclosure. No repeat policy approval needed.
+
+### Stable consumer candidate for the common milestone
+
+Immutable T2 code candidate: `f3c61d7704813790245ec73096c753ee5dd93915` on
+`codex/arch-t2-economics`, base `c88a474695569af905b294906ba604d61f3de62f`.
+Exact accepted0066 prerequisite: `dbf8d31d9fc0b9035b9c8a84727e70713956afe0`,
+merged with its platform/guard ancestry by `1464fcdfaab15b053678dd4f6d0337d958dab7f7`.
+This includes the0066 consumer and released pure source prerequisites; no speculative
+imports of upcoming override constants/tables. Accepted compatibility currently means
+0066 plus its merged guard prerequisites, **not** the later combined platform.
+Root may use this candidate after T1 platform release for one shared migration/import/
+contract/consumer gate; root owns integration and authorized push. T2 will update the
+candidate when an actual new accepted repository/service dependency is consumed,
+not for each test/docs commit. Stage2/3/4/5 remain incomplete after this milestone.
+Read-only `git diff --exit-code 9c7e5ba f3c61d7` confirms the participant/user-command
+modules and all three PG acceptance test files byte-unchanged; merge-base verifies
+0066 ancestry, both exit0. These are snapshot checks, not a new platform test run.
+Next work priority is actual worker/outcome/jobs/receipt and normalized override/source
+repositories/services using exact released T1 contracts, not extra generic codecs.
+
+## HISTORY — prior snapshots and per-slice evidence (not current status)
+
 ## T1 SQL encoder golden-vector dependency
 
 `tests/fixtures/wb_repricing_sql_golden_vectors_v1.json`: eight synthetic vectors
@@ -49,7 +108,7 @@ new tests respectively `test_wb_canonical_price_parser.py`,
 `test_wb_repricing_postgres_text.py`. Approval change touches only pure kernel,
 repository Protocol/identity bridge and dispatch domain; no actual writer connection.
 
-## Single requirement matrix
+## Historical requirement snapshot — superseded by CURRENT above
 
 | Stage | Completed evidence | Still required / actual dependency |
 | --- | --- | --- |
