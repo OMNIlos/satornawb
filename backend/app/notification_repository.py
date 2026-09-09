@@ -60,13 +60,14 @@ class NotificationRepository:
                 MarketplaceAccountRow.organization_id == binding.organization_id,
                 MarketplaceAccountRow.marketplace_account_id == binding.marketplace_account_id,
                 MarketplaceAccountRow.marketplace == binding.marketplace).with_for_update()).one_or_none()
-        _require(account is not None and tuple(account) == (binding.external_account_id, binding.credential_ref, "connected"))
+        _require(account is not None and tuple(account)[:2] == (binding.external_account_id, binding.credential_ref))
+        self._connected = account.status == "connected"
 
     def _scope(self, table, **keys):
         return [table.c[key] == bindparam(None, value, type_=table.c[key].type)
                 for key, value in dict(self.owner, **keys).items()]
 
-    def _decode_event(self, row):
+    def _decode_event(self, row, *, current_binding=True):
         raw = bytes(row["event_payload"])
         try:
             value = json.loads(raw)
@@ -78,6 +79,10 @@ class NotificationRepository:
         _require(value["organizationId"] == self.binding.organization_id
                  and value["marketplaceAccountId"] == self.binding.marketplace_account_id
                  and value["eventId"] == str(row["event_id"]), "NOTIFICATION_STORAGE_UNAVAILABLE")
+        # Closing may append a safe historical event after disconnection/rebind;
+        # that must not erase the durable outcome. Visibility is a separate gate.
+        if not current_binding:
+            return value
         # Account rebinding must not make an old source identity current again.
         facts = ReviewFactsRepository(self.connection, ReviewOwner(
             self.binding.organization_id, self.binding.marketplace_account_id, self.binding.marketplace,
@@ -108,7 +113,7 @@ class NotificationRepository:
             *self._scope(EVENT, dedupe_key=display.dedupe_key))).mappings().one_or_none()
         if old is not None:
             _require(all(old[key] == value for key, value in refs.items()))
-            return self._decode_event(old)
+            return self._decode_event(old, current_binding=False)
         value = {"schemaVersion": "notification-event-v1", "eventId": str(uuid4()),
                  "organizationId": self.binding.organization_id, "marketplaceAccountId": self.binding.marketplace_account_id,
                  "scope": "account", "producer": "reviews", "entityId": str(entity_id), "sourceVersion": source_version,
@@ -120,9 +125,10 @@ class NotificationRepository:
             source_version=source_version, kind=kind, occurred_at=now, dedupe_key=display.dedupe_key,
             title=display.title, details=display.details, severity=display.severity,
             event_payload=encoded.canonical_bytes, event_checksum=encoded.checksum).returning(EVENT)).mappings().one()
-        return self._decode_event(row)
+        return self._decode_event(row, current_binding=False)
 
     def _visible(self, event_ids):
+        _require(self._connected)
         rows = {}
         # Immutable events have SELECT/INSERT only; do not request FOR UPDATE on
         # them. The already held canonical account lock serializes this batch.

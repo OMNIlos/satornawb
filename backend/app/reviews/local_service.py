@@ -123,6 +123,40 @@ def execute_local_review(engine: Engine, *, actor: ActorContext, settings: Setti
     return result
 
 
+def execute_local_review_with_notifications(engine: Engine, *, actor: ActorContext,
+                                           settings: Settings, request: object):
+    """Explicit NEW0074 producer entrypoint. Existing0071 callers stay unchanged.
+
+    Only genuinely new draft publication creates approval_required in the same
+    physical root. Exact old command replay never backfills a missing event.
+    """
+    from app.notification_repository import NotificationRepository
+
+    try:
+        encoded = encode_review_local_request(request)
+        command = json.loads(encoded.canonical_bytes)
+    except (StoragePayloadError, ValueError, TypeError):
+        raise ReviewLocalError("REVIEW_LOCAL_INVALID") from None
+    _require(type(actor) is ActorContext and command["organizationId"] == actor.organization_id,
+             "REVIEW_LOCAL_DENIED")
+    permission = "reviews:approve" if command["operationKind"] == "review.decision.record.v1" else "reviews:write"
+    with _unit(engine, actor=actor, settings=settings, account_id=command["marketplaceAccountId"],
+               marketplace=command["marketplace"], permission=permission) as (repository, member):
+        _require(command["actorMembershipId"] == member, "REVIEW_LOCAL_DENIED")
+        original = repository.replay(command, encoded)
+        if original is not None:
+            result = original
+        else:
+            completed_at = repository.connection.scalar(select(func.clock_timestamp())).astimezone(UTC)
+            result = repository.execute(command, completed_at=completed_at)
+            if command["operationKind"] == "review.draft.publish.v1":
+                saved = json.loads(result.canonical_bytes)
+                NotificationRepository(repository.connection, repository.binding).publish(
+                    review_id=_uuid(command["input"]["reviewId"]), entity_id=_uuid(saved["draftId"]),
+                    source_version=saved["draftRevision"], kind="approval_required")
+    return result
+
+
 def read_local_review_context(engine: Engine, *, actor: ActorContext, settings: Settings,
                               marketplace_account_id: int, marketplace: str,
                               review_id: str | None = None, external_review_id: str | None = None):
