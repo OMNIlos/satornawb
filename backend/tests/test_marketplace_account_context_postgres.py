@@ -251,3 +251,78 @@ def test_context_alone_does_not_make_inactive_principal_authorized(data):
             guard_tests.acquire(session, data)
             guard_tests.proof(session, data)
     assert guard_tests.count_proof(data) == 0
+
+
+@pytest.mark.parametrize("join_mode", ["default", "rollback_only"])
+def test_external_connection_root_denied_without_changing_owner_work(context_engine, join_mode):
+    options = {} if join_mode == "default" else {"join_transaction_mode": join_mode}
+    with context_engine.connect() as connection:
+        external = connection.begin()
+        try:
+            connection.execute(text("INSERT INTO synthetic_context_row (id) VALUES (77)"))
+            connection.execute(text("SELECT set_config('app.organization_id', '1', true), "
+                                    "set_config('app.marketplace_account_id', '', true)"))
+            before = connection.execute(SETTINGS).one()
+            statements = []
+
+            def capture(c, cursor, statement, parameters, context, executemany):
+                statements.append(statement)
+
+            with Session(connection, **options) as session:
+                session.begin()
+                event.listen(connection, "before_cursor_execute", capture)
+                try:
+                    try:
+                        apply(session)
+                    except api()[1] as error:
+                        assert str(error) == "account_context_invalid"
+                    else:
+                        # RED witness: logical Session completion leaves the
+                        # externally owned physical transaction/context alive.
+                        session.commit()
+                        assert external.is_active
+                        assert KEY not in session.info
+                        assert connection.execute(SETTINGS).one() == ("1", "11")
+                        pytest.fail("external root retains account context after Session commit")
+                finally:
+                    event.remove(connection, "before_cursor_execute", capture)
+                assert statements == []
+                assert KEY not in session.info
+                session.rollback()
+            assert external.is_active and connection.get_transaction() is external
+            assert connection.execute(SETTINGS).one() == before
+            assert connection.scalar(text("SELECT count(*) FROM synthetic_context_row WHERE id=77")) == 1
+        finally:
+            external.rollback()
+        assert all(value in (None, "") for value in connection.execute(SETTINGS).one())
+        assert connection.scalar(text("SELECT count(*) FROM synthetic_context_row WHERE id=77")) == 0
+
+
+@pytest.mark.parametrize("join_mode", ["conditional_savepoint", "rollback_only",
+                                      "control_fully", "create_savepoint"])
+@pytest.mark.parametrize("external_active", [False, True])
+def test_every_connection_binding_denied_before_sql(context_engine, join_mode, external_active):
+    with context_engine.connect() as connection:
+        external = connection.begin() if external_active else None
+        statements = []
+
+        def capture(c, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        try:
+            with Session(connection, join_transaction_mode=join_mode) as session, session.begin():
+                event.listen(connection, "before_cursor_execute", capture)
+                try:
+                    with pytest.raises(api()[1], match="^account_context_invalid$"):
+                        apply(session)
+                finally:
+                    event.remove(connection, "before_cursor_execute", capture)
+                assert statements == []
+                assert KEY not in session.info
+                session.rollback()
+            assert connection.in_transaction() is external_active
+            if external is not None:
+                assert connection.get_transaction() is external and external.is_active
+        finally:
+            if external is not None:
+                external.rollback()

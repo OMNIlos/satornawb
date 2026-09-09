@@ -20,12 +20,23 @@ with Session(runtime_engine) as session, session.begin():
     # It remains responsible for final authorization and exact context checks.
 ```
 
-The helper requires an actual Session with a clean active root transaction,
+The helper requires an actual Engine-bound Session with a clean active root transaction,
 PostgreSQL READ COMMITTED and strictly positive INT4 IDs (`type(value) is int`,
 maximum2147483647). Missing/ended/inactive roots, pending new/dirty/deleted ORM
 work, Session SAVEPOINTs and actual bound Connection SAVEPOINTs deny admission.
 The Connection check runs on initial and repeated calls before context SQL.
 This does not intercept arbitrary later Connection/DBAPI commands.
+
+Only an Engine returned by the public `session.get_bind()` is admitted, as in
+the normal `get_session_factory`. All Connection-bound Sessions are rejected
+before any context SQL, including `control_fully` and `create_savepoint` modes.
+Default external-root joins and explicit `rollback_only` can end a Session while
+the external physical transaction retains both local settings. The helper does
+not inspect private transaction maps or commit/roll back external caller work.
+Callers currently composing through a Connection must instead use an Engine-bound
+Session that owns its root lifetime; no external-join compatibility is promised.
+Actual PostgreSQL negatives verify denial leaves external root, settings and
+uncommitted synthetic control data unchanged until the external owner rolls back.
 
 DBAPI autocommit also denies: PostgreSQL's reported isolation can remain READ
 COMMITTED when SET LOCAL would have no durable transaction scope. The public
@@ -67,8 +78,9 @@ service/schema must enforce the exact account context at its own final boundary.
 No claim that this helper guards arbitrary subsequent raw SQL or grants permission,
 locks account rows, proves organization/account ownership, or enables a writer.
 
-Verification: focused account tests80PASS; final combined account/publication
-group and scoped Ruff/compile/diff results are recorded in the task report.
+Verification: initial focused account tests80PASS; the external-lifetime review
+fix adds10 cases. Final combined account/publication group and scoped
+Ruff/compile/diff results are recorded in the task report.
 Tests use only this worktree's backend/.venv and fresh random databases/roles via
 the tracked Orders disposable helper. Existing local Unix `/tmp` PostgreSQL is
 the authorized maintenance fallback, not a newly initialized server. Runtime
@@ -78,7 +90,9 @@ The approved separate Ruff environment was used for lint only. No dependencies,
 network/provider/Redis/application data/secrets/flags/deploy were touched.
 
 Self-review found and corrected the DBAPI AUTOCOMMIT hole using two real RED
-canaries. The requested preflight-critic skill path is absent; manual isolated
+canaries. Independent review found the external Connection lifetime mismatch;
+two actual PostgreSQL RED witnesses preceded the Engine-only admission fix.
+The requested preflight-critic skill path is absent; manual isolated
 Critic Pass followed the global checklist. Independent review belongs to the
 controller. Task2's approvals/attempts/audit persistence and production activation
 remain separate work.

@@ -86,12 +86,14 @@ def _clear_marketplace_account_context(session, transaction) -> None:
 def set_marketplace_account_context(
     session: Session, *, organization_id: int, marketplace_account_id: int
 ) -> None:
-    """Set an exact pair locally in a clean existing PostgreSQL RC root.
+    """Set an exact pair locally in an Engine-bound Session's clean PG RC root.
 
     This supplies context, not authentication, permission or account row locks.
     Call after the trusted publication guard and before domain locks/writes.
     Every failure requires caller rollback. Arbitrary later caller SQL is not
     fenced; the publication/service layer owns final authorization checks.
+    Connection-bound Sessions are unsupported: an external physical root can
+    outlive Session completion and retain its transaction-local settings.
     """
     if (not isinstance(session, Session)
             or any(type(value) is not int or not 0 < value <= 2**31 - 1
@@ -103,7 +105,8 @@ def set_marketplace_account_context(
             or session.new or session.dirty or session.deleted):
         raise MarketplaceAccountContextError("account_context_invalid")
     try:
-        if session.get_bind().dialect.name != "postgresql":
+        bind = session.get_bind()
+        if not isinstance(bind, Engine) or bind.dialect.name != "postgresql":
             raise MarketplaceAccountContextError("account_context_invalid")
         with session.no_autoflush:
             connection = session.connection()
