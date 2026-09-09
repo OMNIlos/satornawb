@@ -1,6 +1,19 @@
 # T4 — requirement → commit → evidence → remaining work
 
-## Current checkpoint: frontend response isolation; Review historical binding open
+## Current checkpoint: Digest/Stock boundary fixes; Review0068 consumer preparing
+
+Independent Digest hidden-empty1RED→GREEN and Stock exact7/60 numeric3RED→GREEN
+completed. Main combined28PASS5.90s/natural0/browsercleanup, tsc0/diff0,
+independent critic scopedPASS. Details and limits: frontend report
+`2026-09-09-t4-digest-stock-boundaries.md`. No new full-suite/build claim.
+
+T1 exact prerequisites imported unchanged locally: dbf8d31→117dbc6,
+d87e575→0439652, mandatoryc4e3e373→f330020,4d95b24→b8b7128.
+This is Git integration only, NOT T4 PostgreSQL acceptance. Review consumer plan
+and two behavioral RED candidates prepared; repository/runtime wiring not changed.
+History-binding consumer, transaction acceptance and activation remain separate.
+
+## Previous frontend checkpoint — historical evidence
 
 T1 Review0068 is now READY exact4d95b24b549f0b1f773095ec583a85f18172fdbc,
 superseding earlier not-ready entries below. Main read complete handoff/migration/

@@ -7468,7 +7468,7 @@ function DigestBalancePanelIsland({
           )
         })}
       </svg>
-      <div className="balance-empty" id="digestBalanceEmpty">{!state.loading && !points.length ? (state.error ?? 'За выбранный период нет продаж, заказов и возвратов.') : ''}</div>
+      <div className={`balance-empty${!state.loading && !points.length ? ' visible' : ''}`} id="digestBalanceEmpty">{!state.loading && !points.length ? (state.error ?? 'За выбранный период нет продаж, заказов и возвратов.') : ''}</div>
     </div>
   )
 }
