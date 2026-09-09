@@ -98,6 +98,13 @@ metadata, prove a committed marker, construct a scoped receipt row or persist it
 The acceptance gate above remains open for trusted adapter/service wiring and DB
 receipt authority, not for this separately tested decoded numeric projection.
 
+Further dormant follow-up: `extract_post_upload_id_from_bytes` validates bounded
+original UTF-8 JSON, including duplicate/escaped-equal keys and numeric token shape,
+before calling the decoded projection.48 added synthetic cases;95 combined raw and
+decoded cases pass. Response-byte budget is explicit trusted adapter policy, not a
+new provider limit. Current WB transport still does not supply/call this function;
+passing reserialized or already lossy data cannot recreate original-byte evidence.
+
 ## Replay, conflicting evidence and recovery
 
 UNIQUE `(organization_id,marketplace_account_id,attempt_id)`; receipt insert locks

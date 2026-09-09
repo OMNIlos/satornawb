@@ -211,3 +211,19 @@ mutable state machine. Receipt gets a proposed concrete scoped job FK. Existing
 ORM/memory/Orders proposal are not misrepresented as accepted price-worker authority;
 trusted executor/closing resolver remains T1-owned and pending. No production or
 shared schema changes and no fabricated worker principal.
+
+### Independent raw receipt JSON boundary
+
+`extract_post_upload_id_from_bytes` now accepts original immutable UTF-8 bytes,
+requires an explicit trusted response-byte budget, rejects duplicate/escaped-equal
+keys and malformed/non-finite JSON, and preserves integer lexemes beyond BIGINT
+and Python's decimal-string digit limit. Decimal/exponent tokens never become IDs.
+Only canonical ID is returned; no raw payload/checksum is retained. The decoded
+entrypoint remains available but cannot establish raw JSON uniqueness by itself.
+
+RED missing raw API exit2 → **95 combined raw+decoded cases PASS in0.06s, exit0**
+(48 new raw cases). Independent critic reran95PASS; scoped Ruff/compile/diff0.
+The existing transport does not call this helper: trusted POST provenance, job
+authority, marker-commit proof and receipt DB publication remain separate gates.
+T4's available/blocked matrix was sent before implementation, not used as a stopping
+point; no frontend or active T1 schema/resolver work was duplicated.
