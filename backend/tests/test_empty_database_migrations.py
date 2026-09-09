@@ -1,64 +1,36 @@
 """Real PostgreSQL regression tests; never consume an inherited database URL."""
 
-from pathlib import Path
-import shutil
-import socket
-import subprocess
 import sys
-from uuid import uuid4
+from pathlib import Path
 
-from alembic import command
+import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import DBAPIError
 
+from alembic import command
 from ops.release_gate import run_migration_roundtrip, safe_environment
-
+from tests import test_orders_schema_candidate as candidate
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.fixture(scope="module")
-def postgres_cluster(tmp_path_factory):
-    binaries = {name: shutil.which(name) for name in ("initdb", "pg_ctl", "createdb")}
-    if not all(binaries.values()):
-        pytest.fail("Local PostgreSQL binaries are required for migration regression tests")
-    root = tmp_path_factory.mktemp("empty-database-migrations")
-    data = root / "data"
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    owner = "migration_test_owner"
-    def run(args):
-        subprocess.run(args, check=True, capture_output=True, text=True)
-    run([binaries["initdb"], "-D", str(data), "-A", "trust", "-U", owner,
-         "--no-locale", "-E", "UTF8"])
-    run([binaries["pg_ctl"], "-D", str(data), "-l", str(root / "postgres.log"),
-         "-o", f"-p {port} -h 127.0.0.1 -k /tmp -c fsync=off", "-w", "start"])
-    try:
-        yield binaries, port, owner
-    finally:
-        run([binaries["pg_ctl"], "-D", str(data), "-m", "fast", "-w", "stop"])
+cluster = candidate.cluster
 
 
 @pytest.fixture
-def database(postgres_cluster, monkeypatch):
-    binaries, port, owner = postgres_cluster
-    name = "migration_" + uuid4().hex
-    subprocess.run([binaries["createdb"], "-h", "127.0.0.1", "-p", str(port),
-                    "-U", owner, name], check=True, capture_output=True, text=True)
-    url = f"postgresql+psycopg://{owner}@127.0.0.1:{port}/{name}"
-    monkeypatch.setenv("VELLA_DATABASE_URL", url)
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", url)
-    engine = create_engine(url)
-    try:
-        yield config, engine
-    finally:
-        engine.dispose()
+def database(cluster, monkeypatch):
+    with candidate.disposable_database(cluster) as allocated:
+        monkeypatch.setenv("VELLA_DATABASE_URL", allocated.url)
+        config = Config(str(ROOT / "alembic.ini"))
+        config.set_main_option("script_location", str(ROOT / "alembic"))
+        config.set_main_option("sqlalchemy.url", allocated.url)
+        engine = create_engine(allocated.url)
+        try:
+            yield config, engine
+        finally:
+            engine.dispose()
 
 
 def prompt_column(engine):

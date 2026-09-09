@@ -295,7 +295,10 @@ def test_uncertain_commit_requires_readback_not_refetch(
         marketplace_account_id=claim.locator.marketplace_account_id,
         job_id=claim.locator.job_id,
     )
-    assert result.state == ("succeeded" if commit_first else "running")
+    assert result == {
+        "job_id": str(claim.locator.job_id),
+        "state": "succeeded" if commit_first else "running",
+    }
     with owner.connect() as connection:
         assert connection.scalar(
             text("SELECT count(*) FROM order_sync_runs WHERE source_run_key=:key"),

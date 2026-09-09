@@ -3,6 +3,52 @@
 Branch `codex/arch-t3-operations`; исходная база `c88a474`.
 Общая очередь не активирована. Legacy writers/prototype сохранены.
 
+## Foundation Common-Run Repair Package
+
+The root foundation-delivery plan narrows the current milestone; the broader
+historical matrix below is not a claim that all original requirements are done.
+Repair base is exact common `ff6ca4a`, including the shared JSONB metadata fix.
+Root's first common run at c4d1b9a naturally exited1 with5426 pass/135 fail/448 error;
+no shutdown workaround, force exit, timeout increase or skip is warranted.
+
+Seven test/harness files repair the assigned concrete causes:
+
+- Five empty-database tests now reuse candidate.cluster/disposable_database,
+  including owned Unix-socket allocation and exact cleanup, rather than bind a
+  TCP port inside the accepted OS sandbox. Actual upgrade/downgrade/schema/prompt
+  assertions remain; no application/live database or broader role grants.
+- Six legacy HTML compatibility cases load existing TypeScript with createRequire
+  anchored to the declared frontend package. Python uses existing frontend_directory
+  for both source and dependency identity. No install, new renderer or browser action.
+- Closed diagnostic tests assert fixed endpoint/count/status instead of removed
+  URL/provider keys and per-chat identifier maps; positive business DTO assertions
+  remain. The logger test temporarily restores only that logger's disabled and
+  propagation state, avoiding unrelated application-entrypoint test contamination.
+- Two uncertain-commit assertions use the real content-free job readback dictionary,
+  rather than assuming an authenticated StoredOrdersJobView. No runtime widening.
+
+Focused command: existing T1 Python, OS deny-all-network plus existing secret-file
+denials, release_gate.safe_environment, plugin autoload disabled, explicit frontend
+directory pointing to the existing integration frontend, pytest no-cache/syscapture:
+test_avito_orders.py, test_avito_chats.py, test_orders_avito_adapter_characterization.py,
+test_orders_production_html.py. Result: **40 PASS, 2 inherited warnings, 7.90s,
+natural exit0**. No provider/DB/service access. Compileall and diff check exit0.
+Ruff from backend cwd initially found three import-order issues; import-only fixes
+then final six-file Ruff exit0. No broad formatting or diagnostic contract rollback.
+
+Migration and job-publication PG reruns remain pending the root-coordinated slot;
+T1 holds it. T3 has no active PG process, reservation or cleanup. Do not count the
+prepared five migration/two readback cases as newly passing. JSONB-related returns
+and credential API failures belong to the already imported shared fix, not another
+local metadata patch. Token-store cases are exclusively T1-owned.
+
+Two other assigned IDs are exact existing baseline entries: avito_repricer_worker
+pending-approval case (baseline line6) and one_c_cash_flow PNL attachment (line8).
+The former supplies empty strategy assignments; the latter invokes legacy PNL
+without authoritative financial-source evidence. Neither permits inventing
+automatic assignments or a finance attachment workflow. Retain as explicit
+legacy/P1 failures for root disposition; no test deletion, skip or baseline edit.
+
 ## Current Requirements Matrix (2026-09-09, supersedes all history below)
 
 Implementation baseline: `35ea34e77d80920b0d8779a6b888e6f1d8e7bad0`.

@@ -1,7 +1,8 @@
 // Execute existing declarations, never the HTML's startup code or browser actions.
 const vm = require('node:vm');
 const fs = require('node:fs');
-const ts = require('typescript');
+const { createRequire } = require('node:module');
+const ts = createRequire(process.argv[2])('typescript');
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const declarations = [];
 for (const script of input.scripts) {

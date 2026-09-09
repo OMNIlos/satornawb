@@ -103,7 +103,10 @@ def test_partial_provider_page_does_not_fetch_remaining_pages():
 def test_missing_total_falls_back_to_page_length_and_is_not_completion_evidence():
     result = fetch({"orders": [raw_order()]}, page=2)
     assert result.total == 1
-    assert result.diagnostics["payloadKeys"] == ["orders"]
+    assert result.diagnostics["ordersCount"] == 1
+    assert result.diagnostics["rawCount"] == 1
+    assert "payloadKeys" not in result.diagnostics
+    assert "requestParams" not in result.diagnostics
 
 
 def test_item_reordering_and_quantity_changes_are_not_deduplicated_by_listing():

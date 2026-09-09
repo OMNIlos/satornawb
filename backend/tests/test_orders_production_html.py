@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+from ops.release_gate import frontend_directory
 
 
 class Scripts(HTMLParser):
@@ -30,10 +30,12 @@ class Scripts(HTMLParser):
 
 
 def execute(*calls):
+    frontend = frontend_directory()
     parser = Scripts()
-    parser.feed((ROOT / "frontend/public/vella-production.html").read_text())
+    parser.feed((frontend / "public/vella-production.html").read_text())
     result = subprocess.run(
-        ["node", str(Path(__file__).parent / "source_recovery/production_html_characterization.cjs")],
+        ["node", str(Path(__file__).parent / "source_recovery/production_html_characterization.cjs"),
+         str(frontend / "package.json")],
         input=json.dumps({"scripts": parser.scripts, "calls": calls}),
         text=True, capture_output=True, timeout=15, check=False,
     )

@@ -2,10 +2,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
 import httpx
+from fastapi.testclient import TestClient
 
-from app.avito.chats import AvitoChatsFetchRequest, AvitoChatsFetchResult, AvitoChatRow, AvitoMessageRow, AvitoChatsUpstreamError, LiveAvitoChatsClient
+from app.avito.chats import (
+    AvitoChatRow,
+    AvitoChatsFetchRequest,
+    AvitoChatsFetchResult,
+    AvitoChatsUpstreamError,
+    AvitoMessageRow,
+    LiveAvitoChatsClient,
+)
 from app.cabinet.store import AvitoCredentialsSecret
 from app.main import create_app
 
@@ -190,7 +197,9 @@ def test_live_avito_chats_client_keeps_chats_when_messages_endpoint_fails():
     assert result.messages["chat-1"][0].text == "Здравствуйте"
     assert result.messages["chat-1"][0].messageId == "chat-1:last"
     assert result.diagnostics is not None
-    assert result.diagnostics["messagesFailed"]["chat-1"]["httpStatus"] == 403
+    assert len(result.diagnostics["messagesFailed"]) == 1
+    assert result.diagnostics["messagesFailed"][0]["httpStatus"] == 403
+    assert "chat-1" not in str(result.diagnostics["messagesFailed"])
 
 
 def test_live_avito_chats_client_preserves_send_access_errors():
