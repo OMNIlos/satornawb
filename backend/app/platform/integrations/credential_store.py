@@ -12,10 +12,16 @@ from sqlalchemy.orm import Session
 
 from app.cabinet.orm import LkAuditEventRow
 from app.config import get_settings, load_marketplace_credential_keyring
-from app.infra.db import get_session_factory, set_tenant_context
+from app.infra.db import get_session_factory, set_marketplace_account_context, set_tenant_context
 from app.platform.integrations.orm import (
     MarketplaceAccountCredentialRow,
     MarketplaceAccountRow,
+)
+from app.platform.integrations.publication_guard import _physical_connection
+from app.platform.integrations.worker_identity import (
+    ExecutorIdentityDenied,
+    ExecutorRoleIdentity,
+    verify_executor_login,
 )
 from app.security.marketplace_credentials import (
     CredentialCryptoError,
@@ -443,16 +449,7 @@ def resolve_marketplace_credential(
             raise _translate_persistence_error() from None
 
 
-def resolve_marketplace_credential_for_fetch(
-    account_identity: MarketplaceAccountCredentialOwner,
-    kind: str,
-) -> ResolvedCredentialForFetch:
-    """Capture connected-account binding and decrypted authority atomically.
-
-    The outer join distinguishes missing account from missing active credential
-    without a second snapshot. The short session closes before provider I/O.
-    """
-
+def _validate_fetch(account_identity, kind):
     if (
         not isinstance(account_identity, MarketplaceAccountCredentialOwner)
         or not isinstance(account_identity.provider, str)
@@ -461,7 +458,10 @@ def resolve_marketplace_credential_for_fetch(
         raise CredentialStoreError("credential_contract_invalid")
     _validate_owner(account_identity)
     _validate_kind(account_identity, kind)
-    keyring = _load_keyring()
+
+
+def _resolve_fetch_in_session(session, account_identity, kind, keyring):
+    """One paired query/crypto implementation; caller owns context and root."""
     account = MarketplaceAccountRow
     credential = MarketplaceAccountCredentialRow
     query = (
@@ -481,32 +481,155 @@ def resolve_marketplace_credential_for_fetch(
             account.status == "connected",
         )
     )
+    selected = session.execute(query).one_or_none()
+    if selected is None:
+        raise CredentialStoreError("credential_account_not_found")
+    external_account_id, credential_ref, row = selected
+    if row is None:
+        raise CredentialStoreError("credential_missing")
+    identity = _identity(row)
+    if identity.expires_at is not None and identity.expires_at <= _utc_now():
+        raise CredentialStoreError("credential_expired")
+    secret = decrypt_credential(identity, _encrypted(row), keyring)
+    return ResolvedCredentialForFetch(
+        secret=secret,
+        binding=CredentialFetchBinding(
+            owner=account_identity,
+            external_account_id=external_account_id,
+            credential_ref=credential_ref,
+            credential_identity=identity,
+        ),
+    )
+
+
+def resolve_marketplace_credential_for_fetch(
+    account_identity: MarketplaceAccountCredentialOwner,
+    kind: str,
+) -> ResolvedCredentialForFetch:
+    """Capture account and credential in one snapshot; close before provider I/O.
+
+    Existing public path retains its configured pool/key loader and SQLite
+    compatibility. Dedicated executors use the explicit factory below instead.
+    """
+    _validate_fetch(account_identity, kind)
+    keyring = _load_keyring()
     with get_session_factory()() as session:
         try:
             set_tenant_context(session, account_identity.organization_id)
-            selected = session.execute(query).one_or_none()
-            if selected is None:
-                raise CredentialStoreError("credential_account_not_found")
-            external_account_id, credential_ref, row = selected
-            if row is None:
-                raise CredentialStoreError("credential_missing")
-            identity = _identity(row)
-            if identity.expires_at is not None and identity.expires_at <= _utc_now():
-                raise CredentialStoreError("credential_expired")
-            secret = decrypt_credential(identity, _encrypted(row), keyring)
-            return ResolvedCredentialForFetch(
-                secret=secret,
-                binding=CredentialFetchBinding(
-                    owner=account_identity,
-                    external_account_id=external_account_id,
-                    credential_ref=credential_ref,
-                    credential_identity=identity,
-                ),
-            )
+            return _resolve_fetch_in_session(session, account_identity, kind, keyring)
         except (CredentialCryptoError, CredentialStoreError):
             raise
         except SQLAlchemyError:
             raise _translate_persistence_error() from None
+
+
+class _ExecutorCredentialResolver:
+    __slots__ = ("_factory", "_keyring_loader", "_identity")
+
+    def __init__(self, *, session_factory, keyring_loader, identity):
+        if (not callable(session_factory) or not callable(keyring_loader)
+                or type(identity) is not ExecutorRoleIdentity):
+            raise CredentialStoreError("credential_configuration_invalid")
+        self._factory = session_factory
+        self._keyring_loader = keyring_loader
+        self._identity = identity
+
+    def __repr__(self):
+        return "<ExecutorCredentialResolver redacted>"
+
+    __str__ = __repr__
+
+    def __copy__(self):
+        raise TypeError("credential_contract_invalid")
+
+    def __deepcopy__(self, memo):
+        raise TypeError("credential_contract_invalid")
+
+    def __reduce__(self):
+        raise TypeError("credential_contract_invalid")
+
+    def __reduce_ex__(self, protocol):
+        raise TypeError("credential_contract_invalid")
+
+    def __call__(self, account_identity: MarketplaceAccountCredentialOwner,
+                 kind: str) -> ResolvedCredentialForFetch:
+        _validate_fetch(account_identity, kind)
+        try:
+            session = self._factory()
+        except Exception:
+            raise _translate_persistence_error() from None
+        # Do not touch ownership/lifecycle of a foreign or joined root. Engine
+        # inspection does not open a connection; rejected factories own cleanup.
+        try:
+            valid = (isinstance(session, Session) and session.is_active
+                     and not session.in_transaction() and not session.in_nested_transaction()
+                     and not session.new and not session.dirty and not session.deleted
+                     and isinstance(session.get_bind(), Engine)
+                     and session.get_bind().dialect.name == "postgresql")
+        except Exception:
+            valid = False
+        if not valid:
+            raise CredentialStoreError("credential_contract_invalid")
+        try:
+            session.begin()
+            connection = _physical_connection(session)
+            root, physical_root = session.get_transaction(), connection.get_transaction()
+
+            def verify_same_root():
+                if (session.get_transaction() is not root or not root.is_active
+                        or session.new or session.dirty or session.deleted
+                        or _physical_connection(session) is not connection
+                        or connection.get_transaction() is not physical_root):
+                    raise CredentialStoreError("credential_contract_invalid")
+                verify_executor_login(session, identity=self._identity)
+
+            verify_same_root()  # Concrete physical-login check BEFORE key/ciphertext.
+            try:
+                keyring = self._keyring_loader()
+                if type(keyring) is not CredentialKeyring:
+                    raise CredentialStoreError("credential_configuration_invalid")
+            except Exception:
+                raise CredentialStoreError("credential_configuration_invalid") from None
+            verify_same_root()
+            set_marketplace_account_context(
+                session, organization_id=account_identity.organization_id,
+                marketplace_account_id=account_identity.marketplace_account_id,
+            )
+            with session.no_autoflush:
+                result = _resolve_fetch_in_session(session, account_identity, kind, keyring)
+            verify_same_root()
+        except ExecutorIdentityDenied:
+            raise CredentialStoreError("credential_configuration_invalid") from None
+        except (CredentialCryptoError, CredentialStoreError):
+            raise
+        except Exception:
+            raise _translate_persistence_error() from None
+        finally:
+            # No writes/commit, no read-closure "commit ambiguity". Both cleanup
+            # operations are attempted; any failure prevents returning authority.
+            cleanup_failed = False
+            try:
+                session.rollback()
+            except Exception:
+                cleanup_failed = True
+            try:
+                session.close()
+            except Exception:
+                cleanup_failed = True
+            if cleanup_failed:
+                raise _translate_persistence_error() from None
+        return result
+
+
+def make_executor_credential_resolver(*, session_factory, keyring_loader, identity):
+    """Bind explicit trusted bootstrap dependencies, without DB/key I/O.
+
+    This verifies pool/crypto identity, NOT job/user/domain authorization. Never
+    register this as a fallback for an unresolved job credential generation.
+    """
+    return _ExecutorCredentialResolver(
+        session_factory=session_factory, keyring_loader=keyring_loader, identity=identity,
+    )
 
 
 def get_marketplace_credential_metadata(
