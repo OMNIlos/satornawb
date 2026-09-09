@@ -2,6 +2,13 @@
 
 ## Current checkpoint: frontend response isolation; Review historical binding open
 
+Latest test-only strategy-scope follow-up to c114a18: obsolete dependencyliteral
+replaced byactualReactinactivepage APIassertion, precisein-memorymutation detects
+unexpected GET/strategies/catalog. Finalfull350PASS/19FAIL/0pending versus349/20,
+oneperformance sourcecaseclosed/nonewIDs; TypeScript/diff0, independentcriticPASS.
+No runtimechanges; doesnotproveallproductrouteperformance. Localreport same
+2026-09-09-t4-repricer-stats-route-test.md, remaining19failuresunwaived.
+
 Latest frontend test-only checkpoint: actual VellaHtmlParityPage route/effects/
 generatedHTML browser test replaces2obsolete source-string assertions, retaining
 all otherguards. RealinitialGET/scopedperiodGET/authnullrow+KPIclearing verified.

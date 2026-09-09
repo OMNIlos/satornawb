@@ -47,3 +47,20 @@ stats source case; zero new failures. Remaining20 are unwaived debt.
 `tsc -b --noEmit` and `git diff --check` exit0. No runtime/build inputs changed
 in this test-only slice; prior Vite build remains unchanged, not rerun here.
 Full run report `/tmp/satorna-t4-stats-page-full.json`.
+
+## Follow-up: inactive strategy loading
+
+The next test-only extension removes one obsolete dependency-array literal from
+the performance source test; its checks against pathname dependency and product
+reload tick remain. Actual stats-page test verifies no strategies request on a
+non-product page. An exact multiline in-memory mutation removes productsTabActive
+only from the loadLiveRepricerStrategies effect; the test detects an unexpected
+request. Normal adjacent6 tests pass. Independent critic approves this replacement.
+This does not prove reload counts across all product-route transitions; no broad
+performance completion claim. Runtime files remain unchanged.
+
+Fresh full:350PASS/19FAIL/0pending versus349/20; only the named performance
+source case removed from failure set, zero new IDs. Final TypeScript/diff0.
+Mutation evidence names unexpected GET `/api/v1/wb-repricer/strategies/catalog`;
+it was aborted locally. Full `/tmp/satorna-t4-strategies-scope-full.json`, mutation
+`/tmp/satorna-t4-stats-page-strategies-mutation-evidence.json`.

@@ -8,16 +8,17 @@ import { expect, it } from 'vitest'
 it('loads live statistics through the actual React route and clears them on session loss', async () => {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const mutation = process.env.SATORNA_STATS_TEST_MUTATION
-  if (mutation && !['route', 'period'].includes(mutation)) throw new Error('Unknown statistics test mutation')
+  if (mutation && !['route', 'period', 'strategies-scope'].includes(mutation)) throw new Error('Unknown statistics test mutation')
   const result = await build({
     configFile: false, envFile: false, root, logLevel: 'silent', plugins: [
       { name: 'statistics-test-mutation', enforce: 'pre', transform(code, id) {
         if (!mutation || !id.endsWith('/VellaHtmlParityPage.tsx')) return null
         const original = mutation === 'route'
           ? "if (effectiveActiveParityTab === 'repricer-stats') void window.__vellaLoadLiveRepricerStats?.()"
-          : "if (!reportPeriodEventMatches(event, 'repricer-stats')) return"
+          : mutation === 'period' ? "if (!reportPeriodEventMatches(event, 'repricer-stats')) return"
+          : 'if (!runtime || !accessToken || !productsTabActive) return\n\n    const controller = new AbortController()\n    void loadLiveRepricerStrategies(accessToken, controller.signal)'
         if (!code.includes(original)) throw new Error('Statistics mutation target absent')
-        return code.replace(original, mutation === 'route' ? 'void 0' : 'if (false) return')
+        return code.replace(original, mutation === 'route' ? 'void 0' : mutation === 'period' ? 'if (false) return' : original.replace(' || !productsTabActive', ''))
       } },
       react(),
     ],
@@ -75,7 +76,7 @@ it('loads live statistics through the actual React route and clears them on sess
     expect(await page.getByText('NEW-PERIOD-REACT-STATS-SKU', { exact: true }).count()).toBe(0)
     expect(await page.locator('#tab-repricer-stats .stat-val').allTextContents()).toEqual(['—', '—', '—', '—'])
     expect(requests).toHaveLength(2)
-    expect(unexpected).toEqual([])
+    expect(unexpected, `Unexpected fixture requests: ${JSON.stringify(unexpected)}`).toEqual([])
     expect(errors).toEqual([])
   } finally { await browser.close() }
 }, 60_000)
