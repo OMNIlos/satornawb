@@ -251,3 +251,23 @@ accidental runtime/client dependencies. Fresh combined group **228PASS in0.16s**
 override suite now77 cases. Ruff from `backend` exits0. A root-cwd Ruff invocation
 reported I001 because import-root inference differs; the documented backend-cwd
 invocation passes without source changes. This is a scoped check, not whole-repo lint.
+
+### Real independent input-guard defect: DST elapsed TTL
+
+Strict-boundary review found a real defect in dormant `wb_repricing_price_inputs`:
+adding TTL/comparing datetimes in the same timezone used wall-clock semantics.
+Synthetic New York fall-back accepted an expired observation as fresh and accepted
+a future fold as current; spring-forward expired a still-fresh observation early.
+RED **3FAIL32PASS**, exit1. Root cause fixed by normalizing comparison instants to
+UTC before elapsed-second TTL arithmetic, while retaining original observation.
+UTC overflow fails closed; timezone/freshness policies and TTL values are not invented.
+
+Six regressions (DST3, UTC boundary2, provenance/equivalent offset1). Independent
+critic **38PASS**, no findings. Fresh combined price-input/stock/price-parser/source-
+revision/unchanged legacy calculation group **245PASS54.76s**, exit0. Compileall and
+diff0. Ruff exit1 has exactly the same5 diagnostics as pre-change HEAD: TRY004,
+I001, UP017, C408x2; new test lines use UTC and introduce no additional diagnostics.
+This is not a full-backend baseline claim. No current repricer wiring or formula edits.
+Rollback is a code-only revert of this bounded fix; no data/schema/backfill exists
+for this dormant guard. Activating it still requires accepted canonical inputs and
+the existing approval/economics/one-writer gates.

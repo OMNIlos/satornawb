@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -121,3 +121,55 @@ def test_ttl_requires_explicit_positive_integer_seconds(ttl):
 def test_malformed_provenance_is_rejected(changes):
     with pytest.raises(ValueError):
         replace(observation(), **changes)
+
+
+def test_fall_back_ttl_is_elapsed_seconds_not_repeated_wall_hour():
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("America/New_York")
+    source = observation(observed_at=datetime(2026, 11, 1, 1, 30, tzinfo=zone, fold=0))
+    now = datetime(2026, 11, 1, 1, 30, tzinfo=zone, fold=1)
+    result = assess(source, now=now, ttl_seconds=3600)
+    assert result.state == "stale"
+    assert not result.usable_for_repricing
+    assert result.expires_at == datetime(2026, 11, 1, 6, 30, tzinfo=UTC)
+
+
+def test_repeated_hour_future_observation_is_not_fresh():
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("America/New_York")
+    source = observation(observed_at=datetime(2026, 11, 1, 1, 15, tzinfo=zone, fold=1))
+    result = assess(source, now=datetime(2026, 11, 1, 1, 45, tzinfo=zone, fold=0))
+    assert result.reason_code == "PRICE_OBSERVATION_IN_FUTURE"
+    assert not result.usable_for_repricing
+
+
+def test_spring_forward_does_not_expire_before_elapsed_ttl():
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("America/New_York")
+    source = observation(observed_at=datetime(2026, 3, 8, 1, 30, tzinfo=zone))
+    result = assess(source, now=datetime(2026, 3, 8, 3, 0, tzinfo=zone))
+    assert result.state == "fresh"
+    assert result.expires_at == datetime(2026, 3, 8, 7, 30, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("field", ["observed_at", "now"])
+def test_unrepresentable_utc_boundary_fails_closed(field):
+    edge = datetime.min.replace(tzinfo=timezone(timedelta(hours=1)))
+    with pytest.raises(ValueError, match="supported UTC range"):
+        if field == "observed_at":
+            assess(observation(observed_at=edge))
+        else:
+            assess(observation(), now=edge)
+
+
+def test_equivalent_offset_instants_preserve_observation_and_ttl():
+    original = AT.astimezone(timezone(timedelta(hours=3)))
+    source = observation(observed_at=original)
+    result = assess(source, now=AT + timedelta(seconds=3599))
+    assert result.state == "fresh"
+    assert result.observation is source
+    assert source.observed_at is original
+    assert result.expires_at == AT + timedelta(hours=1)

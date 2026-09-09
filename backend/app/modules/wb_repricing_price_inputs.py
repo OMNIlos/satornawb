@@ -6,7 +6,7 @@ SPP and all other existing guards still apply. TTL is supplied by source policy.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Literal
 
@@ -96,11 +96,17 @@ def assess_current_buyer_price(
     _aware(now)
     if type(ttl_seconds) is not int or ttl_seconds <= 0:
         raise ValueError("positive integer TTL seconds required")
-    observed_at = observation.observed_at
     try:
+        # Compare instants and elapsed TTL, not DST-sensitive wall-clock times.
+        # Retain the original immutable observation for provenance.
+        now = now.astimezone(UTC)
+        observed_at = (
+            observation.observed_at.astimezone(UTC)
+            if observation.observed_at is not None else None
+        )
         expires_at = observed_at + timedelta(seconds=ttl_seconds) if observed_at is not None else None
     except OverflowError as exc:
-        raise ValueError("TTL exceeds supported datetime range") from exc
+        raise ValueError("observation time or TTL exceeds supported UTC range") from exc
 
     reason = None
     state = "blocked"
