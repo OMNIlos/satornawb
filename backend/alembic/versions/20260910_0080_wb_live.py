@@ -31,7 +31,8 @@ CREATE TABLE wb_live_sync_sources (
  source text NOT NULL CHECK(source IN ('content','prices')), run_id uuid NOT NULL UNIQUE,
  state text NOT NULL CHECK(state IN ('queued','running','completed','failed')),
  checkpoint jsonb NOT NULL DEFAULT '{}' CHECK(jsonb_typeof(checkpoint)='object'),
- processed bigint NOT NULL DEFAULT 0 CHECK(processed>=0), attempt integer NOT NULL DEFAULT 0 CHECK(attempt>=0),
+ processed bigint NOT NULL DEFAULT 0 CHECK(processed>=0), revision bigint NOT NULL DEFAULT 0 CHECK(revision>=0),
+ attempt integer NOT NULL DEFAULT 0 CHECK(attempt>=0),
  lease_token uuid, lease_expires_at timestamptz, next_due_at timestamptz NOT NULL DEFAULT now(),
  updated_at timestamptz NOT NULL DEFAULT now(), error_code text,
  PRIMARY KEY(organization_id,marketplace_account_id,job_id,source),
@@ -69,7 +70,7 @@ CREATE TABLE wb_live_product_sizes (
 );
 CREATE TABLE wb_live_pages (
  organization_id integer NOT NULL, marketplace_account_id integer NOT NULL, job_id uuid NOT NULL,
- source text NOT NULL, lease_token uuid NOT NULL, page_digest varchar(64) NOT NULL,
+ source text NOT NULL, run_id uuid NOT NULL, lease_token uuid NOT NULL, page_digest varchar(64) NOT NULL,
  checkpoint jsonb NOT NULL, row_count integer NOT NULL CHECK(row_count>=0), committed_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY(organization_id,marketplace_account_id,job_id,source,lease_token),
  FOREIGN KEY(organization_id,marketplace_account_id,job_id,source)
@@ -93,10 +94,12 @@ RETURNS TABLE(org_id integer, account_id integer, job_id uuid)
 LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
  SELECT j.organization_id,j.marketplace_account_id,j.job_id
  FROM public.wb_live_sync_jobs j
- WHERE j.state IN ('queued','running','partial') AND EXISTS (
+ WHERE (j.state IN ('queued','running','partial') OR (j.state='completed' AND NOT EXISTS
+ (SELECT 1 FROM public.wb_live_sync_jobs newer WHERE newer.organization_id=j.organization_id
+ AND newer.marketplace_account_id=j.marketplace_account_id AND (newer.created_at,newer.job_id)>(j.created_at,j.job_id)))) AND EXISTS (
  SELECT 1 FROM public.wb_live_sync_sources s WHERE s.organization_id=j.organization_id
  AND s.marketplace_account_id=j.marketplace_account_id AND s.job_id=j.job_id
- AND s.state IN ('queued','running') AND s.next_due_at<=clock_timestamp()
+ AND s.state IN ('queued','running','completed') AND s.next_due_at<=clock_timestamp()
  AND (s.lease_expires_at IS NULL OR s.lease_expires_at<=clock_timestamp()))
  ORDER BY j.updated_at,j.job_id LIMIT greatest(0,least(p_limit,100));
 $$;

@@ -62,6 +62,7 @@ class WbLiveSyncSourceRow(_Owner, Base):
     state: Mapped[str] = mapped_column(String)
     checkpoint: Mapped[dict] = mapped_column(JSONB)
     processed: Mapped[int] = mapped_column(BigInteger)
+    revision: Mapped[int] = mapped_column(BigInteger)
     attempt: Mapped[int] = mapped_column(Integer)
     lease_token: Mapped[UUID | None] = mapped_column(Uuid)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
