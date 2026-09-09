@@ -3,6 +3,59 @@
 Date: 2026-09-08. Base: `c88a474695569af905b294906ba604d61f3de62f`.
 Branch: `codex/arch-t1-platform`.
 
+## Current finite foundation handoff — 2026-09-09
+
+This section supersedes historical ownership/status statements below. Latest user
+scope is the coordinator's `2026-09-09-architecture-foundation-delivery.md`.
+Source tip before this documentation commit: `032e0e8c5718e426cd5e1cb20e7c5e4af63e65ec`.
+T1 freezes new source work and releases shared integration ownership to root.
+There are no active T1 implementers, heavy processes or resource reservations.
+
+Source-only schema packages: 0077 `b21f2166886ade7637b1b9594b5b28c1e38d3e80`,
+0078 `eb079c6da56df5d90c3c6b7cbde86ab43ee87edd`, 0079
+`5ec0746bce06989337803386806721931ed45c6f`, maintenance handoff
+`5b8db89e35749086aa52cc65254625b7b3fe20a4`. Source declarations end at
+`20260909_0079` → `20260909_0078`; no new Alembic execution is claimed.
+0079 adds only inert metadata/storage and two provision/deprovision artifacts.
+The approved audit amendment `619c0c5890e193bf663b1ab0b31b49daf4fae9d5` uses a
+fixed derived helper, not nonexistent audit RLS or direct runner audit rights.
+See `2026-09-09-t1-credential-maintenance-handoff.md` for the complete object/ACL
+matrix. Maintenance store/registrar/CLI were not started and remain P1; SQL
+registration alone is not independently verified mapping. Provisioning is not authorized.
+
+All temporary shared-path delegations below have returned and are imported unchanged:
+
+| Origin | T1 import | Bounded package |
+| --- | --- | --- |
+| ef027ea87fed51b4bfb80b1e40a95413c0cfbe77 | c74c4a58ec5fd6ed59d4ffe45945a5d57466ddaf | One pure maintenance metadata contract |
+| 1e4ce7a4c1578f16fde7dca35f4eb770590d42ef | 23c54753e29aa614dc5076fb658961cca978bcad | Four-path Avito failure outputs |
+| 35d302ef4b18204769abe15da15783c9b1f97884 | 88bc71412d99d055af25b56e29df1545ad4cf433 | Orders client diagnostic follow-up |
+| 33227b10d89e1d71ba9b05a36324e39745ec8200 | 94a062eeaf6c99ef89f25311842f4e0a2936f5d1 | Overview typed/cache diagnostics |
+| 7b32749ee39a26ffd824572a9f65bb95f652325c | 032e0e8c5718e426cd5e1cb20e7c5e4af63e65ec | Repricer error/cache diagnostics |
+
+These are output hardening, not account cutover or whole-Avito safety. Existing
+management `91f2456` and persisted readback `7f76425` contracts remain in this tree.
+T3 separately returned release-gate three-path source
+`bf6aa9a6d40a6956a3ac012c635e0eed0d0be3d0` directly to root; T1 did not import it.
+Root must retain the union with its existing installed-wheel entry points.
+
+**P0 residual:** integrate immutable domain packages; empty bootstrap/upgrade and
+restricted-role isolation; changed credential authorization/readback and domain
+transaction/CAS/replay/canary gates; installed-wheel entry points; consolidated
+backend/frontend/typecheck/build with natural shutdown; independent final review
+and demonstrated-defect fixes. None of these new-source gates ran in this
+source-first continuation. Historical 105 failures and shutdown hang remain
+unresolved evidence, not an expanded or accepted green baseline.
+
+Operational cutover, plaintext retirement, real backfill/restore, key custody,
+proof/TTL/drain/observation policy, unsupported product permissions and new live
+heartbeat expansion remain P1. Production assembly/printing remains P2 deferred;
+KIZ/standalone matcher remain excluded. New dormant flows were not activated;
+older unrelated flags were not changed or asserted universally disabled. No
+provider, production, real-credential, GitHub, push or deployment action occurred
+in this continuation. This is IMPLEMENTED / UNVERIFIED source, not release or
+architecture completion. The rest of this document is historical slice evidence.
+
 This slice adds the authenticated account-owned API boundary over the existing
 Wave 1 crypto, persistence, forced-RLS and credential-store contracts. It does
 not switch a provider consumer, implement a legacy fallback, mount a keyring,
