@@ -1,5 +1,18 @@
 # T4 — requirement → commit → evidence → remaining work
 
+## Latest: active Ads search characterized, unused-path hypothesis rejected
+
+Actual React Ads search by supplied SKU/campaign: 1PASS3.48s, TypeScript0,
+all traffic intercepted and browser cleanup complete. Test-only addition;
+runtime/source snapshot unchanged. Prototype-selector hypothesis was disproved
+by mounted React inspection and deliberately disabled old demo renderer; all
+speculative helper edits removed. Old giant test still fails, no full-suite
+green inferred. See frontend report `2026-09-09-t4-ads-search-verification.md`.
+Explicit heavy-slot release sent to T1/T2/T3. T2 continues uncovered legacy
+calculation characterization; T3 continues independent Orders/Production scope.
+Neither requires waiting for T1 as a whole; exact missing DDL/authority contracts
+still gate their respective integration slices.
+
 ## Current checkpoint: Review0068 consumer scoped acceptance; frontend debt continues
 
 Review consumer final focused44PASS11.78s, including six actual account-lock race
