@@ -3,6 +3,7 @@
 # ruff: noqa: SIM117
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Event
@@ -11,7 +12,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import event, func, select, text, update
+from sqlalchemy import create_engine, event, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -89,6 +90,138 @@ def count_proof(d):
         return session.scalar(select(func.count()).select_from(LkAuditEventRow).where(
             LkAuditEventRow.organization_id == d.org,
             LkAuditEventRow.action.in_(["synthetic.publication", "synthetic.proof"])))
+
+
+@contextmanager
+def guard_statements(connection):
+    """Observe guard SQL only, excluding driver initialization and test setup."""
+    statements = []
+
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(connection, "before_cursor_execute", capture)
+    try:
+        yield statements
+    finally:
+        event.remove(connection, "before_cursor_execute", capture)
+
+
+@pytest.mark.parametrize("mode", ["engine_option", "engine_constructor", "bound_connection"])
+def test_physical_admission_rejects_autocommit_before_sql(data, mode):
+    d, g = data, api()
+    # A separate pool makes every mode/setting change local to this test.
+    engine = create_engine(d.factory.kw["bind"].url, hide_parameters=True,
+                           **({"isolation_level": "AUTOCOMMIT"} if mode == "engine_constructor" else {}))
+    bind = engine.execution_options(isolation_level="AUTOCOMMIT") if mode == "engine_option" else engine
+    connection = engine.connect().execution_options(isolation_level="AUTOCOMMIT") if mode == "bound_connection" else None
+    try:
+        with Session(connection if connection is not None else bind) as session:
+            with session.begin():
+                physical = session.connection()
+                assert session.get_transaction().is_active
+                assert physical.get_isolation_level() == "READ COMMITTED"
+                assert physical.connection.dbapi_connection.autocommit is True
+                # Reproduce old guard acceptance, not merely its later tenant
+                # mismatch: AUTOCOMMIT can retain a session-level tenant value.
+                physical.execute(text("SELECT set_config('app.organization_id', :org, false)"), {"org": str(d.org)})
+                try:
+                    with guard_statements(physical) as statements:
+                        with pytest.raises(g.PublicationGuardError, match="^publication_context_invalid$"):
+                            acquire(session, d)
+                    assert statements == []
+                finally:
+                    physical.execute(text("SELECT set_config('app.organization_id', '', false)"))
+                    session.rollback()
+    finally:
+        if connection is not None:
+            connection.close()
+        engine.dispose()
+    assert count_proof(d) == 0
+
+
+def test_physical_admission_rejects_initial_connection_savepoint_before_sql(data):
+    d, g = data, api()
+    with d.factory() as session, session.begin():
+        connection = session.connection()
+        nested = connection.begin_nested()
+        try:
+            assert not session.in_nested_transaction()
+            with guard_statements(connection) as statements:
+                with pytest.raises(g.PublicationGuardError, match="^publication_context_invalid$"):
+                    acquire(session, d)
+            assert statements == []
+        finally:
+            nested.rollback()
+            session.rollback()
+
+
+@pytest.mark.parametrize("boundary", ["revalidate", "commit"])
+def test_physical_admission_rejects_later_connection_savepoint_and_poisons_root(data, boundary):
+    d, g = data, api()
+    with d.factory() as session:
+        session.begin()
+        guard = acquire(session, d)
+        proof(session, d)
+        session.flush()
+        connection = session.connection()
+        nested = connection.begin_nested()
+        try:
+            with guard_statements(connection) as statements:
+                with pytest.raises(g.PublicationGuardError, match="^publication_context_invalid$"):
+                    guard.revalidate_before_write() if boundary == "revalidate" else session.commit()
+            assert statements == []
+        finally:
+            if nested.is_active:
+                nested.rollback()
+        # Closing the unsupported SAVEPOINT cannot recover a poisoned handle.
+        for operation in (guard.revalidate_before_write, session.commit):
+            with pytest.raises(g.PublicationGuardError, match="^publication_context_invalid$"):
+                operation()
+        session.rollback()
+    assert count_proof(d) == 0
+
+
+@pytest.mark.parametrize("join_mode", [None, "rollback_only", "create_savepoint", "control_fully"])
+def test_physical_admission_rejects_external_root_without_touching_owner(data, join_mode):
+    d, g = data, api()
+    with d.engine.connect() as connection:
+        root = connection.begin()
+        try:
+            connection.execute(text("SELECT set_config('app.organization_id', :org, true)"), {"org": str(d.org)})
+            connection.execute(text("INSERT INTO lk_audit_events (organization_id, actor_user_id, action, object_type, object_id) "
+                                    "VALUES (:org, :user, 'synthetic.owner', 'synthetic', :object)"),
+                               {"org": d.org, "user": f"owner-{d.org}", "object": str(d.org)})
+            options = {} if join_mode is None else {"join_transaction_mode": join_mode}
+            with Session(connection, **options) as session:
+                with session.begin():
+                    with guard_statements(connection) as statements:
+                        with pytest.raises(g.PublicationGuardError, match="^publication_context_invalid$"):
+                            acquire(session, d)
+                    assert statements == []
+            assert connection.get_transaction() is root and root.is_active
+            assert not connection.in_nested_transaction()
+            assert connection.scalar(text("SELECT current_setting('app.organization_id', true)")) == str(d.org)
+            assert connection.scalar(text("SELECT count(*) FROM lk_audit_events WHERE organization_id=:org AND action='synthetic.owner'"),
+                                     {"org": d.org}) == 1
+        finally:
+            if root.is_active:
+                root.rollback()
+    assert count_proof(d) == 0
+
+
+def test_physical_admission_accepts_engine_root_and_commits_both_proofs(data):
+    d = data
+    with d.factory() as session, session.begin():
+        connection = session.connection()
+        assert connection.get_isolation_level() == "READ COMMITTED"
+        assert connection.connection.dbapi_connection.autocommit is False
+        assert connection.get_transaction().is_active
+        assert not connection.in_nested_transaction()
+        guard = acquire(session, d)
+        assert guard.revalidate_before_write().tzinfo is not None
+        proof(session, d)
+    assert count_proof(d) == 2
 
 
 def mutate(session, d, change):

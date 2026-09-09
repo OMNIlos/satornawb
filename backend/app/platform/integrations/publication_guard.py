@@ -14,7 +14,7 @@ from datetime import datetime
 from uuid import UUID
 from weakref import ref
 
-from sqlalchemy import event, func, select, text
+from sqlalchemy import Engine, event, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -182,6 +182,21 @@ def _scope(membership, accounts, required_permissions):
         raise PublicationGuardError("publication_access_denied")
 
 
+def _physical_connection(session):
+    # A joined Connection root can outlive Session.commit and its final check.
+    bind = session.get_bind()
+    if not isinstance(bind, Engine) or bind.dialect.name != "postgresql":
+        raise PublicationGuardError("publication_context_invalid")
+    connection = session.connection()
+    root = connection.get_transaction()
+    # Logical Session roots and READ COMMITTED do not rule out AUTOCOMMIT;
+    # Connection SAVEPOINTs also bypass Session nested-transaction events.
+    if (root is None or not root.is_active or connection.in_nested_transaction()
+            or getattr(connection.connection.dbapi_connection, "autocommit", None) is not False):
+        raise PublicationGuardError("publication_context_invalid")
+    return connection
+
+
 class PublicationGuard:
     """Transaction-bound handle; no credential payloads or independent sessions."""
 
@@ -204,6 +219,7 @@ class PublicationGuard:
                 or not self._transaction.is_active or session.in_nested_transaction()
                 or getattr(session, _STATE, None) is not self):
             raise PublicationGuardError("publication_context_invalid")
+        _physical_connection(session)
         marker = (self._transaction, self._principal.organization_id)
         if session.info.get("satorna_tenant_context") != marker:
             raise PublicationGuardError("publication_context_invalid")
@@ -338,10 +354,8 @@ def acquire_publication_guard(session: Session, *, principal: UserSessionPrincip
             or getattr(session, _STATE, None) is not None):
         raise PublicationGuardError("publication_context_invalid")
     try:
-        if session.get_bind().dialect.name != "postgresql":
-            raise PublicationGuardError("publication_context_invalid")
         with session.no_autoflush:
-            if session.connection().get_isolation_level() != "READ COMMITTED":
+            if _physical_connection(session).get_isolation_level() != "READ COMMITTED":
                 raise PublicationGuardError("publication_context_invalid")
             transaction = session.get_transaction()
             marker = session.info.get("satorna_tenant_context")
