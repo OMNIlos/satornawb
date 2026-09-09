@@ -204,12 +204,68 @@ def _physical_connection(session):
     return connection
 
 
+def _require_clean_publication_root(session):
+    """Shared admission only; no authorization, identity or domain callbacks."""
+    existing = getattr(session, _STATE, None)
+    if existing is not None:
+        existing._failed = True
+    if (not isinstance(session, Session) or not session.in_transaction() or not session.is_active
+            or session.in_nested_transaction() or session.new or session.dirty or session.deleted
+            or existing is not None
+            or _physical_connection(session).get_isolation_level() != "READ COMMITTED"):
+        raise PublicationGuardError("publication_context_invalid")
+
+
+def _initialize_publication_root(guard, session):
+    guard._session_ref = ref(session)
+    guard._transaction = session.get_transaction()
+    guard._physical_root = _physical_connection(session).get_transaction()
+    guard._failed = guard._ended = guard._finalizing = False
+    guard._orders_fences = guard._repricer_fences = guard._review_fences = ()
+
+
+def _publication_root_context(guard, organization_id):
+    session = guard._session_ref()
+    if (session is None or guard._ended or guard._failed or not session.is_active
+            or session.get_transaction() is not guard._transaction
+            or guard._transaction is None or not guard._transaction.is_active
+            or session.in_nested_transaction() or getattr(session, _STATE, None) is not guard):
+        raise PublicationGuardError("publication_context_invalid")
+    if _physical_connection(session).get_transaction() is not guard._physical_root:
+        raise PublicationGuardError("publication_context_invalid")
+    if session.info.get("satorna_tenant_context") != (guard._transaction, organization_id):
+        raise PublicationGuardError("publication_context_invalid")
+    actual = session.execute(text(
+        "SELECT current_setting('app.organization_id', true), current_setting('transaction_isolation')"
+    )).one()
+    if actual != (str(organization_id), "read committed"):
+        raise PublicationGuardError("publication_context_invalid")
+    return session
+
+
+def _revalidate_publication_root(guard):
+    try:
+        session = guard._session_ref()
+        if session is None:
+            raise PublicationGuardError("publication_context_invalid")
+        with session.no_autoflush:
+            return guard._validate()
+    except PublicationGuardError:
+        guard._failed = True
+        raise
+    except SQLAlchemyError:
+        guard._failed = True
+        raise PublicationGuardError("publication_persistence_failed") from None
+    except Exception:
+        guard._failed = True
+        raise
+
+
 class PublicationGuard:
     """Transaction-bound handle; no credential payloads or independent sessions."""
 
     def __init__(self, session, principal, permissions, accounts, credentials, tokens):
-        self._session_ref = ref(session)
-        self._transaction = session.get_transaction()
+        _initialize_publication_root(self, session)
         self._principal = principal
         self._permissions = permissions
         self._accounts, self._credentials, self._tokens = accounts, credentials, tokens
@@ -225,37 +281,11 @@ class PublicationGuard:
         return "<PublicationGuard>"
 
     def _context(self):
-        session = self._session_ref()
-        if (session is None or self._ended or self._failed or not session.is_active
-                or session.get_transaction() is not self._transaction
-                or not self._transaction.is_active or session.in_nested_transaction()
-                or getattr(session, _STATE, None) is not self):
-            raise PublicationGuardError("publication_context_invalid")
-        _physical_connection(session)
-        marker = (self._transaction, self._principal.organization_id)
-        if session.info.get("satorna_tenant_context") != marker:
-            raise PublicationGuardError("publication_context_invalid")
-        actual = session.execute(text(
-            "SELECT current_setting('app.organization_id', true), current_setting('transaction_isolation')"
-        )).one()
-        if actual != (str(self._principal.organization_id), "read committed"):
-            raise PublicationGuardError("publication_context_invalid")
-        return session
+        return _publication_root_context(self, self._principal.organization_id)
 
     def revalidate_before_write(self) -> datetime:
         """Refresh exact locked metadata and DB time; does not flush caller writes."""
-        try:
-            session = self._session_ref()
-            if session is None:
-                raise PublicationGuardError("publication_context_invalid")
-            with session.no_autoflush:
-                return self._validate()
-        except PublicationGuardError:
-            self._failed = True
-            raise
-        except SQLAlchemyError:
-            self._failed = True
-            raise PublicationGuardError("publication_persistence_failed") from None
+        return _revalidate_publication_root(self)
 
     def _validate(self):
         session = self._context()
@@ -322,13 +352,15 @@ class PublicationGuard:
     def _validate_accounts(self, session, expiries):
         p = self._principal
         a = MarketplaceAccountRow
+        locked_accounts = {}
         for expected in self._accounts:
             account = session.execute(select(a.organization_id, a.marketplace, a.external_account_id,
-                a.credential_ref, a.status).where(a.marketplace_account_id == expected.marketplace_account_id
+                a.credential_ref, a.status, a.ingestion_binding_version).where(a.marketplace_account_id == expected.marketplace_account_id
                 ).with_for_update()).one_or_none()
-            if account is None or tuple(account) != (p.organization_id, expected.provider,
+            if account is None or tuple(account)[:5] != (p.organization_id, expected.provider,
                     expected.external_account_id, expected.credential_ref, "connected"):
                 raise PublicationGuardError("publication_binding_changed")
+            locked_accounts[expected.marketplace_account_id] = account
         c = MarketplaceAccountCredentialRow
         for expected in self._credentials:
             credential = session.execute(select(c.organization_id, c.marketplace_account_id, c.provider,
@@ -343,10 +375,18 @@ class PublicationGuard:
         t = MarketplaceAccountIngestionTokenRow
         for expected in self._tokens:
             token = session.execute(select(t.organization_id, t.marketplace_account_id, t.provider, t.scope,
-                t.expires_at, t.revoked_at).where(t.token_id == expected.token_id).with_for_update(read=True)).one_or_none()
-            if token is None or tuple(token) != (p.organization_id, expected.marketplace_account_id,
+                t.expires_at, t.revoked_at, t.binding_schema_version, t.binding_external_account_id,
+                t.binding_credential_ref, t.binding_version).where(t.token_id == expected.token_id).with_for_update(read=True)).one_or_none()
+            if token is None or tuple(token)[:6] != (p.organization_id, expected.marketplace_account_id,
                                                  "avito", expected.scope, expected.expires_at, None):
                 raise PublicationGuardError("publication_authority_invalid")
+            # Legacy all-NULL is retained ONLY for the pre-rollout, independently
+            # user-authenticated entry. New bound rows cannot bypass incarnation.
+            binding = tuple(token)[6:]
+            account = locked_accounts[expected.marketplace_account_id]
+            if binding != (None, None, None, None) and binding != (
+                    1, account.external_account_id, account.credential_ref, account.ingestion_binding_version):
+                raise PublicationGuardError("publication_binding_changed")
             expiries.append(token.expires_at)
         now = session.scalar(select(func.clock_timestamp()))
         if any(not _aware(expiry) or expiry <= now for expiry in expiries):
@@ -549,10 +589,7 @@ def acquire_publication_guard(session: Session, *, principal: UserSessionPrincip
                               required_permissions: frozenset[str], accounts, authorities) -> PublicationGuard:
     """Acquire one metadata fence in an existing clean PostgreSQL RC transaction."""
     accounts, credentials, tokens = _contracts(principal, required_permissions, accounts, authorities)
-    if (not isinstance(session, Session) or not session.in_transaction() or not session.is_active
-            or session.in_nested_transaction() or session.new or session.dirty or session.deleted
-            or getattr(session, _STATE, None) is not None):
-        raise PublicationGuardError("publication_context_invalid")
+    _require_clean_publication_root(session)
     try:
         with session.no_autoflush:
             if _physical_connection(session).get_isolation_level() != "READ COMMITTED":

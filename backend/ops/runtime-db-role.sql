@@ -104,6 +104,12 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM :"runtime_role";
 GRANT USAGE ON SCHEMA public TO :"runtime_role";
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO :"runtime_role";
+-- 0076 additive columns inherit the existing table privileges. Column REVOKE
+-- cannot narrow a table UPDATE grant: immutable incarnation/binding triggers
+-- enforce these invariants, including OLD+1 caller counter assignments.
+-- Trigger execution is automatic; runtime may not invoke the functions itself.
+REVOKE ALL ON FUNCTION public.ingestion_account_incarnation_guard(),
+    public.ingestion_token_binding_guard() FROM PUBLIC, :"runtime_role";
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO :"runtime_role";
 
 ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
@@ -454,5 +460,93 @@ GRANT EXECUTE ON FUNCTION public.wb_state_uuid(uuid), public.wb_state_time(times
 -- Exact preexisting pure codec dependencies; no old table/index or policy change.
 GRANT EXECUTE ON FUNCTION public.repricer_exact_text(text), public.repricer_ascii_json_string(text),
  public.wb_sku_override_decimal(numeric), public.wb_sku_override_integral(numeric) TO :"runtime_role";
+
+-- 0077: only current WB source storage objects. These database privileges do
+-- not authenticate a worker, supply a source permission or enable a collector.
+DO $$
+DECLARE t record; a record; c record; f record; who text;
+BEGIN
+ FOR t IN SELECT x.name,c.oid,c.relowner,c.relname,c.relacl,c.relkind,c.relrowsecurity,c.relforcerowsecurity
+ FROM (VALUES ('wb_price_runs'),('wb_price_pages'),('wb_price_product_facts'),('wb_price_size_facts'),
+ ('wb_price_current_heads'),('wb_price_audit'),('wb_stock_runs'),('wb_stock_pages'),
+ ('wb_stock_observations'),('wb_stock_current_heads'),('wb_stock_audit'),
+ ('wb_price_ingest_sequence'),('wb_stock_ingest_sequence')) x(name)
+ LEFT JOIN pg_class c ON c.oid=to_regclass('public.'||x.name) LOOP
+  IF t.oid IS NULL OR (t.relkind<>'S' AND (NOT t.relrowsecurity OR NOT t.relforcerowsecurity)) THEN
+   RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='wb_current_forced_rls_required'; END IF;
+  FOR a IN SELECT DISTINCT grantee FROM aclexplode(t.relacl) WHERE grantee<>t.relowner LOOP
+   who:=CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END;
+   EXECUTE format('REVOKE ALL ON %s public.%I FROM %s',CASE WHEN t.relkind='S' THEN 'SEQUENCE' ELSE 'TABLE' END,t.relname,who);
+  END LOOP;
+  FOR c IN SELECT at.attname,x.grantee FROM pg_attribute at CROSS JOIN LATERAL aclexplode(at.attacl) x
+  WHERE at.attrelid=t.oid AND x.grantee<>t.relowner LOOP
+   who:=CASE WHEN c.grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(c.grantee)) END;
+   EXECUTE format('REVOKE ALL (%I) ON public.%I FROM %s',c.attname,t.relname,who);
+  END LOOP;
+  EXECUTE format('REVOKE ALL ON %s public.%I FROM PUBLIC',CASE WHEN t.relkind='S' THEN 'SEQUENCE' ELSE 'TABLE' END,t.relname);
+ END LOOP;
+ FOR f IN SELECT oid,proowner,proacl,oid::regprocedure signature FROM pg_proc WHERE oid IN (
+ 'public.wb_current_uuid(uuid)'::regprocedure,'public.wb_current_time(timestamptz)'::regprocedure,
+ 'public.wb_current_presence(text,bigint)'::regprocedure,
+ 'public.wb_current_request_bytes(integer,integer,text,text,bigint)'::regprocedure,
+ 'public.wb_price_manifest_bytes(public.wb_price_runs,public.wb_price_pages[])'::regprocedure,
+ 'public.wb_stock_manifest_bytes(public.wb_stock_runs,public.wb_stock_pages[])'::regprocedure,
+ 'public.wb_current_account_lock()'::regprocedure,'public.wb_current_immutable()'::regprocedure,
+ 'public.wb_price_run_guard()'::regprocedure,'public.wb_price_child_guard()'::regprocedure,
+ 'public.wb_price_head_guard()'::regprocedure,'public.wb_price_audit_guard()'::regprocedure,
+ 'public.wb_price_emit_audit()'::regprocedure,'public.wb_price_graph()'::regprocedure,
+ 'public.wb_stock_run_guard()'::regprocedure,'public.wb_stock_child_guard()'::regprocedure,
+ 'public.wb_stock_head_guard()'::regprocedure,'public.wb_stock_audit_guard()'::regprocedure,
+ 'public.wb_stock_emit_audit()'::regprocedure,'public.wb_stock_graph()'::regprocedure) LOOP
+  FOR a IN SELECT DISTINCT grantee FROM aclexplode(f.proacl) WHERE grantee<>f.proowner LOOP
+   who:=CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END;
+   EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %s',f.signature,who);
+  END LOOP;
+  EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC',f.signature);
+ END LOOP;
+END $$;
+GRANT SELECT ON public.wb_price_runs, public.wb_price_pages, public.wb_price_product_facts,
+ public.wb_price_size_facts, public.wb_price_current_heads, public.wb_price_audit,
+ public.wb_stock_runs, public.wb_stock_pages, public.wb_stock_observations,
+ public.wb_stock_current_heads, public.wb_stock_audit TO :"runtime_role";
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,request_key,source_kind,parser_version,
+ started_at,page_limit,request_bytes,request_checksum,account_binding_schema_version,account_binding_external_account_id,
+ account_binding_credential_ref,account_binding_payload,account_binding_checksum,credential_id,credential_kind,
+ credential_generation,credential_payload_schema_version,credential_expires_at)
+ ON public.wb_price_runs, public.wb_stock_runs TO :"runtime_role";
+GRANT UPDATE (state,version,received_at,manifest_checksum,page_count,raw_row_count,fact_count,safe_error_code)
+ ON public.wb_price_runs, public.wb_stock_runs TO :"runtime_role";
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,run_id,page_no,page_offset,requested_limit,
+ received_at,source_observed_at,http_status,raw_checksum,raw_row_count,terminal,request_id)
+ ON public.wb_price_pages, public.wb_stock_pages TO :"runtime_role";
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,run_id,page_no,nm_id,source_size_count,
+ unresolved_size_count,discount_presence,discount,club_discount_presence,club_discount)
+ ON public.wb_price_product_facts TO :"runtime_role";
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,run_id,nm_id,size_id,currency,
+ list_price_kopecks_presence,list_price_kopecks,discounted_price_kopecks_presence,discounted_price_kopecks,
+ club_price_kopecks_presence,club_price_kopecks) ON public.wb_price_size_facts TO :"runtime_role";
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,run_id,page_no,stock_scope,warehouse_id,
+ nm_id,chrt_id,warehouse_display_name,quantity_presence,quantity,in_way_to_client_presence,in_way_to_client,
+ in_way_from_client_presence,in_way_from_client) ON public.wb_stock_observations TO :"runtime_role";
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,source_kind,parser_version,request_checksum,
+ run_id,published_sequence,version) ON public.wb_price_current_heads, public.wb_stock_current_heads TO :"runtime_role";
+GRANT UPDATE (run_id,published_sequence,version)
+ ON public.wb_price_current_heads, public.wb_stock_current_heads TO :"runtime_role";
+-- Used by SECURITY INVOKER automatic audit triggers; the audit insert guard
+-- rejects direct INSERT. IDs and timestamps are always supplied by the DB.
+GRANT INSERT (organization_id,marketplace_account_id,marketplace,run_id,event_kind,actor_kind,
+ actor_membership_id,before_run,after_run,before_head,after_head)
+ ON public.wb_price_audit, public.wb_stock_audit TO :"runtime_role";
+-- USAGE permits burning nextval; no SELECT/UPDATE, setval, ALTER or ownership.
+-- An explicit ingest_sequence is rejected before INSERT even for table owners.
+GRANT USAGE ON SEQUENCE public.wb_price_ingest_sequence, public.wb_stock_ingest_sequence TO :"runtime_role";
+GRANT EXECUTE ON FUNCTION public.wb_current_uuid(uuid), public.wb_current_time(timestamptz),
+ public.wb_current_presence(text,bigint), public.wb_current_request_bytes(integer,integer,text,text,bigint),
+ public.wb_price_manifest_bytes(public.wb_price_runs,public.wb_price_pages[]),
+ public.wb_stock_manifest_bytes(public.wb_stock_runs,public.wb_stock_pages[]) TO :"runtime_role";
+-- Exact preexisting schema-1 account descriptor dependencies, no parent edits.
+GRANT EXECUTE ON FUNCTION public.orders_binding_text(text,integer),
+ public.review_run_binding_bytes(integer,integer,text,text,text), public.review_binding_ascii_string(text)
+ TO :"runtime_role";
 
 COMMIT;

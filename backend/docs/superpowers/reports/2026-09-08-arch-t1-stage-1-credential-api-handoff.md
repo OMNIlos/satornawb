@@ -59,8 +59,27 @@ coordinator to unblock parallel source implementation (not Stage1 verification):
   `d1fd534f53b879f1e741d39b13c6ce76fdad5e2f`, imported unchanged with provenance as
   `564515291612520e3ba5d585e870a37355c90e0b`; ownership returned T1. Existing legacy
   methods and consumers are unchanged.
+- T2 temporarily owned ONLY safe error/diagnostic fields in
+  `backend/app/avito/chats.py`, `backend/app/avito/stats.py` and its dedicated
+  `2026-09-09-t2-avito-safe-diagnostics-handoff.md`. Delivered
+  `1213202030039af60aa63e111e2f1de43d9b7e06`, imported unchanged as
+  `dad6b661efd5844f68d6085c93e6b2662f4fbc32`; ownership returned T1. Business
+  payloads/pagination remain separate from redacted diagnostics; no blanket
+  claim that every non-HTTP Avito action error is now covered.
+- T2 temporarily owned ONLY the ordinary put/revoke/status/resolve transaction
+  core in `backend/app/platform/integrations/credential_store.py` and
+  `2026-09-09-t1-credential-transaction-core-handoff.md`. Source chain
+  `874782ddeed534e4f4bfd9024037853fb5197ac4`,
+  `e2d51a5c9482733eb4e50a0dd47addb010280440`,
+  `fb2ae0ec686aa59a2c8e69dc3fdf96dca753ee42` imported unchanged respectively as
+  `944c6ed31362471fd9c7b93adc09d8dc5bd3c36b`,
+  `827620abaa5b83ad169391611db5684c277a1917`,
+  `742c83f690272344427de7f02d2fcfca756e8689`; ownership returned T1. The final
+  follow-up preserves public post-query expiry-clock ordering. Private helpers
+  are transaction participants, not authentication; paired fetch/executor/rekey
+  and existing public signatures were outside this delegation.
 
-Both source packages are IMPLEMENTED / UNVERIFIED under the user's source-first
+All these source packages are IMPLEMENTED / UNVERIFIED under the user's source-first
 sequence. No new tests/review/compile/import/PG gates, operational role/flag/key or
 provider actions were performed for these imports. This does not broaden domain
 owners' standing rights over store writers, schema, shared guard/config/grants,

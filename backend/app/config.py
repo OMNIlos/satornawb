@@ -177,6 +177,9 @@ class Settings:
     review_shadow_enabled: bool = False
     review_shadow_account_pairs: tuple[tuple[int, int], ...] = ()
     marketplace_credentials_enabled: bool = False
+    # Optional nonsecret JSON policy. Parsing belongs to explicit ingestion
+    # bootstrap: malformed/partial policy must not prevent unrelated app startup.
+    ingestion_policy_config: str | None = None
     marketplace_executor_role: str | None = None
     marketplace_api_runtime_role: str | None = None
     marketplace_credential_keyring_dir: str | None = None
@@ -316,6 +319,7 @@ def get_settings() -> Settings:
         marketplace_credentials_enabled=_parse_bool_env(
             "VELLA_MARKETPLACE_CREDENTIALS_ENABLED", False
         ),
+        ingestion_policy_config=os.getenv("VELLA_INGESTION_POLICY"),
         marketplace_executor_role=_parse_marketplace_role(os.getenv("VELLA_MARKETPLACE_EXECUTOR_ROLE")),
         marketplace_api_runtime_role=_parse_marketplace_role(os.getenv("VELLA_MARKETPLACE_API_RUNTIME_ROLE")),
         marketplace_credential_keyring_dir=os.getenv(

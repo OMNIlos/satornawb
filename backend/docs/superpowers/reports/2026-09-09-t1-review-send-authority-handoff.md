@@ -1,5 +1,81 @@
 # Review sender/executor authority — IMPLEMENTED / UNVERIFIED
 
+## Actual T4 consumption follow-up: sealed read intent and queued cancellation
+
+Source-only addition on base9960548b47021880f3a511d09facd508c9c7270c, consuming
+the actual T4 composition handoff and send_service.py call sites at
+a13a6f4ab84e210c86eca798d3311634280d408e. No tests, imports, compile, lint,
+review/critic, PG/Redis or provider gates run. Original acceptance is still pending.
+
+`ReviewReadAuthority.intent` now contains the exact immutable `ReviewSendIntent`
+from the SAME locked command snapshot used by the final short capture_read root.
+Its canonical request bytes, request SHA, text/binding checksum and scoped
+review/draft/decision/command IDs are retained. T4 can decode the existing
+canonical request for externalReviewId and use intent.text_checksum when routing
+the authorized provider GET; no unguarded lookup, process cache or HTTP routing
+input is needed. Construction requires keyword `intent` in addition to the
+existing private mint arguments. Ordinary callers still use capture_read and
+must not construct this capability. publish compares the newly locked command's
+intent to the captured value before calling T4, and the final publication fence
+repeats that comparison after flush. Frozen/redacted/non-serializable behavior,
+same operator/session/read credential and one-use publication remain unchanged.
+
+New exact user entrypoint:
+
+```python
+commands.cancel(
+    authenticated_actor=real_current_actor,
+    locator=scoped_command_locator,
+    expected=exact_expected_state,
+    participant=t4_cancel,
+)
+```
+
+`t4_cancel(session, handle)` first calls
+`handle.require_participation(session, ReviewAction.CANCEL)`. It uses the actual
+ReviewSendRepository on `session.connection()` with the exact historical account
+binding from `handle.capture.account`; its transition arguments are:
+
+```python
+repository.transition(
+    command_id=handle.expected.locator.command_id,
+    expected_version=handle.expected.version,
+    expected_attempt_id=None,
+    lease_token=None,
+    event_kind="send.cancelled",
+    actor_kind="membership",
+    actor_membership_id=handle.principal.membership_id,
+    reason="USER_CANCELLED",
+)
+```
+
+T1 freshly authenticates the ORIGINAL creator user AND membership against the
+immutable authority/command, requiring current active identity/membership,
+reviews:send, a genuine current live session, and exact allowed connected account
+external/ref binding. That user's new current session may cancel after the
+original login/deadline/credential expires. Cancellation does not check/revive
+the old session, credential or approver and cannot transfer to another operator.
+The original user/member comparison is repeated by the final handle after flush.
+
+Only exact queued expected version with no attempt is admitted. T4 performs the
+existing0074 audit-first transition; T1 seals one version increment, cancelled,
+USER_CANCELLED, completion time, no attempt and no result evidence, plus the
+membership-authored send.cancelled audit. The unchanged original intent/authority
+is checked too. The public return is `ReviewReadback` only after physical commit.
+Terminal, repeated or stale requests raise REVIEW_CONFLICT before the participant;
+they never create another event/authority or authorize a send. Other creator
+user/membership is REVIEW_ACCESS_DENIED; normal live guard denial retains the
+existing REVIEW_AUTHORITY_DENIED mapping. No cancellation was added to executor
+initiation/closing action sets. Existing exact ReviewPublicationHandle root
+registration suffices; publication_guard/store/schema/grants were not changed.
+
+Deferred central cases for this addition: exact captured provider target/text
+after origin expiry, intent substitution at publish, current read credential or
+account rebind, original user's new-session cancel, other-user/member denial,
+lost/revoked current permission/session while waiting, queued claim/cancel races,
+stale/terminal/repeated calls, wrong audit actor/reason, attempt/evidence injection
+and final-root sabotage. No notification root or additional policy was introduced.
+
 Source-only package. Tests, test authoring, imports, compilation, lint, SQL/PG,
 Redis, intermediate review and critic were NOT RUN per the explicit source-first
 order. Final centralized acceptance remains required. No provider/network,
