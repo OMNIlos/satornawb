@@ -209,6 +209,7 @@ class PublicationGuard:
         self._failed = False
         self._ended = False
         self._orders_fences = ()
+        self._repricer_fences = ()
         self._finalizing = False
 
     def __repr__(self):
@@ -325,6 +326,8 @@ def _before_commit(session):
         guard.revalidate_before_write()
         for fence in guard._orders_fences:
             fence._validate_final()
+        for fence in guard._repricer_fences:
+            fence._validate_final()
         if session.new or session.dirty or session.deleted:
             raise PublicationGuardError("publication_context_invalid")
     except PublicationGuardError:
@@ -349,13 +352,55 @@ def _register_user_orders_fence(guard, fence):
 
     try:
         if (type(guard) is not PublicationGuard or type(fence) is not UserOrdersPublicationHandle
-                or guard._finalizing or guard._orders_fences or fence._guard is not guard
+                or guard._finalizing or guard._orders_fences or guard._repricer_fences or fence._guard is not guard
                 or fence._session_ref() is not guard._context()):
             raise PublicationGuardError("publication_context_invalid")
         guard._orders_fences = (fence,)
     except Exception:
         guard._failed = True
         raise
+
+
+def _register_repricer_fence(guard, fence):
+    """Private exact-class repricer extension; not a public callback registry."""
+    from app.platform.integrations.repricer_job_executor import RepricerInitiationHandle
+
+    try:
+        if (type(guard) is not PublicationGuard or type(fence) is not RepricerInitiationHandle
+                or guard._finalizing or guard._orders_fences or guard._repricer_fences
+                or fence._guard is not guard or fence._session_ref() is not guard._context()):
+            raise PublicationGuardError("publication_context_invalid")
+        guard._repricer_fences = (fence,)
+    except Exception:
+        guard._failed = True
+        raise
+
+
+def _install_repricer_closing_guard(session, handle):
+    """Exact closing type only. Never fabricates or weakens a user principal."""
+    from app.platform.integrations.repricer_job_executor import RepricerClosingHandle
+
+    if (type(handle) is not RepricerClosingHandle or not isinstance(session, Session)
+            or not session.in_transaction() or not session.is_active or session.in_nested_transaction()
+            or session.new or session.dirty or session.deleted or getattr(session, _STATE, None) is not None
+            or handle._session_ref() is not session or handle._transaction is not session.get_transaction()
+            or _physical_connection(session).get_isolation_level() != "READ COMMITTED"):
+        raise PublicationGuardError("publication_context_invalid")
+    _install_listeners(session)
+    setattr(session, _STATE, handle)
+    try:
+        handle.revalidate_before_write()
+    except Exception:
+        handle._failed = True
+        raise
+
+
+def _install_listeners(session):
+    for name, listener in (("before_commit", _before_commit),
+                           ("after_transaction_create", _transaction_created),
+                           ("after_transaction_end", _transaction_ended)):
+        if not event.contains(session, name, listener):
+            event.listen(session, name, listener)
 
 
 def _transaction_created(session, transaction):
@@ -401,11 +446,7 @@ def acquire_publication_guard(session: Session, *, principal: UserSessionPrincip
             # Functions capture neither this transaction nor the session. Install
             # once per Session; root completion clears state without modifying a
             # listener collection during event dispatch or affecting other sessions.
-            for name, listener in (("before_commit", _before_commit),
-                                   ("after_transaction_create", _transaction_created),
-                                   ("after_transaction_end", _transaction_ended)):
-                if not event.contains(session, name, listener):
-                    event.listen(session, name, listener)
+            _install_listeners(session)
             setattr(session, _STATE, guard)
             guard.revalidate_before_write()
             return guard
