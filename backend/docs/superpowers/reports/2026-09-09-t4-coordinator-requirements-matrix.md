@@ -2,6 +2,12 @@
 
 ## Current checkpoint: dormant shadow composition after c125a54
 
+Selector434ff5f accepted/cherry-picked9981e72,94PASS2warnings2.81s/newRuffcompile/diff0.
+All flag defaults remain off. New actual wiring gate: legacy feedback storage and
+reads have no org/account owner; adding arbitrary account DTO dualwrites is unsafe.
+Coordinator received exact source evidence and bounded compatibility/scoping decision
+request. No HTTP edit; older pending-selector statements below are superseded.
+
 Fixture follow-up supersedes the blocker immediately below: acceptedT1 34b5f62
 cherry-picked79f83b9; actual mixed collection with Review ORM and all original files
 plus fixture regressions passes349tests27.69s and349tests31.46s in reverse order,

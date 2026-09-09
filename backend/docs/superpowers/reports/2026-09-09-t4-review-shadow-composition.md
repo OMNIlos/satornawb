@@ -89,3 +89,29 @@ legacy-file Ruff findings remain disclosed in its handoff, not a whole-lint PASS
 T1 independent review approved the exact patch; T4 checked the actual diff and
 independently ran both mixed orders. Review default-off selector is still pending;
 neither HTTP integration nor live/provider/production work has been enabled.
+
+## Rollout prerequisite accepted; legacy ownership wiring gate
+
+Exact accepted T1 selector434ff5f cherry-picked9981e72. Independent selector plus
+scheduler/canonical-shadow/infra compatibility checks:94PASS2warnings2.81s, exit0;
+new-test Ruff/compile/diff0. Two dependency warnings and existing configI001 remain
+disclosed, not a whole-lint claim. Both policy fields remain default-off/empty.
+
+Before actual manual HTTP wiring, read-only tracing confirmed a separate boundary:
+ReviewFeedbackSyncRequest has no marketplace account selector; existing route fetches
+using the user WB token. Legacy ReviewFeedbackRow (app/reviews/orm.py) has only
+feedback_id primary key and no organization/account columns. _store_feedback gets
+that global key; list_feedbacks queries all rows. The memory map is also global and
+_run_db converts SQLAlchemyError into fallback. Canonical guard does not authorize
+or isolate these later legacy operations.
+
+Therefore a newly selectable canonical account must not silently feed its DTOs
+into the existing global legacy store. No ownership can be inferred from matching
+feedback IDs, tokens, current account metadata or the rollout allowlist. Sent exact
+evidence to coordinator for a bounded integration decision: either approved trusted
+legacy-source compatibility binding without broadened legacy writes, or scoped
+legacy/canonical read-write migration before dual-consumer account expansion.
+Original legacy route remains unchanged; no HTTP wiring has been implemented.
+Received-DTO extraction/tests can be prepared independently, but are not proof of
+safe multi-account legacy parity. The selector/physical guard dependencies themselves
+are accepted; this remaining issue is domain ownership, not another flag dependency.
