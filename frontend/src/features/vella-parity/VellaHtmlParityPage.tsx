@@ -2289,6 +2289,65 @@ function renderLiveRepricerStatsError(error: unknown) {
   if (body) body.innerHTML = `<tr data-report-row="1"><td colspan="13"><div class="report-empty-note visible">Статистика репрайсера недоступна: ${escapeHtml(message)}</div></td></tr>`
 }
 
+export function installRepricerStatsLiveBridge(accessToken: string | null) {
+  let disposed = false
+  let generation = 0
+  const load = async () => {
+    if (disposed) return null
+    const currentGeneration = ++generation
+    const isCurrent = () => !disposed && currentGeneration === generation
+    if (!accessToken) {
+      renderLiveRepricerStatsError(new ApiError('AUTH_REQUIRED', 401))
+      return null
+    }
+    renderLiveRepricerStatsLoading()
+    const period = repricerStatsPeriodRequest()
+    const queryInput = document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')
+    try {
+      const baseQuery = {
+        ...period,
+        page: 1,
+        pageSize: REPRICER_STATS_PAGE_SIZE,
+        q: queryInput?.value?.trim() || undefined,
+      }
+      const payload = await loadLiveRepricerStats(accessToken, undefined, baseQuery)
+      if (!isCurrent()) return null
+      applyRepricerStatsCachePeriod(payload)
+      renderLiveRepricerStats(payload)
+      const total = Number(payload.total || 0)
+      const maxRows = Math.min(total, REPRICER_STATS_MAX_ROWS)
+      const pageCount = Math.ceil(maxRows / REPRICER_STATS_PAGE_SIZE)
+      const mergedItems = [...(payload.items ?? [])]
+      for (let page = 2; page <= pageCount; page += 1) {
+        const pagePayload = await loadLiveRepricerStats(accessToken, undefined, {
+          ...baseQuery,
+          page,
+        })
+        if (!isCurrent()) return null
+        mergedItems.push(...(pagePayload.items ?? []))
+        renderLiveRepricerStats({
+          ...payload,
+          ...pagePayload,
+          items: mergedItems.slice(0, REPRICER_STATS_MAX_ROWS),
+          itemsReturned: Math.min(mergedItems.length, REPRICER_STATS_MAX_ROWS),
+          summary: payload.summary,
+          total,
+        })
+      }
+      return payload
+    } catch (error) {
+      if (!isCurrent()) return null
+      renderLiveRepricerStatsError(error)
+      throw error
+    }
+  }
+  window.__vellaLoadLiveRepricerStats = load
+  return () => {
+    disposed = true
+    if (window.__vellaLoadLiveRepricerStats === load) delete window.__vellaLoadLiveRepricerStats
+  }
+}
+
 function installSecondaryReportHeaderGuard() {
   if (window.__vellaSecondaryReportHeaderGuardInstalled || typeof window.renderSecondaryReports !== 'function') return
   const originalRenderSecondaryReports = window.renderSecondaryReports
@@ -34936,53 +34995,9 @@ export function VellaHtmlParityPage() {
 
   useEffect(() => {
     if (!runtime) return
-    window.__vellaLoadLiveRepricerStats = async () => {
-      if (!accessToken) {
-        renderLiveRepricerStatsError(new ApiError('AUTH_REQUIRED', 401))
-        return null
-      }
-      renderLiveRepricerStatsLoading()
-      const period = repricerStatsPeriodRequest()
-      const queryInput = document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')
-      try {
-        const baseQuery = {
-          ...period,
-          page: 1,
-          pageSize: REPRICER_STATS_PAGE_SIZE,
-          q: queryInput?.value?.trim() || undefined,
-        }
-        const payload = await loadLiveRepricerStats(accessToken, undefined, baseQuery)
-        applyRepricerStatsCachePeriod(payload)
-        renderLiveRepricerStats(payload)
-        const total = Number(payload.total || 0)
-        const maxRows = Math.min(total, REPRICER_STATS_MAX_ROWS)
-        const pageCount = Math.ceil(maxRows / REPRICER_STATS_PAGE_SIZE)
-        const mergedItems = [...(payload.items ?? [])]
-        for (let page = 2; page <= pageCount; page += 1) {
-          const pagePayload = await loadLiveRepricerStats(accessToken, undefined, {
-            ...baseQuery,
-            page,
-          })
-          mergedItems.push(...(pagePayload.items ?? []))
-          renderLiveRepricerStats({
-            ...payload,
-            ...pagePayload,
-            items: mergedItems.slice(0, REPRICER_STATS_MAX_ROWS),
-            itemsReturned: Math.min(mergedItems.length, REPRICER_STATS_MAX_ROWS),
-            summary: payload.summary,
-            total,
-          })
-        }
-        return payload
-      } catch (error) {
-        renderLiveRepricerStatsError(error)
-        throw error
-      }
-    }
-    if (effectiveActiveParityTab === 'repricer-stats') void window.__vellaLoadLiveRepricerStats()
-    return () => {
-      delete window.__vellaLoadLiveRepricerStats
-    }
+    const dispose = installRepricerStatsLiveBridge(accessToken)
+    if (effectiveActiveParityTab === 'repricer-stats') void window.__vellaLoadLiveRepricerStats?.()
+    return dispose
   }, [accessToken, effectiveActiveParityTab, runtime])
 
   useEffect(() => {
