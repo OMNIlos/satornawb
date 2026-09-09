@@ -54,6 +54,17 @@ Session nested hooks; an existing Connection SAVEPOINT must also deny. This is
 initial/repeated-call admission, not a claim to prevent arbitrary later raw SQL.
 Add a real PostgreSQL negative case plus positive normal Session root control.
 
+Supported lifetime is an Engine-bound Session, as produced by get_session_factory.
+Require isinstance(session.get_bind(), Engine) before any context SQL; all
+Connection-bound Sessions are unsupported, even if a particular join mode could
+commit their external transaction. Never inspect private Session transaction maps
+or force-commit/rollback external caller work. Add real PostgreSQL negatives for
+an already active external Connection with default conditional_savepoint and
+explicit rollback_only: denial occurs before settings/marker mutation, external
+transaction and preexisting control data/settings stay unchanged until its owner
+rolls it back. Retain ordinary Engine Session commit/rollback/pool positive cases.
+Document this conservative public-binding limitation and caller cost.
+
 - [ ] Step1 write focused missing-interface RED and type/transaction canaries.
 
 ```python

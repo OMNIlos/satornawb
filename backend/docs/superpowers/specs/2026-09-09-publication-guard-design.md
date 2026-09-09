@@ -162,6 +162,14 @@ Connection.begin_nested() is likewise not represented by Session nested hooks.
 These are admission gaps to test directly against the guard, not evidence that a
 configured ordinary READ COMMITTED consumer already bypasses authorization.
 
+Also require an Engine-bound Session via its public get_bind type. A Session
+joined to an externally started Connection root can finish its before_commit hook
+and logical transaction without physical COMMIT. Reject all Connection-bound
+Sessions, rather than guess join ownership or inspect private transaction maps.
+The standard get_session_factory Engine binding remains supported. Real default
+conditional_savepoint and explicit rollback_only external-root tests must deny
+before application context/authority SQL and leave external owner work untouched.
+
 At acquisition before context SQL and at every guard context revalidation, inspect
 the actual bound Connection: active root transaction, no Connection nested
 transaction, and publicly exposed DBAPI autocommit exactly False. Missing or

@@ -163,6 +163,14 @@ principal/accounts, not a new production function.
 - [ ] Step2 RED initial Connection.begin_nested before acquisition, and active
 Connection SAVEPOINT opened after acquisition before explicit revalidation or
 Session.commit. Include ordinary real Session READ COMMITTED positive control.
+
+Also reproduce the external-root join lifetime mismatch using a Connection whose
+owner already called begin(), with Session default conditional_savepoint and
+explicit rollback_only. Require Engine-bound Sessions using public get_bind type;
+reject all Connection-bound Sessions before authority/context SQL, even join modes
+that might transfer commit ownership. Negative tests leave external settings/data
+and its root untouched; normal Engine-root lifecycle stays positive. No private
+transaction maps or forced external commit/rollback.
 Denied commit rolls back every synthetic publication/audit row. No application
 context or authority query should execute on initial invalid admission; ordinary
 driver connection initialization is not an application authority query.
