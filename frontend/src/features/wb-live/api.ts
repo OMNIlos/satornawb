@@ -1,7 +1,8 @@
 import { apiData, ApiError } from '@/lib/api'
 import { authorizationHeaders } from '@/features/auth/authApi'
+import { parseWbCredential, parseWbSync } from './validation'
 
-export type WbAccount = { marketplaceAccountId: number; provider: string; externalAccountId: string; displayName: string; status: string }
+export type WbAccount = { marketplaceAccountId: number; provider: string; externalAccountId: string; displayName: string | null; status: string }
 export type WbCredential = { marketplaceAccountId: number; status: 'missing' | 'active' | 'expired' | 'revoked'; updatedAt: string | null }
 export type WbSync = {
   marketplaceAccountId: number; jobId: string | null
@@ -13,7 +14,8 @@ export type WbProduct = {
   nmId: string; vendorCode: string | null; title: string | null; brand: string | null; subjectId: string | null; subjectName: string | null
   photoUrl: string | null; contentUpdatedAt: string | null; pricesUpdatedAt: string | null
   sizesTruncated: boolean
-  sizes: { chrtId: string; techSize: string | null; skus: string[] | null; skusTruncated: boolean; priceKopecks: string | null; discountedPriceKopecks: string | null }[]
+  truncatedFields?: string[]
+  sizes: { chrtId: string; techSize: string | null; skus: string[] | null; skusTruncated: boolean; priceKopecks: string | null; discountedPriceKopecks: string | null; truncatedFields?: string[] }[]
 }
 export type WbProductsPage = {
   marketplaceAccountId: number; items: WbProduct[]; nextCursor: string | null; readVersion: string
@@ -41,14 +43,14 @@ const pendingReads = new Map<string, PendingRead>()
 
 // No response cache: completed data belongs to the mounted, authenticated consumer.
 // Each subscriber can cancel without cancelling another subscriber's request.
-export function readWbData<T>(accessToken: string, path: string, signal: AbortSignal): Promise<T> {
+export function readWbData<T>(accessToken: string, path: string, signal: AbortSignal, parse?: (value: unknown) => T): Promise<T> {
   if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'))
   const key = `${accessToken}\n${path}`
   let entry = pendingReads.get(key)
   if (!entry) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 20_000)
-    const promise = apiData<T>(path, { headers: authorizationHeaders(accessToken), signal: controller.signal, cache: 'no-store' })
+    const promise = apiData<unknown>(path, { headers: authorizationHeaders(accessToken), signal: controller.signal, cache: 'no-store' })
       .finally(() => {
         clearTimeout(timeout)
         if (pendingReads.get(key)?.promise === promise) pendingReads.delete(key)
@@ -73,7 +75,10 @@ export function readWbData<T>(accessToken: string, path: string, signal: AbortSi
     }
     const abort = () => { if (finish()) reject(new DOMException('Aborted', 'AbortError')) }
     signal.addEventListener('abort', abort, { once: true })
-    read.promise.then((value) => { if (finish()) resolve(value as T) }, (error) => { if (finish()) reject(error) })
+    read.promise.then((value) => {
+      if (!finish()) return
+      try { resolve(parse ? parse(value) : value as T) } catch (error) { reject(error) }
+    }, (error) => { if (finish()) reject(error) })
   })
 }
 
@@ -86,17 +91,17 @@ export function shouldPollWbSync(data: WbSync) {
 
 // Explicit writes only. A lost response never triggers an automatic write retry.
 export function saveWbCredential(accessToken: string, accountId: number, wbToken: string) {
-  return apiData<WbCredential>(credentialPath(accountId), {
+  return apiData<unknown>(credentialPath(accountId), {
     method: 'PUT', headers: authorizationHeaders(accessToken), body: JSON.stringify({ wbToken }),
-  })
+  }).then((value) => parseWbCredential(value, accountId))
 }
 export function revokeWbCredential(accessToken: string, accountId: number) {
-  return apiData<WbCredential>(credentialPath(accountId), { method: 'DELETE', headers: authorizationHeaders(accessToken) })
+  return apiData<unknown>(credentialPath(accountId), { method: 'DELETE', headers: authorizationHeaders(accessToken) }).then((value) => parseWbCredential(value, accountId))
 }
 export function startWbSync(accessToken: string, accountId: number, idempotencyKey: string) {
-  return apiData<WbSync>(syncPath(accountId), {
+  return apiData<unknown>(syncPath(accountId), {
     method: 'POST', headers: { ...authorizationHeaders(accessToken), 'Idempotency-Key': idempotencyKey }, body: '{}',
-  })
+  }).then((value) => parseWbSync(value, accountId))
 }
 
 export function wbErrorMessage(error: unknown, write = false) {

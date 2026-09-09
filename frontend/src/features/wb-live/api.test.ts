@@ -120,7 +120,7 @@ describe('WB credential and sync writes', () => {
   })
 
   it('writes only the selected account credential route', async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ marketplaceAccountId: 17, status: 'active' }))
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ marketplaceAccountId: 17, status: 'active', updatedAt: null }))
     vi.stubGlobal('fetch', fetchMock)
     await saveWbCredential('session', 17, 'test-only-credential')
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/cabinet/marketplace-accounts/17/credentials/wb/wb_api')

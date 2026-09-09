@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAuth } from '@/features/auth/authContext'
 import { apiData, ApiError } from '@/lib/api'
 import { authorizationHeaders } from '@/features/auth/authApi'
 import { credentialPath, readWbData, revokeWbCredential, saveWbCredential, shouldPollWbSync, startWbSync, syncPath, wbErrorMessage, type WbAccount, type WbCredential, type WbSync } from './api'
+import { parseWbAccounts, parseWbConnection, parseWbCredential, parseWbSync } from './validation'
+import { createWbWriteEpoch } from './writeEpoch'
 
 const selections = new Map<string, number>()
 const selectionEvent = 'satorna:wb-account-selected'
@@ -21,7 +23,7 @@ export function useWbAccount() {
     setError(null)
     if (!accessToken || !scope || !cabinetMe) { setLoading(false); return }
     setLoading(true)
-    void readWbData<WbAccount[]>(accessToken, '/api/v1/cabinet/marketplace-accounts?provider=wb', controller.signal)
+    void readWbData<WbAccount[]>(accessToken, '/api/v1/cabinet/marketplace-accounts?provider=wb', controller.signal, parseWbAccounts)
       .then((items) => {
         if (controller.signal.aborted) return
         const eligible = items.filter((account) => account.provider === 'wb')
@@ -80,7 +82,7 @@ export function useWbSync(accessToken: string | null, accountId: number | null, 
       const requestController = new AbortController()
       controller = requestController
       try {
-        const data = await readWbData<WbSync>(accessToken, syncPath(accountId), requestController.signal)
+        const data = await readWbData<WbSync>(accessToken, syncPath(accountId), requestController.signal, (value) => parseWbSync(value, accountId))
         if (disposed || requestController.signal.aborted) return
         failures = 0; setSnapshot({ key, data }); setError(null)
         if (shouldPollWbSync(data)) timeout = setTimeout(poll, 15_000)
@@ -128,53 +130,62 @@ export function WbConnection() {
   const [adding, setAdding] = useState(false)
   const syncIntent = useRef<{ owner: string; id: string } | null>(null)
   const credentialOwner = useRef('')
-  const current = useRef('')
-  current.current = `${scope}:${accountId}`
-  const key = current.current
+  const writeEpoch = useRef(createWbWriteEpoch())
+  const mutationPending = useRef(false)
+  const key = `${scope}:${accountId}`
+  useLayoutEffect(() => {
+    writeEpoch.current.invalidate(); mutationPending.current = false
+    setBusy(false); setUnknown(false); syncIntent.current = null
+    return () => { writeEpoch.current.invalidate(); mutationPending.current = false }
+  }, [key])
   useEffect(() => {
     const controller = new AbortController()
     setCredential(null); setDraft(''); setError(null)
     if (!accessToken || !accountId) return
-    void readWbData<WbCredential>(accessToken, credentialPath(accountId), controller.signal)
-      .then((data) => { if (!controller.signal.aborted) { credentialOwner.current = key; setCredential(data); setUnknown(false) } })
-      .catch((failure) => { if (!controller.signal.aborted) setError(wbErrorMessage(failure)) })
+    const isCurrentRead = writeEpoch.current.observe()
+    void readWbData<WbCredential>(accessToken, credentialPath(accountId), controller.signal, (value) => parseWbCredential(value, accountId))
+      .then((data) => { if (!controller.signal.aborted && isCurrentRead()) { credentialOwner.current = key; setCredential(data); setUnknown(false) } })
+      .catch((failure) => { if (!controller.signal.aborted && isCurrentRead()) setError(wbErrorMessage(failure)) })
     return () => controller.abort()
   }, [accessToken, accountId, key, revision])
-  useEffect(() => { setBusy(false); setUnknown(false); syncIntent.current = null }, [key])
   const activeCredential = credentialOwner.current === key ? credential : null
   useEffect(() => {
     if (!account.loading && !account.error && !accountId) setUnknown(false)
   }, [account.loading, account.error, accountId])
   async function write(action: 'save' | 'revoke' | 'sync') {
-    if (!accessToken || !accountId || busy || unknown) return
+    if (!accessToken || !accountId || busy || unknown || mutationPending.current) return
     const owner = key
+    const isCurrent = writeEpoch.current.capture()
+    mutationPending.current = true
     setBusy(true); setError(null)
     try {
       if (action === 'sync') {
         if (syncIntent.current?.owner !== owner) syncIntent.current = { owner, id: crypto.randomUUID() }
         await startWbSync(accessToken, accountId, syncIntent.current.id)
-        if (current.current === owner) syncIntent.current = null
+        if (isCurrent()) syncIntent.current = null
       }
       else {
         const data = action === 'save' ? await saveWbCredential(accessToken, accountId, draft.trim()) : await revokeWbCredential(accessToken, accountId)
-        if (current.current === owner) { credentialOwner.current = owner; setCredential(data); setDraft('') }
+        if (isCurrent()) { credentialOwner.current = owner; setCredential(data); setDraft('') }
       }
-      if (current.current === owner) sync.refresh()
+      if (isCurrent()) sync.refresh()
     } catch (failure) {
-      if (current.current === owner) { setError(wbErrorMessage(failure, true)); setUnknown(!(failure instanceof ApiError && failure.status < 500)); setDraft('') }
-    } finally { if (current.current === owner) setBusy(false) }
+      if (isCurrent()) { setError(wbErrorMessage(failure, true)); setUnknown(!(failure instanceof ApiError && failure.status < 500)); setDraft('') }
+    } finally { if (isCurrent()) { mutationPending.current = false; setBusy(false) } }
   }
   async function createAccount() {
-    if (!accessToken || !draft.trim() || busy || unknown) return
-    const owner = key
+    if (!accessToken || !draft.trim() || busy || unknown || mutationPending.current) return
+    const isCurrent = writeEpoch.current.capture()
+    mutationPending.current = true
     setBusy(true); setError(null)
     try {
-      const result = await apiData<{ account: WbAccount; credential: WbCredential }>('/api/v1/cabinet/marketplace-accounts/connect/wb', { method: 'POST', headers: authorizationHeaders(accessToken), body: JSON.stringify({ wbToken: draft.trim(), ...(name.trim() ? { displayName: name.trim() } : {}) }) })
-      if (current.current !== owner) return
+      const raw = await apiData<unknown>('/api/v1/cabinet/marketplace-accounts/connect/wb', { method: 'POST', headers: authorizationHeaders(accessToken), body: JSON.stringify({ wbToken: draft.trim(), ...(name.trim() ? { displayName: name.trim() } : {}) }) })
+      const result = parseWbConnection(raw)
+      if (!isCurrent()) return
       selections.set(scope, result.account.marketplaceAccountId)
       setName(''); setDraft(''); setAdding(false); account.reload()
-    } catch (failure) { if (current.current === owner) { setError(wbErrorMessage(failure, true)); setUnknown(!(failure instanceof ApiError && failure.status < 500)); setDraft('') } }
-    finally { if (current.current === owner) setBusy(false) }
+    } catch (failure) { if (isCurrent()) { setError(wbErrorMessage(failure, true)); setUnknown(!(failure instanceof ApiError && failure.status < 500)); setDraft('') } }
+    finally { if (isCurrent()) { mutationPending.current = false; setBusy(false) } }
   }
   return <div className="profile-token-card" data-wb-live="connection">
     <div className="profile-token-head"><div><div className="profile-card-title">WB token</div><div className="profile-helper-text">Подключение аккаунта Wildberries и загрузка данных.</div></div><span className="access-badge">{activeCredential?.status === 'active' ? 'ключ сохранён' : 'нет активного ключа'}</span></div>

@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react'
 import { ApiError } from '@/lib/api'
 import { formatWbPrice, productsPath, readWbData, wbErrorMessage, type WbProductSort, type WbProductsPage } from './api'
 import { useWbAccount, useWbSync, WbAccountSelect, WbSyncStatus } from './WbConnection'
+import { parseWbProducts } from './validation'
 
 const readinessLabels = {
   empty: 'В сохранённых данных пока нет товаров.',
-  partial: 'Доступна часть данных. Остальные источники ещё загружаются.',
+  partial: 'Доступны не все данные источников. Состояние загрузки показано выше.',
   ready: 'Сохранённые данные доступны.',
   error: 'Один или несколько источников завершились с ошибкой. Показаны уже сохранённые данные.',
 }
@@ -37,10 +38,9 @@ export function WbProducts() {
     const controller = new AbortController()
     if (!account.accessToken || !account.accountId || !path || accountChanged) return
     setLoading(true); setFailure(null)
-    void readWbData<WbProductsPage>(account.accessToken, path, controller.signal)
+    void readWbData<WbProductsPage>(account.accessToken, path, controller.signal, (value) => parseWbProducts(value, account.accountId!))
       .then((data) => {
         if (controller.signal.aborted) return
-        if (data.marketplaceAccountId !== account.accountId || !Array.isArray(data.items)) throw new Error('Invalid account response')
         setSnapshot({ key: requestKey, data })
       })
       .catch((error) => {
@@ -77,7 +77,7 @@ export function WbProducts() {
       {loading ? <div role="status">Загрузка страницы товаров…</div> : null}
       {data ? <><div className="profile-token-feedback" role="status">{readinessLabels[data.readiness]}{data.items.length === 0 && data.readiness !== 'empty' ? ' По выбранным условиям сохранённых товаров нет.' : ''}</div>
         <div className="table-wrap"><table><thead><tr><th scope="col">Товар</th><th scope="col">Артикул WB</th><th scope="col">Артикул продавца</th><th scope="col">Бренд</th><th scope="col">Категория</th><th scope="col">Размеры и цены</th><th scope="col">Обновление</th></tr></thead><tbody>
-          {data.items.map((product) => <tr key={product.nmId}><td>{product.title || '—'}</td><td>{product.nmId}</td><td>{product.vendorCode || '—'}</td><td>{product.brand || '—'}</td><td>{product.subjectName || '—'}</td><td>{product.sizes.length ? product.sizes.map((size) => <div key={size.chrtId}>{size.techSize || 'Без размера'}: {formatWbPrice(size.discountedPriceKopecks ?? size.priceKopecks)}</div>) : '—'}{product.sizesTruncated ? <div>Показана часть размеров: {product.sizes.length}</div> : null}</td><td>{product.contentUpdatedAt ? new Date(product.contentUpdatedAt).toLocaleString('ru-RU') : '—'}{!product.pricesUpdatedAt ? <div>Цены ещё не загружены</div> : <div>Цены: {new Date(product.pricesUpdatedAt).toLocaleString('ru-RU')}</div>}</td></tr>)}
+          {data.items.map((product) => <tr key={product.nmId}><td>{product.title || '—'}{product.truncatedFields?.length ? <div>Часть полей сокращена</div> : null}</td><td>{product.nmId}</td><td>{product.vendorCode || '—'}</td><td>{product.brand || '—'}</td><td>{product.subjectName || '—'}</td><td>{product.sizes.length ? product.sizes.map((size) => <div key={size.chrtId}>{size.techSize || 'Без размера'}: {formatWbPrice(size.discountedPriceKopecks ?? size.priceKopecks)}{size.truncatedFields?.length ? ' · часть полей сокращена' : ''}</div>) : '—'}{product.sizesTruncated ? <div>Показана часть размеров: {product.sizes.length}</div> : null}</td><td>{product.contentUpdatedAt ? new Date(product.contentUpdatedAt).toLocaleString('ru-RU') : '—'}{!product.pricesUpdatedAt ? <div>Цены ещё не загружены</div> : <div>Цены: {new Date(product.pricesUpdatedAt).toLocaleString('ru-RU')}</div>}</td></tr>)}
         </tbody></table></div>
         <div className="profile-token-actions"><button className="btn btn-default btn-sm" type="button" disabled={page === 0 || loading} onClick={() => setPage((value) => value - 1)}>Назад</button><span>Страница {page + 1} · до 50 товаров</span><button className="btn btn-default btn-sm" type="button" disabled={!data.nextCursor || loading} onClick={() => { if (data.nextCursor) { setCursors((values) => [...values.slice(0, page + 1), data.nextCursor]); setPage((value) => value + 1) } }}>Далее</button></div>
       </> : null}
