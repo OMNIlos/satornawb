@@ -2,6 +2,27 @@
 
 ## CURRENT — original requirements, local readiness and owners
 
+Latest process amendment: complete an implementation package first, then its final
+checks; no repeated intermediate test/review loops. Independent calculation service
+now exists in `app/modules/wb_repricing_calculation.py`: detached recursively frozen
+context, explicit clock/guard inputs, scoped versioned cache key and actual extracted
+P_MIN/P_MAX, basket, plan-fact/interval, liquidation, clamp and rounding operations.
+The existing repricer is not rewired. This does not complete Stage4 or authorize
+prices: canonical context assembly from dated DB facts, mapping/source validation,
+full apply guards, night-median execution, writer fence and settings persistence
+remain separate required work. A reference is provenance, not authenticated evidence.
+
+Final package check after implementation: new34 cases plus existing102 legacy
+characterization = **136PASS0.71s**, natural exit0, offline sandbox/plugin. New
+parity cases compare actual old/new outputs including explanations, interval history,
+float precision boundary, price clamps, plan metrics and liquidation; original
+characterization continues checking other unchanged guards. No RED-first claim for
+this package: user explicitly changed the implementation/check order. Compileall0;
+initial Ruff reported9 remaining diagnostics after2 safe fixes; final narrow legacy
+arithmetic/timestamp and deliberate invalid-input annotations are documented in code.
+No runtime flags, existing formula functions, provider adapters, migrations or shared
+wiring changed. Rollback removes the detached service and tests; no data rollback.
+
 Updated 2026-09-09 after root process-audit direction. This is the **only current
 requirement status table**. Everything under HISTORY below is dated evidence, not
 current readiness. Counts prove only named tests, never completion of a stage.
