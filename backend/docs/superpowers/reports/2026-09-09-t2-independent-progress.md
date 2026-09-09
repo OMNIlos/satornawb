@@ -2,6 +2,39 @@
 
 ## CURRENT — original requirements, local readiness and owners
 
+Dormant worker source now composes the exact T1 executor through `9b30eb2cb59b38d18e859773b9b9607406832bb5`
+(import merge `331c9f80ff7aecbfedf99dc8507d10ddaf8ce45e`). Both imported0073 and
+this composition are **IMPLEMENTED / UNVERIFIED**, not schema acceptance or Stage3
+completion. `wb_repricing_worker.py` uses immutable stored bytes, handle-derived
+membership, physical claim/reserve/dispatch roots, injected single-POST transport,
+receipt-only uncertainty recovery and explicit trusted outcome closure. Accepted
+upload is not an applied price. Existing dispatch marker prevents duplicate POST;
+an in-flight duplicate is not automatically classified as abandoned. There is no
+real transport, scheduler, ACK integration or current-writer registration.
+
+`test_wb_repricing_worker_postgres.py` contains15 pending synthetic PG cases:
+two real claim sessions, committed-marker/no-held-lock fake I/O, paired resolver
+physical login observation, receipt/restart/closed duplicate, raw error sanitization,
+rollback, marker/receipt commit uncertainty, pre-dispatch and post-acceptance crash,
+revocation, foreign scope, stale version and mismatched applied receipt. No PG run
+started. Root explicitly deferred it to centralized whole-package verification;
+final compile/lint/consumer regressions also pending after latest source edits.
+Initial Ruff reported6 diagnostics; imports were formatted, transport/publication
+exception sanitization annotated and receipt validation narrowed. No clean final
+lint claim. Independent collection literals at `a8581cb5f8cd7c3ee3233ae8812fd70e800481f5`
+did receive final offline **10PASS0.10s**, exit0, before queue deferral.
+
+Remaining implementation dependencies are concrete: T1 typed settings/assignment/
+liquidation physical write tuples and source/current/daily/evidence tables plus
+publication authority; immutable mapping and dated economics/source facts; provider
+history/reconciliation authority and abandoned-worker recovery contract; shared
+one-writer fence/cutover. T1 plans `d4fa2c6`/`63c4949` are not delivered DDL. Org-wide
+settings mutation permissions and final profitability rules require explicit owner
+decisions. Neither policy is invented; final financial fields remain null. Until
+these contracts arrive, no further independent service implementation is identified
+from the current requirements. This is a dependency inventory, not a claim that
+all stages are done. Rollback removes dormant source/tests; no data rollback.
+
 Stage4A source package for T1 now includes complete org algorithm settings/three
 basket-default and liquidation command encoding at
 `app/modules/wb_repricing_state_commands.py`. Latest exact field/byte contract is
