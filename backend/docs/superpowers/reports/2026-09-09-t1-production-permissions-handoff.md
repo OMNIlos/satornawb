@@ -32,6 +32,14 @@ PRODUCTION_ASSIGN_PERMISSIONS = frozenset(
 Guard вызывается с фактическим аутентифицированным `UserSessionPrincipal`, точным frozen `ExpectedAccountBinding` текущего выбранного аккаунта и пустыми `authorities` для credential-independent Production commands:
 
 ```python
+from app.cabinet.permissions import PRODUCTION_CREATE_PERMISSIONS
+from app.platform.integrations.publication_guard import (
+    ExpectedAccountBinding,
+    UserSessionPrincipal,
+    acquire_publication_guard,
+)
+
+
 principal = UserSessionPrincipal(
     organization_id=authenticated_organization_id,
     user_id=authenticated_user_id,
@@ -53,14 +61,21 @@ with session.begin():
         accounts=(account,),
         authorities=(),
     )
-    # Receipt/replay data may be queried only after guard acquisition.
-    result = read_or_execute_inside_the_same_root_transaction(session)
-    guard.revalidate_before_write()
+    # Existing-receipt branch: this read occurs only after guard acquisition.
+    existing_receipt = ...  # T3's read-only receipt lookup
+    if existing_receipt is not None:
+        result = existing_receipt
+    else:
+        # New-mutation branch: T3 may now acquire its domain locks and validate.
+        ...
+        # This call must be immediately before every domain/receipt/audit write.
+        guard.revalidate_before_write()
+        result = ...  # T3's domain write follows immediately; repeat per write.
 # Return only here, after the guard's final before-commit validation and COMMIT.
 return result
 ```
 
-Не создавать fake user/background principal и не подменять binding данными запроса. Acquire должен происходить до чтения receipt и до domain locks; root transaction сохраняется через всю операцию. Replay заново требует текущую operation+read permission даже для ранее успешной команды. Guard автоматически выполняет final revalidation в `before_commit`; T3 возвращает receipt/result только после успешного commit. Committed revocation до acquire отказывает; revocation, сериализованный после уже захваченной операции, не отменяет её ретроактивно.
+Не создавать fake user/background principal и не подменять binding данными запроса. Acquire должен происходить до чтения receipt и до domain locks; root transaction сохраняется через всю операцию. Existing-receipt branch остаётся read-only. В new-mutation branch `guard.revalidate_before_write()` вызывается непосредственно перед каждой domain/receipt/audit записью — никогда после неё. Replay заново требует текущую operation+read permission даже для ранее успешной команды. Guard автоматически выполняет дополнительную final revalidation в `before_commit`; T3 возвращает receipt/result только после успешного commit. Committed revocation до acquire отказывает; revocation, сериализованный после уже захваченной операции, не отменяет её ретроактивно.
 
 Публичные safe codes guard ограничены точными значениями: `publication_context_invalid`, `publication_access_denied`, `publication_binding_changed`, `publication_authority_invalid`, `publication_expired`, `publication_persistence_failed`. Неизвестный input/canary не отражается в ошибке.
 
