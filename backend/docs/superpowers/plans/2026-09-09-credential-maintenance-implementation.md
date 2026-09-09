@@ -5,6 +5,15 @@ The approved conceptual source is28258e3f39eb388179fe0b27686d0b8840cfa8dc.
 This plan completes its three delivery boundaries as one source-first package.
 Final security/role/RLS/restore tests follow the implementation, not each edit.
 
+Actual-schema amendment approved by integration owner2026-09-09: legacy
+lk_audit_events has no RLS, so runner gets NO direct audit/sequence privileges.
+Use the spec's fixed authorizationUUID+operation safe-audit helper, inert invoker
+until explicit provisioning, owned by dedicated non-table-owner helper role with
+exact audit INSERT columns/sequence USAGE only. Real session_user/locked metadata
+derives every audit field; store calls only after persisted decrypt/readback in
+same root. No global audit RLS change or exactly-once-audit claim. Include helper
+in exact manifests/deprovision and final negative ACL/forgery/rollback gates.
+
 ## Global constraints
 
 T1 worktree only. No production, providers, working database/Redis, real source
@@ -71,7 +80,8 @@ No fallback to an API/admin role or auto-creation of authorizations.
    payload and metadata plus narrow lock columns; invalidator owner only auth
    identity/revocation fields; registrar metadata/source attestation capabilities;
    runner scoped metadata/source/history views and restrictive encrypted SELECT/
-   generation1 INSERT + safe audit INSERT. No runner base-source SELECT/UPDATE,
+   generation1 INSERT + exact safe-audit helper EXECUTE. No runner base-audit or
+   audit-sequence rights, base-source SELECT/UPDATE,
    account UPDATE or encrypted UPDATE/DELETE, no runtime maintenance grants.
    Do not add merely permissive policies to existing permissive tenant RLS.
 5. Scoped security-barrier views expose exact active direct-role authorization,
@@ -101,7 +111,7 @@ No fallback to an API/admin role or auto-creation of authorizations.
 9. Extract/reuse minimal private store persistence/resolver readback core rather
    than public put/resolve/rekey nested roots. Existing AEAD/keyring/current key/
    fresh nonce, insert/flush/expire/requery persisted row, decrypt/validate and exact
-   typed equality BEFORE safe audit and physical commit. Failure rolls everything
+   typed equality BEFORE fixed safe-audit helper and physical commit. Failure rolls everything
    back, including corrupted readback/expired auth; return redacted metadata only
    after commit. Uncertain commit safe unknown, not automatic replacement/retry.
 10. IDs-only CLI inventory/backfill/verify/report with strict mapping schema,
