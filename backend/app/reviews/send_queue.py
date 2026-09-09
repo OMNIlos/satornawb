@@ -11,9 +11,12 @@ from sqlalchemy.orm import Session
 from app.infra.db import set_marketplace_account_context, set_tenant_context
 from app.platform.integrations.publication_guard import _physical_connection
 from app.platform.integrations.review_job_contract import ReviewJobError
-from app.platform.integrations.worker_identity import ExecutorRoleIdentity, verify_executor_login
-from app.reviews.send_repository import _decoded
+from app.platform.integrations.worker_identity import (
+    ExecutorRoleIdentity,
+    verify_executor_login,
+)
 from app.reviews.send_payloads import encode_review_enqueue
+from app.reviews.send_repository import _decoded
 from app.reviews.send_tables import COMMAND, ENQUEUE
 
 
@@ -33,13 +36,13 @@ def scan_ready_commands(*, executor_session_factory, identity: ExecutorRoleIdent
         raise ReviewJobError("REVIEW_CONTRACT_INVALID")
     try:
         session = executor_session_factory()
-    except Exception:
+    except Exception:  # noqa: BLE001 - trusted factory failures still need a safe boundary.
         raise ReviewJobError("REVIEW_PERSISTENCE_FAILED") from None
     try:
         valid = (isinstance(session, Session) and session.is_active and not session.in_transaction()
                  and not session.in_nested_transaction() and not session.new and not session.dirty and not session.deleted
                  and isinstance(session.get_bind(), Engine) and session.get_bind().dialect.name == "postgresql")
-    except Exception:
+    except Exception:  # noqa: BLE001 - reject foreign/broken root without taking ownership.
         valid = False
     if not valid:
         # Foreign/dirty root is not ours to commit/rollback/close.
@@ -83,17 +86,17 @@ def scan_ready_commands(*, executor_session_factory, identity: ExecutorRoleIdent
         result = tuple(values)
     except ReviewJobError as error:
         code = error.code
-    except Exception:
+    except Exception:  # noqa: BLE001 - stored corruption and SQL errors are not public diagnostics.
         code = "REVIEW_PERSISTENCE_FAILED"
     finally:
         failed = False
         try:
             session.rollback()
-        except Exception:
+        except Exception:  # noqa: BLE001 - still attempt close when rollback fails.
             failed = True
         try:
             session.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 - never return rows after uncertain cleanup.
             failed = True
         if failed:
             code = "REVIEW_PERSISTENCE_FAILED"

@@ -97,15 +97,23 @@ Visible-read failure never marks notifications. This client does not prove auth.
    Avito list exposes moderation/published/rejected/unknown; accepted send-completion
    meaning and safe targeted fresh-read/pagination must be explicit.
 3. WB source adapter currently retains answer presence, not durable answer identity;
-   legacy request_send says mutation path is not wired. An accepted exact provider
-   answer identity/read/write contract is missing; do not synthesize an answer ID
-   from review ID or a local hash to claim success.
+   legacy request_send says mutation path is not wired. The local sources inspected
+   here do not establish the accepted provider answer identity/read/write contract.
+   This is NOT evidence that the official API lacks such a contract. A focused
+   confirmation against accepted provider documentation and representative fixtures
+   is still required before implementing the transport; do not synthesize an answer
+   ID from review ID or a local hash to claim success.
 4. Queue fairness/polling/backoff, concrete paired-credential transport bootstrap,
    notification preference CAS/external-delivery policy, shared registration and
    full legacy Review moderation/prompt parity remain separate tasks.
 
 Root was sent these exact gaps. Existing code/routes/data/schema and production
 remain intact; no provider documents/network were consulted or actions executed.
+The source-only inspection covered app/avito/reviews.py (create result, list answer
+status and legacy conversion), app/reviews/canonical_wb_fetch.py and the
+request_send section of app/reviews/service.py. It was not an exhaustive official
+API investigation. Avito read/pagination and status acceptance likewise require
+focused confirmation; missing local wiring is not proof of missing upstream API.
 
 ## Central acceptance additions — pending, no results claimed
 

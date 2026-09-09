@@ -4,8 +4,8 @@ No concrete provider client, URL, production bootstrap, task or retry loop. An
 injected fake transport can exercise this sequence in final synthetic acceptance.
 """
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from typing import Protocol
 
 from app.platform.integrations.review_job_contract import ReviewJobError
@@ -79,7 +79,7 @@ def reconcile_once(*, service, authenticated_actor, locator, expected,
             observation = None
         else:
             observation.__post_init__()
-    except Exception:
+    except Exception:  # noqa: BLE001 - untrusted transport errors never become response evidence.
         observation = None
     if observation is None:
         observation = ReviewAnswerObservation(None, None)
@@ -121,7 +121,7 @@ def send_once(*, service, locator, expected, transport: ReviewAnswerTransport, v
             observation = None
         else:
             observation.__post_init__()
-    except Exception:
+    except Exception:  # noqa: BLE001 - provider may have succeeded; never leak or retry.
         # Even a transport exception may follow provider success. No exception
         # text, retry, second provider call or marker reset is permitted.
         observation = None

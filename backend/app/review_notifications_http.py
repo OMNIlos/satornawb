@@ -6,15 +6,15 @@ Bootstrap must provide a trusted service dependency and explicit request budgets
 
 import json
 import re
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 
-from app.control_plane.auth import actor_from_request
+from app.control_plane.auth import ActorContext, actor_from_request
 from app.notification_service import NotificationServiceError, ReviewNotificationService
-
 
 _STATUS = {"NOTIFICATION_INVALID": 400, "NOTIFICATION_AUTHENTICATION_REQUIRED": 401,
     "NOTIFICATION_DENIED": 403, "NOTIFICATION_NOT_FOUND": 404, "NOTIFICATION_CONFLICT": 409,
@@ -33,7 +33,7 @@ def _actor(request: Request):
         actor = actor_from_request(request)
     except HTTPException:
         code = "NOTIFICATION_AUTHENTICATION_REQUIRED"
-    except Exception:
+    except Exception:  # noqa: BLE001 - HTTP boundary must not expose authentication internals.
         code = "NOTIFICATION_UNAVAILABLE"
     if code is not None:
         raise _error(code)
@@ -96,7 +96,7 @@ def make_review_notifications_router(*, service_dependency, max_request_bytes: i
             output = json.dumps(_wire(result), ensure_ascii=True, allow_nan=False, separators=(",", ":"))
         except NotificationServiceError as error:
             code = error.code
-        except Exception:
+        except Exception:  # noqa: BLE001 - an unknown post-commit result requires readback.
             # A serialization failure after receipt commit is not a rolled-back write.
             code = "NOTIFICATION_READBACK_REQUIRED" if method == "mark_visible" else "NOTIFICATION_UNAVAILABLE"
         if code is not None:
@@ -129,15 +129,18 @@ def make_review_notifications_router(*, service_dependency, max_request_bytes: i
         return await call(service, method, actor, scope, ids)
 
     @router.get("/visible")
-    async def visible(request: Request, actor=Depends(_actor), service=Depends(service_dependency)):
+    async def visible(request: Request, actor: Annotated[ActorContext, Depends(_actor)],
+                      service: Annotated[ReviewNotificationService, Depends(service_dependency)]):
         return await read(request, actor, service, "read_visible")
 
     @router.get("/capabilities")
-    async def capabilities(request: Request, actor=Depends(_actor), service=Depends(service_dependency)):
+    async def capabilities(request: Request, actor: Annotated[ActorContext, Depends(_actor)],
+                           service: Annotated[ReviewNotificationService, Depends(service_dependency)]):
         return await read(request, actor, service, "capabilities")
 
     @router.post("/receipts")
-    async def receipts(request: Request, actor=Depends(_actor), service=Depends(service_dependency)):
+    async def receipts(request: Request, actor: Annotated[ActorContext, Depends(_actor)],
+                       service: Annotated[ReviewNotificationService, Depends(service_dependency)]):
         invalid = False
         try:
             if (request.query_params or request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json"

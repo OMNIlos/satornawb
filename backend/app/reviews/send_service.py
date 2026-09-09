@@ -5,27 +5,41 @@ semantics. Evidence entrypoints are TRUSTED adapter inputs, never HTTP payloads.
 """
 
 import json
-from hashlib import sha256
 from dataclasses import dataclass
-from datetime import timezone
+from datetime import UTC
+from hashlib import sha256
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 
 from app.notification_repository import NotificationRepository
 from app.platform.integrations.orm import MarketplaceAccountRow
-from app.platform.integrations.review_job_authority import ReviewJobCommands, ReviewJobExecutor, ReviewReconciliation
-from app.platform.integrations.review_job_contract import ReviewAction, ReviewJobError, ReviewSendIntent
+from app.platform.integrations.review_job_authority import (
+    ReviewJobCommands,
+    ReviewJobExecutor,
+    ReviewReconciliation,
+)
+from app.platform.integrations.review_job_contract import (
+    ReviewAction,
+    ReviewJobError,
+    ReviewSendIntent,
+)
 from app.reviews.canonical_contract import ExternalReviewIdentity, ReviewMarketplace
 from app.reviews.canonical_repository import ReviewFactsRepository, ReviewOwner
 from app.reviews.decision_contract import ReviewDraftRevision, ReviewPolicyVersion
 from app.reviews.historical_binding import ReviewBindingDescriptor
 from app.reviews.local_repository import ReviewLocalRepository, _encoded
-from app.reviews.local_tables import AUDIT as LOCAL_AUDIT, DECISION, DRAFT, POLICY, POLICY_HEAD, WORKFLOW_HEAD
+from app.reviews.local_tables import AUDIT as LOCAL_AUDIT
+from app.reviews.local_tables import DECISION, DRAFT, POLICY, POLICY_HEAD, WORKFLOW_HEAD
 from app.reviews.send_payloads import encode_review_answer_evidence
 from app.reviews.send_repository import ReviewSendRepository
 from app.reviews.send_tables import COMMAND
-from app.reviews.storage_payloads import encode_review_generation, encode_review_local_audit, encode_review_policy, encode_review_send
+from app.reviews.storage_payloads import (
+    encode_review_generation,
+    encode_review_local_audit,
+    encode_review_policy,
+    encode_review_send,
+)
 
 
 class ReviewDomainBlocked(ReviewJobError):
@@ -280,7 +294,7 @@ class ReviewSendService:
                 "marketplace": locator.marketplace, "evidenceId": str(uuid4()), "reviewId": str(command["review_id"]),
                 "commandId": str(locator.command_id), "attemptId": str(expected.attempt_id),
                 "outcome": outcome, "readId": None, "reconciliationStartedAt": None,
-                "observedAt": session.scalar(select(func.clock_timestamp())).astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                "observedAt": session.scalar(select(func.clock_timestamp())).astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
                 "providerAnswerId": observation.provider_answer_id, "answerChecksum": checksum, "verifierVersion": verifier_version}
             repository.append_evidence(payload)
             if action is ReviewAction.ACK:
@@ -316,8 +330,8 @@ class ReviewSendService:
                 "marketplace": read.locator.marketplace, "evidenceId": str(uuid4()), "reviewId": str(read.intent.review_id),
                 "commandId": str(read.locator.command_id), "attemptId": str(read.expected.attempt_id),
                 "outcome": outcome, "readId": str(read.read_id),
-                "reconciliationStartedAt": read.started_at.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
-                "observedAt": session.scalar(select(func.clock_timestamp())).astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                "reconciliationStartedAt": read.started_at.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+                "observedAt": session.scalar(select(func.clock_timestamp())).astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
                 "providerAnswerId": observation.provider_answer_id, "answerChecksum": checksum, "verifierVersion": verifier_version}
 
         return self._publish_reconciliation(authenticated_actor=authenticated_actor,

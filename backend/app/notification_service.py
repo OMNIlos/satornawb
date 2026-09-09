@@ -10,12 +10,19 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.control_plane.auth import ActorContext
-from app.infra.db import MarketplaceAccountContextError, set_marketplace_account_context, set_tenant_context
+from app.infra.db import (
+    MarketplaceAccountContextError,
+    set_marketplace_account_context,
+    set_tenant_context,
+)
 from app.notification_repository import NotificationRepository, NotificationStorageError
 from app.platform.identity.orm import IamMembershipRow
 from app.platform.integrations.orm import MarketplaceAccountRow
 from app.platform.integrations.publication_guard import (
-    ExpectedAccountBinding, PublicationGuardError, UserSessionPrincipal, acquire_publication_guard,
+    ExpectedAccountBinding,
+    PublicationGuardError,
+    UserSessionPrincipal,
+    acquire_publication_guard,
 )
 from app.reviews.historical_binding import ReviewBindingDescriptor
 from app.reviews.ingestion_contract import ReviewRepositoryError
@@ -123,18 +130,18 @@ class ReviewNotificationService:
             code = "NOTIFICATION_CONFLICT"
         except (SQLAlchemyError, MarketplaceAccountContextError):
             code = "NOTIFICATION_READBACK_REQUIRED" if action is not None and committing else "NOTIFICATION_UNAVAILABLE"
-        except Exception:
+        except Exception:  # noqa: BLE001 - unknown commit must not leak SQL or imply rollback.
             code = "NOTIFICATION_READBACK_REQUIRED" if action is not None and committing else "NOTIFICATION_UNAVAILABLE"
         finally:
             if session is not None:
                 failed = False
                 try:
                     session.rollback()
-                except Exception:
+                except Exception:  # noqa: BLE001 - still attempt close after rollback failure.
                     failed = True
                 try:
                     session.close()
-                except Exception:
+                except Exception:  # noqa: BLE001 - cleanup failure makes mutation outcome uncertain.
                     failed = True
                 if failed:
                     code = "NOTIFICATION_READBACK_REQUIRED" if action is not None and committing else "NOTIFICATION_UNAVAILABLE"

@@ -24,6 +24,41 @@ Local Reviews amendment and exact parity limits are recorded in
 required service chain or integration is absent. The table above is the only
 current stage-status source in this file.
 
+### Final available-source checkpoint after b557de1 (not acceptance/release)
+
+Coordinator accepted b557de1 as completion of the CURRENTLY AVAILABLE T4 source
+implementation, not full original scope or release readiness. No additional
+speculative feature/policy work is authorized by that checkpoint. Exact remaining
+mapping of the original eight stages:
+
+| Original stage | Actual source checkpoints | Pending checks | Concrete missing input / next owner |
+|---|---|---|---|
+| 1 ABC/P&L | 7cd1fd9/028168b/81ee4b9, integrated frontend milestone77abab0 | Final integrated backend/frontend freshness/null/pagination parity and approved canary | T1/root accepted freshness + integration artifact; final financial policy is not T4's choice |
+| 2 Review facts/shadow |27c227e/835a82b/c87af78 and later single-read source recorded above | Integrated RLS/rebind/revocation/partial source and restart acceptance | T1/root registration/rollout; queue/discovery/filter contract, not guessed completeness |
+| 3 Policies/drafts/decisions/history |ae7db1d local services, dc6a72d workflow history + typed client, a13a6f4 atomic new-draft producer | New history15+adjacent17 and frontend transport cases were authored but not run; integrated process restart/CAS and legacy parity | Full moderation/prompt/model provenance and list/filter parity mapping, durable preparation orchestration; old legacy preserved |
+| 4 Send/recovery |dc6a72d repository, a13a6f4 guarded services, f2eed7b cancel/fresh read/queue; actual T1 prerequisites b6b6343/43fa81d | Actual0074 + authority + service combined PG; cancellation races, final fences, fake transport unknown COMMIT/restart/late ACK; queue login/root/duplication | Confirmed WB/Avito read/write/answer identity/status semantics and fixtures; trusted transport/bootstrap/fair scheduling and explicit lease/budget policies |
+| 5 Notifications |dc6a72d persistence, a13a6f4 producers, f2eed7b recipient root, b557de1 exact-ID HTTP/typed client | Actual RLS/current recipient/commit + concurrent read/dismiss; HTTP wire/strict input/stream budgets; frontend epochs/supersession/unknown outcome | Discovery sort/cursor/filter/count/retention/rebinding policy, deployment budgets, preferences CAS and external destination/delivery policy; root registration/UI integration |
+| 6 Other frontend |77abab0 legacy regression milestone; dc6a72d local Reviews client;8d29886 new Avito producer boundary; b557de1 notifications client | Fresh combined frontend and backend DTO fixtures against final integration SHA | Actual T2/T3 service/HTTP/capability contracts. T3 reported8735915 adds no new frontend contract. Production assembly/printing remain deferred |
+| 7 Rollout/legacy retirement |e4818e3 runbook + current dormant modules | Authorized canary, observed rollback/restore and actual full parity evidence | Root release artifact/allowlist approval and deployment inputs; no retirement now |
+| 8 Final debt/integration |Current T4 branch through b557de1 + this bounded hygiene/ledger follow-up | Central serialized integration/PG/fullsuite/build and independent review, without CodeRabbit | Coordinator resource slot and accepted integration SHA; baseline backend debt is not proven resolved by T4 static checks |
+
+Actual light verification after available-source completion: frontend `tsc -b
+--pretty false` natural exit0. Initial Ruff5-file check found26 diagnostics,
+including import/UTC style, FastAPI dependency defaults and intentional outer
+safety catches. Scoped follow-up uses Annotated dependencies, automatic import/
+UTC fixes, and per-boundary documented BLE001 exceptions to preserve safe unknown
+commit/transport cleanup semantics. Final same5-file Ruff: All checks passed,
+exit0; git diff --check: exit0/no output. This is NOT test/PG/API/transport acceptance. No heavy test,
+fullsuite, build, role creation or resource reservation was started by T4 here.
+
+Provider gap is precisely a gap in the accepted integration inputs examined, NOT
+a claim that official APIs lack functionality. Inspected local sources were
+Avito review create/list/answer DTOs, WB single-page canonical fetch, and legacy WB
+request_send. No official provider docs or network were consulted in this phase.
+Final focused provider review must establish identity/status/read/write semantics
+against authoritative contract and fixtures before activation; submitted text must
+never be relabelled as observed answer evidence.
+
 ### In-progress implementation package after8d29886 — verification pending
 
 Local immutable workflow history now has backend service/dormant HTTP, bounded
