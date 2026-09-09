@@ -37,7 +37,7 @@
 
 Router object: `app.orders.router.router`, prefix уже `/api/v2/orders`.
 Registration НЕ выполнена. До activation нужен immutable source binding (request `0b8ae9d`)
-и T1 physical-root guard followup; никакие feature flags не включены.
+; T1 physical-root followup уже принят ниже. Никакие feature flags не включены.
 
 Query: repeated positive `account_id` (все должны быть доступны, без silent omission),
 `query_checksum` prepublished view, optional `snapshot_id` ИЛИ `cursor`, limit1..200.
@@ -102,7 +102,9 @@ Offline pure/legacy regression: **148 passed, 0.85s, exit0** (`orders_contract`,
 Run binding stamps сейчас в legacy mutable audit JSON: service-level defense, НЕ DB
 immutable provenance. `0b8ae9d` просит минимальный forward storage у T1; это activation gate.
 Old unbound runs/snapshots intentional fail-closed, rollback не должен их relabel.
-Guard physical-root followup пока не consumed; обычные Session(engine) используются в HTTP.
+Guard physical-root followup принят merge `6891b4826d39cfa149ca84baaf2940f546e59410`,
+exact T1 `8338ef77311266ec9943ef06fac4672efe948d40` вместе с account context `2408839`.
+Обычные Session(engine) используются в HTTP; API guard не изменился.
 Production P1 DDL/permission ещё нужны; `0aa2c48` содержит согласованный witness amendment
 и separate frozen/artifact/delivery requests. Source refresh/unassign/planning не придуманы.
 Полные calendar/grouping/A4/sticker sources отсутствуют; WB fulfillment source отсутствует.
@@ -110,3 +112,21 @@ Production P1 DDL/permission ещё нужны; `0aa2c48` содержит со�
 
 Никаких provider/production/print/export-operational-data/GitHub/push/deploy действий.
 Только synthetic local tests; customer JSON, frontend, prototype и secrets не изменены.
+
+## Final physical-guard consumer acceptance
+
+После accepted exact merge: **386 passed, 2 dependency warnings, 42.26s, exit0**.
+Состав: 111 Orders binding/Catalog/assembly/publication/read/HTTP/wire/repository/cursor
+cases + 275 T1 publication-guard/account-context unit+actual PostgreSQL cases.
+Orders schema fixtures намеренно pinned0064; новый shared helper/guard реально взят
+из merged8338ef7. All own Unix-disposable resources cleanup verified. Локальный
+единственный Alembic head теперь0065 (унаследованная принятая T1 Review migration),
+не заявляется новый T3 schema/Review consumer implementation.
+
+Actual executable HTML characterization повторён после merge: **6 passed, 6.89s**,
+scrubbed sandbox, existing T4 TypeScript runtime, fake fetch/print boundaries;
+это не physical print или full renderer parity. Scoped Ruff/compile/diff проходят.
+Golden binding codec/vectors доставлены T1 exact `1e25e71`; typed decimal-string
+wire `da7e017` отдельно прочитан и принят T4 для dormant подготовки (их10purePASS).
+Activation остаётся закрыта immutable source binding + реальными source contracts,
+Production DDL/permission и полными parity/rollback gates, а не ожиданием старого guard.
