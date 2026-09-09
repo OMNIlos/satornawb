@@ -147,3 +147,17 @@ only Avito strategy/settings source test resolved, plus new browser case. This
 run also includes restored ABC no-demo guards from4fd9156. JSON evidence prefix
 `/tmp/satorna-t4-avito-settings-`: before/browser/mutation/after/full. Remaining22
 failures are unwaived; no skips or blanket snapshots introduced.
+
+## RNP — actual stale-period defect
+
+Unlike the obsolete call-string assertion, an actual mounted-browser test reproduced
+old ready rows remaining visible during a new period request. Scoped state now hides
+them immediately and fences obsolete setters by session/organization/period. The
+test also checks exact GET parameters and logout clearing without another request.
+Two source cases replaced by one browser case; six other RNP/Ads guards retained.
+RED old runtime → GREEN new runtime; independent scoped review PASS.
+
+Fresh full **282PASS/21FAIL/0pending**, exit1 versus282/22: no new failure IDs,
+one obsolete RNP source failure resolved. Evidence /tmp/satorna-t4-rnp-period-full.json;
+details in 2026-09-09-t4-rnp-period-isolation.md. Still no canonical RNP cutover or
+full release approval. Out-of-order/polling/org-switch races are not browser-proven.

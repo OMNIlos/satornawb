@@ -1,4 +1,4 @@
-import { Fragment, createContext, memo, startTransition, type CSSProperties, type ChangeEvent, type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, createContext, memo, startTransition, type CSSProperties, type ChangeEvent, type KeyboardEvent, type MouseEvent, type ReactNode, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, FileSpreadsheet, FolderPlus, Settings, Sparkles, Upload, X } from 'lucide-react'
@@ -12352,7 +12352,7 @@ function WeekTableScrollStyles() {
   )
 }
 
-function RnpReportIsland({ replacementKey }: { replacementKey: string }) {
+export function RnpReportIsland({ replacementKey }: { replacementKey: string }) {
   return (
     <PeriodReportGate replacementKey={replacementKey} surface="rnp">
       <RnpReportActiveIsland replacementKey={replacementKey} />
@@ -12361,13 +12361,30 @@ function RnpReportIsland({ replacementKey }: { replacementKey: string }) {
 }
 
 function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
-  const { accessToken } = useAuth()
+  const { accessToken, cabinetMe } = useAuth()
   const activeTab = useContext(ActiveParityTabContext)
   const rnpReportActive = shouldLoadPeriodSurface(activeTab, 'rnp')
-  const [state, setState] = useState<RnpLiveState>({ status: 'loading' })
+  const [publishedState, setPublishedState] = useState<ScopedReportState<RnpLiveState> | null>(null)
   const [periodState, setPeriodState] = useState(() => readReportPeriodState('rnp'))
   const periodFromIso = periodState.fromIso
   const periodToIso = periodState.toIso
+  // Keep session material in component memory only, as in the P&L consumer.
+  const requestScope = JSON.stringify([accessToken, cabinetMe?.organization.organizationId, periodFromIso, periodToIso])
+  const activeScope = useRef(requestScope)
+  useLayoutEffect(() => { activeScope.current = requestScope }, [requestScope])
+  const state = selectScopedReportState<RnpLiveState>(requestScope, publishedState, { status: 'loading' })
+  const setState = useCallback((next: RnpLiveState | ((current: RnpLiveState) => RnpLiveState)) => {
+    if (activeScope.current !== requestScope) return
+    setPublishedState(current => {
+      if (activeScope.current !== requestScope) return current
+      return {
+        scope: requestScope,
+        state: typeof next === 'function'
+          ? next(selectScopedReportState<RnpLiveState>(requestScope, current, { status: 'loading' }))
+          : next,
+      }
+    })
+  }, [requestScope])
   const rnpJob = state.status === 'ready'
     ? describePnlReportJob(state.report.reportJob ?? null)
     : state.job ?? null
@@ -12421,7 +12438,7 @@ function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       cancelled = true
       controller.abort()
     }
-  }, [accessToken, periodFromIso, periodToIso, rnpReportActive])
+  }, [accessToken, periodFromIso, periodToIso, rnpReportActive, requestScope, setState])
 
   useEffect(() => {
     const render = (event: Event) => {
@@ -12476,7 +12493,7 @@ function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       cancelled = true
       if (timer !== null) window.clearTimeout(timer)
     }
-  }, [accessToken, periodFromIso, periodToIso, rnpRefreshRunning, rnpReportActive, state.status])
+  }, [accessToken, periodFromIso, periodToIso, rnpRefreshRunning, rnpReportActive, state.status, requestScope, setState])
 
   useEffect(() => {
     const root = document.getElementById('tab-rnp')
