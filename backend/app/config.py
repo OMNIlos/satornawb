@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 from app.security.marketplace_credentials import CredentialCryptoError, CredentialKeyring
+
+
+def _parse_marketplace_role(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", value) is None:
+        raise RuntimeError("marketplace_executor_configuration_invalid") from None
+    return value
 
 
 def _parse_csv_env(value: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -168,6 +177,8 @@ class Settings:
     review_shadow_enabled: bool = False
     review_shadow_account_pairs: tuple[tuple[int, int], ...] = ()
     marketplace_credentials_enabled: bool = False
+    marketplace_executor_role: str | None = None
+    marketplace_api_runtime_role: str | None = None
     marketplace_credential_keyring_dir: str | None = None
     marketplace_credential_current_key_version: int | None = None
     marketplace_credential_key_versions: tuple[int, ...] = ()
@@ -305,6 +316,8 @@ def get_settings() -> Settings:
         marketplace_credentials_enabled=_parse_bool_env(
             "VELLA_MARKETPLACE_CREDENTIALS_ENABLED", False
         ),
+        marketplace_executor_role=_parse_marketplace_role(os.getenv("VELLA_MARKETPLACE_EXECUTOR_ROLE")),
+        marketplace_api_runtime_role=_parse_marketplace_role(os.getenv("VELLA_MARKETPLACE_API_RUNTIME_ROLE")),
         marketplace_credential_keyring_dir=os.getenv(
             "VELLA_MARKETPLACE_CREDENTIAL_KEYRING_DIR"
         ),
