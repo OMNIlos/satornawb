@@ -59,6 +59,39 @@ Production portions of that package and the first-consumer plan are retained for
 resumption only. The Avito source-semantics investigation concerns ACTIVE Orders;
 it does not authorize new work items, sheet generation or print actions.
 
+## Legacy Cache Baseline Probe (current follow-up)
+
+At `f4c6a286030f15ba063980d10dc517a7ddad5da6`, the unchanged historical
+`tests/test_avito_orders.py::test_avito_orders_endpoint_ignores_blocked_cache_and_refetches`
+passed alone: **1 PASS, 2 existing deprecation warnings, 1.77s, exit 0**.
+This does not establish full-suite resolution; `ops/legacy-test-failures.txt`
+remains unchanged. The test stubs actor/credentials/orders client/cache, but
+does not stub public-color lookup or return-inventory DB enrichment. Thus its
+authorization and enrichment behavior are not acceptance evidence.
+
+Reproduction used a cleared environment, disabled plugin autoload/bytecode/cache,
+and macOS sandbox denial of ALL networking and file writes plus secret-file reads.
+No DB allocator, provider, printing, operational export or file mutation ran.
+Initial pytest FD capture could not create its temporary file and exited before
+collection; switching to in-memory capture and disabling logging fixed only the
+harness, without relaxing containment. No runtime or test source was changed.
+
+```sh
+env -i PATH=/usr/local/bin:/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 \
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /usr/bin/sandbox-exec -p \
+  '(version 1) (allow default) (deny network*) (deny file-write*) (deny file-read* (regex #"/\\.env($|[./])")) (deny file-read* (regex #"/\\.(pgpass|pg_service.conf|netrc)$"))' \
+  /Users/bratishka/Downloads/satornawb-main/.worktrees/arch-t1-platform/backend/.venv/bin/python -m pytest \
+  -p no:cacheprovider -p no:logging --capture=sys -q --tb=short \
+  tests/test_avito_orders.py::test_avito_orders_endpoint_ignores_blocked_cache_and_refetches
+```
+
+Run from this worktree's `backend` using the approved sibling T1 virtualenv.
+The blocked-cache branch explicitly bypasses blocked results at
+`app/routers/avito_orders.py:879`, then calls the injected order client at line884.
+The probe provides no reason to alter that branch or weaken permissions. Missing
+test isolation and possible suite-order/environment dependencies remain distinct
+from an asserted cache defect. Production renderer tests were not resumed.
+
 ## Historical Evidence (not current status)
 
 All headings, tables, pending/blocked statements, test counts and next-step notes
