@@ -5,6 +5,9 @@ from typing import Literal
 
 PermissionProfile = Literal["viewer", "settings_editor", "price_sender", "finance_viewer", "admin", "custom"]
 
+WB_SKU_OVERRIDE_READ_PERMISSIONS = frozenset({"settings:read"})
+WB_SKU_OVERRIDE_REPLACE_PERMISSIONS = frozenset({"settings:read", "settings:write"})
+
 LEGACY_PROFILE_ALIASES: dict[str, PermissionProfile] = {
     "admin": "admin",
     "owner": "admin",
