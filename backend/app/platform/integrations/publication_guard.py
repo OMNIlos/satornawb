@@ -288,10 +288,22 @@ def _before_commit(session):
     if guard is None:
         return
     try:
+        # Dispatch iteration is the effective class-then-instance call order,
+        # not registration time. No callback may run after final validation,
+        # even if its author intended a read-only observer. Inspect, never edit,
+        # the collection while SQLAlchemy is dispatching it.
+        if tuple(session.dispatch.before_commit)[-1:] != (_before_commit,):
+            raise PublicationGuardError("publication_context_invalid")
         with session.no_autoflush:
             guard._context()
         session.flush()
+        # after_flush_postexec can queue another flush. Do not let SQLAlchemy's
+        # subsequent commit flush loop publish that work after our final check.
+        if session.new or session.dirty or session.deleted:
+            raise PublicationGuardError("publication_context_invalid")
         guard.revalidate_before_write()
+        if session.new or session.dirty or session.deleted:
+            raise PublicationGuardError("publication_context_invalid")
     except PublicationGuardError:
         guard._failed = True
         raise

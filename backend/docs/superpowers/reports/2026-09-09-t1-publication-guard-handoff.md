@@ -83,10 +83,24 @@ membership/org/user/permission/scope, session/user/revoke/expiry and every exact
 account and authority expectation are checked. No latest-row substitution.
 
 Database `clock_timestamp()` is sampled after all lock waits. The Session-specific
-`before_commit` hook checks context, explicitly flushes, then performs the complete
-fresh metadata/context/time validation again. Omitted caller rechecks and mutations
-flushed in the same transaction cannot bypass this final check. Failure poisons the
-handle until caller rollback. Nested transaction attempts also poison the root.
+`before_commit` hook first verifies it is the last effective callback (including
+class and instance listeners), checks context, flushes once, rejects any remaining
+new/dirty/deleted ORM work, then performs complete fresh metadata/context/time
+validation and again rejects pending ORM work. This prevents SQLAlchemy's later
+commit flush loop from writing mutations left by `after_flush_postexec` or final
+validation events after the guard's final check. Failure poisons the handle until
+caller rollback. Nested transaction attempts also poison the root.
+
+Trusted callbacks effectively before the guard are supported. Any callback after
+it, even a claimed read-only observer, denies commit at guard entry. Effective
+SQLAlchemy order determines this: class callbacks precede instance callbacks,
+including class registrations made later. The check repeats on reused Sessions;
+registration before a new acquisition does not move a callback before an already
+retained guard. No callback collection is mutated during dispatch or drained in an
+unbounded flush loop. Callers must use this supported Session protocol: raw DBAPI
+or connection COMMIT, private-state manipulation and cursor/connection callbacks
+executing SQL after checks are prohibited bypasses outside these guarantees. The
+guard is not a sandbox for arbitrary application code.
 
 Three constant callbacks are installed once per guarded Session. They hold no
 captured Session/root state and never modify listeners during event dispatch.
@@ -110,8 +124,14 @@ PostgreSQL tests. Additional self-review RED reproduced malformed tenant markers
 leading-zero scope compatibility and multiple distinct same-account tokens; fixed
 and rerun. Exact commands, counts and allocated-resource cleanup are in the local
 task execution report `.superpowers/sdd/2026-09-09-publication-guard/task-2-report.md`.
-Final focused plus paired-fetch/crypto/store/WB binding run: **245 passed in
-14.00s**, exit 0. Three-file Ruff and compileall pass, exit 0.
+Initial focused plus paired-fetch/crypto/store/WB binding run: **245 passed in
+14.00s**, exit 0. Independent review then found the additional-flush callback gap
+(I1), reproduced on actual PostgreSQL before the fix. The finalizer protocol above
+includes that correction; exact follow-up verification is recorded in the report.
+I1 regression RED: **3 failed in 2.73s**; covering guard GREEN: **161 passed in
+11.02s**; final seven-file combined GREEN: **255 passed in 14.41s**, exit 0.
+Ruff, compileall and diff checks pass; all follow-up disposable resources were
+cleaned and verified absent. The inherited passfile warning remains unchanged.
 
 PostgreSQL coverage includes both lock winner orders for user deactivation/org
 change, membership revocation/permission/scope change, session revoke, account

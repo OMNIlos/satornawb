@@ -641,6 +641,140 @@ def test_database_commit_failure_rolls_back_publication_and_audit(data):
     assert count_proof(d) == 0
 
 
+def test_finalizer_rejects_orm_auth_mutation_left_by_after_flush_postexec(data):
+    d, g = data, api()
+    mutations = []
+    with d.factory() as session:
+        with pytest.raises(g.PublicationGuardError, match="^publication_context_invalid$"):
+            with session.begin():
+                acquire(session, d)
+                user = session.get(LkUserRow, f"owner-{d.org}")
+
+                def leave_pending_auth(current_session, context):
+                    if not mutations:
+                        mutations.append("pending inactive user")
+                        user.is_active = False
+
+                event.listen(session, "after_flush_postexec", leave_pending_auth)
+                proof(session, d)
+        assert mutations == ["pending inactive user"]
+        assert count_proof(d) == 0
+
+
+@pytest.mark.parametrize("mutate_user", [True, False])
+def test_finalizer_rejects_any_later_instance_before_commit_callback(data, mutate_user):
+    d, g = data, api()
+    called = []
+    with d.factory() as session:
+        with pytest.raises(g.PublicationGuardError, match="^publication_context_invalid$"):
+            with session.begin():
+                acquire(session, d)
+                user = session.get(LkUserRow, f"owner-{d.org}")
+
+                def later_callback(current_session):
+                    called.append("later")
+                    if mutate_user:
+                        user.is_active = False
+
+                event.listen(session, "before_commit", later_callback)
+                proof(session, d)
+        # Reject at guard entry, before an unsupported callback can do any work.
+        assert called == []
+        assert count_proof(d) == 0
+
+
+@pytest.mark.parametrize("placement", ["instance_before", "class_before", "class_after"])
+def test_finalizer_allows_trusted_callbacks_effectively_before_guard(data, placement):
+    d = data
+    calls = []
+
+    class CallerSession(Session):
+        pass
+
+    def trusted_callback(session):
+        calls.append("trusted")
+        session.add(LkAuditEventRow(organization_id=d.org, action="synthetic.trusted_callback",
+                                   object_type="synthetic", object_id="trusted"))
+
+    with CallerSession(d.factory.kw["bind"]) as session:
+        target = session if placement == "instance_before" else CallerSession
+        if placement != "class_after":
+            event.listen(target, "before_commit", trusted_callback)
+        try:
+            with session.begin():
+                acquire(session, d)
+                if placement == "class_after":
+                    # SQLAlchemy invokes class listeners before instance ones,
+                    # including class listeners registered after guard creation.
+                    event.listen(target, "before_commit", trusted_callback)
+                proof(session, d)
+        finally:
+            event.remove(target, "before_commit", trusted_callback)
+    assert calls == ["trusted"]
+    assert count_proof(d) == 2
+    with Session(d.engine) as session:
+        assert session.scalar(select(func.count()).select_from(LkAuditEventRow).where(
+            LkAuditEventRow.organization_id == d.org,
+            LkAuditEventRow.action == "synthetic.trusted_callback")) == 1
+
+
+def test_finalizer_checks_effective_order_again_on_reused_session_and_poisons_handle(data):
+    d, g = data, api()
+
+    def later_callback(session):
+        pass
+
+    with d.factory() as session:
+        with session.begin():
+            acquire(session, d, read=True)
+        # Registration precedes this root's acquisition but follows the retained
+        # guard callback in effective order, so the second commit must deny.
+        event.listen(session, "before_commit", later_callback)
+        session.begin()
+        guard = acquire(session, d)
+        proof(session, d)
+        with pytest.raises(g.PublicationGuardError, match="^publication_context_invalid$"):
+            session.commit()
+        event.remove(session, "before_commit", later_callback)
+        # Repairing callback order cannot rehabilitate a failed root transaction.
+        with pytest.raises(g.PublicationGuardError, match="^publication_context_invalid$"):
+            guard.revalidate_before_write()
+        with pytest.raises(g.PublicationGuardError, match="^publication_context_invalid$"):
+            session.commit()
+        session.rollback()
+        with session.begin():
+            acquire(session, d, read=True)
+    assert count_proof(d) == 0
+
+
+@pytest.mark.parametrize("pending_kind", ["new", "dirty", "deleted"])
+def test_finalizer_rejects_orm_work_created_during_final_validation(data, pending_kind):
+    d, g = data, api()
+    with d.factory() as session:
+        with pytest.raises(g.PublicationGuardError, match="^publication_context_invalid$"):
+            with session.begin():
+                acquire(session, d)
+                user = session.get(LkUserRow, f"owner-{d.org}")
+                proof(session, d)
+                added = []
+
+                def during_validation(execute_state):
+                    # A supported Session ORM event queues work when final
+                    # validation reads DB time. It performs no SQL of its own.
+                    if not added and "clock_timestamp()" in str(execute_state.statement):
+                        added.append("pending")
+                        if pending_kind == "dirty":
+                            user.is_active = False
+                        elif pending_kind == "new":
+                            proof(session, d)
+                        else:
+                            session.delete(user)
+
+                event.listen(session, "do_orm_execute", during_validation)
+        assert added == ["pending"]
+        assert count_proof(d) == 0
+
+
 def wait_expired(connection, expiry):
     deadline = monotonic() + 5
     while connection.scalar(select(func.clock_timestamp())) <= expiry:
