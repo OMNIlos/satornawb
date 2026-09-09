@@ -89,7 +89,7 @@ describe('Avito live integration wiring', () => {
     expect(overviewSource).toContain('avito-overview-item-modal')
     expect(overviewSource).not.toContain('window.openAvitoListingPopup?.(row.itemId)')
     expect(overviewSource).toContain('avitoOverviewDataForPeriod')
-    expect(overviewSource).toContain('загружаем выбранный период')
+    // Actual loading, period isolation and empty/error rendering: avitoOverviewBrowser.test.ts.
     expect(overviewSource).toContain('Объявления по просмотрам и контактам за выбранный период.')
     expect(overviewSource).not.toContain('Объявления по просмотрам и контактам за 7 дней.')
   })
@@ -116,19 +116,13 @@ describe('Avito live integration wiring', () => {
     expect(overviewIslandSource).toContain('scrubAvitoOverviewLegacyMocks(document.body)')
   })
 
-  it('keeps Avito overview date inputs, applied period, and backend request in sync', () => {
-    const toolbarSource = paritySource.slice(
-      paritySource.indexOf('function AvitoOverviewToolbarIsland'),
-      paritySource.indexOf('function AvitoOverviewPeriodControlIsland'),
-    )
+  it('keeps Avito overview applied period wired to the backend request', () => {
     const islandSource = paritySource.slice(
       paritySource.indexOf('function AvitoOverviewIsland'),
       paritySource.indexOf('function defaultAvitoChatsState'),
     )
-    expect(toolbarSource).toContain('applyOverviewDate')
-    expect(toolbarSource).toContain('next.dateFrom = dateFrom')
-    expect(toolbarSource).toContain('next.dateTo = dateTo')
-    expect(toolbarSource).toContain('next.requestSeq = current.requestSeq + 1')
+    // The current UI uses period tabs; actual clicks and request dates are
+    // verified in avitoOverviewBrowser.test.ts, not obsolete date-input code.
     expect(islandSource).toContain('loadLiveAvitoOverview(accessToken, { dateFrom: state.dateFrom, dateTo: state.dateTo')
   })
 

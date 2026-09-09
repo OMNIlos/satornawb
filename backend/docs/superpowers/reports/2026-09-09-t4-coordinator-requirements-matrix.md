@@ -2,6 +2,21 @@
 
 ## Current checkpoint: frontend response isolation; Review historical binding open
 
+Latest independent frontend batch:373PASS/7FAIL/0pending versus358/16, exact
+nine old failed IDs closed, zero new failures; finaltsc/diff0. Actual overview
+period/modal/loading/empty/error/logout, protected secondary DOM node identity
+and exception restoration, Ads/Stock event scopes with intended mutation REDs,
+legacy Reviews explicit two-row synthetic fixture preserving all guards/settings
+and initial empty-runtime proof. Equivalent threshold-copy and valid negative
+strategy input tests corrected without runtime/formula changes. Full report:
+frontend/docs/superpowers/reports/2026-09-09-t4-independent-frontend-batch.md.
+Separate RNP cache test in progress, not part of the above evidence.
+User explicitly requested all available T2–T4 work: existing T2/T3 resumed,
+both delivered further independent commits and were asked to continue remaining
+safe owner scope. T4 independently verified T2 receipt/override/assignment228PASS
+and buyer-price DST38PASS under all-network-denied sandbox. T3 reports0067consumer
+33c95c1 ready/HWMv3; adapter keeps HWMopaque; no frontend/APIactivation inferred.
+
 T1 direct dependency ACK: committed spec+implementation plan at
 17028f5667599c0ef2ca2f2536d3334426354afd fully read via git show. T1 explicitly
 consumed T4 codec45e2ccb and six literal vectors. No important domain mismatch;
