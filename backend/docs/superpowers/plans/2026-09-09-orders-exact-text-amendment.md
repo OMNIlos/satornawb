@@ -20,6 +20,7 @@
 - Use only own random disposable PostgreSQL databases/runtime roles via authorized Unix `/tmp`; maintenance `postgres` only create/drop exact own names and absence checks. Never inspect existing app data or alter host. OS network denial and env isolation required.
 - Downgrade fails closed before mutation if affected data exist, including hidden-by-RLS data. No CASCADE, stamp, backfill or data deletion.
 - Existing feature fixtures remain bounded0062/0063; actual current grant script uses latest-head fixture only.
+- This new feature's fixture/index inventory and downgrade helper remain bounded0064 too. Its graph assertion is one current head with0064 in ancestry, never that0064 stays head forever. A separate latest-head fixture exercises the actual current runtime script; do not invoke that script on a pinned0064 database.
 - No subagents from implementer. Controller performs review. Preserve unrelated controller docs; stage only task files.
 
 ### Task 1: Exact-text migration and PostgreSQL acceptance
