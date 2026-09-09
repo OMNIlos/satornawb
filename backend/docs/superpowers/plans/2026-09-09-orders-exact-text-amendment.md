@@ -58,7 +58,8 @@ IF current_setting('transaction_isolation') <> 'read committed' THEN
   RAISE EXCEPTION USING ERRCODE='25000', MESSAGE='orders_isolation_invalid';
 END IF;
 PERFORM 1 FROM marketplace_accounts
- WHERE organization_id=NEW.organization_id AND id=NEW.marketplace_account_id
+ WHERE organization_id=NEW.organization_id
+   AND marketplace_account_id=NEW.marketplace_account_id
  FOR UPDATE;
 -- Existing ownership FK remains authoritative; exact predicate follows in a
 -- separate volatile PL/pgSQL statement after the acquired account lock.
