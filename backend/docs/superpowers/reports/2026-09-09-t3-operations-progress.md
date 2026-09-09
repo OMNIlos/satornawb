@@ -211,3 +211,23 @@ Manual critic: account lock is serialization, not authorization; caller still
 needs T1 shared guard before entering, and must not hold domain locks first.
 Actual0064 migration/long-key gate remains NOT_RUN until T1 delivers its exact SHA.
 No schema, shared auth, routes, providers, production or frontend changed.
+
+## Item projection primitive
+
+`OrdersProjectionRepository.set_item(run,observation,line,resolution,expected_version)`
+uses the same decoded scoped order-level membership as parent CAS. Shared account
+lock precedes run/item locks under RC. None means insert only if absent; explicit
+version requires CAS. Stored line identity/quantity/effective time cannot be
+overridden by request. Repeated listings retain distinct explicit occurrence keys.
+Identity drift fails; no physical deletion or inferred absent-item cancellation.
+Catalog IDs remain references with account-scoped Product/Offer FKs; resolution is
+an explicit trusted caller decision, not title matching. No readiness field written.
+
+RED2 missing set_item -> GREEN; final parent/item/evidence/snapshot21PASS9.03s,
+including two actual sessions/PIDs competing for item version (one winner, one
+conflict), quantity3->5, repeated lines, missing line, rollback, and same-org other
+account Product rejection. Cleanup verified, Ruff/compileall/diff exit0.
+Manual critic: not an operator assignment endpoint; manual override commands still
+require Production CAS/idempotency/audit service. No-op replay, out-of-order source
+selection and atomic status/coverage/run publication remain service obligations.
+Long-key acceptance still waits exact0064 and its PG gate; no original0062 changes.
