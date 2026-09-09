@@ -215,6 +215,8 @@ class PublicationGuard:
         self._accounts, self._credentials, self._tokens = accounts, credentials, tokens
         self._failed = False
         self._ended = False
+        self._orders_fences = ()
+        self._finalizing = False
 
     def __repr__(self):
         return "<PublicationGuard>"
@@ -311,6 +313,9 @@ def _before_commit(session):
     if guard is None:
         return
     try:
+        if guard._finalizing:
+            raise PublicationGuardError("publication_context_invalid")
+        guard._finalizing = True
         # Dispatch iteration is the effective class-then-instance call order,
         # not registration time. No callback may run after final validation,
         # even if its author intended a read-only observer. Inspect, never edit,
@@ -325,6 +330,8 @@ def _before_commit(session):
         if session.new or session.dirty or session.deleted:
             raise PublicationGuardError("publication_context_invalid")
         guard.revalidate_before_write()
+        for fence in guard._orders_fences:
+            fence._validate_final()
         if session.new or session.dirty or session.deleted:
             raise PublicationGuardError("publication_context_invalid")
     except PublicationGuardError:
@@ -333,6 +340,29 @@ def _before_commit(session):
     except SQLAlchemyError:
         guard._failed = True
         raise PublicationGuardError("publication_persistence_failed") from None
+    except Exception:
+        # A job fence failure poisons this root even if a caller catches it.
+        guard._failed = True
+        raise
+
+
+def _register_user_orders_fence(guard, fence):
+    """Private, exact-class Orders extension; never an arbitrary callback bus.
+
+    Same root only, before finalization, once. The normal listener remains the
+    final before_commit listener and validates these fences after flush and auth.
+    """
+    from app.platform.integrations.user_orders_jobs import UserOrdersPublicationHandle
+
+    try:
+        if (type(guard) is not PublicationGuard or type(fence) is not UserOrdersPublicationHandle
+                or guard._finalizing or guard._orders_fences or fence._guard is not guard
+                or fence._session_ref() is not guard._context()):
+            raise PublicationGuardError("publication_context_invalid")
+        guard._orders_fences = (fence,)
+    except Exception:
+        guard._failed = True
+        raise
 
 
 def _transaction_created(session, transaction):
