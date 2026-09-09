@@ -130,31 +130,33 @@ def test_actual_chain_has_one_head_containing_orders_revision():
     assert "20260909_0062" in {revision.revision for revision in scripts.iterate_revisions(heads[0], "base")}
 
 
-def _credential_reachable_calls(function):
-    """Bounded source admission; do not count disconnected nested definitions."""
-    calls = []
+def _credential_calls(function):
+    """Syntactic inventory only; setup admission separately checks block shape."""
+    return [node for node in ast.walk(function) if isinstance(node, ast.Call)]
 
-    class Calls(ast.NodeVisitor):
-        def visit_FunctionDef(self, node):
-            pass
 
-        visit_AsyncFunctionDef = visit_ClassDef = visit_Lambda = visit_FunctionDef
+def _credential_setup_blocks(function):
+    """Only the fixture's straight-line with/try setup spine is admitted."""
+    def blocks(statements):
+        yield statements
+        for statement in statements:
+            if isinstance(statement, ast.With) or (
+                isinstance(statement, ast.Try) and not statement.handlers and not statement.orelse
+            ):
+                yield from blocks(statement.body)
 
-        def visit_If(self, node):
-            if isinstance(node.test, ast.Constant):
-                for statement in node.body if node.test.value else node.orelse:
-                    self.visit(statement)
-            else:
-                self.generic_visit(node)
+    return list(blocks(function.body))
 
-        def visit_Call(self, node):
-            calls.append(node)
-            self.generic_visit(node)
 
-    visitor = Calls()
-    for statement in function.body:
-        visitor.visit(statement)
-    return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
+def _credential_migration_calls(function):
+    # Conservative: even an extra command call in cleanup or a disconnected
+    # definition is outside the approved shared sequence. Do not execute source.
+    return [
+        node for node in _credential_calls(function)
+        if isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "command"
+    ]
 
 
 def _assert_credential_fixture_admission(tree):
@@ -162,6 +164,7 @@ def _assert_credential_fixture_admission(tree):
         node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
     }
     fixture = functions["disposable_postgres"]
+    assert not _credential_migration_calls(fixture)
     assert len(fixture.body) == 1 and isinstance(fixture.body[0], ast.If)
     dispatch = fixture.body[0]
     assert ast.dump(dispatch.test) == ast.dump(
@@ -177,29 +180,51 @@ def _assert_credential_fixture_admission(tree):
         call = delegation.value
         assert isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
         assert call.func.id == generator
-        bootstraps = [
-            candidate_call for candidate_call in _credential_reachable_calls(functions[generator])
-            if isinstance(candidate_call.func, ast.Name)
-            and candidate_call.func.id == "_bootstrap_postgres"
+        setup = functions[generator]
+        assert not _credential_migration_calls(setup)
+        # Fail closed on early exits, including conditional returns before the
+        # setup try. This is a bounded fixture shape, not a Python CFG analyzer.
+        assert not any(isinstance(node, ast.Return) for node in ast.walk(setup))
+        yields = [node for node in ast.walk(setup) if isinstance(node, (ast.Yield, ast.YieldFrom))]
+        assert len(yields) == 1 and isinstance(yields[0], ast.Yield)
+        blocks = [
+            block for block in _credential_setup_blocks(setup)
+            if any(isinstance(statement, ast.Expr) and statement.value is yields[0] for statement in block)
         ]
-        assert len(bootstraps) == 1
+        assert len(blocks) == 1
+        block = blocks[0]
+        assert [type(statement) for statement in block] == [ast.Expr, ast.Assign, ast.Expr]
+        bootstrap = block[0].value
+        assert isinstance(bootstrap, ast.Call) and isinstance(bootstrap.func, ast.Name)
+        assert bootstrap.func.id == "_bootstrap_postgres"
+        assert [
+            call for call in _credential_calls(setup)
+            if isinstance(call.func, ast.Name) and call.func.id == "_bootstrap_postgres"
+        ] == [bootstrap]
+        assert block[-1].value is yields[0]
         role_arguments = [
-            keyword.value for keyword in bootstraps[0].keywords
+            keyword.value for keyword in bootstrap.keywords
             if keyword.arg == "create_runtime_role"
         ]
         assert len(role_arguments) == 1 and isinstance(role_arguments[0], ast.Constant)
         assert role_arguments[0].value is creates_role
 
+    shared = functions["_bootstrap_postgres"]
+    assert not any(isinstance(node, ast.Return) for node in ast.walk(shared))
+    migrations = _credential_migration_calls(shared)
+    blocks = [
+        block for block in _credential_setup_blocks(shared)
+        if len(block) == 4 and all(
+            isinstance(statement, ast.Expr) and statement.value in migrations
+            for statement in block
+        )
+    ]
+    assert len(migrations) == 4 and len(blocks) == 1
     sequence = []
-    for call in _credential_reachable_calls(functions["_bootstrap_postgres"]):
-        if (
-            isinstance(call.func, ast.Attribute)
-            and isinstance(call.func.value, ast.Name)
-            and call.func.value.id == "command"
-            and call.func.attr in {"stamp", "upgrade", "downgrade"}
-        ):
-            assert len(call.args) == 2 and isinstance(call.args[1], ast.Constant)
-            sequence.append((call.func.attr, call.args[1].value))
+    for statement in blocks[0]:
+        call = statement.value
+        assert len(call.args) == 2 and isinstance(call.args[1], ast.Constant)
+        sequence.append((call.func.attr, call.args[1].value))
     assert sequence == [
         ("stamp", "20260905_0060"),
         ("upgrade", "20260908_0061"),
@@ -218,6 +243,9 @@ def test_isolated_credential_fixture_pins_its_supported_revision():
 @pytest.mark.parametrize("mutation", [
     "head", "wrong_revision", "wrong_downgrade", "bypass_local", "bypass_native",
     "bypass_local_dispatch", "bypass_native_dispatch", "disconnected_local_bootstrap",
+    "early_return_local", "early_return_native",
+    "external_head_local", "external_head_native",
+    "external_wrong_revision_local", "external_wrong_revision_native",
 ])
 def test_credential_fixture_admission_rejects_unsafe_reachable_changes(mutation):
     tree = ast.parse((candidate.ROOT / "tests/test_marketplace_credential_rls.py").read_text())
@@ -225,10 +253,26 @@ def test_credential_fixture_admission_rejects_unsafe_reachable_changes(mutation)
     if mutation in {"head", "wrong_revision", "wrong_downgrade"}:
         action = "downgrade" if mutation == "wrong_downgrade" else "upgrade"
         call = next(
-            call for call in _credential_reachable_calls(functions["_bootstrap_postgres"])
+            call for call in _credential_calls(functions["_bootstrap_postgres"])
             if isinstance(call.func, ast.Attribute) and call.func.attr == action
         )
         call.args[1] = ast.Constant("head" if mutation == "head" else "20260909_0062")
+    elif mutation.startswith(("early_return_", "external_")):
+        generator = "_native_postgres" if mutation.endswith("_native") else "_local_postgres"
+        # Mutate the real pre-yield block, leaving its original bootstrap intact.
+        block = next(
+            node.body for node in ast.walk(functions[generator])
+            if isinstance(node, ast.Try)
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Call)
+            and isinstance(node.body[0].value.func, ast.Name)
+            and node.body[0].value.func.id == "_bootstrap_postgres"
+        )
+        if mutation.startswith("early_return_"):
+            block.insert(0, ast.Return())
+        else:
+            target = "head" if mutation.startswith("external_head_") else "20260909_0062"
+            block.insert(1, ast.parse(f"command.upgrade(config, '{target}')").body[0])
     elif mutation.endswith("_dispatch"):
         branch = functions["disposable_postgres"].body[0]
         statements = branch.body if "local" in mutation else branch.orelse
@@ -236,7 +280,7 @@ def test_credential_fixture_admission_rejects_unsafe_reachable_changes(mutation)
     else:
         generator = "_native_postgres" if mutation == "bypass_native" else "_local_postgres"
         call = next(
-            call for call in _credential_reachable_calls(functions[generator])
+            call for call in _credential_calls(functions[generator])
             if isinstance(call.func, ast.Name) and call.func.id == "_bootstrap_postgres"
         )
         call.func.id = "_bypassed_bootstrap"

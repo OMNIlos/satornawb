@@ -128,3 +128,26 @@ SHA256 каждого файла сохраняются в execution report по
 Все PG проверки только disposable Unix allocator через scrubbed env-i и OS sandbox;
 собственная backend .venv. Ruff-only interpreter согласован отдельно. No app DB,
 real credentials, providers/network, Redis, host changes, flags, push или deploy.
+
+## Исправление после review round 1 — I1
+
+Независимое review нашло важный пробел только в pure credential-fixture admission:
+старый visitor считал bootstrap после безусловного return и не замечал лишние
+migration calls в local/native generators. До исправления добавлены6отрицательных
+контролей: early return, внешний upgrade в head и неверную revision для обоих
+generators. RED:6FAIL9PASS0.56s, все6сбоев — DID NOT RAISE AssertionError.
+
+Admission теперь принимает ограниченный straight-line with/try setup shape:
+единственный bootstrap → runtime assignment → единственный yield, без return;
+никаких command calls вне общего блока из4точно закреплённых migrations.
+Условные/loop/handler пути не заменяют обязательный setup spine. Это не общий
+Python control-flow analyzer. Исходные8негативных контролей сохранены, реальная
+credential fixture неизменна. Финальный covering pure gate:15PASS0.51s,natural0;
+scoped Ruff, compileall и diffcheck прошли. PG gates не повторялись, исходные
+173/447 результаты и failed438/1 history выше остаются отдельной evidence.
+
+Изменены только Orders admission test и этот handoff;0069, runtime SQL и3feature
+tests неизменны. I1 исправлен для scoped re-review, не объявлен независимо
+принятым. M1 (12 inherited cleanup warnings) оставлен на отдельно разрешённое
+исправление harness: suppression, sandbox relaxation и удаление чужих temp dirs
+не выполнялись. T3 authorization/source/permission activation по-прежнему отдельно.
