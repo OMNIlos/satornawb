@@ -1,6 +1,6 @@
 # Account-scoped SKU override storage handoff
 
-Status: implementer PostgreSQL247, adjacent compatibility402 and controller independent PostgreSQL247 gates passed on identical feature sources. Independent spec/quality review remains pending; not READY for T2 until it accepts this change.
+Status: CLOSED / READY for the bounded T1 SQL persistence handoff to T2. Release commit: `54386d4a789b0b74ae30710035defe949ea44b6a` (`feat: add account-scoped SKU override storage`). Independent spec review: PASS; task quality: Approved, with 0 Critical, 0 Important and 2 Minor findings. Implementer PostgreSQL247, adjacent compatibility402 and controller independent PostgreSQL247 gates passed on identical feature sources. This release does not accept the whole branch, integration, T2 authenticated service or rollout.
 
 Revision `20260909_0070` follows sole predecessor `20260909_0069`. No old migration, domain service, ORM, route, legacy writer, dependency, feature flag or Production feature changed. Only the six code/test/fixture paths below and this handoff are tracked changes. This supplies a SQL persistence contract, not authenticated-service, formula, mapping or rollout acceptance.
 
@@ -75,7 +75,12 @@ Full three-file retry passed **247 tests in29.39s**, natural exit0, no skipped t
 
 Compile, scoped Ruff and diff checks pass. Ruff diagnostics for the seven adjacent historical modules are identical to BASE and all zero. Controller independently reran the same three-file gate: **247 passed in26.25s**, natural exit0, no skips. It verified all seven own database/seven role cleanup and absence checks, exact sole head0070, compile/Ruff/diff0 and identical six source hashes after the gate. The inherited libpq `/dev/null` passfile warning remains; output is not warning-free. Evidence is attributed to controller `.superpowers/sdd/2026-09-09-sku-override-storage/parent-verification.md`, fully read before this handoff was finalized.
 
-Independent spec/quality review remains pending. Isolated implementer self-critique found no remaining blocker; it is not independent review. Exact actual commands, failures, all owner cleanup identifiers and rulings are in ignored `.superpowers/sdd/2026-09-09-sku-override-storage/task-1-report.md`. Controller authorized the exact seven-path commit after its passing checkpoint; the resulting full commit SHA is recorded in that execution report and the final task response.
+Independent review of BASE `9ec82a268778162e86bb277bb0722d3524c3ca1a` → release `54386d4a789b0b74ae30710035defe949ea44b6a` is complete: spec PASS and task quality Approved, with 0 Critical, 0 Important and 2 Minor findings. The reviewer read the full frozen diff and attributed execution evidence; it did not rerun tests or reconstruct historical RED/cleanup events. The review is recorded in `.superpowers/sdd/2026-09-09-sku-override-storage/task-1-review.md`, read in full alongside controller verification for this evidence-only update. Exact commands, failures, cleanup identifiers and release rulings remain in `.superpowers/sdd/2026-09-09-sku-override-storage/task-1-report.md`.
+
+The two non-blocking findings remain open for final whole-branch triage:
+
+- **M1 — scoped-parent FK test isolation:** the wrong-SKU-organization and wrong-membership-organization cases in `test_provider_sku_and_member_parent_scope_rejected` wrap a version-only root in `pytest.raises(DBAPIError)`. Missing head/audit witnesses could still cause a commit error if a targeted FK were removed. The actual account/SKU/member FKs are present; targeted behavioral regression proof for these particular parent checks is limited by orphan-error masking. No storage defect was identified. A future test refinement can assert immediate INSERT rejection or the exact target constraint in an otherwise valid root.
+- **M2 — inherited libpq warning noise:** recorded runs emit `password file "/dev/null" is not a plain file`. This does not invalidate the passing gates or indicate credential access, but output is not pristine. Any future allocator-owned regular-passfile adjustment needs controller-approved harness scope and exact cleanup evidence. This frozen task's mandated environment and test results remain unchanged.
 
 Feature source SHA256 frozen after full247 pass:
 
