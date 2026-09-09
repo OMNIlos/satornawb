@@ -1,5 +1,100 @@
 # T4 — requirement → commit → evidence → remaining work
 
+## Current authoritative status — all eight stages
+
+Frozen platform-milestone input: **77abab0ae4a5bef1544bccfbeb92e728d8b7c4e6**.
+It contains consumer27c227e and HTTP835a82b; frontend acceptance uses the same SHA.
+Later documentation/parity work does not silently replace this integration input.
+`released` below means a local owner handoff, never deployment. `consumer-accepted`
+means the stated local check only. No row is final-integrated or production-active.
+
+| Requirement | Actual implementation SHA / state | Verified evidence | Remaining local work / owner | Production activation |
+|---|---|---|---|---|
+| 1. Typed ABC/P&L cutover | 7cd1fd9/028168b/81ee4b9; implemented, local consumer-accepted, not final-integrated | Typed pagination/account/formula/null guards; full frontend at77abab0:430/0/0 | T1/root shared integration and exact freshness contract; T4 keeps default-off rollback and no invented profit | Not authorized; separate approved canary/deploy |
+| 2. Review Facts + same-DTO parity | 27c227e immutable0068 consumer;835a82b canonical-only HTTP;c87af78 parity. Later single-fact read is implemented locally, separate from frozen77; exact commit in Git | Binding44PASS; earlier225/2 retained. Parity4PASS/combined61PASS. New read14+HTTP/binding/shadow final71PASS18.28s; diagnostic BIGINT fixture failures disclosed in HTTP handoff. No consolidated platform milestone result yet | T1 shared registration; T4 list/queue, remaining workflow services and frontend; root milestone review. Local explicit retry proven, automatic failed-run/ambiguous-COMMIT recovery not implemented. Platform0068 is released, not missing | Off; original legacy shadow activation is not implemented or authorized |
+| 3. Policies/drafts/decisions | Actual0071 local repository/live-session service/dormant HTTP/fake-manual preparation implemented; unchanged T1 chain consumed through4f196cd. Source SHA in local-services-send-in-app handoff commit | Combined92PASS2warnings7.92s after Numeric-bind fix; original91/1 and diagnostic disclosed. Receipt/source/epoch/CAS/races/rollback and revocation covered; final DB-clock rerun in handoff | T1/root registration and independent integration; T4 full list/history/moderation/prompt parity, durable pre-publication orchestration and process-restart acceptance. Local v1 is not full legacy feature parity | Off; no real LLM/send required or authorized |
+| 4. Send/recovery | Actual0074 participant + T1 roots297fcfd→b6b6343 and cc820→43fa81d; source/policy/approval callbacks, closing, queued-only one-POST driver, original-sender cancellation, captured fresh-read orchestration and read-only ready scanner implemented UNVERIFIED | Earlier287purePASS covers codecs only, NOT new repositories/authority/services/drivers/scanner; no new gate | Concrete synthetic transport acceptance, uncertain commit/restart and fair queue scheduling; trusted bootstrap/transport and UI boundary; broad authority/0074 DDL and sealed intent/cancel no longer missing | Live sends off; no provider bootstrap or final acceptance |
+| 5. Notifications | Actual0074 participant + atomic producers + own-recipient live-session root + dormant exact-visible-ID HTTP factory/typed frontend client implemented UNVERIFIED; account allowlist empty by default | Earlier287purePASS covers codecs only; new HTTP/client/service/RLS/concurrent merge acceptance PENDING | Discovery pagination/filter/binding policy, preferences CAS extension, bootstrap/registration/full UI parity and external delivery policy remain; explicit-ID reads/marks are no longer missing | No Telegram/provider actions; old0071 writer unchanged/no replay backfill |
+| 6. Other canonical frontend consumers |77abab0 existing fixes +430/0/0; dormant local Reviews adapter and new Avito browser-evidence producer validator, no UI/extension switch | New browser25+Reviews10=35PASS0.42s/TypeScript0; actual frontend→T3 decoder2PASS/checksum parity. No full frontend/new UI parity implied | T2 repricer/finance/sources and T3 Orders routes/authority; T4 switches. Shared Orders filter semantics absent. Legacy browser producer lacks stable occurrence; new validator does not fabricate it. Production deferred | Default-off; no operational authority inferred |
+| 7. Rollout/retirement preparation |e4818e3 runbook; preparation implemented, execution not performed | Null/version/pagination/rollback criteria and build-time redeploy limitation documented | Root/T1 integration artifact and authorized observation inputs; T4 maintain runbook against accepted contracts. Legacy retained until actual parity | Canary/deploy/retirement explicitly not authorized by local test work |
+| 8. Assigned debt + final handoff |77abab0; frontend debt consumer-accepted, architecture final handoff incomplete |Actual full430PASS0FAIL0PENDING/133.91s; T2 independent102PASS0.70s; not full backend green | Root/T1 one consolidated integration milestone, then remaining vertical services and final combined/backend gates; independent final review remains | No release approval inferred from test counts |
+
+Local Reviews amendment and exact parity limits are recorded in
+`2026-09-09-t4-canonical-review-http-handoff.md`. Tests cannot close a row whose
+required service chain or integration is absent. The table above is the only
+current stage-status source in this file.
+
+### Final available-source checkpoint after b557de1 (not acceptance/release)
+
+Coordinator accepted b557de1 as completion of the CURRENTLY AVAILABLE T4 source
+implementation, not full original scope or release readiness. No additional
+speculative feature/policy work is authorized by that checkpoint. Exact remaining
+mapping of the original eight stages:
+
+| Original stage | Actual source checkpoints | Pending checks | Concrete missing input / next owner |
+|---|---|---|---|
+| 1 ABC/P&L | 7cd1fd9/028168b/81ee4b9, integrated frontend milestone77abab0 | Final integrated backend/frontend freshness/null/pagination parity and approved canary | T1/root accepted freshness + integration artifact; final financial policy is not T4's choice |
+| 2 Review facts/shadow |27c227e/835a82b/c87af78 and later single-read source recorded above | Integrated RLS/rebind/revocation/partial source and restart acceptance | T1/root registration/rollout; queue/discovery/filter contract, not guessed completeness |
+| 3 Policies/drafts/decisions/history |ae7db1d local services, dc6a72d workflow history + typed client, a13a6f4 atomic new-draft producer | New history15+adjacent17 and frontend transport cases were authored but not run; integrated process restart/CAS and legacy parity | Full moderation/prompt/model provenance and list/filter parity mapping, durable preparation orchestration; old legacy preserved |
+| 4 Send/recovery |dc6a72d repository, a13a6f4 guarded services, f2eed7b cancel/fresh read/queue; actual T1 prerequisites b6b6343/43fa81d | Actual0074 + authority + service combined PG; cancellation races, final fences, fake transport unknown COMMIT/restart/late ACK; queue login/root/duplication | Confirmed WB/Avito read/write/answer identity/status semantics and fixtures; trusted transport/bootstrap/fair scheduling and explicit lease/budget policies |
+| 5 Notifications |dc6a72d persistence, a13a6f4 producers, f2eed7b recipient root, b557de1 exact-ID HTTP/typed client | Actual RLS/current recipient/commit + concurrent read/dismiss; HTTP wire/strict input/stream budgets; frontend epochs/supersession/unknown outcome | Discovery sort/cursor/filter/count/retention/rebinding policy, deployment budgets, preferences CAS and external destination/delivery policy; root registration/UI integration |
+| 6 Other frontend |77abab0 legacy regression milestone; dc6a72d local Reviews client;8d29886 new Avito producer boundary; b557de1 notifications client | Fresh combined frontend and backend DTO fixtures against final integration SHA | Actual T2/T3 service/HTTP/capability contracts. T3 reported8735915 adds no new frontend contract. Production assembly/printing remain deferred |
+| 7 Rollout/legacy retirement |e4818e3 runbook + current dormant modules | Authorized canary, observed rollback/restore and actual full parity evidence | Root release artifact/allowlist approval and deployment inputs; no retirement now |
+| 8 Final debt/integration |Current T4 branch through b557de1 + this bounded hygiene/ledger follow-up | Central serialized integration/PG/fullsuite/build and independent review, without CodeRabbit | Coordinator resource slot and accepted integration SHA; baseline backend debt is not proven resolved by T4 static checks |
+
+Actual light verification after available-source completion: frontend `tsc -b
+--pretty false` natural exit0. Initial Ruff5-file check found26 diagnostics,
+including import/UTC style, FastAPI dependency defaults and intentional outer
+safety catches. Scoped follow-up uses Annotated dependencies, automatic import/
+UTC fixes, and per-boundary documented BLE001 exceptions to preserve safe unknown
+commit/transport cleanup semantics. Final same5-file Ruff: All checks passed,
+exit0; git diff --check: exit0/no output. This is NOT test/PG/API/transport acceptance. No heavy test,
+fullsuite, build, role creation or resource reservation was started by T4 here.
+
+Provider gap is precisely a gap in the accepted integration inputs examined, NOT
+a claim that official APIs lack functionality. Inspected local sources were
+Avito review create/list/answer DTOs, WB single-page canonical fetch, and legacy WB
+request_send. No official provider docs or network were consulted in this phase.
+Final focused provider review must establish identity/status/read/write semantics
+against authoritative contract and fixtures before activation; submitted text must
+never be relabelled as observed answer evidence.
+
+### In-progress implementation package after8d29886 — verification pending
+
+Local immutable workflow history now has backend service/dormant HTTP, bounded
+version pagination and a typed frontend consumer. The same package adds a dormant
+HTTP client for local context/history/commands with epoch/supersession guards and
+explicit exact-byte command retries; no UI switch or route registration. This
+narrows rows3/6, but does not close full queue, policy history or legacy parity.
+See `2026-09-09-t4-review-workflow-history.md` for exact files and boundaries.
+History backend15+adjacent17 and new frontend transport tests/fresh TypeScript
+are PENDING. Earlier45frontendPASS/TypeScript0 cover pre-transport state only.
+Per coordinator, implementation is assembled first; no micro-gates/PG reservations
+are active. The combined verification queue remains a release prerequisite.
+
+### Explicitly deferred by user — Production assembly and printing
+
+Shared WB/Avito work items/assignments, batches, schedule, picking/print sheets,
+XLSX/PDF/stickers, print archive and delivery receipts are deferred, not DONE.
+T4 retains the existing UI and completed compatibility protections at frozen
+77abab0; its new canonical Production adapter/switch is not implemented or
+consumer-accepted. T1's implemented0069 atd57c544 and all existing owner code/
+migration history must remain; this statement does not assert T3 P1 service
+acceptance. Exact backend readiness remains in the T1/T3 current ledgers.
+Resumption needs accepted backend service/HTTP/authority contracts and the
+missing source/parity inputs recorded by T3. Do not continue new implementation,
+P1–P4 tests or missing-renderer/calendar research while deferred. Preserve existing
+behavior and required regression compatibility for already accepted changes.
+This deferral does not block Orders ingestion/read/API, Reviews, Notifications,
+T2 work or integration/acceptance of the remaining scope. KIZ/matcher stay excluded.
+
+# Historical ledger — all following checkpoints are superseded snapshots
+
+The headings and tables below retain their original dates/claims as evidence;
+they are not current dependency or completion status. Use only the table above
+for planning. In particular, historical missing0068/guard and frontend failures
+must not be repeated as current blockers.
+
 ## Current complete frontend gate: 430PASS / 0FAIL / 0PENDING
 
 One fresh serial fullfrontend run completed naturally0 in133.91s, JSONsuccess
