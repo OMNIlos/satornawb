@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import copy
 import json
-from email.parser import BytesParser
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tomllib
 import zipfile
+from email.parser import BytesParser
+from pathlib import Path
 
 from packaging.requirements import Requirement
 
@@ -24,6 +24,10 @@ EXPECTED_RUNTIME_FILES = {
     "app/platform/integrations/credential_store.py",
     "app/platform/integrations/publication_guard.py",
     "app/reviews/canonical_contract.py",
+    "app/reviews/canonical_router.py",
+    "app/reviews/canonical_sync.py",
+    "app/orders/router.py",
+    "app/orders/read_service.py",
     "vella_wb_19_05/models.py",
 }
 
@@ -37,6 +41,10 @@ REPRESENTATIVE_IMPORTS = (
     "app.platform.integrations.credential_store",
     "app.platform.integrations.publication_guard",
     "app.reviews.canonical_contract",
+    "app.reviews.canonical_router",
+    "app.reviews.canonical_sync",
+    "app.orders.router",
+    "app.orders.read_service",
     "vella_wb_19_05.models",
 )
 
