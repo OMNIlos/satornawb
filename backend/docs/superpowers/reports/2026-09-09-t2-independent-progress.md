@@ -323,3 +323,25 @@ loads pinned expected bytes/hash/count and never regenerates.8192 syntheticbudge
 no operational policy. Native NUMERIC limits and separate settings-write/live mapping
 auth must remain explicit; these vectors are SQL parity inputs, not SQL proof.
 Scoped Ruff/compileall/diff exit0; read-only critic no findings, no extra test process.
+
+### Independent override-to-calculation characterization gap
+
+Added22 test-only cases to existing `test_repricer_calculation_characterization.py`:
+explicit pMin/alias/zero inheritance, fixed costs/pick-pack/expense precedence,
+nonpositive denominator fallback, pMax/RRP/margin priority, minutes/hours/global
+interval fallback and input/global immutability. Original repricer code is unchanged.
+These pin actual legacy behavior, not approved financial rules or new API defaults.
+
+One synthetic precision boundary is explicit: `2**53+1` passes direct pMin exactly,
+but the existing COGS path crosses float and produces one kopeck less. This must not
+be hidden by future integer storage/codec exactness claims. No business formula or
+checksum is adjusted to repair it in a state-migration slice; no real data involved.
+
+Fresh focused **22PASS0.57s,80deselected**, naturalexit0; no claim the entire102case
+file ran at this revision. Compileall/diff0. Ruff exit1 same3 inherited diagnostics
+as pre-change HEAD (I001,C408,UP017), no new diagnostics. Fixture blocks network,
+approval/apply/storage entry points and restores monkeypatched globals. No PG,
+browser/build/fullsuite gate or heavy-slot reservation. Test-only rollback removes
+the new cases; no runtime/schema/data rollback needed.
+Final single-module unit run **102PASS0.62s**, naturalexit0 (old80+new22 actually
+run together). Read-only critic found no defects, did not start test processes.
