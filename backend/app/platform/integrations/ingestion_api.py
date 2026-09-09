@@ -361,7 +361,8 @@ def create_ingestion_router(*, token_service: AuthenticatedIngestionTokens,
             if type(result) is not CommittedIngestionAcknowledgement:
                 raise IngestionAPIError("ingestion_unavailable")
             result.__post_init__()
-            return JSONResponse(asdict(result), headers={"Cache-Control": "no-store"})
+            return JSONResponse({"run_id": str(result.run_id), "state": result.state,
+                                 "replayed": result.replayed}, headers={"Cache-Control": "no-store"})
         except (IngestionAPIError, IngestionLimitError) as error:
             return _safe_error(error)
         except (PublicationGuardError, IngestionTokenStoreError):

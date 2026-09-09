@@ -232,6 +232,13 @@ commit proof; router refuses unknown result types and never returns uploaded
 evidence. T3 may raise `IngestionAPIError('ingestion_conflict')` for a proven
 idempotency/body conflict; other exceptions get fixed safe mapping.
 
+The external HTTP acknowledgement is exactly
+`{"run_id":"<canonical positive base10 decimal>","state":"partial","replayed":false}`
+(replayed is a boolean and may be true). Wire run_id is a STRING without leading
+zeros, preserving the entire positive BIGINT range through browser JSON.parse.
+The internal callback DTO and database run_id remain integers with their existing
+bounds. State/replayed fields and no-store/HTTP behavior are unchanged.
+
 Public HTTP codes: access_denied403, token_invalid401, body_invalid400,
 body_too_large413, encoding_unsupported415, conflict409, rate_limited429;
 policy_unavailable/peer_unavailable/limits_unavailable/unavailable503, and
@@ -247,7 +254,9 @@ PostgreSQL or Redis execution during this package, per binding source-first orde
 No final acceptance claim for0074/0075/0076 or shared authority source.
 
 Central gates retained: dual-org/account/auth matrix; missing/wrong/live/revoked
-login/member and readonly scope; malformed/unknown/revoked/expired/unbound bearer;
+login/member and readonly scope; ACK run_id values2**53-1,2**53+1,2**63-1 must
+round-trip through normal browser JSON.parse with exact decimal string text;
+malformed/unknown/revoked/expired/unbound bearer;
 actual constant-time compare and secret canaries; A→B→A and disconnect/reconnect;
 lock/flush/commit wait expiry/revoke and competing/nested/foreign/listener bypass;
 one-time reveal/uncertain commit; streaming/gzip/content-length/JSON limits;
