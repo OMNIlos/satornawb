@@ -217,7 +217,8 @@ def test_reencrypt_uses_fresh_nonce_verifies_and_cas_updates(store_db) -> None:
     event.listen(engine, "before_cursor_execute", _capture)
 
     try:
-        rotated = reencrypt_credential(created.credential_id, expected_generation=1, target_key_version=8)
+        rotated = reencrypt_credential(created.credential_id, expected_generation=1, target_key_version=8,
+                                       account_identity=_wb_owner())
     finally:
         event.remove(engine, "before_cursor_execute", _capture)
     assert rotated.generation == 2
@@ -237,7 +238,8 @@ def test_reencrypt_uses_fresh_nonce_verifies_and_cas_updates(store_db) -> None:
         assert after.ciphertext != old_ciphertext
 
     with pytest.raises(CredentialStoreError) as caught:
-        reencrypt_credential(created.credential_id, expected_generation=1, target_key_version=8)
+        reencrypt_credential(created.credential_id, expected_generation=1, target_key_version=8,
+                             account_identity=_wb_owner())
     assert caught.value.code == "credential_concurrent_update"
 
 
@@ -247,6 +249,62 @@ def test_reason_and_owner_errors_are_safe(store_db) -> None:
     assert caught.value.code == "credential_reason_invalid"
     assert CANARY not in str(caught.value)
     assert CANARY not in repr(caught.value)
+
+
+def test_reencrypt_missing_owner_denies_before_io(monkeypatch) -> None:
+    from uuid import uuid4
+
+    def forbidden():
+        raise AssertionError("rekey must validate before I/O")
+
+    monkeypatch.setattr(credential_store, "_load_keyring", forbidden)
+    monkeypatch.setattr(credential_store, "get_session_factory", forbidden)
+    with pytest.raises(CredentialStoreError, match="^credential_contract_invalid$"):
+        reencrypt_credential(uuid4(), 1, 8)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("account_identity", None), ("account_identity", object()),
+    *[(field, value) for field in ("organization_id", "marketplace_account_id")
+      for value in (True, False, 0, -1, 2147483648, "1", None)],
+    *[("provider", value) for value in (None, [], {}, "unknown")],
+    *[("credential_id", value) for value in (None, True, "not-a-uuid")],
+    *[(field, value) for field in ("expected_generation", "target_key_version")
+      for value in (True, False, 0, -1, "1", None)],
+    ("expected_generation", 9223372036854775807),
+    ("expected_generation", 9223372036854775808),
+    ("target_key_version", 2147483648),
+])
+def test_reencrypt_invalid_contract_denies_before_io(monkeypatch, field, value) -> None:
+    from dataclasses import replace
+    from uuid import uuid4
+
+    def forbidden():
+        raise AssertionError("rekey must validate before I/O")
+
+    monkeypatch.setattr(credential_store, "_load_keyring", forbidden)
+    monkeypatch.setattr(credential_store, "get_session_factory", forbidden)
+    args = {"credential_id": uuid4(), "expected_generation": 1, "target_key_version": 8,
+            "account_identity": _wb_owner()}
+    if field in {"organization_id", "marketplace_account_id", "provider"}:
+        args["account_identity"] = replace(args["account_identity"], **{field: value})
+    else:
+        args[field] = value
+    with pytest.raises(CredentialStoreError, match="^credential_contract_invalid$"):
+        reencrypt_credential(**args)
+
+
+def test_reencrypt_maximum_schema_shape_reaches_key_policy(monkeypatch) -> None:
+    from uuid import uuid4
+
+    def no_configured_key():
+        raise CredentialStoreError("credential_configuration_invalid")
+
+    monkeypatch.setattr(credential_store, "_load_keyring", no_configured_key)
+    with pytest.raises(CredentialStoreError, match="^credential_configuration_invalid$"):
+        reencrypt_credential(uuid4(), 9223372036854775806, 2147483647,
+                             account_identity=MarketplaceAccountCredentialOwner(
+                                 2147483647, 2147483647, "wb"))
 
 
 @pytest.mark.parametrize("mode", ["missing", "malformed", "unreadable"])

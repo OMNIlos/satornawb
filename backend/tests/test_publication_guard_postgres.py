@@ -14,7 +14,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import create_engine, event, func, select, text, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from app.cabinet.orm import LkAuditEventRow, LkSessionRow, LkUserRow
 from app.infra.db import set_tenant_context
@@ -321,9 +321,6 @@ def test_actual_owned_writers_both_lock_winners(data, monkeypatch, writer_kind, 
     owner = store.MarketplaceAccountCredentialOwner(d.org, d.org + 100000, "avito") if token else d.owner
     monkeypatch.setattr(ingestion_tokens, "get_session_factory", lambda: d.factory)
     writer_engine = d.factory.kw["bind"]
-    if writer_kind == "reencrypt":
-        monkeypatch.setattr(store, "get_session_factory", lambda: sessionmaker(d.engine))
-        writer_engine = d.engine
     writer_started, mutated, release = Event(), Event(), Event()
     pids = {}
 
@@ -346,7 +343,7 @@ def test_actual_owned_writers_both_lock_winners(data, monkeypatch, writer_kind, 
         if writer_kind == "revoke":
             return store.revoke_marketplace_credential(owner, "wb_api", "operator_revoked")
         if writer_kind == "reencrypt":
-            return store.reencrypt_credential(d.credential.credential_id, 1, 8)
+            return store.reencrypt_credential(d.credential.credential_id, 1, 8, account_identity=owner)
         if writer_kind == "token_rotate":
             return ingestion_tokens.issue_ingestion_token(owner, expires_at=d.expiry)
         return ingestion_tokens.revoke_ingestion_tokens(owner, "operator_revoked")
