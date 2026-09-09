@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.modules.orders import OrderContractValidationError
+from app.orders.avito_status_refresh import POLICY_VERSION, production_work_exists
 from app.orders.bindings import bound_high_water_mark, validate_run_binding
 from app.orders.catalog_resolution import resolve_order_catalog
 from app.orders.contracts import AccountCoverage, CatalogResolution, OrderReadRow
@@ -176,6 +177,43 @@ def freeze_orders_view(
                         AND order_item_id IS NULL AND observation_id<>:observation)"""),
                         scoped,
                     ).scalar_one()
+                    refresh_reconciliation = False
+                    existing_work = False
+                    if observation.adapter_version == POLICY_VERSION:
+                        refresh_reconciliation = session.execute(
+                            text("""SELECT EXISTS(SELECT 1 FROM order_lifecycle_events
+                            WHERE organization_id=:org AND marketplace_account_id=:account AND order_id=:order
+                            AND event_kind='reconciliation_required' AND evidence->>'policy'=:policy)"""),
+                            dict(scoped, policy=POLICY_VERSION),
+                        ).scalar_one()
+                        # Only the committed accepted-predecessor chain is explained history.
+                        divergent = session.execute(
+                            text("""WITH RECURSIVE accepted(observation_id) AS (
+                                SELECT CAST(:observation AS bigint)
+                                UNION
+                                SELECT CAST(l.evidence->>'previous_observation_id' AS bigint)
+                                FROM accepted a JOIN order_lifecycle_events l ON l.observation_id=a.observation_id
+                                JOIN order_observations predecessor ON predecessor.observation_id=
+                                    CAST(l.evidence->>'previous_observation_id' AS bigint)
+                                WHERE l.organization_id=:org AND l.marketplace_account_id=:account AND l.order_id=:order
+                                AND predecessor.organization_id=:org AND predecessor.marketplace_account_id=:account
+                                AND predecessor.order_id=:order AND predecessor.order_item_id IS NULL
+                                AND l.event_kind='status_changed' AND l.source_event_key=:key AND l.evidence->>'policy'=:policy
+                            ) SELECT EXISTS(SELECT 1 FROM order_observations
+                                WHERE organization_id=:org AND marketplace_account_id=:account AND order_id=:order
+                                AND order_item_id IS NULL AND observation_id NOT IN (SELECT observation_id FROM accepted))"""),
+                            dict(
+                                scoped,
+                                policy=POLICY_VERSION,
+                                key=POLICY_VERSION + ":accepted",
+                            ),
+                        ).scalar_one()
+                        existing_work = production_work_exists(
+                            session,
+                            principal.organization_id,
+                            account.marketplace_account_id,
+                            order["order_id"],
+                        )
                     items = (
                         session.execute(
                             text("""SELECT * FROM marketplace_order_items
@@ -206,6 +244,16 @@ def freeze_orders_view(
                             item["resolution_version"],
                         )
                         blockers = ["source_readiness_unproven", "coverage_unproven"]
+                        if observation.adapter_version == POLICY_VERSION:
+                            blockers.append(
+                                "application_freshness_not_provider_chronology"
+                            )
+                        if refresh_reconciliation:
+                            blockers.append(
+                                "avito_status_refresh_reconciliation_required"
+                            )
+                        if existing_work:
+                            blockers.append("avito_status_refresh_existing_work_item")
                         if divergent:
                             blockers.append("source_reconciliation_required")
                         if resolution.state not in ("resolved", "manual_override"):

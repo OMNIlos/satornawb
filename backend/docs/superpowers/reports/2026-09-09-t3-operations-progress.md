@@ -41,8 +41,20 @@ production canaries and physical printing are NOT prerequisites for safe local
 service development. No current T3 heavy process, reservation or pending cleanup.
 The package now also records root-authorized official Avito OpenAPI lookup:
 required `hasMore` (not `total`), no documented ordered revision/stable order-line
-guarantee, and one bounded status-only replacement policy option for root decision.
-That option is NOT approved or implemented; it does not claim account completeness.
+guarantee. Root subsequently approved the bounded known-order status-only
+application policy, implemented in `app/orders/avito_status_refresh.py` and
+tracked by `2026-09-09-orders-avito-status-refresh.md`. This is not provider
+chronology or account completeness. Local runtime-role acceptance: 20 PASS in
+8.76s; adjacent publication/read/HTTP/browser regression: 48 PASS, two known
+warnings, in 20.22s. Exact owned database/role cleanup was verified in both gates.
+Final independent scoped review found no further significant defects; fresh pure
+source/identity checks passed 64 tests in 0.42s. This follow-up is recorded in the
+commit containing this checkpoint; the frozen baseline above does not include
+it and root integration remains separate. Valid rejected observations remain durable;
+only accepted predecessor lineage is excluded from divergence. Existing work
+items prevent status promotion. Full-account traversal, old-baseline enrollment,
+trusted credential-bound client/worker activation, exact filter semantics and
+shared route registration remain separate missing inputs or integration work.
 Production portions of that package and the first-consumer plan are retained for
 resumption only. The Avito source-semantics investigation concerns ACTIVE Orders;
 it does not authorize new work items, sheet generation or print actions.
