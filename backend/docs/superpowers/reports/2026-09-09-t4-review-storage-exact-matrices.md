@@ -175,8 +175,8 @@ hash. Existing policy/draft versions выше signed BIGINT остаются в�
 |---|---|---|
 | review.policy.create.v1 | policy (exact объект review-policy-v1) | Immutable policy creation, без head; policy.created |
 | review.policy.select.v1 | policyId, policyVersion, policyChecksum, expectedHeadVersion | Явный CAS policy head; policy.selected |
-| review.draft.publish.v1 | reviewId, externalReviewId, draftId, expectedHeadVersion, expectedDraftRevision, expectedPolicyHeadVersion, generation (exact review-generation-v1), text | Publication подготовленного immutable output; draft.published |
-| review.decision.record.v1 | reviewId, externalReviewId, draftId, draftRevision, bindingChecksum, sourceObservationId, expectedHeadVersion, expectedPolicyHeadVersion, decisionKind | decisionKind approved/rejected; соответствующий decision audit |
+| review.draft.publish.v1 | reviewId, externalReviewId, draftId, expectedHeadVersion, expectedDraftRevision, expectedPolicyHeadId, expectedPolicyHeadVersion, generation (exact review-generation-v1), text | Publication подготовленного immutable output; draft.published |
+| review.decision.record.v1 | reviewId, externalReviewId, draftId, draftRevision, bindingChecksum, sourceObservationId, expectedHeadVersion, expectedPolicyHeadId, expectedPolicyHeadVersion, decisionKind | decisionKind approved/rejected; соответствующий decision audit |
 
 В draft input generation уже содержит source observation/checksum, policy
 ID/version/checksum, template/model, generation ID, mode, trusted actor и времена.
@@ -184,7 +184,8 @@ ID/version/checksum, template/model, generation ID, mode, trusted actor и вр�
 output, валидируется текущим draft predicate, сравнивается побайтно, не только hash.
 Начальная draft: expectedHeadVersion=expectedDraftRevision=0; при existing head
 оба >0. expectedPolicyHeadVersion всегда >0. Для decision обе expected head versions
-и draftRevision >0. BindingChecksum и sourceObservationId сверяются с immutable draft,
+и draftRevision >0. expectedPolicyHeadId — canonical nonzero UUID, не ID policy.
+BindingChecksum и sourceObservationId сверяются с immutable draft,
 reviewId/externalReviewId — с exact scoped Review Fact. Нельзя выбрать чужой generation
 или подменить actor/binding из HTTP. Policies используют reviews:write, draft publication
 reviews:write, decision reviews:approve; все требуют live scope и active account.
@@ -256,6 +257,67 @@ conflicts без второго audit. Это gate requirements, не уже в�
 и текущими golden bytes, отдельный main-agent critical pass на actor/rebind/late-replay,
 atomicity и private output. Runtime/schema/serializers не менялись. T1 acceptance и
 физическая DDL обязательны до consumer implementation; этот пробел не блокирует Reads.
+
+### Policy-selection epoch: P1→P2→P1 не восстанавливает старый approval
+
+Это дополнение отвечает на отдельный T1 ABA admission вопрос. Существующий
+`decision_contract._context` сравнивает только policy ID/version/checksum и сам
+по себе не доказывает актуальность выбора policy. Новое physical/service условие
+добавляется явно; existing `review-policy-v1`, `review-generation-v1`, decision
+binding checksum и `review-audit-v1` bytes не переписываются задним числом.
+
+Каждая immutable draft сохраняет **policy_head_id + policy_head_version** выбранной
+policy (captured selection epoch), дополнительно к существующим policy ID/version/
+checksum. Head ID — scoped FK на account policy head; captured version >0, exact
+integer без сужения валидных versions. Ссылка на historical policy.selected audit
+этого же head/version обязательна как immutable witness; соответствующие target
+policy, actor-independent owner и version сверяются при publication. Head later
+изменяемый: captured version не FK к его current version, не ON UPDATE CASCADE.
+Нельзя вывести captured epoch из latest head при чтении старой draft или backfill.
+Draft без trusted capture/witness fail-closed для новых decision/send; read history
+может показать её без утверждения eligibility. Автоматическая relabel/backfill нет.
+
+До подготовки generation сервер фиксирует scoped selected head ID/version вместе
+с policy snapshot. Internal prepared publication intent несёт expectedPolicyHeadId
+и expectedPolicyHeadVersion (добавлены выше). В transaction публикации locked head
+должен совпасть с обоими значениями и immutable generation policy. Только после
+этого новые draft capture/witness + workflow CAS + audit + receipt публикуются одной
+root transaction. Head change во время fake generation отклоняет output; нельзя
+подставить свежий head version к уже подготовленному output. Manual edit также
+требует нового явного prepared intent/current selection и новой draft revision;
+не обновляет policy epoch прежней draft или decision.
+
+Для новой approve/reject команды submitted expected epoch, captured draft epoch и
+locked current policy head ID/version должны совпасть; также проверяются policy
+target/checksum и прежние source/draft/actor predicates. Клиентское значение само
+по себе ничего не разрешает. Decision хранит immutable scoped draft reference,
+поэтому наследует её epoch; повторять epoch в decision не обязательно. Если T1
+дублирует поля, DB обязан запретить расхождение с draft. Будущий send intent/claim/
+pre-dispatch service дополнительно сравнивает epoch immutable approved draft с
+current head, не полагается только на старый `validate_review_send`/binding checksum.
+Mismatch до dispatch блокирует новое действие с existing POLICY_CHANGED reason;
+после dispatch остаются действующими ambiguous/reconciliation rules, историю не
+превращаем в cancelled и не очищаем marker. Этот документ не реализует send service.
+
+Каждый новый явный policy select увеличивает head version, даже при том же target.
+P1/v1 selection epoch1 → P2/epoch2 → P1/epoch3: draft/decision epoch1 остаются
+неактуальными, хотя policy content снова совпал. Нужно создать новую draft под
+epoch3 и подтвердить её заново. Никаких массовых updates всех workflow rows,
+background invalidation jobs, JSON/memory fallback или автоматического approval.
+Точное повторение уже committed localCommandId по прежнему возвращает historical
+receipt без нового действия: его результат не заявляет current eligibility и не
+обходит проверку epoch при новом decision/send command. Новый UUID требует checks.
+
+Дополнительные gates: (a) P1→P2→P1, прежняя draft + новый approval command rejected;
+(b) прежний approved draft + новый send denied до provider; (c) same-target select
+new key тоже меняет epoch, exact old key replay не меняет; (d) current target тот же,
+но head UUID другой — deny; (e) selection switch между prepare и publication —
+rollback без draft/audit/receipt; (f) forged client current epoch при old capture
+deny; (g) historical decision receipt replay после switch сохраняет old result,
+не переустанавливает current pointer; (h) concurrent select/decision lock winners
+и revoke rechecks; (i) missing/wrong-owner audit witness и null legacy capture deny;
+(j) новая draft/current epoch + новое explicit approval проходят локальные fake
+gates. Эти случаи требуют будущей DDL/service проверки, не считаются уже пройденными.
 
 External notification destination/receipt/policy relations и org-wide system registry остаются
 platform contracts T1; их FK/production values здесь не выдумываются. Account-scoped in-app
