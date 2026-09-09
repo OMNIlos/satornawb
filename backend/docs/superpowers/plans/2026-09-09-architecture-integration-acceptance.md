@@ -5,6 +5,29 @@ audit omissions, then publish the verified result to `OMNIlos/satornawb:filipp`.
 Publication is conditional on correctness. This checklist does not authorize
 production rollout, real provider actions, or replacement of missing evidence.
 
+## Current scope and integration checkpoint (supersedes historical gates below)
+
+The user deferred the shared order assembly/printing module (Production).
+Existing code/migrations and compatibility are preserved; new work items,
+assignments, batches/calendar, sheets/labels, print archive and delivery work are
+not current completion requirements. They remain deferred, not done. Orders
+ingestion/storage/read/API remains active. KIZ and the separate matcher are
+excluded; unrelated WB/Avito matching and historical compatibility remain.
+
+Complete every remaining task supported by available requirements autonomously.
+Record genuinely missing information/rules and their impact in one final list;
+do not invent them or block unrelated implementation. Separate local acceptance
+from unauthorized operational activation.
+
+The consolidated frozen platform/consumer milestone now has root evidence:
+17 main/router/wheel tests, 433 combined PostgreSQL tests, full frontend
+430 PASS/0 FAIL/0 PENDING, both TypeScript projects and Vite build pass.
+These are distinct gates, not a fabricated sum or full backend acceptance.
+Details, exact inputs, failures and limits:
+`../reports/2026-09-09-root-consolidated-milestone.md`.
+Newer owner services outside those frozen inputs and full active-TZ acceptance
+remain pending. Historical statuses below must not override this checkpoint.
+
 ## Execution
 
 1. Accept immutable ready commits from each owner; verify prerequisites before
