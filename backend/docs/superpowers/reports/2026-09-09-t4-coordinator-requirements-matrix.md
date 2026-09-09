@@ -1,5 +1,17 @@
 # T4 — requirement → commit → evidence → remaining work
 
+## Latest acceptance: stabilized report case now passes
+
+The previously failing stabilized legacy report case passes1/31.21s after
+obsolete Ads label reconciliation and replacing the retired RNP demo-history
+action with no-demo-row assertions. Actual React RNP source explanation in
+the Comment column is covered by populated cache test; all three cache/session
+scenarios pass3/6.92s. Ads+historical marking compatibility2/4.57s; TypeScript0.
+No runtime changes in this batch. Earlier45s timeout narrowed to exact5s
+missing-locator failure before correction; no test timeout widened. Remaining
+generic-filter/Digest broad debt stays open; whole-suite not rerun/inferred.
+See `2026-09-09-t4-legacy-report-case-reconciliation.md` for scope and evidence.
+
 ## Latest: active Ads search characterized, unused-path hypothesis rejected
 
 Actual React Ads search by supplied SKU/campaign: 1PASS3.48s, TypeScript0,

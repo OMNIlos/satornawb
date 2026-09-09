@@ -601,7 +601,9 @@ describe('vella source of truth', () => {
 
   it('renders the stabilized 8 May report decisions after Vella JS initialization', async () => {
     const browser = await chromium.launch({ headless: true })
-    const page = await browser.newPage({ viewport: { width: 1512, height: 982 } })
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1512, height: 982 } })
+    await page.route(/^https?:\/\//, route => route.abort())
+    page.setDefaultTimeout(5_000)
     const source = pathToFileURL(join(root, 'public/vella-production.html')).toString()
 
     try {
@@ -611,7 +613,7 @@ describe('vella source of truth', () => {
         { query: 'tab=abc', expected: ['ABC-анализ', 'Себестоимость', 'Чистая прибыль по статусам', 'Порог фиксирован: 20/30/50', '+12% к периоду'], absent: ['COGS', 'ОБЦ'] },
         { query: 'tab=rnp', expected: ['Ниже порога', 'Позиция', 'Комментарий', 'Правило', 'Добавить'], absent: ['Склад Казань', 'Комментарии SKU', 'Логи действий'] },
         { query: 'tab=pnl', expected: ['Налог', 'Себестоимость', 'Позиция', 'Комментарий'], absent: ['Финансовая логика ждёт подтверждения', 'ждёт подтверждения', 'COGS', 'ждём Максима', 'placeholder'] },
-        { query: 'tab=ads', expected: ['Все менеджеры', 'Все SKU', 'РК', 'Тип РК', 'Позиция', 'Комментарий', 'детализация до ключевых фраз'], absent: ['Поиск · Футболка', 'draft', 'API discovery'] },
+        { query: 'tab=ads', expected: ['Все менеджеры', 'Все товары', 'РК', 'Тип РК', 'Позиция', 'Комментарий', 'детализация до ключевых фраз'], absent: ['Поиск · Футболка', 'draft', 'API discovery'] },
         { query: 'tab=stock', expected: ['Остаток WB', 'От клиента', 'К клиенту', 'Доступно', 'Средний КТР', 'Позиция', 'Комментарий'], absent: ['Мария подтвердила', 'по таблице локализации Марии'] },
         { query: 'tab=week', expected: ['SKU ниже порогов', 'был ОС', 'Наличие 7 дней', 'Позиция', 'Комментарий'], absent: ['Неделя-к-неделе: включаемые метрики'] },
         { query: 'tab=settings-profile', expected: ['Личный кабинет', 'Мария Ф.', 'maria@ogni.example', 'Безопасность', 'Сессии', 'Интерфейс'], absent: ['shadcn'] },
@@ -726,9 +728,10 @@ describe('vella source of truth', () => {
 
       await page.goto(`${source}?tab=rnp`, { waitUntil: 'domcontentloaded' })
       await page.waitForTimeout(1200)
-      await page.locator('#tab-rnp .report-comment-btn').first().click()
-      await page.locator('#reportCommentDrawer.open').waitFor({ timeout: 2_000 })
-      expect(await page.locator('#reportCommentDrawer').innerText()).toContain('История комментариев')
+      // RNP demo row generation is retired. The active backend table renders
+      // source explanations (covered by rnpCacheBrowser), not a demo history action.
+      expect(await page.locator('#tab-rnp tr[data-report-row]').count()).toBe(0)
+      expect(await page.locator('#tab-rnp .report-comment-btn').count()).toBe(0)
 
       await page.setViewportSize({ width: 375, height: 812 })
       await page.goto(`${source}?tab=digest&mode=period`, { waitUntil: 'domcontentloaded' })

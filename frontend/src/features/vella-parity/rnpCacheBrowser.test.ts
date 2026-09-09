@@ -48,6 +48,7 @@ it.each(['empty', 'failure', 'populated'])('renders RNP cache loading → %s and
         filters: { dateRange: { from: url.searchParams.get('from'), to: url.searchParams.get('to') } },
         // These optional product fields are the existing RnpBackendRow contract used by rnpPeriodBrowser.
         rows: outcome === 'populated' ? [{ sku: 'SYNTHETIC-CACHE-RNP', productName: 'Synthetic cached RNP product', nmId: 900101,
+          reasons: ['Synthetic source explanation'],
           photoUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' }] : [],
         kpis: [], formulaNotes: [], sourceEvidence: [], reportJob: null,
       }) })
@@ -73,6 +74,12 @@ it.each(['empty', 'failure', 'populated'])('renders RNP cache loading → %s and
       // The filter bridge also creates a hidden empty-state row; count actual report data rows.
       expect(await surface.locator('[data-vella-island="rnp-live-table-body"] > tr[data-report-row="rnp"]').count()).toBe(1)
       expect(await surface.locator('[data-report-empty="rnp-filter"]').isVisible()).toBe(false)
+      const table = surface.locator('[data-vella-runtime-binding="backend-rnp"] table')
+      const commentColumn = await table.getByRole('columnheader', { name: /^Комментарий/ })
+        .evaluate((header: HTMLTableCellElement) => header.cellIndex)
+      expect(await table.locator('tr[data-report-row="rnp"] td').nth(commentColumn).innerText())
+        .toBe('Synthetic source explanation')
+      expect(await table.locator('.report-comment-btn').count()).toBe(0)
     } else {
       await surface.getByText(outcome === 'empty' ? 'За выбранный период нет данных' : 'Не удалось загрузить РНП', { exact: true }).waitFor({ timeout: 15_000 })
       expect(await surface.locator('tbody tr').count()).toBe(0)
