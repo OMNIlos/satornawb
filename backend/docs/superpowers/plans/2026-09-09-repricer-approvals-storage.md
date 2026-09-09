@@ -21,8 +21,8 @@
 - Every mutation locks account before domain tuple locks at READ COMMITTED, checks fresh exact equality after waits, and enforces organization AND account FORCE RLS. Missing/invalid context denies. Auth user/membership/session locks precede this helper's account/domain work in the trusted service, not fabricated by schema.
 - New runtime writes are v1 only; privileged legacy import preserves bytes=NULL, checksum/key/status/version/actors with imported audit and no attempts. Runtime cannot grant itself owner/import authority. No real import is performed.
 - Runtime/default ACL defense is atomic and confined to the new relations/functions; never rewrite unrelated old/default privileges. No PUBLIC rights on new relations or mutating helpers, no grant options, DELETE/TRUNCATE/audit UPDATE/trigger bypass.
-- Fresh sanitized ScriptDirectory currently reports sole head `20260909_0064`. Task2 targets new `20260909_0065`; recheck at dispatch. If another revision exists or head differs, stop that task for controller revision/plan amendment, never silently renumber or rewrite an old revision.
-- Historical feature fixture pins0065; current runtime-script fixture independently migrates latest head. Graph gate requires one head and0065 ancestry, not permanent head equality. Downgrade requires all-empty proof under genuine visibility and locks before destructive DDL; no CASCADE or data deletion.
+- Fresh sanitized ScriptDirectory currently reports sole head `20260909_0065`. Task2 targets new `20260909_0066`; recheck at dispatch. If another revision exists or head differs, stop that task for controller revision/plan amendment, never silently renumber or rewrite an old revision.
+- Historical feature fixture pins0066; current runtime-script fixture independently migrates latest head. Graph gate requires one head and0066 ancestry, not permanent head equality. Downgrade requires all-empty proof under genuine visibility and locks before destructive DDL; no CASCADE or data deletion.
 
 ## Task 1: Add exact transaction-local account context
 
@@ -47,6 +47,23 @@ def set_marketplace_account_context(
 ```
 
 Require actual Session, active clean root transaction (no nested, pending new/dirty/deleted or ended transaction), PostgreSQL READ COMMITTED, strict positive INT4 IDs excluding bool. Before changing anything read both existing settings without autoflush. Each must be unset/empty or match the requested canonical decimal value; a different/malformed value fails closed. An existing own marker must belong to that root and exact pair; never use a marker to skip actual setting verification. Set both values with parameterized transaction-local set_config, record root/pair under a dedicated session.info key, remove only this helper's state when the root ends. Same-pair repeat is legal; scope switching within the same transaction is denied. SQL failures become a safe error with no chained SQL/value fragments. Caller must roll back after failure. It does not lock account rows, grant permission, commit work or guard arbitrary future caller SQL; publication guard remains responsible for final authorization/context checks.
+
+Inspect both Session nested state and the actual bound Connection's nested state
+before context SQL on every call. `Connection.begin_nested()` is not visible to
+Session nested hooks; an existing Connection SAVEPOINT must also deny. This is
+initial/repeated-call admission, not a claim to prevent arbitrary later raw SQL.
+Add a real PostgreSQL negative case plus positive normal Session root control.
+
+Supported lifetime is an Engine-bound Session, as produced by get_session_factory.
+Require isinstance(session.get_bind(), Engine) before any context SQL; all
+Connection-bound Sessions are unsupported, even if a particular join mode could
+commit their external transaction. Never inspect private Session transaction maps
+or force-commit/rollback external caller work. Add real PostgreSQL negatives for
+an already active external Connection with default conditional_savepoint and
+explicit rollback_only: denial occurs before settings/marker mutation, external
+transaction and preexisting control data/settings stay unchanged until its owner
+rolls it back. Retain ordinary Engine Session commit/rollback/pool positive cases.
+Document this conservative public-binding limitation and caller cost.
 
 - [ ] Step1 write focused missing-interface RED and type/transaction canaries.
 
@@ -83,7 +100,7 @@ Run adjacent tenant/publication tests touching the exact helper once, not the wh
 ## Task 2: Install approvals, attempt and audit storage atomically
 
 **Files:**
-- Create `backend/alembic/versions/20260909_0065_repricer_approvals.py`.
+- Create `backend/alembic/versions/20260909_0066_repricer_approvals.py`.
 - Modify `backend/ops/runtime-db-role.sql` only new relation/function overrides after broad grants within its existing transaction.
 - Create `backend/tests/test_repricer_approvals_schema.py` (disposable fixtures, migration/serialization/numeric/graph gates).
 - Create `backend/tests/test_repricer_approvals_lifecycle.py` (exact lifecycle/audit/CAS/race gates, import shared fixtures).
@@ -91,9 +108,9 @@ Run adjacent tenant/publication tests touching the exact helper once, not the wh
 - Create `backend/tests/fixtures/wb_repricing_sql_golden_vectors_v1.json` exactly from e15495a, no fixture editing to match SQL.
 - Create `backend/docs/superpowers/reports/2026-09-09-t1-repricer-approvals-schema-handoff.md`.
 
-**Consumes:** accepted three-relation spec and exact T2 request plus literal fixture; Task1 `set_marketplace_account_context`; canonical account/catalog/membership tables, actual head0064 and runtime grants. Existing domain code is read-only local Git evidence. No repository implementation is included.
+**Consumes:** accepted three-relation spec and exact T2 request plus literal fixture; Task1 `set_marketplace_account_context`; canonical account/catalog/membership tables, actual head0065 and runtime grants. Existing domain code is read-only local Git evidence. No repository implementation is included.
 
-**Produces:** forward0065 after0064, all spec tables/fields/FKs/checks/indexes/triggers/ACLs; installed helper names and exact SQL parameter order documented in handoff for T2. Fixed helper interfaces:
+**Produces:** forward0066 after0065, all spec tables/fields/FKs/checks/indexes/triggers/ACLs; installed helper names and exact SQL parameter order documented in handoff for T2. Fixed helper interfaces:
 
 ```text
 repricer_exact_text(text) -> boolean
@@ -113,7 +130,7 @@ repricer_dispatch_key(integer, integer, text, text, uuid) -> text
 
 Pure validation/serialization helpers may be invoked by scoped runtime checks; no mutation helper is SECURITY DEFINER. Use immutable helpers with qualified fixed search_path, VOLATILE trigger routines. A safe context helper for RLS can be dedicated to this migration and must turn absent/empty/noncanonical/out-of-INT4 settings into denial, never default scope. Runtime role grants only the required helper execution; PUBLIC mutating/trigger execution is revoked. Privileged import is restricted to the current table owner (catalog role identity), not a caller-controlled GUC; it still requires exact scoped context and all witnesses/constraints. No new global role, inherited-owner membership or production grant is created.
 
-- [ ] Step1 before DDL, copy only literal golden fixture through apply_patch and verify byte parity with local e15495a. Write tests that call the new SQL helpers and query new relations, then run RED on a disposable0064 DB. Distinguish expected undefined_table/function failures from real boundary characterization: plain PostgreSQL INTEGER/BIGINT cannot store the accepted >BIGINT values, raw full-text B-tree indexes cannot store incompressible long accepted IDs. Existing0064 is not rewritten to manufacture a regression.
+- [ ] Step1 before DDL, copy only literal golden fixture through apply_patch and verify byte parity with local e15495a. Write tests that call the new SQL helpers and query new relations, then run RED on a disposable0065 DB. Distinguish expected undefined_table/function failures from real boundary characterization: plain PostgreSQL INTEGER/BIGINT cannot store the accepted >BIGINT values, raw full-text B-tree indexes cannot store incompressible long accepted IDs. Existing0065 is not rewritten to manufacture a regression.
 
 ```python
 fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
@@ -150,16 +167,23 @@ Each omitted/ghost/misbound audit, metadata-only witness fill, actor/time/versio
 
 - [ ] Step5 install FORCE RLS org+account policies and atomic ACL intersection for all existing new-table relacl/column ACL grantees, revoke grant options/PUBLIC rights, retain only allowed inherited operations. Runtime script overrides the same new objects after broad grants; no global/default ACL change. Test actual non-owner NOSUPERUSER/NOBYPASSRLS role: missing/wrong org/account SELECT/INSERT/UPDATE/DELETE, same-org foreign-account references, foreign membership/catalog, scoped FK mismatch, arbitrary import, forbidden mutation/delete/truncate/setval/trigger/policy/schema/role privileges. Current script must run against a separate latest-head fixture; pre-script expansion proves broad defaults cannot leave a temporary bypass.
 
-- [ ] Step6 migration acceptance: empty bootstrap without stamp;0064 synthetic production-shaped schema upgrade preserves old tables/data/defaults/ACLs;0065 empty downgrade→upgrade; sole-head ancestor gate plus synthetic future-head regression. Downgrade locks all three tables before all-row counts, sets row_security=off only as refusal defense, and requires genuine visibility. Nonempty and RLS-hidden rows refuse atomically with unchanged schema/data; no CASCADE or deletion workaround. All runtime failure paths are safe fixed codes, no body/ID/request fragments in custom exceptions or generic audit.
+- [ ] Step6 migration acceptance: empty bootstrap without stamp;0065 synthetic production-shaped schema upgrade preserves old tables/data/defaults/ACLs;0066 empty downgrade→upgrade; sole-head ancestor gate plus synthetic future-head regression. Downgrade locks all three tables before all-row counts, sets row_security=off only as refusal defense, and requires genuine visibility. Nonempty and RLS-hidden rows refuse atomically with unchanged schema/data; no CASCADE or deletion workaround. All runtime failure paths are safe fixed codes, no body/ID/request fragments in custom exceptions or generic audit.
 
 ```sh
 .venv/bin/python -m pytest -q tests/test_marketplace_account_context.py tests/test_marketplace_account_context_postgres.py tests/test_repricer_approvals_schema.py tests/test_repricer_approvals_lifecycle.py tests/test_repricer_approvals_rls.py
-.venv/bin/python -m pytest -q tests/test_orders_exact_text_migration.py tests/test_orders_schema_candidate.py tests/test_orders_schema_integration.py tests/test_orders_contract.py tests/test_review_facts_schema.py
-.venv/bin/python -m compileall -q app/infra/db.py alembic/versions/20260909_0065_repricer_approvals.py tests/test_repricer_approvals_schema.py tests/test_repricer_approvals_lifecycle.py tests/test_repricer_approvals_rls.py
+.venv/bin/python -m pytest -q tests/test_orders_exact_text_migration.py tests/test_orders_schema_candidate.py tests/test_orders_schema_integration.py tests/test_orders_contract.py tests/test_review_facts_schema.py tests/test_review_lossless_migration.py tests/test_review_lossless_rls.py
+.venv/bin/python -m compileall -q app/infra/db.py alembic/versions/20260909_0066_repricer_approvals.py tests/test_repricer_approvals_schema.py tests/test_repricer_approvals_lifecycle.py tests/test_repricer_approvals_rls.py
 git diff --check
 ```
 
 All commands above run with the authorized scrubbed Unix-only test wrapper, not ambient environment. Record exact commands/exits/counts/natural shutdown and exact DB/role absence checks. Run scoped Ruff through the approved lint-only interpreter, not an unavailable tool claim. No skip/baseline expansion.
+
+For the new-table default-ACL intersection fixture, establish valid previous0065
+first, then install broad defaults before upgrading only0066. Review0065 explicitly
+rejects preexisting PUBLIC writes to its old relations; that earlier documented
+operating precondition is not a0066 test failure or reason to rewrite old migrations.
+Empty bootstrap uses normal authorized defaults. Preserve/recheck all old ACLs;
+new-table narrowing must not change old Review/Orders/default privilege state.
 
 - [ ] Step7 self-review and commit `feat: add account-owned repricer approval storage`. Handoff physical columns/helper signatures, owner/import/context/lock/witness insert ordering, removed assumptions and exact tests. Independent controller review precedes ready delivery to T2; repository/authenticated dispatch/provider proof remains T2/shared integration work, not claimed by DDL.
 

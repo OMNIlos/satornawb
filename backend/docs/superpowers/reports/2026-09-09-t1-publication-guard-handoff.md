@@ -159,3 +159,53 @@ database validation instant, not frozen wall-clock time until physical COMMIT.
 Requested local preflight-critic was unavailable; an isolated self-review pass
 covered spec/source/races/error/lifecycle checks. Controller independent review is
 required before this handoff is accepted or wired by domain owners.
+
+## Physical transaction admission follow-up — Task 3
+
+The public API is unchanged. The supported caller is an **Engine-bound Session**
+with an existing clean logical root and an active physical PostgreSQL root at
+READ COMMITTED; the DBAPI driver's public `autocommit` must be exactly `False`.
+All Connection-bound Sessions are rejected, including default
+`conditional_savepoint`, `rollback_only`, `create_savepoint`, and `control_fully`.
+A joined external root can otherwise survive Session completion and outlive the
+final authorization check. The guard never assumes or transfers external ownership.
+
+The shared private admission check runs before acquisition context SQL and on
+every existing guard context check, including explicit revalidation and both
+commit-finalizer validations. It rejects missing/inactive physical roots, active
+Connection SAVEPOINTs, and missing/unknown/autocommit driver states with
+`publication_context_invalid`; SQLAlchemy inspection errors retain sanitized
+`publication_persistence_failed`. A later rejection poisons the handle through
+the existing failure path until caller rollback. No repair SQL, global hooks,
+private transaction maps, account-context helper invocation, permission changes,
+consumer changes or altered lock/finalizer protocol were introduced.
+
+Actual PostgreSQL RED against the accepted pre-follow-up guard: **10 failed,
+1 passed, 123 deselected in 3.73s**, exit 1. All ten failures were `DID NOT RAISE
+PublicationGuardError`: engine execution-options AUTOCOMMIT, constructor
+AUTOCOMMIT, bound Connection AUTOCOMMIT, initial Connection SAVEPOINT, later
+Connection SAVEPOINT at explicit validation/commit, and all four external join
+modes. The autocommit setup uses a synthetic session-level tenant value to prove
+old guard acceptance, rather than merely an eventual tenant mismatch. Ordinary
+Engine-root publication was the passing positive control.
+
+Focused GREEN: **24 passed, 161 deselected in 2.92s**, exit 0. All initial invalid
+modes issue zero observed application SQL; the external owner's settings, row and
+root remain untouched. A later SAVEPOINT denial rolls back both already-flushed
+synthetic publication/audit proof rows, and closing the SAVEPOINT cannot revive
+the poisoned guard. Driver-state/error contract tests additionally cover missing
+or inactive roots, absent/unknown flags, non-bool 0/1 and safe exception rendering.
+
+Final prescribed six-file suite (guard unit/PostgreSQL, paired fetch
+unit/PostgreSQL, account context unit/PostgreSQL): **304 passed in 17.37s**, exit 0.
+Ruff, compileall and diff checks pass. Every allocated disposable database and
+runtime role was cleaned through tracked helper `finally` blocks and verified
+absent, including RED runs. The existing `/dev/null` password-file warning remains.
+Exact commands, natural exits and resource identifiers are in the local
+`.superpowers/sdd/2026-09-09-publication-guard/task-3-report.md`.
+
+This does not detect raw SAVEPOINTs opened and closed entirely between checks,
+or sandbox arbitrary caller SQL/DBAPI commits or callbacks after final validation.
+No new driver support, physical COMMIT error interception or absolute expiry-at-
+COMMIT guarantee is claimed. Isolated self-review found no unresolved issue;
+controller independent review is still required before follow-up acceptance.

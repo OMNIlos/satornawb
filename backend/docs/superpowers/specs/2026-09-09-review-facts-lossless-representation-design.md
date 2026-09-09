@@ -151,6 +151,22 @@ grants inside its existing transaction. Test actual preexisting column grants,
 runtime/script idempotence, grant options and sequence prohibition. Never use
 SECURITY DEFINER merely to bypass CHECK helper permissions.
 
+PUBLIC writer preflight: actual0063 can preserve PUBLIC INSERT/UPDATE table or
+column grants. There is no finite named-role extension that preserves that
+arbitrary-role writer contract while denying PUBLIC helper EXECUTE. Before any
+DDL, acquire ACCESS EXCLUSIVE on all three affected tables in the same fixed
+order as downgrade, then reject such grants with fixed SQLSTATE55000
+`review_lossless_acl_unsupported`; inspect both relacl and attacl. Preserve all
+old grants/schema/data on refusal. PUBLIC SELECT alone is not a writer and does
+not block this migration. Do not silently revoke old PUBLIC writes, enumerate
+all current roles as a substitute for PUBLIC, or make helpers SECURITY DEFINER.
+Real remediation of a detected PUBLIC writer grant requires a separate owner-
+approved ACL change; no such operational change is performed by this slice.
+LOCK itself is not DDL or an ACL/data mutation. Any claim that it fences concurrent
+GRANT requires an actual two-session PostgreSQL test; otherwise exclusive
+privileged DDL/ACL maintenance remains an explicit operating precondition. No
+catalog/global role-lock expansion or hostile database-owner sandbox is promised.
+
 Downgrade locks all three affected tables ACCESS EXCLUSIVE in fixed order and
 proves all new byte columns NULL with genuine all-row visibility. row_security=off
 is a refusal defense, not a bypass privilege. Any byte-backed row blocks downgrade
@@ -177,6 +193,8 @@ a decoder-capable application on the expanded schema.
   names must fail at T4 publication, not claimed as DB-only validation.
 - Runtime role/new column INSERT allowed; missing/wrong tenant, delete/truncate,
   sequence override/setval, broad inherited privilege/reader escalation denied.
+- PUBLIC table/column INSERT or UPDATE preflight refuses before DDL with unchanged
+  ACLs/revision; PUBLIC SELECT-only remains compatible and gains no write rights.
 - Old-only data downgrade→upgrade succeeds unchanged; any new bytes or hidden
   bytes refuse without dropping schema/data. Historical feature fixture pinned;
   actual latest runtime-script test separate, one-head ancestor gate successor-safe.
