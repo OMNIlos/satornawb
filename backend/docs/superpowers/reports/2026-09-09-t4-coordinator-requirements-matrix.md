@@ -2,6 +2,14 @@
 
 ## Current checkpoint: dormant shadow composition after c125a54
 
+Latest bounded result: canonical-only HTTP router/service/raw WB adapter ready for
+T1 default-off registration, NOT activation. Coordinator superseded unsafe legacy
+dualconsumer for this path: no legacy write/read/cache use. Actual signed auth,
+pairedcredential/scope/revoke/replay/rollback/outage and rawlossless source acceptance;
+final900PASS2warnings49.16s/no skips, scopedRuffcompile/diff0, independentcriticPASS.
+See2026-09-09-t4-canonical-review-http-handoff.md for exact wire/errors/limits.
+Public canonical reads, dualconsumer legacy isolation and later stages stay open.
+
 Selector434ff5f accepted/cherry-picked9981e72,94PASS2warnings2.81s/newRuffcompile/diff0.
 All flag defaults remain off. New actual wiring gate: legacy feedback storage and
 reads have no org/account owner; adding arbitrary account DTO dualwrites is unsafe.

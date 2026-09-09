@@ -33,6 +33,7 @@ from app.reviews.canonical_repository import (
     ReviewOwner,
     ReviewRunReference,
 )
+from app.reviews.canonical_wb_fetch import CanonicalWbFeedbackRow
 from app.reviews.ingestion_contract import ReviewRepositoryError, snapshot_manifest
 from app.security.marketplace_credentials import CredentialIdentity
 from app.wb_api.feedbacks_runtime import WbFeedbackRow
@@ -205,7 +206,9 @@ def publish_received_review_rows(engine, *, ticket, rows, coverage):
             type(ticket) is not ReviewShadowTicket
             or type(ticket.run) is not ReviewRunReference
             or type(rows) is not tuple
-            or not all(type(row) is WbFeedbackRow for row in rows)
+            or not all(
+                type(row) in (WbFeedbackRow, CanonicalWbFeedbackRow) for row in rows
+            )
             or type(ticket.account) is not ExpectedAccountBinding
             or ticket.account.provider != "wb"
             or type(ticket.authority) is not ExpectedCredential
