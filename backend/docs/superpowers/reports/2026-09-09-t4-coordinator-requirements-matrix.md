@@ -2,6 +2,15 @@
 
 ## Current checkpoint: frontend response isolation; Review historical binding open
 
+Latest Avito stats test-only checkpoint: actual React date inputs keep draft
+separate from applied period, Apply performs exact secondGET, logout no extraGET.
+Unique in-memory disabled-Apply mutation fails at secondGET assertion as intended.
+Replaced only obsolete stats date DOM-ID source assertions. Full358PASS/16FAIL/
+0pending versus356/17: one old failure closed, zero new failed IDs. Finaltsc/diff0,
+independent critic no important defects. Empty-response proof, not populated
+KPI clearing/refresh/multi-account/backend parity. Report under frontend/docs/
+superpowers/reports/2026-09-09-t4-avito-stats-period-test.md. No runtime changes.
+
 Latest test-only Stock/Week checkpoint: actual React page proves four scoped
 loading→empty/error→session-expired cases with one intercepted GET, no mock rows
 or additional API calls. Replaced only two obsolete progress-component source

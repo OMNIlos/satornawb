@@ -62,8 +62,8 @@ describe('Avito live integration wiring', () => {
   })
 
   it('lets Avito stats users choose a period and apply backend loading explicitly', () => {
-    expect(paritySource).toContain('avitoStatsDateFrom')
-    expect(paritySource).toContain('avitoStatsDateTo')
+    // Actual draft-input → Apply → scoped GET behavior is covered by
+    // avitoStatsPeriodBrowser.test.ts, without relying on obsolete DOM IDs.
     expect(paritySource).toContain('applyAvitoStatsPeriod')
     expect(paritySource).toContain('forceRefresh')
     expect(paritySource).not.toContain('83 402')
