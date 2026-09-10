@@ -65,8 +65,9 @@ def _verify_parent_baseline(before, after, *, run_id, replayed):
             continue
         prestate = tuple(row[key] for key in ("history_pre_order_version", "history_pre_sync_run_id", "history_pre_observation_id"))
         outcome = row["history_outcome"]
-        if prior[0] is None:
+        if prior[0] is None or (prior[1:] == (1, None, None) and outcome == "initial_projection"):
             if (outcome != "initial_projection" or prestate != (1, None, None)
+                    or (prior[0] is not None and current[0] != prior[0])
                     or current[0] is None or current[1:3] != (2, run_id) or current[3] is None):
                 raise OrdersJobError("JOB_FENCE_INVALID")
         elif (current != prior or prestate != prior[1:]

@@ -44,6 +44,38 @@ def test_absent_parent_allows_only_real_initial_transition():
         history_pre_sync_run_id=None, history_pre_observation_id=None, history_outcome="initial_projection"),))
 
 
+def test_existing_empty_identity_allows_derived_initial_transition_with_same_id():
+    verify((("srid-one", 12, 1, None, None),), (current(version=2,
+        last_seen_sync_run_id=80, prior_observation_id=90, history_pre_order_version=1,
+        history_pre_sync_run_id=None, history_pre_observation_id=None, history_outcome="initial_projection"),))
+
+
+@pytest.mark.parametrize("changes", [{"order_id": 13}, {"version": 3},
+    {"last_seen_sync_run_id": 81}, {"prior_observation_id": None},
+    {"history_pre_order_version": 2}, {"history_pre_sync_run_id": 60},
+    {"history_pre_observation_id": 70}, {"history_outcome": "reconciliation_required"}])
+def test_existing_empty_identity_rejects_noninitial_or_substituted_transition(changes):
+    row = current(version=2, last_seen_sync_run_id=80, prior_observation_id=90,
+        history_pre_order_version=1, history_pre_sync_run_id=None,
+        history_pre_observation_id=None, history_outcome="initial_projection")
+    row.update(changes)
+    with pytest.raises(OrdersJobError, match="^JOB_FENCE_INVALID$"):
+        verify((("srid-one", 12, 1, None, None),), (row,))
+
+
+def test_existing_empty_identity_can_remain_unchanged_for_derived_reconciliation():
+    verify((("srid-one", 12, 1, None, None),), (current(version=1,
+        last_seen_sync_run_id=None, prior_observation_id=None, history_pre_order_version=1,
+        history_pre_sync_run_id=None, history_pre_observation_id=None, history_outcome="reconciliation_required"),))
+
+
+def test_existing_noninitial_version_cannot_reenter_initial_projection():
+    with pytest.raises(OrdersJobError, match="^JOB_FENCE_INVALID$"):
+        verify((("srid-one", 12, 2, None, None),), (current(version=3,
+            last_seen_sync_run_id=80, prior_observation_id=90, history_pre_order_version=2,
+            history_pre_sync_run_id=None, history_pre_observation_id=None, history_outcome="initial_projection"),))
+
+
 def test_absent_parent_cannot_be_reclassified_as_existing_reconciliation():
     with pytest.raises(OrdersJobError, match="^JOB_FENCE_INVALID$"):
         verify((("srid-one", None, None, None, None),), (current(history_outcome="reconciliation_required"),))
