@@ -200,6 +200,7 @@ class FinancePnlFact:
     cashback_discount_kopecks: int | None
     cashback_commission_change_kopecks: int | None
     payable_kopecks: int | None = None
+    payable_basis: bool = False
 
     @property
     def loyalty_net_cost_kopecks(self) -> int | None:
@@ -209,6 +210,13 @@ class FinancePnlFact:
             or self.cashback_commission_change_kopecks is None
         ):
             return None
+        if self.payable_basis:
+            if self.payable_kopecks is None:
+                return None
+            # Discount compensation is already included in reconciled payable.
+            return (
+                self.cashback_amount_kopecks + self.cashback_commission_change_kopecks
+            )
         return (
             self.cashback_amount_kopecks
             + self.cashback_commission_change_kopecks
@@ -389,7 +397,7 @@ def normalize_operation(
         "acceptance_kopecks": _first_money(row, "paidAcceptance", "acceptance"),
         "penalty_kopecks": _first_money(row, "penalty", "penaltyRub"),
         "deduction_kopecks": deduction,
-        "additional_payment_kopecks": payment_schedule - reward_adjustment,
+        "additional_payment_kopecks": -payment_schedule - reward_adjustment,
         "acquiring_kopecks": acquiring,
         "payable_kopecks": None if payable is None else document_sign * payable,
         "cashback_amount_kopecks": _optional_first_money(
@@ -1594,6 +1602,7 @@ class FinanceService:
                     None if row[23] is None else int(row[23])
                 ),
                 payable_kopecks=None if row[24] is None else int(row[24]),
+                payable_basis=run.formula_version == "wb-finance-v3",
             )
             for row in rows
         ]

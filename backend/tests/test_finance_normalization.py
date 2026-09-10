@@ -64,7 +64,7 @@ def test_normalizer_uses_exact_kopecks_and_explicit_report_semantics() -> None:
     assert main.units == 1
     assert main.sign == 1
     assert main.correction_at == datetime(2026, 8, 22, 21, tzinfo=timezone.utc)
-    assert main.additional_payment_kopecks == 404
+    assert main.additional_payment_kopecks == -1_414  # Both adjustments are costs.
     assert redemption_return.report_type == "redemptions"
     assert redemption_return.revenue_kopecks == -10_025
     assert redemption_return.commission_kopecks == -10_010

@@ -21,7 +21,7 @@ from app.platform.finance.service import (
 )
 from app.platform.period import MOSCOW, Period
 
-FORMULA_VERSION = "wb-abc-pnl-fullstats-loyalty-v1"
+FORMULA_VERSION = "wb-abc-pnl-payable-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,9 +373,14 @@ class WbAbcPnlService:
             + fact.acquiring_kopecks
             - compensation
         )
+        payable_complete = not fact.payable_basis or fact.payable_kopecks is not None
         settlement_profit = (
-            None if cogs is None else fact.revenue_kopecks - cogs - finance_expenses
+            None
+            if cogs is None or not payable_complete
+            else fact.revenue_kopecks - cogs - finance_expenses
         )
+        if not payable_complete:
+            blockers = (*blockers, "WB_PNL_PAYABLE_INCOMPLETE")
         profit_before_ads_and_loyalty = (
             None
             if settlement_profit is None or tax is None or other_expenses is None
@@ -467,6 +472,9 @@ class WbAbcPnlService:
             return sum(int(getattr(row, name)) for row in rows)
 
         costs_complete = all(row.cogs_kopecks is not None for row in rows)
+        settlement_complete = all(
+            row.settlement_profit_kopecks is not None for row in rows
+        )
         economics_complete = all(
             row.tax_kopecks is not None and row.other_expenses_kopecks is not None
             for row in rows
@@ -517,7 +525,7 @@ class WbAbcPnlService:
             total("acquiring_kopecks"),
             total("finance_expenses_kopecks"),
             total("cogs_kopecks") if costs_complete else None,
-            total("settlement_profit_kopecks") if costs_complete else None,
+            total("settlement_profit_kopecks") if settlement_complete else None,
             total("tax_kopecks") if economics_complete else None,
             total("other_expenses_kopecks") if economics_complete else None,
             profit_before_ads,

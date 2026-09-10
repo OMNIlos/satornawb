@@ -97,7 +97,7 @@ class AbcPnlMetaView(BaseModel):
     marketplaceAccountId: int = Field(gt=0)
     period: FinancePeriodView
     snapshot: FinanceSnapshotView | None = None
-    formulaVersion: Literal["wb-abc-pnl-fullstats-loyalty-v1"]
+    formulaVersion: Literal["wb-abc-pnl-payable-v2"]
     costLedgerRevision: int = Field(ge=0)
     economicsRevision: int = Field(ge=0)
     advertisingSource: Literal["finance_promotion", "ads_fullstats"] | None = None

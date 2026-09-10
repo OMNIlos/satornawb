@@ -87,6 +87,7 @@ def settlement_rows() -> list[dict[str, object]]:
             "docTypeName": "Продажа",
             "quantity": 2,
             "retailAmount": "1000.00",
+            "forPay": "885.00",
             "ppvzSalesCommission": "100.00",
             "deliveryService": "50.00",
             "paidStorage": "20.00",
@@ -108,6 +109,7 @@ def settlement_rows() -> list[dict[str, object]]:
             "docTypeName": "Возврат",
             "quantity": 1,
             "retailAmount": "200.00",
+            "forPay": "177.00",
             "ppvzSalesCommission": "20.00",
             "acquiringFee": "3.00",
             "saleDt": "2026-08-21",
@@ -262,7 +264,7 @@ def test_abc_pnl_base_uses_dated_cogs_and_signed_settlement_formula(
     )
 
     assert page.state == "partial"
-    assert page.formula_version == "wb-abc-pnl-fullstats-loyalty-v1"
+    assert page.formula_version == "wb-abc-pnl-payable-v2"
     assert page.cost_ledger_revision == 2
     assert page.economics_revision == 1
     assert set(page.blocker_ids) == GLOBAL_BLOCKERS
@@ -273,15 +275,15 @@ def test_abc_pnl_base_uses_dated_cogs_and_signed_settlement_formula(
     assert row.revenue_kopecks == 80_000
     assert row.cogs_kopecks == 15_000
     assert row.cost_value_state == "configured"
-    assert row.finance_other_expenses_kopecks == 7_500
+    assert row.finance_other_expenses_kopecks == 12_500
     assert row.compensation_kopecks == 0
-    assert row.finance_expenses_kopecks == 31_700
-    assert row.settlement_profit_kopecks == 33_300
+    assert row.finance_expenses_kopecks == 36_700
+    assert row.settlement_profit_kopecks == 28_300
     assert row.economics_value_state == "configured"
     assert row.economics_evidence_status == "dated"
     assert row.tax_kopecks == 4_800
     assert row.other_expenses_kopecks == 6_000
-    assert row.profit_before_ads_and_loyalty_kopecks == 22_500
+    assert row.profit_before_ads_and_loyalty_kopecks == 17_500
     assert row.advertising_spend_kopecks is None
     assert row.profit_before_loyalty_kopecks is None
     assert row.net_profit_kopecks is None
@@ -289,11 +291,11 @@ def test_abc_pnl_base_uses_dated_cogs_and_signed_settlement_formula(
     assert row.abc_code is None
     assert page.summary.revenue_kopecks == 80_000
     assert page.summary.cogs_kopecks == 15_000
-    assert page.summary.finance_expenses_kopecks == 31_700
-    assert page.summary.settlement_profit_kopecks == 33_300
+    assert page.summary.finance_expenses_kopecks == 36_700
+    assert page.summary.settlement_profit_kopecks == 28_300
     assert page.summary.tax_kopecks == 4_800
     assert page.summary.other_expenses_kopecks == 6_000
-    assert page.summary.profit_before_ads_and_loyalty_kopecks == 22_500
+    assert page.summary.profit_before_ads_and_loyalty_kopecks == 17_500
     assert page.summary.advertising_spend_kopecks is None
     assert page.summary.unattributed_advertising_spend_kopecks is None
     assert page.summary.profit_before_loyalty_kopecks is None
@@ -333,7 +335,7 @@ def test_finance_promotion_cannot_fill_operational_advertising(
     assert set(page.blocker_ids) == GLOBAL_BLOCKERS
 
 
-def test_v2_loyalty_evidence_builds_profit_after_loyalty(session: Session) -> None:
+def test_v3_loyalty_evidence_builds_profit_after_loyalty(session: Session) -> None:
     from app.modules.wb_reports.abc_pnl import WbAbcPnlService
 
     add_dated_costs(session)
@@ -354,17 +356,17 @@ def test_v2_loyalty_evidence_builds_profit_after_loyalty(session: Session) -> No
     )
 
     row = page.items[0]
-    assert page.formula_version == "wb-abc-pnl-fullstats-loyalty-v1"
+    assert page.formula_version == "wb-abc-pnl-payable-v2"
     assert row.cashback_amount_kopecks == 800
     assert row.cashback_discount_kopecks == 400
     assert row.cashback_commission_change_kopecks == -100
-    assert row.loyalty_net_cost_kopecks == 300
-    assert row.profit_after_loyalty_kopecks == 9_900
+    assert row.loyalty_net_cost_kopecks == 700
+    assert row.profit_after_loyalty_kopecks == 4_500
     assert page.summary.cashback_amount_kopecks == 800
     assert page.summary.cashback_discount_kopecks == 400
     assert page.summary.cashback_commission_change_kopecks == -100
-    assert page.summary.loyalty_net_cost_kopecks == 300
-    assert page.summary.profit_after_loyalty_kopecks == 9_900
+    assert page.summary.loyalty_net_cost_kopecks == 700
+    assert page.summary.profit_after_loyalty_kopecks == 4_500
     assert page.summary.net_profit_kopecks is None
     assert "WB_PNL_LOYALTY_NOT_CANONICAL" not in page.blocker_ids
     assert page.blocker_ids == ("WB_PNL_CLASSIFICATION_NOT_CANONICAL",)
@@ -405,6 +407,59 @@ def test_v1_finance_snapshot_keeps_loyalty_unknown(session: Session) -> None:
     assert page.summary.loyalty_net_cost_kopecks is None
     assert page.summary.profit_after_loyalty_kopecks is None
     assert "WB_PNL_LOYALTY_NOT_CANONICAL" in page.blocker_ids
+
+
+def test_incomplete_payable_blocks_only_affected_sku_and_summary(
+    session: Session,
+) -> None:
+    from app.modules.wb_reports.abc_pnl import WbAbcPnlService
+
+    add_dated_costs(session)
+    add_dated_economics(session)
+    rows = settlement_rows_with_loyalty()
+    rows[0]["forPay"] = "885"
+    rows[1]["forPay"] = "177"
+    common = {
+        "nmId": 202,
+        "cashbackAmount": "0",
+        "cashbackCommissionChange": "0",
+        "rrDate": "2026-08-21",
+    }
+    rows.extend(
+        [
+            common | {"rrdId": 3, "forPay": "10", "cashbackDiscount": "10"},
+            common | {"rrdId": 4, "cashbackDiscount": "0"},
+        ]
+    )
+    FinanceService(session, 1, now=lambda: NOW).ingest_snapshot(
+        31, PERIOD, rows, observed_at=NOW
+    )
+    AdvertisingService(session, 1, now=lambda: NOW).ingest_raw_payload(
+        31,
+        PERIOD,
+        raw_advertising_bundle(),
+        source_reference="wb_api:raw",
+        observed_at=NOW,
+    )
+
+    page = WbAbcPnlService(session, 1, now=lambda: NOW).get_page(
+        31, PERIOD, limit=100, offset=0
+    )
+    complete, incomplete = (
+        next(row for row in page.items if row.nm_id == nm) for nm in (101, 202)
+    )
+    assert complete.profit_after_loyalty_kopecks == 4_500
+    assert incomplete.cogs_kopecks == 0
+    assert incomplete.settlement_profit_kopecks is None
+    assert incomplete.profit_before_ads_and_loyalty_kopecks is None
+    assert incomplete.profit_after_loyalty_kopecks is None
+    assert incomplete.cashback_discount_kopecks == 1_000
+    assert "WB_PNL_PAYABLE_INCOMPLETE" in incomplete.blocker_ids
+    assert "WB_PNL_PAYABLE_INCOMPLETE" not in complete.blocker_ids
+    assert "WB_PNL_PAYABLE_INCOMPLETE" in page.blocker_ids
+    assert page.summary.cogs_kopecks == 15_000
+    assert page.summary.settlement_profit_kopecks is None
+    assert page.summary.profit_after_loyalty_kopecks is None
 
 
 def test_incomplete_v2_loyalty_never_becomes_zero(session: Session) -> None:
@@ -529,12 +584,12 @@ def test_exact_advertising_only_sku_joins_report_union(session: Session) -> None
     finance_row = next(row for row in page.items if row.nm_id == 101)
     advertising_row = next(row for row in page.items if row.nm_id == 202)
     assert finance_row.advertising_spend_kopecks == 0
-    assert finance_row.profit_before_loyalty_kopecks == 22_500
+    assert finance_row.profit_before_loyalty_kopecks == 17_500
     assert advertising_row.operation_count == 0
     assert advertising_row.revenue_kopecks == 0
     assert advertising_row.advertising_spend_kopecks == 12_300
     assert advertising_row.profit_before_loyalty_kopecks == -12_300
-    assert page.summary.profit_before_loyalty_kopecks == 10_200
+    assert page.summary.profit_before_loyalty_kopecks == 5_200
 
 
 def test_aggregate_only_settlement_is_not_operational_advertising(
@@ -899,7 +954,7 @@ def test_mid_period_economics_change_uses_daily_basis(session: Session) -> None:
     assert page.economics_revision == 2
     assert row.tax_kopecks == 4_500
     assert row.other_expenses_kopecks == 7_000
-    assert row.profit_before_ads_and_loyalty_kopecks == 21_800
+    assert row.profit_before_ads_and_loyalty_kopecks == 16_800
 
 
 def test_assumed_or_missing_economics_remains_explicit(session: Session) -> None:
@@ -913,7 +968,7 @@ def test_assumed_or_missing_economics_remains_explicit(session: Session) -> None
 
     missing = service.get_page(31, PERIOD, limit=100, offset=0)
 
-    assert missing.items[0].settlement_profit_kopecks == 33_300
+    assert missing.items[0].settlement_profit_kopecks == 28_300
     assert missing.items[0].tax_kopecks is None
     assert missing.items[0].profit_before_ads_and_loyalty_kopecks is None
     assert "WB_PNL_ECONOMICS_MISSING" in missing.blocker_ids

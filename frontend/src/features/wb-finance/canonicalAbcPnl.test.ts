@@ -460,6 +460,17 @@ describe('canonical ABC/P&L contract', () => {
     expect(() => parseCanonicalAbcPnlPage({ ...page(), meta: { ...page().meta, formulaVersion: 'v2' } })).toThrow(ApiError)
   })
 
+  it('accepts the payable-reconciled formula without recomputing money', () => {
+    const payload = page()
+    const parsed = parseCanonicalAbcPnlPage({
+      ...payload,
+      meta: { ...payload.meta, formulaVersion: 'wb-abc-pnl-payable-v2' },
+    })
+    expect(parsed.meta.formulaVersion).toBe('wb-abc-pnl-payable-v2')
+    expect(parsed.items).toEqual(payload.items)
+    expect(parsed.summary).toEqual(payload.summary)
+  })
+
   it('uses GET with bearer authorization and no mutation body through the real API client', async () => {
     const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(page()))
     vi.stubGlobal('fetch', request)

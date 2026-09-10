@@ -1737,7 +1737,7 @@ def _margin_breakdown_from_rows(
                 label="Компенсации и корректировки WB net",
                 operation="+ credit",
                 amount_kopecks=analytics.get("additionalPaymentKopecks"),
-                source="finance paymentSchedule - raw additionalPayment",
+                source="finance -paymentSchedule - raw additionalPayment",
             ),
             _margin_component(
                 key="tax",

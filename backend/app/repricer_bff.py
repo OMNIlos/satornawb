@@ -389,7 +389,7 @@ def _finance_row_costs(item: dict[str, Any]) -> dict[str, int]:
         "deductionKopecks": 0 if is_wb_promotion else deduction,
         "rewardAdjustmentKopecks": reward_adjustment,
         "paymentScheduleKopecks": payment_schedule,
-        "additionalPaymentKopecks": payment_schedule - reward_adjustment,
+        "additionalPaymentKopecks": -payment_schedule - reward_adjustment,
         "cashbackAmountKopecks": cashback_amount,
         "cashbackDiscountKopecks": _first_kopecks(item, "cashback_discount", "cashbackDiscount"),
         "cashbackCommissionChangeKopecks": cashback_commission_change,
@@ -646,7 +646,7 @@ def build_finance_diagnostics_from_aggregates(
             "taxIncludedInExpenses": False,
             "signedFields": ["penalty", "deduction"],
             "subtractFields": ["additionalPayment"],
-            "additionalPaymentNormalization": "paymentSchedule - rewardAdjustment(additionalPayment raw)",
+            "additionalPaymentNormalization": "-paymentSchedule - rewardAdjustment(additionalPayment raw)",
             "forbiddenNormalizers": [
                 "absolute value for penalty",
                 "absolute value for deduction",

@@ -205,6 +205,7 @@ def api() -> TestClient:
                     "docTypeName": "Продажа",
                     "quantity": 1,
                     "retailAmount": "1208.00",
+                    "forPay": "1208.00",
                     "cashbackAmount": "10.00",
                     "cashbackDiscount": "3.50",
                     "cashbackCommissionChange": "-1.25",
@@ -287,8 +288,8 @@ def test_abc_pnl_v2_is_cache_only_and_reconciles(
     assert payload["summary"]["cashbackAmountKopecks"] == 1_000
     assert payload["summary"]["cashbackDiscountKopecks"] == 350
     assert payload["summary"]["cashbackCommissionChangeKopecks"] == -125
-    assert payload["summary"]["loyaltyNetCostKopecks"] == 525
-    assert payload["summary"]["profitAfterLoyaltyKopecks"] == 73_687
+    assert payload["summary"]["loyaltyNetCostKopecks"] == 875
+    assert payload["summary"]["profitAfterLoyaltyKopecks"] == 73_337
     assert payload["summary"]["netProfitKopecks"] is None
     assert payload["items"][0]["settlementProfitKopecks"] == 100_800
     assert payload["items"][0]["economicsValueState"] == "configured"
@@ -298,15 +299,15 @@ def test_abc_pnl_v2_is_cache_only_and_reconciles(
     assert payload["items"][0]["cashbackAmountKopecks"] == 1_000
     assert payload["items"][0]["cashbackDiscountKopecks"] == 350
     assert payload["items"][0]["cashbackCommissionChangeKopecks"] == -125
-    assert payload["items"][0]["loyaltyNetCostKopecks"] == 525
-    assert payload["items"][0]["profitAfterLoyaltyKopecks"] == 73_687
+    assert payload["items"][0]["loyaltyNetCostKopecks"] == 875
+    assert payload["items"][0]["profitAfterLoyaltyKopecks"] == 73_337
     assert payload["items"][0]["netProfitKopecks"] is None
     assert payload["items"][0]["profitClass"] is None
     assert payload["items"][0]["abcCode"] is None
     assert payload["meta"]["state"] == "partial"
     assert (
         payload["meta"]["formulaVersion"]
-        == "wb-abc-pnl-fullstats-loyalty-v1"
+        == "wb-abc-pnl-payable-v2"
     )
     assert payload["meta"]["costLedgerRevision"] == 1
     assert payload["meta"]["economicsRevision"] == 1

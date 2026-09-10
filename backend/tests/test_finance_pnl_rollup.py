@@ -109,7 +109,7 @@ def test_pnl_source_materializes_signed_settlement_components(session: Session) 
     assert fact.acceptance_kopecks == 1_000
     assert fact.penalty_kopecks == 3_000
     assert fact.deduction_kopecks == 4_000
-    assert fact.additional_payment_kopecks == -7_500
+    assert fact.additional_payment_kopecks == -12_500
     assert fact.acquiring_kopecks == 1_200
     assert session.scalar(
         select(func.count()).select_from(WbFinanceSyncRunSkuPnlRollupRow)
@@ -122,11 +122,13 @@ def test_pnl_source_materializes_signed_settlement_components(session: Session) 
 def test_pnl_source_materializes_complete_loyalty_money(session: Session) -> None:
     rows = settlement_rows()
     rows[0].update(
+        forPay="885.00",
         cashbackAmount="10.00",
         cashbackDiscount="3.00",
         cashbackCommissionChange="2.00",
     )
     rows[1].update(
+        forPay="177.00",
         cashbackAmount="-1.00",
         cashbackDiscount="0.50",
         cashbackCommissionChange="-0.25",
@@ -139,7 +141,7 @@ def test_pnl_source_materializes_complete_loyalty_money(session: Session) -> Non
     assert fact.cashback_amount_kopecks == 900
     assert fact.cashback_discount_kopecks == 350
     assert fact.cashback_commission_change_kopecks == 175
-    assert fact.loyalty_net_cost_kopecks == 725
+    assert fact.loyalty_net_cost_kopecks == 1_075
 
 
 def test_missing_loyalty_component_stays_unknown_in_exact_and_custom_rollups(
@@ -147,11 +149,13 @@ def test_missing_loyalty_component_stays_unknown_in_exact_and_custom_rollups(
 ) -> None:
     rows = settlement_rows()
     rows[0].update(
+        forPay="885.00",
         cashbackAmount="10.00",
         cashbackDiscount="3.00",
         cashbackCommissionChange="2.00",
     )
     rows[1].update(
+        forPay="177.00",
         cashbackAmount="0",
         cashbackCommissionChange="0",
     )
@@ -185,7 +189,7 @@ def test_missing_loyalty_component_stays_unknown_in_exact_and_custom_rollups(
         first_day.cashback_discount_kopecks,
         first_day.cashback_commission_change_kopecks,
         first_day.loyalty_net_cost_kopecks,
-    ) == (1_000, 300, 200, 900)
+    ) == (1_000, 300, 200, 1_200)
     assert (
         second_day.cashback_amount_kopecks,
         second_day.cashback_discount_kopecks,

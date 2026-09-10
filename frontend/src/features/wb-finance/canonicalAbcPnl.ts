@@ -114,7 +114,7 @@ const metaSchema = z.object({
   marketplaceAccountId: z.number().int().positive(),
   period: periodSchema,
   snapshot: snapshotSchema.nullable(),
-  formulaVersion: z.literal('wb-abc-pnl-fullstats-loyalty-v1'),
+  formulaVersion: z.enum(['wb-abc-pnl-fullstats-loyalty-v1', 'wb-abc-pnl-payable-v2']),
   costLedgerRevision: z.number().int().nonnegative(),
   economicsRevision: z.number().int().nonnegative(),
   advertisingSource: z.enum(['finance_promotion', 'ads_fullstats']).nullable(),
