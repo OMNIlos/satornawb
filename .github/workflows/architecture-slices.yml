@@ -147,6 +147,8 @@ jobs:
             src/features/orders/canonicalOrdersClient.test.ts \
             src/features/marketplace-accounts/canonicalMarketplaceAccounts.test.ts \
             src/features/wb-live/history.test.ts \
+            src/features/wb-live/validation.test.ts \
+            src/features/wb-live/api.test.ts \
             src/features/vella-parity/wbLivePageBrowser.test.ts \
             src/features/avito/canonicalAvitoStatisticsClient.test.ts \
             src/features/avito/canonicalAvitoStatisticsBrowser.test.ts \

@@ -14,6 +14,20 @@ const product = {
 const products = { marketplaceAccountId: 17, items: [product], nextCursor: null, readVersion: 'version', readiness: 'partial', sources: [source] }
 
 describe('WB response validation before publication', () => {
+  it.each(['2026-09-10T17:58:01.489071+03:00', '2026-09-10T09:58:01.489071-05:00', '2026-09-10T14:58:01.489071Z'])('accepts timezone-aware API timestamps without changing their instant: %s', (updatedAt) => {
+    const parsed = parseWbProducts({ ...products,
+      items: [{ ...product, pricesUpdatedAt: updatedAt, contentUpdatedAt: updatedAt }],
+      sources: [{ ...source, updatedAt }],
+    }, 17)
+    expect(parsed.items[0].pricesUpdatedAt).toBe(updatedAt)
+    expect(Date.parse(parsed.items[0].contentUpdatedAt!)).toBe(Date.parse('2026-09-10T14:58:01.489Z'))
+    expect(parsed.sources[0].updatedAt).toBe(updatedAt)
+  })
+
+  it.each(['2026-09-10T17:58:01', '2026-09-10', '2026-09-10T17:58:01+25:00'])('rejects ambiguous or invalid timestamps: %s', (updatedAt) => {
+    expect(() => parseWbSync({ ...sync, updatedAt }, 17)).toThrow('Некорректный ответ сервиса WB')
+  })
+
   it('accepts bounded nullable responses and preserves truncation flags and lossless prices', () => {
     expect(parseWbAccounts([account])).toEqual([account])
     expect(parseWbAccounts([{ ...account, displayName: null }])[0].displayName).toBeNull()

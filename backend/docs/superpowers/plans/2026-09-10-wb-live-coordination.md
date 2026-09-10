@@ -25,6 +25,34 @@ Do not start a new snapshot subsystem merely because that design is available.
 
 ## Owned local runtime checkpoint — 2026-09-10
 
+### Later live acceptance evidence (supersedes the no-token/no-job state below)
+
+User entered a WB key through the local connection form. ROOT did not retrieve
+or print it. Connection had persisted, but no job existed: the current UI requires
+a separate explicit "Проверить доступ и загрузить" action in the profile.
+ROOT activated that existing read-only action once under the user's ongoing
+request. No duplicate start, history date, price write or message send was used.
+
+Real worker fetched/persisted content and prices. The UI initially rejected
+the returned product timestamps because it required UTC suffixes, while the
+backend datetime contract preserves the PostgreSQL session's `+03:00` offset.
+Safe stack-only temporary diagnostics isolated `timestamp()`; diagnostics were
+removed. Frontend now accepts explicit ISO datetime offsets, preserves the
+original timestamp/instant, and still rejects zone-less or invalid timestamps.
+Causal regression: two non-UTC cases failed before the fix; final WB validation,
+API and history suite **56 passed**, direct `tsc -b` exit 0.
+
+Actual in-app browser: **50 real product rows**, no alert after rereading;
+partial prices/names are kept nullable rather than invented. API and worker
+were gracefully restarted: both active, one durable job, one encrypted credential,
+**2232 product identities retained** at that checkpoint (union of content/price
+rows, not 2232 complete cards). Background loading remains enabled. This does not
+prove complete content/prices history, final P&L, sustained throughput, full
+restart/retry matrix or final original T1–T4 acceptance. The previous screenshot's
+rendering failure was separately fixed in `3f73f11` with a genuine full-route
+browser regression and scoped styles; misleading legacy overlay/footer/calendar
+are no longer mounted on live products.
+
 User explicitly authorized installing isolated local infrastructure. ROOT alone
 installed official digest-verified Lima 2.2.0 ARM64 into
 `~/.local/opt/satorna-lima-2.2.0`, with the dedicated

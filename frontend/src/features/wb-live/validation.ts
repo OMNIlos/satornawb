@@ -20,7 +20,9 @@ function array(value: unknown, max: number): unknown[] { if (!Array.isArray(valu
 function timestamp(value: unknown) {
   if (value === null) return null
   const text = string(value, 64)
-  if (!/(Z|\+00:00)$/.test(text) || !Number.isFinite(Date.parse(text))) invalid()
+  // Backend datetime fields may retain the PostgreSQL session's UTC offset.
+  // Require an explicit zone, but do not reject valid non-UTC instants.
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(text) || !Number.isFinite(Date.parse(text))) invalid()
   return text
 }
 function oneOf<T extends string>(value: unknown, options: readonly T[]): T {
