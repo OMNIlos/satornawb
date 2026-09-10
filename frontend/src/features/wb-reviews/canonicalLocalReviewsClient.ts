@@ -1,4 +1,5 @@
 import { buildApiUrl } from '@/lib/api'
+import { parseCanonicalReviewFact } from './canonicalReviewDetail'
 import {
   buildCanonicalReviewHistoryPath, buildCanonicalReviewLocalContextPath,
   canonicalReviewLocalCommandPath, encodeCanonicalReviewLocalCommand,
@@ -15,14 +16,15 @@ export type LocalReviewFailure = {
 export type LocalReviewResponse<T> = { state: 'ready'; data: T } | LocalReviewFailure
 export type PreparedLocalReviewCommand = Readonly<{ localCommandId: string }>
 
-/** Dormant transport, not a capability/authorization decision or UI cutover.
+/** Local-only transport, not a capability/authorization decision.
  * Create per authenticated membership + session epoch + selected account/review.
+ * Omit membership only to read server-derived context; prepare/submit stay closed.
  * isCurrent must become false on logout/review/account/epoch change, even A→B→A;
  * dispose the old client. Never persist prepared commands or token in browser storage.
  */
 export function createCanonicalLocalReviewsClient(options: {
   scope: CanonicalReviewScope
-  actorMembershipId: number
+  actorMembershipId?: number
   accessToken: string
   isCurrent: () => boolean
   fetch?: typeof fetch
@@ -43,12 +45,14 @@ export function createCanonicalLocalReviewsClient(options: {
   async function request<T>(path: string, parse: (value: unknown) => T,
     stillCurrent: () => boolean, body?: string): Promise<LocalReviewResponse<T>> {
     if (!active() || !stillCurrent()) return failure('stale')
-    if (!Number.isInteger(membership) || membership < 1 || membership > 2147483647
+    if (membership !== undefined && (!Number.isInteger(membership) || membership < 1 || membership > 2147483647)
       || typeof token !== 'string' || !token.trim()) return failure('unauthenticated')
     const controller = new AbortController()
     pending.add(controller)
     const submitted = body !== undefined
-    const stale = () => !active() || !stillCurrent()
+    if (submitted && membership === undefined) return failure('unauthenticated')
+    const timeout = setTimeout(() => controller.abort(), 20_000)
+    const stale = () => !active() || !stillCurrent() || controller.signal.aborted
     try {
       // No shared refresh/retry layer: never replay a mutation implicitly.
       const response = await fetcher(buildApiUrl(path), {
@@ -60,6 +64,7 @@ export function createCanonicalLocalReviewsClient(options: {
       })
       if (stale()) return failure('stale', submitted)
       if (!response.ok) {
+        await response.body?.cancel()
         // Do not parse, expose or log arbitrary server/provider error text.
         const errors: Partial<Record<number, LocalReviewFailure['state']>> = {
           400: 'invalid-request', 401: 'unauthenticated', 403: 'no-access', 404: 'not-found', 409: 'conflict',
@@ -70,15 +75,32 @@ export function createCanonicalLocalReviewsClient(options: {
       if (response.status !== 200 || response.headers.get('content-type')?.split(';')[0].trim().toLowerCase()
         !== 'application/json') return failure('invalid-response', submitted)
       let data: T
-      try { data = parse(await response.json()) }
+      try {
+        if (!response.body) throw new Error('EMPTY')
+        const reader = response.body.getReader(), decoder = new TextDecoder('utf-8', { fatal: true })
+        let bytes = 0, text = ''
+        while (true) {
+          const chunk = await reader.read()
+          if (chunk.done) break
+          bytes += chunk.value.byteLength
+          if (bytes > 1_048_576) { await reader.cancel(); throw new Error('BOUNDS') }
+          text += decoder.decode(chunk.value, { stream: true })
+        }
+        data = parse(JSON.parse(text + decoder.decode()))
+      }
       catch { return failure(stale() ? 'stale' : 'invalid-response', submitted) }
       return stale() ? failure('stale', submitted) : { state: 'ready', data }
     } catch {
       return failure(stale() ? 'stale' : 'unavailable', submitted)
-    } finally { pending.delete(controller) }
+    } finally { clearTimeout(timeout); pending.delete(controller) }
   }
 
   return {
+    fact(externalId: string) {
+      if (scope.marketplace !== 'wb' || !externalId || externalId.length > 512) return Promise.resolve(failure('invalid-request'))
+      const query = new URLSearchParams({ marketplace_account_id: String(scope.marketplaceAccountId), external_review_id: externalId })
+      return request(`/api/v2/reviews/wb/fact?${query}`, value => parseCanonicalReviewFact(value, scope, externalId), () => true)
+    },
     dispose() {
       disposed = true
       for (const controller of pending) controller.abort()
@@ -92,7 +114,7 @@ export function createCanonicalLocalReviewsClient(options: {
       catch { return failure('invalid-request') }
       return request(path, value => {
         const data = parseCanonicalReviewLocalContext(value, scope, expected)
-        if (data.actorMembershipId !== membership) throw new Error('REVIEW_CONTEXT_ACTOR_MISMATCH')
+        if (membership !== undefined && data.actorMembershipId !== membership) throw new Error('REVIEW_CONTEXT_ACTOR_MISMATCH')
         return data
       }, () => sequence === contextSequence)
     },

@@ -22,6 +22,19 @@ function setup(fetcher: typeof fetch, isCurrent = () => true) {
 }
 
 describe('dormant canonical local Reviews transport (no real network)', () => {
+  it('discovers server membership only from validated GET context; cannot prepare writes without it', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(context))
+    const client = createCanonicalLocalReviewsClient({ scope, accessToken: 'test-only', isCurrent: () => true, fetch: fetcher })
+    expect((await client.context()).state).toBe('ready')
+    expect(() => client.prepare(command())).toThrow()
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
+
+  it('bounds JSON before parsing, without fallback', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({ text: 'x'.repeat(1_048_577) }))
+    expect((await setup(fetcher).context()).state).toBe('invalid-response')
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
   it('uses exact authenticated no-store endpoint with no fallback', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(context))
     const client = setup(fetcher)

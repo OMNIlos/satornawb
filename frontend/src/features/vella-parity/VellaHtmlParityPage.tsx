@@ -8,6 +8,8 @@ import { WbConnection } from '@/features/wb-live/WbConnection'
 import { WbProducts } from '@/features/wb-live/WbProducts'
 import { CanonicalNotificationsIsland, canonicalNotificationsEnabled } from '@/features/notifications/CanonicalNotificationsIsland'
 import { CanonicalNotificationPreferencesForm } from '@/features/notifications/NotificationPreferencesForm'
+import { CanonicalReviewDrawer, canonicalReviewSelectionEvent } from '@/features/wb-reviews/CanonicalReviewDrawer'
+import { canonicalReviewsEnabled } from '@/features/wb-reviews/canonicalReviewDetail'
 
 // The canonical account-scoped screen owns WB product reads after this cutover.
 const WB_ACCOUNT_PRODUCTS_ENABLED = import.meta.env.VITE_WB_LIVE_ENABLED === 'true'
@@ -2885,6 +2887,11 @@ function openBackendReviewDrawer(review: VellaReview) {
   setReviewText('reviewDrawerSku', `${review.sku} · ${review.nm}`)
   setReviewText('reviewDrawerTitle', review.product)
   setReviewText('reviewDrawerMeta', `${review.brand} · ${review.rating} звезд · ${review.age}`)
+  if (canonicalReviewsEnabled) {
+    setReviewText('reviewDrawerTitle', 'Каноническая карточка WB')
+    setReviewText('reviewDrawerMeta', `Внешний ID отзыва: ${review.id}`)
+    setReviewText('reviewDrawerSku', 'Аккаунт выбирается ниже')
+  }
   setReviewText('reviewDrawerStars', reviewStars(review.rating))
   setReviewText('reviewDrawerText', review.text || 'Покупатель оставил оценку без текста.')
   setReviewText('reviewDrawerMedia', review.media)
@@ -2924,6 +2931,7 @@ function openBackendReviewDrawer(review: VellaReview) {
   }
   document.getElementById('reviewDrawerOverlay')?.classList.add('open')
   document.getElementById('reviewDrawer')?.classList.add('open')
+  if (canonicalReviewsEnabled) window.dispatchEvent(new CustomEvent(canonicalReviewSelectionEvent, { detail: review.id }))
   window.switchReviewDrawerTab?.('answer')
   window.setTimeout(() => textarea?.focus(), 0)
   window.syncHiddenA11y?.()
@@ -3452,6 +3460,7 @@ function installReviewsReactRowsBridge(accessToken: string | null, shouldLoad = 
     }
   }
   window.saveReviewDraft = () => {
+    if (canonicalReviewsEnabled) return window.showToast?.('Используйте каноническую локальную правку в карточке.', 'warn')
     const review = (window.__vellaReviewsData ?? []).find((row) => row.id === window.__vellaCurrentReviewId)
     if (!review) return
     const draft = (document.getElementById('reviewDraftText') as HTMLTextAreaElement | null)?.value ?? review.draft
@@ -25702,6 +25711,7 @@ function ReviewsIsland({ replacementKey }: { replacementKey: string }) {
       <ReviewsKpiStripIsland />
       <ReviewsToolbarIsland />
       <ReviewsShellIsland />
+      {canonicalReviewsEnabled ? <CanonicalReviewDrawer /> : null}
     </div>
   )
 }
