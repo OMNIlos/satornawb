@@ -290,6 +290,36 @@ def read_production_work_item(session, *, principal, account, work_item_id):
     return _execute(session, principal, account, PRODUCTION_READ_PERMISSIONS, read)
 
 
+def read_production_work_item_by_source(
+    session, *, principal, account, order_item_id, expected_source_item_version
+):
+    """Recover coherent committed state, never permission to retry creation."""
+    _identifier(order_item_id)
+    _identifier(expected_source_item_version)
+
+    def read(session, guard, scope):
+        # The live account lock also serializes creation/assignment. No row
+        # mutation or audit is needed for this exact-source recovery read.
+        row = (
+            session.execute(
+                text("""SELECT * FROM production_work_items
+            WHERE organization_id=:org AND marketplace_account_id=:account
+            AND order_item_id=:item"""),
+                dict(scope, item=order_item_id),
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise ProductionServiceError("PRODUCTION_NOT_FOUND")
+        if row["source_item_version"] != expected_source_item_version:
+            raise ProductionServiceError("PRODUCTION_SOURCE_CHANGED")
+        _coherent_source(session, scope, account, row)
+        return ProductionWorkItem(**row)
+
+    return _execute(session, principal, account, PRODUCTION_READ_PERMISSIONS, read)
+
+
 def create_production_work_item(
     session, *, principal, account, order_item_id, expected_source_item_version
 ):

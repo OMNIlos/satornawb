@@ -21,6 +21,7 @@ from app.orders.production_service import (
     assign_production_work_item,
     create_production_work_item,
     read_production_work_item,
+    read_production_work_item_by_source,
 )
 from app.orders.router import discover_orders_bindings
 from app.platform.integrations.publication_guard import PublicationGuardError
@@ -355,6 +356,37 @@ def make_production_router(*, max_request_bytes: int, runtime_dependency=_disabl
             CreateResponse,
             write=True,
             order_item_id=order_id,
+            expected_source_item_version=version,
+        )
+
+    @router.get("/by-order-item/{order_item_id}", response_model=WorkItemResponse)
+    async def read_by_source(
+        request: Request,
+        account_id: str,
+        order_item_id: str,
+        actor: Annotated[ActorContext, Depends(production_actor)],
+        runtime: Annotated[ProductionHttpRuntime, Depends(runtime_dependency)],
+    ):
+        invalid = False
+        try:
+            pairs = list(request.query_params.multi_items())
+            if len(pairs) != 1 or pairs[0][0] != "expectedSourceItemVersion":
+                raise ValueError()
+            account = _id(account_id, 2**31 - 1)
+            item = _id(order_item_id)
+            version = _id(pairs[0][1])
+        except ValueError:
+            invalid = True
+        if invalid:
+            raise _error("PRODUCTION_REQUEST_INVALID")
+        return await call(
+            runtime,
+            actor,
+            account,
+            read_production_work_item_by_source,
+            WorkItemResponse,
+            write=False,
+            order_item_id=item,
             expected_source_item_version=version,
         )
 
