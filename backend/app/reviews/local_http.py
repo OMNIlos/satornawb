@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import ClientDisconnect
 
 from app.config import Settings, get_settings
 from app.control_plane.auth import ActorContext, actor_from_request
@@ -31,6 +32,18 @@ _STATUS = {
 _VERSIONS = frozenset({"version", "policyVersion", "draftRevision", "headVersion", "revision",
                       "expectedHeadVersion", "expectedDraftRevision", "expectedPolicyHeadVersion", "policyHeadVersion",
                       "aggregateVersion", "throughVersion", "nextAfterVersion"})
+# Transport budget, not a domain text limit: includes UTF-8 JSON and its envelope.
+MAX_LOCAL_REVIEW_COMMAND_BYTES = 64 * 1024
+
+
+def _json_media(request):
+    types = request.headers.getlist("content-type")
+    encodings = request.headers.getlist("content-encoding")
+    if len(types) != 1 or len(encodings) > 1 or (encodings and encodings[0].strip().lower() != "identity"):
+        return False
+    parts = [part.strip().lower() for part in types[0].split(";")]
+    return parts[0] == "application/json" and (len(parts) == 1 or (
+        len(parts) == 2 and re.fullmatch(r'charset\s*=\s*(?:utf-8|"utf-8")', parts[1]) is not None))
 
 
 def _error(code):
@@ -112,18 +125,31 @@ router = APIRouter(prefix="/api/v2/reviews/local", tags=["canonical-reviews-loca
 async def local_review_command(request: Request,
     actor: Annotated[ActorContext, Depends(_actor)], engine: Annotated[Engine, Depends(_engine)],
     settings: Annotated[Settings, Depends(_settings)]):
+    invalid = False
     try:
+        if not _json_media(request):
+            raise ValueError()
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > MAX_LOCAL_REVIEW_COMMAND_BYTES:
+                raise ValueError()
+            body.extend(chunk)
         # Manual decoding avoids default validation responses echoing private input.
-        value = json.loads((await request.body()).decode("utf-8"), object_pairs_hook=_unique,
+        value = json.loads(body.decode("utf-8"), object_pairs_hook=_unique,
                            parse_constant=_constant)
         command = _versions(value, decode=True)
-    except (ValueError, TypeError, UnicodeError, RecursionError):
-        raise _error("REVIEW_LOCAL_INVALID") from None
+    except (ValueError, TypeError, UnicodeError, RecursionError, ClientDisconnect):
+        invalid = True
+    if invalid:
+        raise _error("REVIEW_LOCAL_INVALID")
+    code = None
     try:
         result = await run_in_threadpool(execute_local_review, engine, actor=actor, settings=settings, request=command)
         return _response(json.loads(result.canonical_bytes))
     except ReviewLocalError as error:
-        raise _error(error.code) from None
+        code = error.code
+    if code is not None:
+        raise _error(code)
 
 
 @router.get("/history")
