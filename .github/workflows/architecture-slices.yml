@@ -108,7 +108,7 @@ jobs:
           npx --no-install playwright install --with-deps chromium
       - name: Focused clients and synthetic browser workflow
         run: |
-          npx --no-install vitest run \
+          npx --no-install vitest run --maxWorkers=2 --minWorkers=2 --fileParallelism \
             src/features/notifications/canonicalNotificationPreferences.test.ts \
             src/features/notifications/canonicalReviewNotificationsClient.test.ts \
             src/features/orders/canonicalOrdersClient.test.ts \

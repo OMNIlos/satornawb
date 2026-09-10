@@ -261,6 +261,13 @@ retirement are introduced by these approvals.
   registrar, pure projection and parallel Avito browser checks. YAML is locally
   parsed; no GitHub Actions execution or full release proof is claimed. The RED
   Production final-role test is deliberately not yet advertised as a CI gate.
+- ROOT then ran the complete eleven-file scoped frontend command with two
+  workers: **222 passed in 11.49s**, including both Chromium fixtures; all five
+  owned listeners closed. The four newly added pure backend files passed
+  together: **95 passed in 1.13s**, with two existing dependency warnings.
+  A safe diagnostic repeat of the Production role gate confirmed SQLSTATE
+  **42501** on `marketplace_order_items` (1 failed in 3.74s); it printed neither
+  SQL nor parameters and verified temporary database/role cleanup.
 
 T1 is implementing genuine 0085 projection authority; T3 implements its actual
 participant, with no fake handle. T2 continues the encrypted-account Avito
