@@ -160,6 +160,10 @@ def create_app() -> FastAPI:
     app.include_router(avito_reviews_router)
     app.include_router(avito_stats_router)
     app.include_router(cabinet_router)
+    if settings.wb_sku_overrides_enabled:
+        from app.sku_override_bootstrap import register_sku_override_routes
+
+        register_sku_override_routes(app)
     if getattr(settings, "canonical_notifications_enabled", False) is True:
         from app.notification_bootstrap import register_notification_routes
 
