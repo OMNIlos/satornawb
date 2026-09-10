@@ -34,7 +34,7 @@ def private_write(path, data):
 
 def clean_env():
     return {"PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"), "HOME": str(Path.home()),
-        "LANG": "en_US.UTF-8", "PYTHONPATH": str(BACKEND), "PGPASSFILE": "/dev/null",
+        "LANG": "en_US.UTF-8", "PYTHONPATH": os.pathsep.join((str(BACKEND), str(BACKEND / "backend_contracts"))), "PGPASSFILE": "/dev/null",
         "PGSERVICEFILE": "/dev/null", "NETRC": "/dev/null"}
 
 def run(args, *, env=None):
