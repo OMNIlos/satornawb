@@ -276,6 +276,48 @@ batches, calendar, print/export parity, credential maintenance/store lifecycle,
 runtime business-policy decisions and full release acceptance remain unfinished.
 No real provider request, secret retrieval, production operation or push occurred.
 
+### Superseding integration checkpoint (2026-09-10, HEAD 06cba90)
+
+- Production grants `3b49771` are independently reviewed and the unchanged
+  final API-role workflow is now GREEN: **1 passed in 9.94s**. Narrow lock
+  privileges are not source-publication rights. The catalog timestamp column
+  remains explicitly classified as mutable timestamp DML, not immutable.
+- Recovery GET `ee80042` finds committed work by account + original order item
+  + exact source version, using current Production read authority and source
+  coherence. No audit/write/retry is performed. Owner HTTP44 and service PG6
+  pass; an initial native-initdb setup error was resolved only by the already
+  authorized synthetic owned-database fixture, not host changes. ROOT extended
+  final API-role workflow `52cd067` also checks recovery before/after assignment:
+  **1 passed in 5.11s**. Temporary database/role cleanup was verified.
+- Client `ea435de` exposes explicit `readbackUnknownCreate()` with no caller
+  IDs, accepts only the original captured scope and source version, and retains
+  its write fence on failed readback. ROOT **68 passed in 989ms** and TypeScript
+  passed. The suspected trailing-newline ID defect was disproved by tests;
+  `36a909d` adds regression coverage only, not a bug fix.
+- Encrypted Avito Orders status preview `497c9d0` / `ae30760` and client
+  `9ce84da` are independently reviewed. Owner service PG15 passed; ROOT pure
+  preview + recovery HTTP **57 passed in 1.96s**, client **70 passed in 1.07s**.
+  Present null/conflicting account aliases and unsupported top-level aliases
+  fail closed; absent provider account evidence is explicitly credential-scoped.
+  Unknown statuses/timestamps stay unknown; no quantity/price/total is inferred.
+- Config `c8e01ca` and bootstrap `06cba90` register this preview only under its
+  own default-off flag and strict organization/account allowlist. ROOT TDD was
+  4 failed / 1 passed before implementation, then combined source/entrypoint
+  checks **54 passed in 2.53s** and config/entrypoint **41 passed in 2.83s**.
+  Actual final API-role test `a84324b` passed **1 in 5.87s**, including fresh
+  revoked-session denial and no service DML. No live/bearer/provider proof,
+  canonical queue publication, frontend mounting or legacy replacement claimed.
+
+T1/T3 are implementing the explicitly approved per-run history decision witness
+over immutable parent memberships. The database must derive its pre-state and
+outcome, reject caller-authored/reordered proof, and prevent parent advancement
+before proof capture. Reused historical singleton observations cannot become
+initial projections; legacy behavior is unchanged. Eight codec vectors have
+bounded owner evidence (6 passed first run, 2 passed after a fixture-only chunk
+split); full 0085 authority/runtime is still unaccepted. T2/T4 independently
+implement encrypted-account Avito Reviews metadata preview, without text/PII,
+drafting, sends, source-publication authority or automatic effects.
+
 ## Historical deferral (superseded where explicitly resumed above)
 
 Production/printing/KIZ/standalone matcher; new financial formulas/redesign; all 70 historical failures except an actual current-path blocker; broad fault matrix and backup-restore program. Package 2 waits for the real-data first-path acceptance rather than silently proceeding on fixtures.

@@ -61,6 +61,10 @@ jobs:
             tests/test_wb_price_quota.py \
             tests/test_orders_history_bridge.py \
             tests/test_production_http.py \
+            tests/test_production_source_recovery_http.py \
+            tests/test_account_avito_order_status.py \
+            tests/test_avito_order_status_entrypoints.py \
+            tests/test_account_avito_order_status_config.py \
             tests/test_credential_maintenance_registrar.py \
             tests/test_wb_history_projection_contract.py \
             tests/test_wb_history_projection_selection.py \
@@ -75,7 +79,9 @@ jobs:
             tests/test_review_local_api_role.py \
             tests/test_sku_override_local_api_role.py \
             tests/test_account_avito_stats_local_api_role.py \
+            tests/test_account_avito_order_status_local_api_role.py \
             tests/test_orders_local_api_role.py \
+            tests/test_production_http_local_api_role.py \
             tests/test_wb_repricing_durable_quota_composition.py \
             tests/test_wb_live_history_postgres.py::test_real_worker_staging_eof_ack_and_immutability \
             tests/test_wb_live_history_postgres.py::test_abandoned_lease_cannot_seal_and_run_refresh_keeps_page_provenance \
@@ -117,6 +123,7 @@ jobs:
             src/features/avito/canonicalAvitoStatisticsClient.test.ts \
             src/features/avito/canonicalAvitoStatisticsBrowser.test.ts \
             src/features/production/canonicalProductionClient.test.ts \
+            src/features/avito/canonicalAvitoOrderStatusPreviewClient.test.ts \
             src/features/wb-reviews/canonicalLocalReviewsClient.test.ts \
             src/features/wb-reviews/canonicalReviewDetail.test.ts \
             src/features/wb-reviews/canonicalWorkflowBrowser.test.ts
