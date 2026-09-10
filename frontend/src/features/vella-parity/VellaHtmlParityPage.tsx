@@ -1280,7 +1280,7 @@ function syncRouteChrome(root: HTMLElement, targetTab: string) {
   if (repricerBanner) repricerBanner.style.display = module === 'repricer' ? '' : 'none'
   root.querySelector<HTMLElement>('#reportsBanner')?.classList.toggle('active', module === 'reports')
 
-  const showPeriodControls = targetTab === 'products'
+  const showPeriodControls = (targetTab === 'products' && !WB_ACCOUNT_PRODUCTS_ENABLED)
     || REPORT_ROUTE_TABS.has(targetTab)
     || targetTab === 'repricer-stats'
     || targetTab === 'expenses'
@@ -35322,7 +35322,7 @@ export function VellaHtmlParityPage() {
   }, [accessToken, productsTabActive, runtime])
 
   useEffect(() => {
-    if (!runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
+    if (WB_ACCOUNT_PRODUCTS_ENABLED || !runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
 
     const backendStrategyNameById = (window.__vellaBackendStrategiesSnapshot?.() ?? []).reduce<Record<string, string>>((acc, strategy) => {
       acc[strategy.id] = strategy.name
@@ -35785,7 +35785,7 @@ export function VellaHtmlParityPage() {
   }, [accessToken, location.pathname, runtime])
 
   useEffect(() => {
-    if (!runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
+    if (WB_ACCOUNT_PRODUCTS_ENABLED || !runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
 
     let disposed = false
     let installTimer: number | null = null
@@ -36237,7 +36237,7 @@ export function VellaHtmlParityPage() {
   }, [accessToken, location.pathname, runtime])
 
   useEffect(() => {
-    if (!runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
+    if (WB_ACCOUNT_PRODUCTS_ENABLED || !runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
 
     const originalApplyDrawerManagerAssignment = window.applyDrawerManagerAssignment
     const originalApplyBulkManagerAssignment = window.applyBulkManagerAssignment
@@ -36326,7 +36326,7 @@ export function VellaHtmlParityPage() {
   return (
     <>
       <style>{runtime.styleText}</style>
-      {accessToken && isCanonicalProductsRoute(location.pathname) ? <ProductsSkuGroupModalIsland accessToken={accessToken} /> : null}
+      {!WB_ACCOUNT_PRODUCTS_ENABLED && accessToken && isCanonicalProductsRoute(location.pathname) ? <ProductsSkuGroupModalIsland accessToken={accessToken} /> : null}
       <style>{`
         #toastContainer.toast-container {
           top: 62px !important;
@@ -40273,7 +40273,7 @@ export function VellaHtmlParityPage() {
           {runtime.shellIsland
             ? <VellaShellIsland shellIsland={runtime.shellIsland} mode={routeTarget.tab === 'work-status' ? 'work-status' : 'default'} />
             : htmlFragment(runtime.bodyHtml, 'body-fallback')}
-          {isCanonicalProductsRoute(location.pathname) ? <ProductsStickyPaginationPanel /> : null}
+          {!WB_ACCOUNT_PRODUCTS_ENABLED && isCanonicalProductsRoute(location.pathname) ? <ProductsStickyPaginationPanel /> : null}
           <AdsCacheRefreshButton accessToken={accessToken} active={routeTarget.tab === 'ads'} />
         </div>
       </ActiveParityTabContext.Provider>

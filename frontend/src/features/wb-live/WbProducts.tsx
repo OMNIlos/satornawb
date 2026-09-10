@@ -3,6 +3,7 @@ import { ApiError } from '@/lib/api'
 import { formatWbPrice, productsPath, readWbData, wbErrorMessage, type WbProductSort, type WbProductsPage } from './api'
 import { useWbAccount, useWbSync, WbAccountSelect, WbSyncStatus } from './WbConnection'
 import { parseWbProducts } from './validation'
+import './WbProducts.css'
 
 const readinessLabels = {
   empty: 'В сохранённых данных пока нет товаров.',
@@ -59,12 +60,12 @@ export function WbProducts() {
   const error = failure?.key === requestKey ? failure.message : null
   function changeFilter(next: typeof filter) { setFilter(next); setPage(0); setCursors([null]); setSnapshot(null); setNotice(null) }
   return <div data-wb-live="products">
-    <div className="profile-page-head"><h1 className="profile-page-title">Товары WB</h1><button className="btn btn-default btn-sm" type="button" disabled={loading || !account.accountId} onClick={() => setRevision((value) => value + 1)}>Обновить данные</button></div>
+    <div className="profile-page-head"><h1 className="profile-page-title">Товары WB</h1><button className="btn btn-default btn-sm" type="button" disabled={loading || !account.accountId} onClick={() => setRevision((value) => value + 1)}>Обновить список</button></div>
     <WbAccountSelect account={account} />
     {!account.loading && !account.accountId ? <p>Подключите или выберите аккаунт WB в <a href="/settings/profile">настройках подключения</a>.</p> : null}
     {account.accountId ? <>
       <WbSyncStatus sync={sync} />
-      <p className="profile-helper-text">Текущие карточки и цены WB. Период в верхней панели не применяется к этому списку. Финансовые показатели, остатки и стратегии в этот источник не входят.</p>
+      <p className="profile-helper-text">Текущие карточки и цены WB из сохранённых данных выбранного аккаунта. Финансовые показатели, остатки и стратегии в этот источник не входят.</p>
       <form className="profile-token-actions" onSubmit={(event) => { event.preventDefault(); changeFilter({ ...filter, q: queryDraft, brand: brandDraft }) }}>
         <input className="profile-input" aria-label="Поиск товаров WB" placeholder="Название или артикул" value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} />
         <input className="profile-input" aria-label="Бренд WB" placeholder="Точное название бренда" value={brandDraft} onChange={(event) => setBrandDraft(event.target.value)} />
