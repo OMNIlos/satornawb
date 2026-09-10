@@ -234,6 +234,41 @@ T2 prepared-price composition, T3 Production HTTP and T4 explicit-load UI
 continue independently. No runtime policy values, production actions or legacy
 retirement are introduced by these approvals.
 
+### Superseding integration checkpoint (2026-09-10, HEAD c98f020)
+
+- Prepared price admission `202ad12` precedes the durable dispatch marker.
+  ROOT verified the actual quota service plus prepared worker: **3 passed in
+  8.30s**, including durable Retry-After and lost quota-commit acknowledgment.
+  This is synthetic transport proof, not live activation or provider exactly-once.
+- Saved Orders views now have two-table read-only local API grants `c04c609`:
+  ROOT's unchanged final-role test went from RED to **1 passed in 3.69s**.
+- Explicit-load Avito statistics UI `0802ac9` is integrated behind its own
+  default-off flag. ROOT TypeScript and direct build passed. Native ephemeral
+  Vite binding `f697013` fixed an actual parallel-browser port collision:
+  two browser files / **3 tests passed in 6.87s**, with listener cleanup verified.
+- Pure history projection contracts `4387c63` and dormant trusted credential
+  registrar `e7a6513` are independently reviewed. They do not establish actual
+  0085 SQL authority, maintenance provisioning, source transfer or rotation.
+- Production command client `c98f020` passed independent source review and ROOT
+  **50 tests in 703ms**, plus TypeScript. It is client-only, not mounted UI.
+  Commands are single-dispatch and require explicit readback; unknown creation
+  without a returned ID stays blocked because no safe lookup endpoint exists.
+- Actual Production HTTP-to-service final API-role test `c1ae0e2` is RED:
+  **1 failed in 8.73s**, creation returned 503 rather than 200. Synthetic DB and
+  three roles were removed and absence verified. T1 owns cause diagnosis and
+  any narrowly justified local role changes; broad grants are not authorized.
+- CI adds already verified Orders/quota, dormant Production HTTP/client,
+  registrar, pure projection and parallel Avito browser checks. YAML is locally
+  parsed; no GitHub Actions execution or full release proof is claimed. The RED
+  Production final-role test is deliberately not yet advertised as a CI gate.
+
+T1 is implementing genuine 0085 projection authority; T3 implements its actual
+participant, with no fake handle. T2 continues the encrypted-account Avito
+Orders status preview, not a full queue or legacy replacement. Production
+batches, calendar, print/export parity, credential maintenance/store lifecycle,
+runtime business-policy decisions and full release acceptance remain unfinished.
+No real provider request, secret retrieval, production operation or push occurred.
+
 ## Historical deferral (superseded where explicitly resumed above)
 
 Production/printing/KIZ/standalone matcher; new financial formulas/redesign; all 70 historical failures except an actual current-path blocker; broad fault matrix and backup-restore program. Package 2 waits for the real-data first-path acceptance rather than silently proceeding on fixtures.
