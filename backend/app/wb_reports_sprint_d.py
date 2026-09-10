@@ -1361,15 +1361,15 @@ def _build_cached_ads_snapshot(
     for raw_key, aggregate in aggregates.items():
         if not isinstance(aggregate, dict):
             continue
-        nm_id = _int_or_zero(aggregate.get("nmId") or aggregate.get("nmID") or raw_key)
         campaign_id_raw = aggregate.get("campaignId") or aggregate.get("advertId") or aggregate.get("advert_id")
         campaign_id = str(campaign_id_raw) if campaign_id_raw not in (None, "") else None
+        nm_id = _int_or_zero(aggregate.get("nmId") or aggregate.get("nmID") or (raw_key if not campaign_id else None))
         ad_spend = _first_nonnegative_int_or_none(aggregate, "adSpendKopecks", "spendKopecks", "sumKopecks")
         impressions = _first_nonnegative_int_or_none(aggregate, "adImpressions", "impressions", "views")
         clicks = _first_nonnegative_int_or_none(aggregate, "adClicks", "clicks")
         cart_adds = _first_nonnegative_int_or_none(aggregate, "adCartAdds", "cartAdds", "cartCount", "baskets")
         orders_count = _first_nonnegative_int_or_none(aggregate, "adOrders", "ordersCount", "orderCount", "orders")
-        orders_kopecks = _first_nonnegative_int_or_none(aggregate, "adSalesKopecks", "ordersKopecks", "orderSumKopecks", "salesKopecks")
+        orders_kopecks = _first_nonnegative_int_or_none(aggregate, "adRevenueKopecks", "adSalesKopecks", "ordersKopecks", "orderSumKopecks", "salesKopecks")
         if not any((nm_id > 0, campaign_id, ad_spend, impressions, clicks, cart_adds, orders_count, orders_kopecks)):
             continue
         if group_by == "sku" and nm_id <= 0:
@@ -1415,13 +1415,13 @@ def _build_cached_ads_snapshot(
         blockers.insert(0, "WB-02")
     return AdsAttributionSnapshot(
         source_status=("partial" if blockers else "fresh") if has_any_data else "blocked",
-        confidence=("medium" if blockers else "high") if has_any_data else "blocked",
+        confidence=("high" if not blockers and any(row.confidence == "high" for row in rows) else "medium") if has_any_data else "blocked",
         blocker_ids=blockers,
         source_evidence=_evidence(
             "wb-ads-attribution-cache",
             "wb_api",
             "WB Ads cached by repricer sync",
-            ["adSpendKopecks", "adImpressions", "adClicks", "adOrders", "adSalesKopecks"],
+            ["adSpendKopecks", "adImpressions", "adClicks", "adCartAdds", "adOrders", "adRevenueKopecks"],
         ),
         totals=totals,
         rows=rows,

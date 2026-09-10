@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.repricer_bff import _merge_ads_spend_aggregate_from_node
 from tests.auth_helpers import auth_headers
 
 
@@ -61,8 +62,11 @@ def test_campaign_only_cost_remains_campaign_level(monkeypatch):
 
 
 @pytest.mark.parametrize("has_sku", [False, True])
-def test_sku_report_never_allocates_campaign_only_cost(monkeypatch, has_sku):
-    aggregates = {"campaign-only": {"campaignId": 55, "adSpendKopecks": 2_000}}
+@pytest.mark.parametrize("campaign_key", ["campaign-only", "55"])
+def test_sku_report_never_allocates_campaign_only_cost(
+    monkeypatch, has_sku, campaign_key
+):
+    aggregates = {campaign_key: {"campaignId": 55, "adSpendKopecks": 2_000}}
     if has_sku:
         aggregates["101"] = {"nmId": 101, "adSpendKopecks": 1_000}
     report = read_report(monkeypatch, aggregates, "sku")
@@ -129,3 +133,68 @@ def test_explicit_zero_metric_is_not_replaced_by_an_alias(monkeypatch):
     assert (
         report["rows"][0]["adSpendKopecks"] == report["totals"]["adSpendKopecks"] == 0
     )
+
+
+def test_report_reads_actual_sync_producer_metrics_and_sku_key(monkeypatch):
+    aggregates = {}
+    _merge_ads_spend_aggregate_from_node(
+        {
+            "nm": 101,
+            "sum": 10,
+            "views": 100,
+            "clicks": 10,
+            "atbs": 3,
+            "orders": 2,
+            "sum_price": 100,
+        },
+        aggregates,
+    )
+    report = read_report(monkeypatch, aggregates, "sku")
+    assert report["sourceStatus"] == "fresh"
+    assert report["confidence"] == "high"
+    assert report["blockerIds"] == []
+    row = report["rows"][0]
+    assert row["skuId"] == "101"
+    assert row["attributionLevel"] == "exact_sku"
+    for metrics in (row, report["totals"]):
+        assert metrics["adSpendKopecks"] == 1_000
+        assert metrics["ordersKopecks"] == 10_000
+        assert metrics["drrPct"] == 10
+        assert metrics["roiPct"] == 900
+
+
+@pytest.mark.parametrize("campaign_key", ["campaign-only", "55"])
+def test_complete_campaign_only_report_never_claims_high_confidence(
+    monkeypatch, campaign_key
+):
+    report = read_report(
+        monkeypatch,
+        {
+            campaign_key: {
+                "campaignId": 55,
+                "adSpendKopecks": 100,
+                "impressions": 10,
+                "clicks": 2,
+                "cartAdds": 0,
+                "ordersCount": 0,
+                "ordersKopecks": 0,
+            }
+        },
+        "campaign",
+    )
+    assert report["sourceStatus"] == "fresh"
+    assert report["rows"][0]["attributionLevel"] == "campaign_only"
+    assert report["rows"][0]["skuId"] is None
+    assert report["confidence"] == "medium"
+
+
+def test_producer_revenue_zero_is_not_replaced_by_legacy_alias(monkeypatch):
+    report = read_report(
+        monkeypatch,
+        {"101": {"adSpendKopecks": 100, "adRevenueKopecks": 0, "adSalesKopecks": 999}},
+        "sku",
+    )
+    assert report["rows"][0]["ordersKopecks"] == 0
+    assert report["totals"]["ordersKopecks"] == 0
+    assert report["totals"]["drrPct"] is None
+    assert report["totals"]["roiPct"] == -100
