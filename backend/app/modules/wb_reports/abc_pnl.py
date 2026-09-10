@@ -568,7 +568,7 @@ class WbAbcPnlService:
         )
         loyalty_canonical = (
             source.snapshot is not None
-            and source.snapshot.formula_version == "wb-finance-v2"
+            and source.snapshot.formula_version in {"wb-finance-v2", "wb-finance-v3"}
         )
         loyalty_complete = (
             loyalty_canonical

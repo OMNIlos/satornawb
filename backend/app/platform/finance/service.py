@@ -66,11 +66,13 @@ _PNL_FIELDS = (
     "cashback_amount_kopecks",
     "cashback_discount_kopecks",
     "cashback_commission_change_kopecks",
+    "payable_kopecks",
 )
 _NULLABLE_PNL_FIELDS = {
     "cashback_amount_kopecks",
     "cashback_discount_kopecks",
     "cashback_commission_change_kopecks",
+    "payable_kopecks",
 }
 
 
@@ -112,6 +114,7 @@ class FinanceOperation:
     cashback_amount_kopecks: int | None
     cashback_discount_kopecks: int | None
     cashback_commission_change_kopecks: int | None
+    payable_kopecks: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +199,7 @@ class FinancePnlFact:
     cashback_amount_kopecks: int | None
     cashback_discount_kopecks: int | None
     cashback_commission_change_kopecks: int | None
+    payable_kopecks: int | None = None
 
     @property
     def loyalty_net_cost_kopecks(self) -> int | None:
@@ -338,6 +342,7 @@ def normalize_operation(
         "commissionRub",
     )
     acquiring = document_sign * _first_money(row, "acquiringFee", "acquiring_fee")
+    payable = _optional_first_money(row, "forPay", "ppvz_for_pay")
     deduction = _first_money(row, "deduction", "deductionRub")
     bonus_type = _text(row, "bonusTypeName", "bonus_type_name")
     is_promotion = "wb продвижение" in bonus_type.casefold()
@@ -385,6 +390,7 @@ def normalize_operation(
         "deduction_kopecks": deduction,
         "additional_payment_kopecks": payment_schedule - reward_adjustment,
         "acquiring_kopecks": acquiring,
+        "payable_kopecks": None if payable is None else document_sign * payable,
         "cashback_amount_kopecks": _optional_first_money(
             row, "cashbackAmount", "cashback_amount"
         ),
@@ -986,7 +992,18 @@ class FinanceService:
                 summed(operation.units > 0, operation.units),
                 summed(operation.units < 0, -operation.units),
                 func.coalesce(func.sum(operation.units), 0),
-                func.coalesce(func.sum(operation.commission_kopecks), 0),
+                func.coalesce(
+                    func.sum(case(
+                        (
+                            operation.payable_kopecks.is_not(None),
+                            operation.revenue_kopecks
+                            - operation.payable_kopecks
+                            - operation.acquiring_kopecks,
+                        ),
+                        else_=operation.commission_kopecks,
+                    )),
+                    0,
+                ),
                 func.coalesce(func.sum(operation.logistics_kopecks), 0),
                 func.coalesce(func.sum(operation.storage_kopecks), 0),
                 func.coalesce(func.sum(operation.acceptance_kopecks), 0),
@@ -997,6 +1014,7 @@ class FinanceService:
                 complete_sum(operation.cashback_amount_kopecks),
                 complete_sum(operation.cashback_discount_kopecks),
                 complete_sum(operation.cashback_commission_change_kopecks),
+                complete_sum(operation.payable_kopecks),
             )
             .select_from(relation)
             .where(*criteria)
@@ -1033,6 +1051,7 @@ class FinanceService:
                     rollup.cashback_amount_kopecks,
                     rollup.cashback_discount_kopecks,
                     rollup.cashback_commission_change_kopecks,
+                    rollup.payable_kopecks,
                 ).where(
                     rollup.organization_id == self.organization_id,
                     rollup.marketplace_account_id == run.marketplace_account_id,
@@ -1361,7 +1380,7 @@ class FinanceService:
                 date_from=period.date_from,
                 date_to=period.date_to,
                 snapshot_checksum=checksum,
-                formula_version="wb-finance-v2",
+                formula_version="wb-finance-v3",
                 operation_count=len(operations),
                 is_materialized=False,
                 is_rollup_materialized=False,
@@ -1573,6 +1592,7 @@ class FinanceService:
                 cashback_commission_change_kopecks=(
                     None if row[23] is None else int(row[23])
                 ),
+                payable_kopecks=None if row[24] is None else int(row[24]),
             )
             for row in rows
         ]
