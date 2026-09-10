@@ -150,6 +150,26 @@ def _parse_review_shadow_account_pairs(
     return tuple(result)
 
 
+def _canonical_avito_stats_settings() -> dict[str, object]:
+    invalid = "canonical_avito_stats_configuration_invalid"
+    enabled = os.getenv("VELLA_CANONICAL_AVITO_STATS_ENABLED", "false").strip().lower()
+    if enabled not in {"true", "false"}:
+        raise RuntimeError(invalid)
+    try:
+        # Same strict int4/no-leading-zero/no-duplicate pair grammar as SKU.
+        pairs = _parse_review_shadow_account_pairs(
+            os.getenv("VELLA_CANONICAL_AVITO_STATS_ACCOUNT_PAIRS")
+        )
+    except RuntimeError:
+        pairs = None
+    if pairs is None:
+        raise RuntimeError(invalid)
+    return {
+        "canonical_avito_stats_enabled": enabled == "true",
+        "canonical_avito_stats_account_pairs": pairs,
+    }
+
+
 def _heartbeat_env_settings() -> dict[str, object]:
     """Retain malformed policy as invalid; never repair IDs or disable a bad flag."""
     prefix = "VELLA_PROCESS_HEARTBEAT_"
@@ -227,6 +247,8 @@ class Settings:
     canonical_shadow_collection_organization_ids: tuple[int, ...] = ()
     review_shadow_enabled: bool = False
     review_shadow_account_pairs: tuple[tuple[int, int], ...] = ()
+    canonical_avito_stats_enabled: bool = False
+    canonical_avito_stats_account_pairs: tuple[tuple[int, int], ...] = ()
     marketplace_credentials_enabled: bool = False
     # Optional nonsecret JSON policy. Parsing belongs to explicit ingestion
     # bootstrap: malformed/partial policy must not prevent unrelated app startup.
@@ -332,6 +354,7 @@ def get_settings() -> Settings:
     environment = os.getenv("VELLA_ENV", "local")
     auth_cookie_secure_raw = os.getenv("VELLA_AUTH_COOKIE_SECURE")
     return Settings(
+        **_canonical_avito_stats_settings(),
         **_heartbeat_env_settings(),
         **_canonical_notification_settings(),
         **_wb_sku_override_settings(),
