@@ -26,6 +26,12 @@ describe('Production exact codecs and captured scope', () => {
   it.each(['9223372036854775808', '0', '01', '-1', '1.0', 9007199254740993, null])('rejects invalid identifier %s', value => {
     expect(() => productionId.parse(value)).toThrow()
   })
+  it.each(['1\n', '1\r', '1\r\n', '1\u2028', '1\u2029'])('rejects a trailing line terminator in Production identifiers %j', value => {
+    expect(() => productionId.parse(value)).toThrow()
+    const fetcher = vi.fn<typeof fetch>(), client = api(fetcher)
+    expect(() => client.prepareCreate({ ...createInput, orderItemId: value })).toThrow()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
   it.each([' key', 'key ', '\u0085key', 'key\u001c', '', 'key\0inside', 'key\ud800'])('rejects exact-domain whitespace/NUL/surrogate input without trimming', value => {
     for (const field of ['idempotencyKey', 'reason']) expect(() => productionAssignmentInput.parse({ ...assignInput, expectedVersion: '1', [field]: value })).toThrow()
   })
