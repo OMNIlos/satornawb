@@ -5,9 +5,10 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
+from sqlalchemy.orm import sessionmaker
 
 from app.orders.history_publication import persist_wb_history_chunk
-from app.wb_live import statistics_orders
+from app.wb_live import repository, statistics_orders
 from app.wb_live.contracts import JobLocator
 from tests import test_wb_history_projection_decisions as history
 from tests import test_wb_live_history_postgres as capture
@@ -185,7 +186,9 @@ def test_existing_empty_identity_can_receive_its_first_real_projection(prepared)
         assert tuple(decision) == (1, None, None, "initial_projection")
 
 
-def test_changed_cancelled_observation_reconciles_without_rewriting_current(prepared):
+def test_changed_cancelled_observation_reconciles_without_rewriting_current(
+    prepared, pg_database
+):
     d, service, claim = prepared
     first = service.publish_chunk(claim=claim, participant=persist_wb_history_chunk)
     before = _canonical_snapshot(d)
@@ -194,14 +197,31 @@ def test_changed_cancelled_observation_reconciles_without_rewriting_current(prep
     )
     payload = parent["normalized_evidence"]["observation"]
     old_job_id, _ = _selection(d, claim)
+    with d.engine.connect() as connection:
+        date_from = connection.scalar(
+            text("""SELECT checkpoint->>'dateFrom' FROM wb_live_sync_sources
+            WHERE organization_id=:org AND marketplace_account_id=:account AND job_id=:job
+              AND source='wb-statistics-supplier-orders'"""),
+            dict(_scope(d), job=old_job_id),
+        )
+    # A periodic resumed run alone is not an explicit manual-history selection.
+    # Create its real request through the existing API-role initializer first.
+    _, api_engine = pg_database
+    api_repo = repository.WbLiveRepository(
+        sessionmaker(api_engine, expire_on_commit=False), d.keys
+    )
+    source_job = api_repo.create_history_job(
+        d.actor, d.org, "synthetic-changed-history-" + uuid4().hex, date_from=date_from
+    )
+    source_job_id = UUID(source_job["jobId"])
     with d.engine.begin() as connection:
         connection.execute(
             text("""UPDATE wb_live_sync_sources SET next_due_at=clock_timestamp()
             WHERE organization_id=:org AND marketplace_account_id=:account AND job_id=:job
               AND source='wb-statistics-supplier-orders'"""),
-            dict(_scope(d), job=old_job_id),
+            dict(_scope(d), job=source_job_id),
         )
-    lease = d.repo.claim_batch(JobLocator(d.org, d.org, str(old_job_id)))
+    lease = d.repo.claim_batch(JobLocator(d.org, d.org, str(source_job_id)))
     assert lease is not None and lease.source == "wb-statistics-supplier-orders"
     (item,) = payload["items"]
     raw = json.dumps(
