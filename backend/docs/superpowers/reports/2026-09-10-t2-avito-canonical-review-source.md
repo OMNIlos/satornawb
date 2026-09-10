@@ -104,3 +104,157 @@ datetime в negative test; тот же naive input построен через `
 new context endpoint не нужен, source answer не подменяется AI draft, missing
 source time не восстанавливается из runtime clock. PostgreSQL/provider jobs не
 запускались; schema/guards/local workflow/legacy/flags не менялись.
+
+## Следующий согласованный slice: received-page publisher
+
+Добавлены отдельные Avito definitions в `shadow_service.py`; девять прежних WB
+definitions неизменны по AST. Нет HTTP caller, router registration, config,
+новых grants или DDL. Pure decoder выше остаётся без изменений.
+
+`begin_avito_review_shadow` получает original authenticated actor и paired fetch
+binding, проверяет existing exact-org/account review-shadow gate и резервирует
+run через existing repository. Authority — только public user-session guard с
+фиксированным `reviews:write`, exact `avito_oauth_access` ID/generation/schema/
+expiry. `cabinet:read` недостаточно; ticket — internal correlation data, не bearer
+token, queue principal или доказательство разрешения.
+
+```text
+begin: original principal + paired binding + exact feature gate
+  -> fresh root -> live guard/account lock -> reserve_run -> physical commit
+  -> immutable ticket; transaction and account lock released
+caller boundary: fetch is NOT implemented here
+publish: same ticket/original principal, received tuple of <=50 native rows
+  -> fresh root -> live guard + captured incarnation
+  -> strict decoder -> existing repository/CAS -> partial manifest
+  -> private incarnation fence -> shared final guard -> physical commit
+  -> receipt returned only after commit
+```
+
+Coverage строго partial, даже для empty page; нет caller-supplied completeness,
+inference об удалённых reviews или обещания полной pagination. Повторное содержимое
+того же run проверяется existing manifest replay; другое содержимое — conflict.
+После rollback публикации сохраняется ранее committed running reservation.
+Автоматическое восстановление/повторная выдача authority после restart не реализованы.
+
+### Physical commit fence: условный Core-only контракт
+
+T1 подтвердил: shared credential guard удерживает account lock до commit, но
+не сравнивает captured ingestion incarnation для ExpectedCredential. Поэтому
+producer-private listener проверяет incarnation дополнительно. Он установлен
+перед public acquire на private Session; shared hook не вызывается вручную,
+не меняется и не переставляется. Effective dispatch обязан оканчиваться ровно
+`(private fence, existing shared final)`. Pending ORM new/dirty/deleted блокируется
+до SELECT; Session/callback не передаётся наружу. Shared final flush должен быть
+пустым, иначе это не поддерживаемая композиция.
+
+```text
+late class listener -> incarnation changes -> private fence detects -> rollback
+private fence -> unexpected listener -> shared final
+  rejected by dispatch-tail check BEFORE unexpected listener executes
+class listener queues ORM -> private fence rejects pending state -> no flush
+other transaction changes locked account -> waits for current physical commit
+```
+
+Это узкое coupling к текущему shared hook identity/order, не generic registry.
+Изменение listener topology требует повторной проверки, а не удаления fence.
+Generic restricted-role fixture не доказывает готовность финального API-role:
+его grants проверяет T1 отдельно. Runtime source route/fetch/activation остаются
+за пределами этого commit; нельзя объявлять full Reviews cutover завершённым.
+
+### Текущая проверка producer
+
+RED: 8 missing page helper tests; затем 2 missing begin/publish tests при 8 PASS.
+GREEN offline: **53 passed, 0.59s, exit 0** (10 producer + 43 decoder).
+Ruff и compileall exact source/two new tests: exit 0. Старые WB definitions:
+**9 unchanged**, AST comparison с parent. PostgreSQL suite: **17 collected,
+0.80s, exit 0**; результат исполнения фиксируется отдельно после выделенного
+ROOT serialized slot. Provider calls, реальные keys и production не используются.
+
+Дополнительный bounded offline regression: producer, decoder, existing canonical
+contract, review-shadow rollout и existing approval kernel — **229 passed, 0.77s,
+exit 0**. Это не полный backend suite и не PostgreSQL evidence.
+
+Первый allocated PG17: **17 setup errors, 5.33s, exit 1**, test bodies не
+выполнялись. Новый synthetic fixture вызвал private resolver без tenant context;
+RLS корректно скрыл account (`credential_account_not_found`). Existing production
+wrapper задаёт context перед этим helper. Исправлен только fixture: exact actor
+organization перед paired resolution; guards/RLS/source не ослаблены. Allocator
+завершил exact owned DB/role cleanup и absence assertions без teardown errors.
+Результат retry нельзя выводить из этого setup failure.
+
+Второй PG17: **14 failed / 3 passed, 9.99s, exit 1**. Reservation блокировался
+на SQL privilege boundary. Отдельный allocated diagnostic exact1: **1 failed,
+3.77s, exit 1**, только `received-review-source SQLSTATE=42501`, без SQL/params/
+raw exception. T1 подтвердил недостающие fixture-only EXECUTE для существующих
+0068 PURE2: `review_binding_ascii_string(text)` и
+`review_run_binding_bytes(integer,integer,text,text,text)`. Они выдаются только
+owned disposable role; никаких trigger/all-functions/операционных grants.
+Причина: migration выбирает уже имеющих права writers, reusable Stats fixture
+выдаёт table rights позже. Обе попытки завершили explicit owned cleanup/absence.
+
+Отдельно PG обнаружил реальный error-boundary дефект: raise внутри генераторного
+context manager сохраняет exception context через `contextlib.throw`, даже после
+внутреннего except. Pure regression: **1 failed / 10 passed, 0.52s**. Теперь
+collector сохраняет только safe code; ordinary begin/publish frame поднимает
+новую ошибку после выхода из `with`. GREEN: **11 passed, 0.48s, exit 0**.
+Это не изменение shared guard и не подавление DB ошибки успешным fallback.
+
+Следующий frozen PG17 после PURE2/error-boundary: **13 failed / 4 passed, 4.62s,
+exit 1**, SQLSTATE42501 всё ещё на reservation. Cleanup/absence подтверждены.
+Нельзя считать begin commit-failure test причинным доказательством: до callback
+могла сработать ранняя ACL ошибка. Повтор PG17 приостановлен до полного exact
+fixture dependency assessment Т1; broad grants и superuser fallback запрещены.
+
+Catalog-only diagnostic exact1: **1 failed, 4.70s, exit 1**. EXECUTE false только
+для двух 0065 helpers, true для двух 0068 helpers; run SELECT/INSERT и account
+SELECT/UPDATE true. T1 подтвердил полный source dependency set PURE4. Fixture
+дополнен только недостающими 0065 EXECUTE, без grants на trigger functions или
+изменения operational ACL. В тех же PG17 отрицательные commit/class tests теперь
+обязаны доказать вызов нужного callback, чтобы ранняя unrelated ошибка не дала
+ложный PASS. Ещё один PG17 — только по отдельному ROOT slot.
+
+PG17 с PURE4: **16 passed / 1 failed, 5.95s, exit 1**, все catalog privileges
+true, happy reserve→publish→replay→existing local context прошёл. Remaining
+incarnation fixture вручную менял защищённый version; 0076 trigger правильно
+отверг UPDATE. Late class test также не доказывал private fence, если его UPDATE
+раньше отверг trigger. Исправлены только stimuli: legitimate external binding
+roundtrip с возвратом descriptor, assert version=captured+2, callback completion
+и точный AUTHORITY_CHANGED outcome. Нет прямой записи version/отключения trigger.
+
+### Финальный gate и handoff
+
+**PG17: 17 passed, 3.86s, exit 0.** Legitimate incarnation roundtrip действительно
+завершается (+2), затем private fence возвращает AUTHORITY_CHANGED; в базе нет
+facts/observations. Intervening callback не выполняется; pending ORM и actual
+physical commit failure откатываются. Committed reservation, exact-text publish,
+same-run replay и existing Avito local context проверены реальным PostgreSQL.
+Owned database `orders_test_f7900d6d577243839100e36cb9f97e1d` и role
+`orders_exact_08a34eee92264272bbcdcb9500a1e456` удалены; allocator явно проверил
+их отсутствие. PG slot освобождён ROOT.
+
+Последний bounded offline набор: **230 passed, 0.65s, exit 0**. Полный backend
+suite не запускался. PG test counts не включают прежние setup failures как PASS.
+
+Команды из backend worktree (все pytest запускались через `env -i` и existing
+offline sandbox, с закрытыми NETRC/PGPASSFILE/PGSERVICEFILE):
+
+```text
+/tmp/satorna-backend311-20260909/bin/python -m pytest -q --tb=short tests/test_review_avito_shadow.py tests/test_review_canonical_avito_decode.py tests/test_review_canonical_contract.py tests/test_review_shadow_rollout.py tests/test_wb_repricing_approval_domain.py
+ORDERS_TEST_USE_LOCAL_CLUSTER=1 ...python -m pytest -q -rP --tb=short tests/test_review_avito_shadow_postgres.py
+/tmp/satorna-backend-verify-20260908/bin/python -m ruff check app/reviews/shadow_service.py tests/test_review_avito_shadow.py tests/test_review_avito_shadow_postgres.py
+PYTHONPYCACHEPREFIX=/tmp/satorna-t2-account-discovery-pycache ...python -m compileall -q app/reviews/shadow_service.py tests/test_review_avito_shadow.py tests/test_review_avito_shadow_postgres.py
+git diff --check
+```
+
+Внутренний отдельный critic pass: error context исправлен с causal regression;
+ACL failure не принят за commit-failure proof; прямой version UPDATE не принят за
+incarnation-fence proof; shared/WB definitions не изменены; роли fixture не
+выдаются за final API-role. Указанный `preflight-critic/SKILL.md` локально отсутствует,
+поэтому независимый внешний reviewer этим отчётом не заявляется.
+
+Scope: additive Avito producer в одном existing module, два новых test files и
+этот report. Не менялись schema/migrations/config/ops/flags/routers/tasks/legacy
+WB flow. Нет decrypt/provider calls, новых credentials, network или production
+mutations. Следующий разрешённый интеграционный slice требует ROOT/T1 wiring и
+проверки реальных ограниченных role grants. Source answer body/list projection,
+bounded fetch orchestration, crash recovery и activation этим commit не закрыты.
