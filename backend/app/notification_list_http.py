@@ -1,11 +1,11 @@
 """Typed, dormant list factory; bootstrap owns allowlist, codec and registration."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from app.control_plane.auth import ActorContext
 from app.notification_list import NotificationListCursorCodec
@@ -15,6 +15,23 @@ from app.review_notifications_http import _actor, _error, _wire
 
 class WireModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    @field_validator("occurredAt", "readAt", "dismissedAt", check_fields=False)
+    @classmethod
+    def aware_instant(cls, value):
+        if value is not None and value.utcoffset() is None:
+            raise ValueError("Aware notification instant required")
+        return value
+
+    @field_serializer("occurredAt", "readAt", "dismissedAt", check_fields=False)
+    def wire_instant(self, value):
+        if value is None:
+            return None
+        return (
+            value.astimezone(UTC)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
 
 
 class NotificationEventView(WireModel):

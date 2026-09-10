@@ -96,3 +96,13 @@ git diff --check
 preferences CAS/write. Затем T3 возвращается к Orders query/filters и Production.
 КИЗ, реальные provider actions, production, operational export/print, push,
 deploy и CodeRabbit в этом пакете не использовались.
+
+## Timestamp Compatibility Follow-Up
+
+T4 обнаружил несовместимость стандартного Pydantic datetime serializer с уже
+существующим strict frontend parser: whole-second instant терял обязательные
+шесть знаков дробной части. Для occurredAt/readAt/dismissedAt добавлен точный
+UTC microsecond serializer; offset сохраняет instant, null остаётся null,
+naive timestamps отклоняются. Frontend parser и canonical storage bytes не менялись.
+Пять actual HTTP/model cases: 5 PASS / 26 deselected, 2 warnings, 0.62 s, exit0.
+PG не повторялся: это изменение wire serialization, не storage/auth/query.

@@ -201,3 +201,76 @@ def test_numeric_versions_stay_lossless_on_wire():
     value["eventIds"] = [event["eventId"]]
     model = NotificationListResponse.model_validate(_wire(value))
     assert model.items[0].event.sourceVersion == "9007199254740993"
+
+
+@pytest.mark.parametrize(
+    "instant,expected",
+    [
+        ("2026-09-10T00:00:00Z", "2026-09-10T00:00:00.000000Z"),
+        ("2026-09-10T03:00:00.123456+03:00", "2026-09-10T00:00:00.123456Z"),
+    ],
+)
+@pytest.mark.parametrize("receipt_field", ["readAt", "dismissedAt"])
+def test_actual_http_preserves_six_digit_utc_instants(
+    http_client, instant, expected, receipt_field
+):
+    from pathlib import Path
+
+    client, service, _ = http_client
+    fixture = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures/reviews/send-in-app-storage-v1-golden.json"
+        ).read_text()
+    )
+    event = json.loads(fixture["vectors"]["notificationEvent"]["canonicalUtf8Json"])
+    event["occurredAt"] = instant
+    receipt = {
+        "value": {
+            "schemaVersion": "notification-in-app-receipt-v1",
+            "organizationId": event["organizationId"],
+            "marketplaceAccountId": event["marketplaceAccountId"],
+            "eventId": event["eventId"],
+            "recipientMembershipId": 77,
+            "readAt": None,
+            "dismissedAt": None,
+        },
+        "version": 1,
+    }
+    receipt["value"][receipt_field] = instant
+    service.list_visible = lambda **kwargs: result(
+        [{"event": event, "receipt": receipt}]
+    )
+    response = client.get(
+        "/api/v2/reviews/notifications?marketplace_account_id=91101&marketplace=avito"
+    )
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert (
+        item["event"]["occurredAt"]
+        == item["receipt"]["value"][receipt_field]
+        == expected
+    )
+    assert (
+        item["receipt"]["value"][
+            "dismissedAt" if receipt_field == "readAt" else "readAt"
+        ]
+        is None
+    )
+
+
+def test_list_wire_rejects_naive_instants():
+    from pydantic import ValidationError
+
+    from app.notification_list_http import NotificationReceiptValue
+
+    with pytest.raises(ValidationError, match="Aware notification instant required"):
+        NotificationReceiptValue(
+            schemaVersion="notification-in-app-receipt-v1",
+            organizationId=1,
+            marketplaceAccountId=1,
+            eventId=UUID(int=1),
+            recipientMembershipId=1,
+            readAt="2026-09-10T00:00:00",
+            dismissedAt=None,
+        )
