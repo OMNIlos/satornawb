@@ -192,6 +192,28 @@ def _canonical_avito_order_status_settings() -> dict[str, object]:
     }
 
 
+def _canonical_avito_reviews_preview_settings() -> dict[str, object]:
+    invalid = "canonical_avito_reviews_preview_configuration_invalid"
+    enabled = os.getenv(
+        "VELLA_CANONICAL_AVITO_REVIEWS_PREVIEW_ENABLED", "false"
+    ).strip().lower()
+    if enabled not in {"true", "false"}:
+        raise RuntimeError(invalid)
+    try:
+        # Identical strict internal int4 pair grammar to Avito Stats/Orders.
+        pairs = _parse_review_shadow_account_pairs(
+            os.getenv("VELLA_CANONICAL_AVITO_REVIEWS_PREVIEW_ACCOUNT_PAIRS")
+        )
+    except RuntimeError:
+        pairs = None
+    if pairs is None:
+        raise RuntimeError(invalid)
+    return {
+        "canonical_avito_reviews_preview_enabled": enabled == "true",
+        "canonical_avito_reviews_preview_account_pairs": pairs,
+    }
+
+
 def _heartbeat_env_settings() -> dict[str, object]:
     """Retain malformed policy as invalid; never repair IDs or disable a bad flag."""
     prefix = "VELLA_PROCESS_HEARTBEAT_"
@@ -273,6 +295,8 @@ class Settings:
     canonical_avito_stats_account_pairs: tuple[tuple[int, int], ...] = ()
     canonical_avito_order_status_enabled: bool = False
     canonical_avito_order_status_account_pairs: tuple[tuple[int, int], ...] = ()
+    canonical_avito_reviews_preview_enabled: bool = False
+    canonical_avito_reviews_preview_account_pairs: tuple[tuple[int, int], ...] = ()
     marketplace_credentials_enabled: bool = False
     # Optional nonsecret JSON policy. Parsing belongs to explicit ingestion
     # bootstrap: malformed/partial policy must not prevent unrelated app startup.
@@ -380,6 +404,7 @@ def get_settings() -> Settings:
     return Settings(
         **_canonical_avito_stats_settings(),
         **_canonical_avito_order_status_settings(),
+        **_canonical_avito_reviews_preview_settings(),
         **_heartbeat_env_settings(),
         **_canonical_notification_settings(),
         **_wb_sku_override_settings(),
