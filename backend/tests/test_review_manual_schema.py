@@ -174,5 +174,9 @@ def test_manual_history_blocks_downgrade_and_is_invisible_without_scope(db):
 
 def test_actual_single_head_revision():
     directory = scripts()
-    assert directory.get_heads() == [TARGET]
+    heads = directory.get_heads()
+    assert len(heads) == 1
+    # Later additive slices may follow this migration, but cannot bypass it or
+    # introduce a competing branch. Keep the exact historical parent witness.
+    assert TARGET in {revision.revision for revision in directory.walk_revisions(base="base", head=heads[0])}
     assert directory.get_revision(TARGET).down_revision == PREVIOUS
