@@ -54,6 +54,8 @@ jobs:
             tests/test_account_discovery_entrypoints.py \
             tests/test_account_discovery_http.py \
             tests/test_sku_override_entrypoints.py \
+            tests/test_wb_price_quota.py \
+            tests/test_orders_history_bridge.py \
             tests/test_review_manual_draft.py \
             tests/test_review_local_http_body.py
       - name: Final local API role, history lifecycle, and Orders filters on owned temporary clusters
@@ -67,6 +69,7 @@ jobs:
             tests/test_wb_live_history_postgres.py::test_history_rotation_denies_staging_and_forced_scope_rls \
             tests/test_orders_filters_postgres.py \
             tests/test_account_discovery_postgres.py \
+            tests/test_wb_price_quota_postgres.py \
             tests/test_review_manual_schema.py \
             tests/test_review_manual_draft_storage.py
 
@@ -96,6 +99,8 @@ jobs:
             src/features/notifications/canonicalNotificationPreferences.test.ts \
             src/features/notifications/canonicalReviewNotificationsClient.test.ts \
             src/features/orders/canonicalOrdersClient.test.ts \
+            src/features/marketplace-accounts/canonicalMarketplaceAccounts.test.ts \
+            src/features/wb-live/history.test.ts \
             src/features/wb-reviews/canonicalLocalReviewsClient.test.ts \
             src/features/wb-reviews/canonicalReviewDetail.test.ts \
             src/features/wb-reviews/canonicalWorkflowBrowser.test.ts
