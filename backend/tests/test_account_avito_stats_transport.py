@@ -77,6 +77,65 @@ def response(data):
     )
 
 
+@pytest.mark.parametrize("missing", ["null", "metric", "day"])
+def test_incomplete_daily_coverage_cannot_become_complete_total(missing):
+    query = request()
+    query.dateTo = date(2026, 9, 2)
+    groups = [
+        {
+            "type": "date",
+            "date": "2026-09-01",
+            "metrics": [{"slug": "views", "value": 5}],
+        },
+        {
+            "type": "date",
+            "date": "2026-09-02",
+            "metrics": [{"slug": "views", "value": 0}],
+        },
+    ]
+    if missing == "null":
+        groups[1]["metrics"][0]["value"] = None
+    elif missing == "metric":
+        groups[1]["metrics"] = [{"slug": "orderedItems", "value": 2}]
+    else:
+        groups.pop()
+    with pytest.raises(AccountStatsError):
+        BoundedAvitoTotalsClient(
+            resolved(),
+            transport=httpx.MockTransport(
+                lambda req: response({"result": {"groupings": groups}})
+            ),
+        ).fetch_stats(query)
+
+
+def test_complete_daily_zero_is_observation_not_missing():
+    query = request()
+    query.dateTo = date(2026, 9, 2)
+    groups = [
+        {
+            "type": "date",
+            "date": "2026-09-01",
+            "metrics": [{"slug": "views", "value": 5}],
+        },
+        {
+            "type": "date",
+            "date": "2026-09-02",
+            "metrics": [{"slug": "views", "value": 0}],
+        },
+    ]
+    result = BoundedAvitoTotalsClient(
+        resolved(),
+        transport=httpx.MockTransport(
+            lambda req: response({"result": {"groupings": groups}})
+        ),
+    ).fetch_stats(query)
+    value = project_stats_result(
+        result, external_id="123", date_from=query.dateFrom, date_to=query.dateTo
+    )
+    assert value["rows"][0]["metrics"]["views"] == "5"
+    assert [row["metrics"]["views"] for row in value["daily"]] == ["5", "0"]
+
+
 def test_one_exact_totals_request_and_lossless_existing_parser():
     calls = []
 

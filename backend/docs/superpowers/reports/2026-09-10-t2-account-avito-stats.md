@@ -108,3 +108,18 @@ PostgreSQL used ROOT's exclusive `AvitoStats19` slot after T1 quota12. Exactly t
 6. This slice does not complete durable repricer, sources, finance decisions, final profit or live integration rollout. Profit/business-rule blockers remain unchanged.
 
 Rollback: leave route unregistered/allowlist false, or remove only this new factory's registration. No DDL, data migration, provider mutation or old-route rollback is needed. No existing flags changed.
+
+## Review follow-up — daily completeness
+
+ROOT review found that removing null metrics before legacy daily aggregation
+could publish `day1=5 + day2=null` as a complete total of 5, dropping the null
+day. The new boundary now fails closed for daily groups unless all requested
+dates exist and every day has the same nonempty set of non-null, valid integer
+metrics. Missing dates, missing metrics and explicit null values are not zero.
+Explicit totals nulls still remain null; complete daily values 5 and 0 still
+produce total `"5"` and daily `"5", "0"`. No old parser or formula change.
+
+Regression RED: 3 failed / 1 passed (null day, missing metric, missing date).
+Final offline DTO/transport: 47 passed, 2 existing warnings, 0.60s, exit 0.
+Pure edge change only; no further PostgreSQL run or slot needed. This supersedes
+the unconditional null-entry filtering description above for **daily** groups.

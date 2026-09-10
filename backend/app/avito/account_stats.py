@@ -153,14 +153,15 @@ def _no_constant(_):
 def _validate_payload(payload, request):
     """Reject lossy coercions before reusing the legacy parser.
 
-    Explicit null metrics are absent observations, not a measured zero. Remove
-    their entries before the existing parser (whose legacy int helper uses 0).
-    No new aggregation or aliases are introduced here.
+    Explicit totals nulls remain absent observations, not measured zeros. Daily
+    aggregation requires every date and the same fully observed metric set.
+    Otherwise the legacy parser would silently turn partial days into a total.
     """
     result = payload.get("result") if type(payload) is dict else None
     if type(result) is not dict:
         raise AccountStatsError()
     groups = result.get("groupings")
+    daily = False
     if groups is not None and "metrics" in result:
         raise AccountStatsError()
     if "dataTotalCount" in result and (
@@ -198,9 +199,13 @@ def _validate_payload(payload, request):
                 raise AccountStatsError()
         if len(kinds) != 1:
             raise AccountStatsError()
+        daily = kinds == {"day"}
+        if daily and len(seen) != (request.dateTo - request.dateFrom).days + 1:
+            raise AccountStatsError()
         metric_lists = [group.get("metrics") for group in groups]
     else:
         raise AccountStatsError()
+    expected_daily_metrics = None
     for metrics in metric_lists:
         if type(metrics) is not list or len(metrics) > 1000:
             raise AccountStatsError()
@@ -218,10 +223,18 @@ def _validate_payload(payload, request):
             seen.add(metric["slug"])
             value = metric["value"]
             if value is None:
+                if daily:
+                    raise AccountStatsError()
                 continue
             if type(value) is not int or value < 0:
                 raise AccountStatsError()
             retained.append(metric)
+        if daily:
+            if not seen or (
+                expected_daily_metrics is not None and seen != expected_daily_metrics
+            ):
+                raise AccountStatsError()
+            expected_daily_metrics = seen
         metrics[:] = retained
     return payload
 
