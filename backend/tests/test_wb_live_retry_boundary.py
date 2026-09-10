@@ -125,3 +125,13 @@ def test_invalid_binding_or_original_authority_cannot_rearm(retry, mutation, cod
     with pytest.raises(WbLiveError, match=code):
         d.repo.create_job(d.actor, 34, "denied-retry-key")
     assert snapshot(d.failed) == before
+
+
+@pytest.mark.parametrize("code", ["WB_ACCESS_DENIED", "WB_BINDING_CHANGED"])
+def test_persisted_access_or_binding_failure_is_not_rearmed_by_new_key(retry, code):
+    d = retry
+    d.failed.error_code = code
+    before = snapshot(d.failed)
+    with pytest.raises(WbLiveError, match=code):
+        d.repo.create_job(d.actor, 34, "invalid-source-retry")
+    assert snapshot(d.failed) == before

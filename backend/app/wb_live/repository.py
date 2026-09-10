@@ -171,6 +171,9 @@ class WbLiveRepository:
             if job is not None and job.state == "partial":
                 failed = [source for source in self._sources(s, job, lock=True) if source.state == "failed"]
                 if failed:
+                    for source in failed:
+                        if source.error_code in {"WB_ACCESS_DENIED", "WB_BINDING_CHANGED"}:
+                            raise WbLiveError(source.error_code)
                     # Preserve the installed live HTTP guard and the job's original
                     # authority. A new login of its same user/membership may retry;
                     # another principal cannot replace that durable authorization.
