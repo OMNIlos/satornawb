@@ -17,24 +17,12 @@ from pydantic import (
     model_validator,
 )
 
-from app.repricer_nomenclature_excel import build_xlsx
+from app.repricer_nomenclature_excel import build_xlsx, validate_xlsx_text
 
 Header = Annotated[StrictStr, StringConstraints(min_length=1, max_length=128)]
 CellText = Annotated[StrictStr, StringConstraints(max_length=4096)]
 Cell = CellText | StrictInt | StrictFloat | None
 ShortText = Annotated[StrictStr, StringConstraints(min_length=1, max_length=128)]
-
-
-def _xml_text(value: str) -> str:
-    if any(
-        code not in (9, 10, 13)
-        and not 0x20 <= code <= 0xD7FF
-        and not 0xE000 <= code <= 0xFFFD
-        and not 0x10000 <= code <= 0x10FFFF
-        for code in map(ord, value)
-    ):
-        raise ValueError("Invalid XML character in XLSX text")
-    return value
 
 
 class ReportTableExportSource(BaseModel):
@@ -64,7 +52,7 @@ class ReportTableExportSource(BaseModel):
             *self.blockerIds,
         ):
             if value is not None:
-                _xml_text(value)
+                validate_xlsx_text(value)
         return self
 
 
@@ -83,7 +71,7 @@ class ReportTableExportRequest(BaseModel):
     @classmethod
     def validate_headers(cls, headers: list[str]) -> list[str]:
         for header in headers:
-            _xml_text(header)
+            validate_xlsx_text(header)
         return headers
 
     @model_validator(mode="after")
@@ -94,7 +82,7 @@ class ReportTableExportRequest(BaseModel):
                 raise ValueError("Each row must match the header width")
             for cell in row:
                 if isinstance(cell, str):
-                    _xml_text(cell)
+                    validate_xlsx_text(cell)
                 elif isinstance(cell, float) and not isfinite(cell):
                     raise ValueError("XLSX numbers must be finite")
         return self

@@ -132,6 +132,18 @@ def _col_ref(index: int) -> str:
     return value
 
 
+def validate_xlsx_text(value: str) -> str:
+    if any(
+        code not in (9, 10, 13)
+        and not 0x20 <= code <= 0xD7FF
+        and not 0xE000 <= code <= 0xFFFD
+        and not 0x10000 <= code <= 0x10FFFF
+        for code in map(ord, value)
+    ):
+        raise ValueError("Invalid XML character in XLSX text")
+    return value
+
+
 def _cell_xml(value: Any, cell_ref: str) -> str:
     if value is None:
         return f'<c r="{cell_ref}"/>'
@@ -141,15 +153,7 @@ def _cell_xml(value: Any, cell_ref: str) -> str:
         if isinstance(value, float) and not isfinite(value):
             raise ValueError("XLSX numbers must be finite")
         return f'<c r="{cell_ref}"><v>{value}</v></c>'
-    text = str(value)
-    if any(
-        code not in (9, 10, 13)
-        and not 0x20 <= code <= 0xD7FF
-        and not 0xE000 <= code <= 0xFFFD
-        and not 0x10000 <= code <= 0x10FFFF
-        for code in map(ord, text)
-    ):
-        raise ValueError("Invalid XML character in XLSX text")
+    text = validate_xlsx_text(str(value))
     return f'<c r="{cell_ref}" t="inlineStr"><is><t>{escape(text)}</t></is></c>'
 
 
@@ -159,7 +163,7 @@ def build_xlsx(rows: list[list[Any]], *, sheet_name: str = "repricer") -> bytes:
         or any(character in "[]:*?/\\" for character in sheet_name)
     ):
         raise ValueError("Invalid XLSX sheet name")
-    _cell_xml(sheet_name, "A1")
+    validate_xlsx_text(sheet_name)
     sheet_rows: list[str] = []
     for row_index, row in enumerate(rows, start=1):
         cells = [
