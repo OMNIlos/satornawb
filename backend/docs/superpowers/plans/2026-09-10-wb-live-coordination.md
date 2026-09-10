@@ -116,7 +116,7 @@ IPC segment or server was modified; no persistent service or live WB key is
 active. Disposable synthetic test databases are not approval to store real
 credentials on that shared server.
 
-### Current integration checkpoint (2026-09-10, HEAD 7c93728)
+### Historical integration checkpoint (2026-09-10, HEAD 7c93728)
 
 - Notification preferences/config and registration are now composed through
   `74dcfb7`; 30 focused entrypoint/HTTP tests passed. The final local API role
@@ -150,13 +150,55 @@ credentials on that shared server.
 - Scoped CI `3cc3a0d` is source/static-validated only, not executed on GitHub.
   It explicitly does not replace full release/debt/restore/rollback gates.
 
-Active work: T1 sole schema/guard owner prepares durable shared price quota then
+Work at that checkpoint: T1 sole schema/guard owner prepares durable shared price quota then
 explicit Orders projection authority; T2 migrates a bounded Avito statistics
 consumer without org cache/plaintext fallback; T3 prepares bounded staged-source
 decoding and projection semantics; T4 adds explicit history initialization UI.
 All external mutation flags remain off. Missing real WB input, dedicated local
 infrastructure acceptance, final finance decisions and complete Production
 renderer/calendar parity remain separate blockers, not completed tasks.
+
+### Current integration checkpoint (2026-09-10, HEAD 478c15a)
+
+- Shared price quota schema0084 `d9adb37` and service `ae4df5d` are integrated
+  and independently reviewed. Owner proof: 31 pure / 12 PostgreSQL tests;
+  ROOT repeated the pure contract: 31 passed in 0.53s. Database-time account
+  serialization, monotonic cooldown and hostile default-ACL/reapply denial are
+  covered. This is admission infrastructure, not price-send authority. Actual
+  adapter admission currently follows dispatch; T2 must move preparation before
+  the marker with a one-use bound operation and no second quota charge. A crash
+  may waste quota capacity; no durable exactly-once admission claim is made.
+- Shared WB/Avito Notifications account discovery `80952a8` is integrated,
+  independently reviewed and owner-tested (58 focused/client/browser cases).
+  Cleanup fix `fbda7c0` has 17 focused client tests plus TypeScript passing.
+  Neither Notifications nor Orders derives action permission from metadata.
+  Explicit WB history initialization `ae29ccb` is also reviewed and integrated.
+- Manual Review SQL0083 and pure history bridge `80b26e3` have passed bounded
+  independent review. Final local API role tests `742b30f` (Reviews) and
+  `22c8409` (SKU read-only) expose narrower missing grants; T1 owns their
+  RED-to-GREEN fixes. Broad fixture roles are not final API acceptance.
+- Avito encrypted-account statistics `5399e46` and default-off exact-pair
+  composition `478c15a` are integrated. Owner proof: 43 offline / 19 PostgreSQL
+  cases; ROOT entrypoint/HTTP/transport run: 48 passed in 2.42s. Independent
+  review found a daily-null aggregation defect despite those tests; T2 is
+  fixing it before acceptance. Final local API-role proof and validated config
+  are still pending. No legacy statistics cutover, source persistence/cache,
+  OAuth refresh or live provider acceptance is claimed. Future frontend load
+  must be explicit, not triggered by every date-field change.
+- Scoped CI `8807d30` includes quota, history decoder and new typed frontend
+  consumers; YAML parsed locally. GitHub Actions has not been executed.
+- T1/T3 projection direction is frozen: a separate current `sync:run` intent,
+  immutable completed-history selection, typed 1000-row chunks and atomic
+  receipt/progress. Historical and current credential identity/generation/
+  incarnation must match. Explicit trusted policy and deadline dependencies
+  are mandatory; no runtime values/TTL are invented. Partial observations do
+  not establish fulfillment readiness or permit Production activation.
+
+Active implementation is T1 minimal grants/authority, T2 Avito correction and
+pre-dispatch price composition, T3 Production HTTP factory while awaiting the
+exact projection handle, and T4 typed explicit-load Avito client. All new gates
+remain off; the dedicated local infrastructure and actual WB-key blockers above
+are unchanged. This checkpoint is not complete architecture/release acceptance.
 
 ## Historical deferral (superseded where explicitly resumed above)
 
