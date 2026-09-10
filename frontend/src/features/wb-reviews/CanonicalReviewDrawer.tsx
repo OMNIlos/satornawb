@@ -4,7 +4,7 @@ import { useAuth } from '@/features/auth/authContext'
 import { useWbAccount, WbAccountSelect } from '@/features/wb-live/WbConnection'
 import { createCanonicalLocalReviewsClient } from './canonicalLocalReviewsClient'
 import type { CanonicalReviewHistoryPage, CanonicalReviewLocalContext, CanonicalReviewScope } from './canonicalLocalReviews'
-import { localReviewReady, prepareReviewDetailCommand } from './canonicalReviewDetail'
+import { firstManualReviewReady, localReviewReady, prepareReviewDetailCommand } from './canonicalReviewDetail'
 
 export const canonicalReviewSelectionEvent = 'satorna:canonical-review-selected'
 export function CanonicalReviewDrawer() {
@@ -80,6 +80,8 @@ function LocalDetail({ token, externalId, scope, permissions }: {
     return () => { ++epoch.current; reader.dispose(); clientRef.current?.dispose() }
   }, [revision]) // This component is keyed by the complete session/account/selection identity.
   const ready = context && localReviewReady(context) && !busy && !error
+  const canCreate = context && firstManualReviewReady(context) && !busy && !error
+  const canAuthor = (ready || canCreate) && permissions.includes('reviews:write')
   const nextHistory = async () => {
     if (busy || !history?.nextAfterVersion || !history.headId || !clientRef.current) return
     const operation = epoch.current
@@ -91,8 +93,9 @@ function LocalDetail({ token, externalId, scope, permissions }: {
     else { setContext(null); setHistory(null); setFactText(null); setText(''); setError('Журнал недоступен или изменился. Перечитайте карточку.') }
     setBusy(false)
   }
-  const submit = async (action: 'edit' | 'approved' | 'rejected') => {
-    if (writing.current || !ready || !context || !clientRef.current || !permissions.includes(action === 'edit' ? 'reviews:write' : 'reviews:approve')) return
+  const submit = async (action: 'create' | 'edit' | 'approved' | 'rejected') => {
+    if (writing.current || !(action === 'create' ? canCreate : ready) || !context || !clientRef.current
+      || !permissions.includes(action === 'edit' || action === 'create' ? 'reviews:write' : 'reviews:approve')) return
     writing.current = true
     const operation = epoch.current, client = clientRef.current
     setBusy(true)
@@ -114,12 +117,13 @@ function LocalDetail({ token, externalId, scope, permissions }: {
     <button type="button" className="btn btn-default btn-sm" disabled={busy} onClick={() => setRevision(value => value + 1)}>Перечитать карточку</button>
     {factText !== null ? <div className="review-detail-box"><h4>Исходный отзыв WB</h4><p>{factText}</p></div> : null}
     {context ? <>
-      <p>{context.draft ? `Локальный черновик · версия ${context.draft.revision}${context.draft.generation.mode === 'fake' ? ' · тестовый, не отправлять' : ''}` : 'Первый реальный черновик пока не поддержан серверным контрактом. Тестовая генерация отключена.'}</p>
+      <p>{context.draft ? `${context.draft.generation.mode === 'fake' ? 'Тестовый черновик, не отправлять' : 'Ручной черновик'} · версия ${context.draft.revision}` : 'Ручной черновик ещё не создан. Текст вводится человеком, без AI-генерации.'}</p>
       <p>{context.decision ? `Локальное решение: ${context.decision.decisionKind === 'approved' ? 'одобрено' : 'отклонено'}. Это не отправка в WB.` : 'Локальное решение ещё не принято.'}</p>
-      {context.draft ? <textarea aria-label="Локальный черновик ответа" className="review-drawer-textarea" maxLength={100_000} value={text} disabled={!ready || !permissions.includes('reviews:write')} onChange={event => setText(event.target.value)} /> : null}
-      {!ready ? <p>Правка и решение недоступны без актуального источника, политики и существующего черновика.</p> : null}
+      <textarea aria-label="Ручной черновик ответа" className="review-drawer-textarea" maxLength={100_000} value={text} disabled={!canAuthor} onChange={event => setText(event.target.value)} />
+      {!context.policy || !context.policyHead ? <p>Не выбрана серверная политика. Создание черновика закрыто; политика не создаётся автоматически.</p> : null}
+      {!ready && !canCreate ? <p>Правка недоступна без актуального источника и политики. Решение требует сохранённого черновика.</p> : null}
       <div className="profile-token-actions">
-        <button type="button" className="btn btn-default" disabled={!ready || !text.trim() || !permissions.includes('reviews:write')} onClick={() => void submit('edit')}>Сохранить локальную правку</button>
+        <button type="button" className="btn btn-default" disabled={!canAuthor || !text.trim()} onClick={() => void submit(context.draft ? 'edit' : 'create')}>{context.draft ? 'Сохранить локальную правку' : 'Создать ручной черновик'}</button>
         <button type="button" className="btn btn-success" disabled={!ready || text !== context.draft?.text || !permissions.includes('reviews:approve')} onClick={() => void submit('approved')}>Одобрить локально</button>
         <button type="button" className="btn btn-danger" disabled={!ready || text !== context.draft?.text || !permissions.includes('reviews:approve')} onClick={() => void submit('rejected')}>Отклонить локально</button>
       </div>

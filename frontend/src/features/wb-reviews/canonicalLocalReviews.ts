@@ -20,6 +20,7 @@ const provenance = { schemaVersion: z.literal('review-generation-v1'), generatio
   startedAt: instant, completedAt: instant }
 const generationSchema = z.discriminatedUnion('mode', [
   z.object({ ...provenance, mode: z.literal('fake') }).strict(),
+  z.object({ ...provenance, mode: z.literal('manual') }).strict(),
   z.object({ ...provenance, mode: z.literal('manual_edit'), previousDraftId: uuid }).strict(),
 ]).refine(value => value.completedAt >= value.startedAt)
 const contextSchema = z.object({ schemaVersion: z.literal('review-local-context-v1'), ...owner,
@@ -48,7 +49,8 @@ const commandSchema = z.discriminatedUnion('operationKind', [
   z.object({ ...commandBase, operationKind: z.literal('review.draft.publish.v1'),
     input: z.object({ ...reviewInput, expectedHeadVersion: expectedVersion,
       expectedDraftRevision: expectedVersion, generation: generationSchema,
-      text: z.string().refine(value => value.trim().length > 0) }).strict() }).strict(),
+      text: z.string().refine(value => value.trim().length > 0
+        && !Array.from(value).some(character => { const point = character.codePointAt(0)!; return point >= 0xd800 && point <= 0xdfff })) }).strict() }).strict(),
   z.object({ ...commandBase, operationKind: z.literal('review.decision.record.v1'),
     input: z.object({ ...reviewInput, draftRevision: version, bindingChecksum: checksum,
       sourceObservationId: uuid, expectedHeadVersion: version,
@@ -79,6 +81,7 @@ export function parseCanonicalReviewLocalContext(payload: unknown, scope: Canoni
     || value.policy && !sameScope(value.policy, checked.data)
     || (value.draft === null) !== (value.workflowHead === null)
     || value.draft && !value.review
+    || value.draft?.generation.mode === 'manual' && value.draft.revision !== '1'
     || value.decision && (!value.draft || value.decision.draftId !== value.draft.draftId
       || value.decision.draftRevision !== value.draft.revision)
     || expectedReview && (!value.review || value.review.reviewId !== expectedReview.reviewId
@@ -96,6 +99,7 @@ export function encodeCanonicalReviewLocalCommand(input: CanonicalReviewLocalCom
   if (value.operationKind === 'review.draft.publish.v1') {
     if (value.input.generation.actorMembershipId !== value.actorMembershipId
       || (value.input.expectedHeadVersion === '0') !== (value.input.expectedDraftRevision === '0')
+      || value.input.generation.mode === 'manual' && value.input.expectedHeadVersion !== '0'
       || value.input.generation.mode === 'manual_edit' && value.input.expectedHeadVersion === '0') return invalid()
   }
   return JSON.stringify(value)

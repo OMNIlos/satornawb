@@ -29,22 +29,30 @@ export function localReviewReady(c: CanonicalReviewLocalContext) {
     && c.draft.generation.sourceObservationId === c.review.sourceObservationId
     && c.draft.generation.sourceChecksum === c.review.sourceChecksum)
 }
+export function firstManualReviewReady(c: CanonicalReviewLocalContext) {
+  return Boolean(c.policy && c.policyHead && c.review && !c.draft && !c.workflowHead && !c.decision
+    && !c.review.answered && c.review.canAnswer === true && c.review.sourceOrderState === 'current')
+}
 /** Explicit human operation only; never creates a fake first draft or sends externally. */
-export function prepareReviewDetailCommand(c: CanonicalReviewLocalContext, action: 'edit' | 'approved' | 'rejected', text: string): CanonicalReviewLocalCommand {
-  if (!localReviewReady(c) || !c.review || !c.draft || !c.workflowHead || !c.policyHead || !c.policy) throw new Error('REVIEW_NOT_READY')
+export function prepareReviewDetailCommand(c: CanonicalReviewLocalContext, action: 'create' | 'edit' | 'approved' | 'rejected', text: string): CanonicalReviewLocalCommand {
+  if (!(action === 'create' ? firstManualReviewReady(c) : localReviewReady(c)) || !c.review || !c.policyHead || !c.policy) throw new Error('REVIEW_NOT_READY')
   const base = { schemaVersion: 'review-local-command-v1' as const, organizationId: c.organizationId,
     marketplaceAccountId: c.marketplaceAccountId, marketplace: c.marketplace,
     actorMembershipId: c.actorMembershipId, localCommandId: crypto.randomUUID() }
-  const input = { reviewId: c.review.reviewId, externalReviewId: c.review.externalReviewId, draftId: c.draft.draftId,
+  const input = { reviewId: c.review.reviewId, externalReviewId: c.review.externalReviewId, draftId: c.draft?.draftId ?? crypto.randomUUID(),
     expectedPolicyHeadId: c.policyHead.headId, expectedPolicyHeadVersion: c.policyHead.version,
-    expectedHeadVersion: c.workflowHead.version }
-  if (action !== 'edit') return { ...base, operationKind: 'review.decision.record.v1', input: { ...input,
+    expectedHeadVersion: c.workflowHead?.version ?? '0' }
+  if (action !== 'edit' && action !== 'create') {
+    if (!c.draft) throw new Error('REVIEW_NOT_READY')
+    return { ...base, operationKind: 'review.decision.record.v1', input: { ...input,
     draftRevision: c.draft.revision, bindingChecksum: c.draft.bindingChecksum,
     sourceObservationId: c.review.sourceObservationId, decisionKind: action } }
+  }
   const at = new Date().toISOString().replace(/Z$/, '000Z')
   return { ...base, operationKind: 'review.draft.publish.v1', input: { ...input, draftId: crypto.randomUUID(),
-    expectedDraftRevision: c.draft.revision, text, generation: { schemaVersion: 'review-generation-v1',
-      generationId: crypto.randomUUID(), mode: 'manual_edit', previousDraftId: c.draft.draftId,
+    expectedDraftRevision: c.draft?.revision ?? '0', text, generation: { schemaVersion: 'review-generation-v1',
+      generationId: crypto.randomUUID(), ...(action === 'create' ? { mode: 'manual' as const }
+        : { mode: 'manual_edit' as const, previousDraftId: c.draft!.draftId }),
       sourceObservationId: c.review.sourceObservationId, sourceChecksum: c.review.sourceChecksum,
       policyId: c.policy.policyId, policyVersion: c.policy.version, policyChecksum: c.policyHead.policyChecksum,
       templateVersion: c.policy.templateVersion, modelVersion: c.policy.modelVersion,

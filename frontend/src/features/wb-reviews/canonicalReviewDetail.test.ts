@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { localReviewReady, parseCanonicalReviewFact, prepareReviewDetailCommand } from './canonicalReviewDetail'
-import { encodeCanonicalReviewLocalCommand, type CanonicalReviewLocalContext } from './canonicalLocalReviews'
+import { firstManualReviewReady, localReviewReady, parseCanonicalReviewFact, prepareReviewDetailCommand } from './canonicalReviewDetail'
+import { encodeCanonicalReviewLocalCommand, parseCanonicalReviewLocalContext, type CanonicalReviewLocalContext } from './canonicalLocalReviews'
 
 const uid = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const scope = { organizationId: 1, marketplaceAccountId: 2, marketplace: 'wb' as const }
@@ -19,6 +19,51 @@ function context(): CanonicalReviewLocalContext {
     workflowHead: { headId: uid(8), version: '9007199254740994' }, decision: null }
 }
 describe('canonical Reviews selected record adapter', () => {
+  it('creates first human draft with zero CAS and captured policy, without predecessor or AI metadata fabrication', () => {
+    const c = context(); c.draft = null; c.workflowHead = null; c.policy!.modelVersion = 'existing-policy-label'
+    expect(firstManualReviewReady(c)).toBe(true)
+    const command = prepareReviewDetailCommand(c, 'create', 'Human first reply')
+    const encoded = JSON.parse(encodeCanonicalReviewLocalCommand(command, scope))
+    expect(encoded.input).toMatchObject({ expectedHeadVersion: '0', expectedDraftRevision: '0', text: 'Human first reply',
+      generation: { mode: 'manual', modelVersion: 'existing-policy-label', policyId: c.policy!.policyId,
+        policyVersion: c.policy!.version, policyChecksum: c.policyHead!.policyChecksum, sourceObservationId: c.review!.sourceObservationId } })
+    expect(encoded.input.generation).not.toHaveProperty('previousDraftId')
+    expect(encoded).not.toHaveProperty('send')
+  })
+  it('closes creation without actual policy/source or when a predecessor exists', () => {
+    const existing = context(), missingPolicy = context(), missingSource = context()
+    missingPolicy.draft = null; missingPolicy.workflowHead = null; missingPolicy.policy = null; missingPolicy.policyHead = null
+    missingSource.draft = null; missingSource.workflowHead = null; missingSource.review = null
+    for (const c of [existing, missingPolicy, missingSource]) {
+      expect(firstManualReviewReady(c)).toBe(false)
+      expect(() => prepareReviewDetailCommand(c, 'create', 'Human')).toThrow()
+    }
+  })
+  it.each(['', '  ', '\ud800'])('rejects invalid initial human text', text => {
+    const c = context(); c.draft = null; c.workflowHead = null
+    expect(() => encodeCanonicalReviewLocalCommand(prepareReviewDetailCommand(c, 'create', text), scope)).toThrow()
+  })
+  it('rejects initial manual command with predecessor or nonzero CAS', () => {
+    const c = context(); c.draft = null; c.workflowHead = null
+    const command = prepareReviewDetailCommand(c, 'create', 'Human')
+    if (command.operationKind !== 'review.draft.publish.v1') throw new Error('unexpected operation')
+    for (const versions of [['1', '1'], ['4', '2'], ['0', '1'], ['1', '0']]) {
+      expect(() => encodeCanonicalReviewLocalCommand({ ...command, input: { ...command.input, expectedHeadVersion: versions[0], expectedDraftRevision: versions[1] } }, scope)).toThrow()
+    }
+    const payload = JSON.parse(JSON.stringify(command)); payload.input.generation.previousDraftId = uid(8)
+    expect(() => encodeCanonicalReviewLocalCommand(payload, scope)).toThrow()
+  })
+  it('reads persisted first manual draft and supports subsequent manual edit, rejecting impossible manual revision', () => {
+    const c = context(), generation = c.draft!.generation
+    const { previousDraftId: ignored, ...base } = generation.mode === 'manual_edit' ? generation : { ...generation, previousDraftId: '' }
+    void ignored
+    c.draft!.generation = { ...base, mode: 'manual' }; c.draft!.revision = '1'; c.workflowHead!.version = '1'
+    expect(parseCanonicalReviewLocalContext(c, scope, c.review!)).toEqual(c)
+    const next = prepareReviewDetailCommand(c, 'edit', 'Edited')
+    expect(JSON.parse(encodeCanonicalReviewLocalCommand(next, scope)).input.generation).toMatchObject({ mode: 'manual_edit', previousDraftId: c.draft!.draftId })
+    c.draft!.revision = '2'
+    expect(() => parseCanonicalReviewLocalContext(c, scope, c.review!)).toThrow()
+  })
   it('retains exact versions and unknown/ambiguous fact state', () => {
     expect(parseCanonicalReviewFact(fact, scope, 'actual-wb-id')).toEqual(fact)
   })
