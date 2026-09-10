@@ -163,6 +163,10 @@ def create_app() -> FastAPI:
         from app.avito_stats_bootstrap import register_avito_stats_routes
 
         register_avito_stats_routes(app)
+    if getattr(settings, "canonical_avito_order_status_enabled", False) is True:
+        from app.avito_order_status_bootstrap import register_avito_order_status_routes
+
+        register_avito_order_status_routes(app)
     app.include_router(cabinet_router)
     if settings.canonical_account_discovery_enabled:
         from app.account_discovery_bootstrap import register_account_discovery_routes
