@@ -160,6 +160,10 @@ def create_app() -> FastAPI:
     app.include_router(avito_reviews_router)
     app.include_router(avito_stats_router)
     app.include_router(cabinet_router)
+    if settings.canonical_account_discovery_enabled:
+        from app.account_discovery_bootstrap import register_account_discovery_routes
+
+        register_account_discovery_routes(app)
     if settings.wb_sku_overrides_enabled:
         from app.sku_override_bootstrap import register_sku_override_routes
 
