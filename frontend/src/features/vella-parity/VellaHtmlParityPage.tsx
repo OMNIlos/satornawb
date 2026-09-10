@@ -6,6 +6,7 @@ import QRCode from 'qrcode'
 import { AuthContext, useAuth } from '@/features/auth/authContext'
 import { WbConnection } from '@/features/wb-live/WbConnection'
 import { WbProducts } from '@/features/wb-live/WbProducts'
+import { CanonicalAvitoStatisticsPage, canonicalAvitoStatisticsEnabled } from '@/features/avito/CanonicalAvitoStatistics'
 import { CanonicalNotificationsIsland, canonicalNotificationsEnabled } from '@/features/notifications/CanonicalNotificationsIsland'
 import { CanonicalNotificationPreferencesForm } from '@/features/notifications/NotificationPreferencesForm'
 import { CanonicalReviewDrawer, canonicalReviewSelectionEvent } from '@/features/wb-reviews/CanonicalReviewDrawer'
@@ -23059,7 +23060,11 @@ function AvitoStatsShellIsland({
   )
 }
 
-function AvitoStatsIsland({
+export function AvitoStatsIsland(props: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
+  return canonicalAvitoStatisticsEnabled ? <CanonicalAvitoStatisticsPage /> : <LegacyAvitoStatsIsland {...props} />
+}
+
+function LegacyAvitoStatsIsland({
   replacementKey,
   sourceElement,
 }: {
