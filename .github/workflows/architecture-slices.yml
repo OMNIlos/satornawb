@@ -49,6 +49,8 @@ jobs:
       - name: Notification entrypoints and preferences HTTP; local Review codecs and request boundary
         run: |
           python -m pytest -q \
+            tests/test_health.py \
+            tests/test_wb_live_linux_environment.py \
             tests/test_notification_entrypoints.py \
             tests/test_notification_preferences_http.py \
             tests/test_account_discovery_entrypoints.py \

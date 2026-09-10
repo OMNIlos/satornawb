@@ -23,6 +23,79 @@ WB products path precede new Orders snapshot-publisher contracts. Source inspect
 and the composed test below show that products do not depend on Orders snapshots.
 Do not start a new snapshot subsystem merely because that design is available.
 
+## Owned local runtime checkpoint — 2026-09-10
+
+User explicitly authorized installing isolated local infrastructure. ROOT alone
+installed official digest-verified Lima 2.2.0 ARM64 into
+`~/.local/opt/satorna-lima-2.2.0`, with the dedicated
+`LIMA_HOME=~/.local/state/satorna-lima`, profile `satorna-db`.
+The checked-in `ops/satorna-local-db.lima.yaml` pins Ubuntu 24.04, 2 CPUs,
+1 GiB RAM, 8 GiB sparse disk, no host/home mounts, no forwarded SSH agent or
+existing public keys, no proxy environment propagation. Only API port 58000 is
+forwarded to host **127.0.0.1**. Explicit IPv4/IPv6 deny rules suppress database,
+Redis and other port forwarding; guest Redis uses a private Unix socket only.
+Existing host PostgreSQL and backend production were not modified.
+
+Inside this new VM: PostgreSQL 16.15 and Redis 7.0.15; empty application DB
+`satorna_wb_live` migrated to `20260910_0085`, then existing
+`ops/wb-live-local-grants.sql` applied transactionally. Linux/SQL identities
+`wb_live_api`, `wb_live_worker`, `wb_live_dispatch` use peer authentication,
+not database passwords or owner credentials. Owner is migration-only. API
+snapshot writes and product-title updates were denied; dispatcher cannot read
+the keyring. Newly generated local crypto/auth secrets remain outside Git in
+root-managed guest files. No WB token was created, recovered or submitted.
+
+Runtime release: `/opt/satorna-releases/739366d/backend`. Three enabled systemd
+units `satorna-wb-{api,worker,beat}` run as distinct unprivileged users with
+read-only system paths, private state directories, no core dumps and no raw
+service-log output. Redis AOF is enabled. There is one worker and one beat.
+Real price application, review sending and legacy/canonical collectors remain
+disabled; only the existing read-only WB-live schedule is enabled.
+
+Actual checks:
+- Full VM stop/start: services return automatically with zero restarts;
+  synthetic PostgreSQL marker survives. This is persistence/restart evidence,
+  **not** a backup-restore or real WB loading proof.
+- `/health/live` and `/health/ready` pass from host localhost after restart;
+  database, Redis, Celery broker/result checks are `ok`. Worker `pong` verified
+  separately. Readiness still reports worker/beat `not_monitored`; do not call
+  the heartbeat architecture complete.
+- Real HTTP through Vite proxy: synthetic registration, cabinet/me, refresh,
+  logout, and revoked bearer/cookie rejection pass. One clearly named synthetic
+  account remains in this isolated DB; no provider credential or job created.
+- Regression fix `739366d`: Celery Unix URL must be translated for redis-py
+  readiness while preserving selected database. Original failure reproduced;
+  scoped health/Linux config suite **36 passed, 2 dependency deprecations**;
+  Ruff and diff checks pass. Existing health assertion updated for the already
+  present default-off WB fields; the health payload itself was not changed.
+- Frontend WB-live API/validation/history suite: **50 passed**. Registration
+  page visibly verified in Codex browser; Playwright CLI Chrome launch timed
+  out, so that CLI attempt is not accepted as browser evidence.
+
+Working launch command, from integration worktree: `./start-wb-live --vm`.
+This starts the **already provisioned** VM and local Vite, waits for readiness,
+uses same-origin `/api` proxy, disables MSW, never runs production snapshot
+generation. URL: `http://127.0.0.1:5173/auth/register`. Ctrl+C stops only Vite.
+Stop the owned VM without deleting data:
+`LIMA_HOME="$HOME/.local/state/satorna-lima" "$HOME/.local/opt/satorna-lima-2.2.0/bin/limactl" stop satorna-db`.
+The no-argument launcher retains the native path; it is not the accepted path
+on this Mac because native initdb had failed with shared-memory ENOMEM.
+
+Limitations: VM Python is 3.12.3; first-path imports/HTTP work, but the dormant
+review sender requires Unicode 14/Python 3.11 and is **not** accepted on this
+runtime. Dependencies are not a complete reproducible lock. The VM provisioning
+was performed locally; the launch command is not a fresh-machine installer.
+Observed VM memory after service startup: 562 MiB used / 392 MiB available
+of 955 MiB, **not** peak-load measurement. Owned Lima state occupies ~2.6 GiB;
+host free disk ~11 GiB. No first-page/throughput/p95 claims without actual data.
+
+Next required live acceptance: user creates their local account and enters a
+read-only WB token **in the connection form, never chat/logs**. Verify durable
+connection → background batch/progress → stored products → selected-account UI
+→ restart → subsequent update. Until this passes, the first live package is not
+complete and package-two external operations must not be activated. Full
+original T1–T4 scope and the traceable 50% checkpoint remain incomplete.
+
 Single-terminal composed proof, base `2d127f4`: new
 `test_wb_live_first_products_path.py` passed actual PostgreSQL (1 in 4.09s), scoped
 Ruff. It migrates to current head, applies the real local API/worker/dispatcher

@@ -21,6 +21,11 @@ ssh:
   loadDotSSHPubKeys: false
 portForwards:
 - guestIP: 127.0.0.1
+  guestPort: 58000
+  hostIP: 127.0.0.1
+  hostPort: 58000
+  proto: tcp
+- guestIP: 127.0.0.1
   guestPortRange: [1, 65535]
   proto: any
   ignore: true
