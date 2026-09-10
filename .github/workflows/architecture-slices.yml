@@ -73,6 +73,7 @@ jobs:
             tests/test_wb_history_projection_selection.py \
             tests/test_review_manual_draft.py \
             tests/test_review_canonical_avito_decode.py \
+            tests/test_review_avito_shadow.py \
             tests/test_review_canonical_contract.py \
             tests/test_review_local_http_body.py
       - name: Final local API role, history lifecycle, and Orders filters on owned temporary clusters
@@ -82,6 +83,7 @@ jobs:
           python -m pytest -q \
             tests/test_notification_local_api_role.py \
             tests/test_review_local_api_role.py \
+            tests/test_review_avito_shadow_postgres.py \
             tests/test_sku_override_local_api_role.py \
             tests/test_account_avito_stats_local_api_role.py \
             tests/test_account_avito_order_status_local_api_role.py \

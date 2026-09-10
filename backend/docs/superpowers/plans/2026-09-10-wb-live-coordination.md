@@ -385,6 +385,27 @@ Narrow UPDATE(order_id) is permitted solely for row locks, provided actual
 tests prove every direct parent mutation, including no-op, is rejected. No
 operational provisioning, provider actions, rollout or legacy removal occurred.
 
+### Superseding checkpoint (2026-09-10, HEAD e9db267)
+
+Received-page Avito canonical publisher `e9db267` (T2 source `5a02706`) passed
+independent review and ROOT bounded pure230 (0.63s), actual PostgreSQL17 (4.46s)
+and scoped Ruff. Disposable database/role absence was explicitly verified.
+The genuine original reviews:write principal, exact credential and incarnation
+are revalidated; pending ORM/listener reordering fail closed; receipt follows
+physical commit. Existing WB bodies remain unchanged. Fixture-only PURE4 grants
+are not operational/final API-role grants. Fetch orchestration, list/answer
+parity, final-role wiring and activation remain separate work.
+
+T1 owner evidence: dedicated-role gate1 passed in 5.18s; empty 0085 roundtrip
+passed. Actual T3 nonempty publication initially failed at the deferred decision
+witness; safe diagnostic confirmed P0001 and the exact witness. Only child
+evidence fix `c9d064b` was added, then the same genuine test passed in 5.95s.
+Child payload/checksum/time/item binding, receipt and progress were inspected
+after commit. This addresses the missing-child defect, not whole history replay.
+T1 schema/ops/runtime checkpoint is not yet imported into ROOT: final review
+found the new-operation status read also needs pinned entry/final role checks.
+No production changes, operational grants, provider actions or rollout occurred.
+
 ## Historical deferral (superseded where explicitly resumed above)
 
 Production/printing/KIZ/standalone matcher; new financial formulas/redesign; all 70 historical failures except an actual current-path blocker; broad fault matrix and backup-restore program. Package 2 waits for the real-data first-path acceptance rather than silently proceeding on fixtures.
