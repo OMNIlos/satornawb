@@ -406,6 +406,20 @@ T1 schema/ops/runtime checkpoint is not yet imported into ROOT: final review
 found the new-operation status read also needs pinned entry/final role checks.
 No production changes, operational grants, provider actions or rollout occurred.
 
+### Schema-first integration (2026-09-10, HEAD 678a407)
+
+Schema `5a6832a` and dormant role artifact `678a407` passed independent source
+review. ROOT reran the exact empty 0085 roundtrip and physical restricted-role
+gate together: 2 passed in 9.72s, both owned databases/three roles removed and
+absence verified. Scoped Ruff passed. CI now includes these bounded gates.
+No operational role was provisioned and no history runtime was activated.
+
+The new-operation status path still awaits T1's runtime fix/integration:
+its genuine owner-factory substitution test failed causally (incorrectly allowed
+read), not at setup. Used-history downgrade refusal, full replay, late role
+drift and final API-reader grants remain separate gates. T3 owns only a new
+genuine used-history downgrade regression; it must preserve stored evidence.
+
 ## Historical deferral (superseded where explicitly resumed above)
 
 Production/printing/KIZ/standalone matcher; new financial formulas/redesign; all 70 historical failures except an actual current-path blocker; broad fault matrix and backup-restore program. Package 2 waits for the real-data first-path acceptance rather than silently proceeding on fixtures.

@@ -84,6 +84,8 @@ jobs:
             tests/test_notification_local_api_role.py \
             tests/test_review_local_api_role.py \
             tests/test_review_avito_shadow_postgres.py \
+            tests/test_wb_history_projection_migration.py \
+            tests/test_wb_history_projection_role_grants.py \
             tests/test_sku_override_local_api_role.py \
             tests/test_account_avito_stats_local_api_role.py \
             tests/test_account_avito_order_status_local_api_role.py \
