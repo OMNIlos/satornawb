@@ -359,6 +359,32 @@ frontend optimization targets the whole parity-page module at the App route
 boundary; it may reduce non-parity route startup only. It must not be described
 as a Production-only or universal WB speedup, regenerate data, or change prints.
 
+### Superseding checkpoint (2026-09-10, HEAD 599251b)
+
+App parity lazy boundary `f035544` passed independent review and ROOT browser/
+history checks (16 passed in 9.16s), TypeScript and direct Vite build (3.83s).
+Manifest verified entry 1,032,432 bytes, lazy parity 1,353,237 bytes, lazy
+snapshot 1,561,404 bytes; static entry closure contains only index.html.
+This reduces unrelated-route startup, not total parity/WB download. Recovery is
+an explicit document reload; no automatic retry and no prototype regeneration.
+
+Pure Avito canonical decoder `599251b` passed independent review and ROOT
+81 tests in 0.47s, scoped Ruff. It preserves the existing canonical contract;
+answer body/id/status are not versioned by that model. This is not an Avito
+publication guard or full Reviews parity. T2 next determines the exact reusable
+source-publication authority; no send/preview permission may substitute for it.
+CI includes both canonical decoder/contract and App lazy browser regressions.
+
+T1 reported genuine decision 3 passed and a separate 5-case gate passed (empty
+upgrade/downgrade, malformed decision evidence, closed callback exceptions).
+These do not approve complete 0085. The new genuine unsealed-publication test
+failed as intended: 1 failed in 4.44s, commit did not reject the missing seal.
+Owned database/three roles were cleaned and the PG slot released. T1 implements
+private baseline/sealed final commit plus the dormant protected-writer boundary.
+Narrow UPDATE(order_id) is permitted solely for row locks, provided actual
+tests prove every direct parent mutation, including no-op, is rejected. No
+operational provisioning, provider actions, rollout or legacy removal occurred.
+
 ## Historical deferral (superseded where explicitly resumed above)
 
 Production/printing/KIZ/standalone matcher; new financial formulas/redesign; all 70 historical failures except an actual current-path blocker; broad fault matrix and backup-restore program. Package 2 waits for the real-data first-path acceptance rather than silently proceeding on fixtures.

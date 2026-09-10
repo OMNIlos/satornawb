@@ -72,6 +72,8 @@ jobs:
             tests/test_wb_history_projection_contract.py \
             tests/test_wb_history_projection_selection.py \
             tests/test_review_manual_draft.py \
+            tests/test_review_canonical_avito_decode.py \
+            tests/test_review_canonical_contract.py \
             tests/test_review_local_http_body.py
       - name: Final local API role, history lifecycle, and Orders filters on owned temporary clusters
         # Each fixture allocates its own database/roles and stops its native Unix
@@ -119,6 +121,7 @@ jobs:
       - name: Focused clients and synthetic browser workflow
         run: |
           npx --no-install vitest run --maxWorkers=2 --minWorkers=2 --fileParallelism \
+            src/App.lazyBrowser.test.ts \
             src/features/notifications/canonicalNotificationPreferences.test.ts \
             src/features/notifications/canonicalReviewNotificationsClient.test.ts \
             src/features/orders/canonicalOrdersClient.test.ts \
