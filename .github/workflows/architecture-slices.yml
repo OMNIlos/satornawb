@@ -1,0 +1,100 @@
+# Bounded synthetic architecture checks, not the release_gate.py full baseline.
+# No application database, provider credentials, dispatch, deploy or snapshot generation.
+name: Architecture slices (scoped, not full release)
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-slices-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-slices:
+    name: Synthetic backend and disposable PostgreSQL slices
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+        shell: bash
+    env:
+      # Explicitly disable the fixture's optional existing-cluster fallback.
+      ORDERS_TEST_USE_LOCAL_CLUSTER: '0'
+    steps:
+      # Official release refs verified 2026-09-10; immutable action pins.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - name: Install backend test dependencies and native PostgreSQL binaries
+        run: |
+          python -m pip install '.[test]'
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-16
+          echo '/usr/lib/postgresql/16/bin' >> "$GITHUB_PATH"
+      - name: Require Unicode 14 and the disposable fixture prerequisites
+        run: |
+          python -c 'import unicodedata; assert unicodedata.unidata_version == "14.0.0"'
+          command -v initdb
+          command -v pg_ctl
+          command -v createdb
+      - name: Notification entrypoints and preferences HTTP; local Review codecs and request boundary
+        run: |
+          python -m pytest -q \
+            tests/test_notification_entrypoints.py \
+            tests/test_notification_preferences_http.py \
+            tests/test_review_manual_draft.py \
+            tests/test_review_local_http_body.py
+      - name: Final local API role, history lifecycle, and Orders filters on owned temporary clusters
+        # Each fixture allocates its own database/roles and stops its native Unix
+        # socket cluster in finally. No service container or application DB URL.
+        run: |
+          python -m pytest -q \
+            tests/test_notification_local_api_role.py \
+            tests/test_wb_live_history_postgres.py::test_real_worker_staging_eof_ack_and_immutability \
+            tests/test_wb_live_history_postgres.py::test_abandoned_lease_cannot_seal_and_run_refresh_keeps_page_provenance \
+            tests/test_wb_live_history_postgres.py::test_history_rotation_denies_staging_and_forced_scope_rls \
+            tests/test_orders_filters_postgres.py
+        # Manual-draft PostgreSQL acceptance is intentionally absent until the
+        # 0083 SQL mode amendment exists; pure manual contract checks run above.
+
+  frontend-slices:
+    name: Synthetic Notification and Review clients and Chromium components
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # Vite 8 requires Node 20.19+ or 22.12+; current Node 22 meets it.
+          node-version: '22'
+      - name: Install locked dependencies and Chromium
+        run: |
+          npm ci
+          npx --no-install playwright install --with-deps chromium
+      - name: Focused clients and synthetic browser workflow
+        run: |
+          npx --no-install vitest run \
+            src/features/notifications/canonicalNotificationPreferences.test.ts \
+            src/features/notifications/canonicalReviewNotificationsClient.test.ts \
+            src/features/wb-reviews/canonicalLocalReviewsClient.test.ts \
+            src/features/wb-reviews/canonicalReviewDetail.test.ts \
+            src/features/wb-reviews/canonicalWorkflowBrowser.test.ts
+      - name: Typecheck and direct Vite build without snapshot generator
+        run: |
+          npx --no-install tsc -b
+          npx --no-install vite build
