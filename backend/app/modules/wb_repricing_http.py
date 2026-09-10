@@ -11,13 +11,17 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from threading import Lock
 
 import httpx
 
-from app.modules.wb_repricing_dispatch import CanonicalApplyRequest
-from app.modules.wb_repricing_worker import OriginalPricePostResponse
+from app.modules.wb_repricing_dispatch import CanonicalApplyRequest, build_dispatch_key
+from app.modules.wb_repricing_worker import OriginalPricePostResponse, canonical_request
 from app.platform.integrations.credential_store import ResolvedCredentialForFetch
 from app.platform.integrations.repricer_job_contract import (
+    Redacted,
+    RepricerExpectedState,
+    RepricerJobLocator,
     integer,
     timestamp,
     upload_id,
@@ -240,6 +244,50 @@ def parse_history(raw, *, expected_upload_id, path, offset=0, limit=1000):
     return HistoryPage(expected_upload_id, offset, limit, tuple(goods))
 
 
+class _PreparedPricePost(Redacted):
+    """Process-local pacing capability, never authorization or durable proof."""
+
+    __slots__ = (
+        "__adapter",
+        "__binding",
+        "__body",
+        "__credential",
+        "__expected",
+        "__locator",
+        "__lock",
+        "__seal",
+        "__used",
+    )
+
+    def __init__(self, adapter, seal, body, credential, locator, expected):
+        self.__adapter = adapter
+        self.__seal, self.__body, self.__credential = seal, body, credential
+        self.__binding, self.__locator, self.__expected = (
+            credential.binding,
+            locator,
+            expected,
+        )
+        self.__lock, self.__used = Lock(), False
+
+    def consume(self, adapter, seal, body, credential, locator, expected):
+        with self.__lock:
+            if self.__used:
+                raise PriceHttpError()
+            # Burn before any I/O. A failed use cannot turn into a later resend.
+            self.__used = True
+            if (
+                adapter is not self.__adapter
+                or seal is not self.__seal
+                or type(body) is not bytes
+                or body != self.__body
+                or credential is not self.__credential
+                or credential.binding != self.__binding
+                or locator != self.__locator
+                or expected != self.__expected
+            ):
+                raise PriceHttpError()
+
+
 class WbPriceHttpAdapter:
     def __init__(
         self,
@@ -269,8 +317,9 @@ class WbPriceHttpAdapter:
         )
         self._clock = clock or (lambda: datetime.now(UTC))
         self._record_cooldown = record_cooldown
+        self._prepare_seal = object()
 
-    def _request(self, *, method, path, credential, body=None, params=None):
+    def _validate_credential(self, credential):
         if type(credential) is not ResolvedCredentialForFetch or (
             credential.binding.owner.organization_id,
             credential.binding.owner.marketplace_account_id,
@@ -278,10 +327,25 @@ class WbPriceHttpAdapter:
             credential.binding.credential_identity.credential_kind,
         ) != (self._org, self._account, "wb", "wb_api"):
             raise PriceHttpError()
+
+    def _reserve_quota(self, method, path):
         # Reserve the shared category budget BEFORE I/O, even if the process dies.
         # Conservative base entitlement; no JWT decoding or in-memory limiter.
-        if self._admit(self._org, self._account, method, path, 900) is not True:
+        try:
+            admitted = self._admit(self._org, self._account, method, path, 900)
+        except Exception:  # noqa: BLE001 -- fixed safe pre-marker error, not raw DB diagnostics.
+            admitted = False
+        if admitted is not True:
             raise PriceHttpError()
+
+    def _request(self, *, method, path, credential, body=None, params=None):
+        self._validate_credential(credential)
+        self._reserve_quota(method, path)
+        return self._send(
+            method=method, path=path, credential=credential, body=body, params=params
+        )
+
+    def _send(self, *, method, path, credential, body=None, params=None):
         result = None
         try:
             with httpx.Client(
@@ -339,7 +403,7 @@ class WbPriceHttpAdapter:
             raise PriceHttpError()
         return result
 
-    def post_price_once(self, *, body, credential):
+    def _validate_body(self, body):
         if type(body) is not bytes or not 1 <= len(body) <= 4096:
             raise PriceHttpError()
         payload = _json(body)
@@ -359,10 +423,91 @@ class WbPriceHttpAdapter:
         _number(row["price"], 1)
         if _number(row["discount"]) > 99:
             raise PriceHttpError()
-        raw, status, now, _ = self._request(
+
+    def prepare_price_once(self, *, body, credential, locator, expected):
+        """Validate stored reserved intent and reserve pacing BEFORE dispatch.
+
+        Caller must still commit dispatch and pass executor.before_provider_io.
+        Denial leaves the attempt reserved; crashes can waste acquired capacity.
+        No per-attempt durable quota idempotency is asserted by this handle.
+        """
+        self._validate_body(body)
+        self._validate_credential(credential)
+        invalid = False
+        try:
+            if (
+                type(locator) is not RepricerJobLocator
+                or type(expected) is not RepricerExpectedState
+            ):
+                raise PriceHttpError()
+            locator.__post_init__()
+            expected.__post_init__()
+            request = canonical_request(expected.approval)
+            if (
+                (locator.organization_id, locator.marketplace_account_id)
+                != (self._org, self._account)
+                or (request.scope.organization_id, request.scope.marketplace_account_id)
+                != (self._org, self._account)
+                or request.provider_bytes != body
+                or expected.attempt_id is None
+                or expected.attempt_version != 0
+                or expected.dispatch_key
+                != build_dispatch_key(
+                    request.scope,
+                    expected.approval.action_key,
+                    str(expected.attempt_id),
+                )
+            ):
+                raise PriceHttpError()
+        except Exception:  # noqa: BLE001 -- no invalid contract/identity details escape.
+            invalid = True
+        if invalid:
+            raise PriceHttpError()
+        self._reserve_quota("POST", "/api/v2/upload/task")
+        return _PreparedPricePost(
+            self, self._prepare_seal, body, credential, locator, expected
+        )
+
+    def _consume_prepared(self, *, prepared, body, credential, locator, expected):
+        if type(prepared) is not _PreparedPricePost:
+            raise PriceHttpError()
+        prepared.consume(self, self._prepare_seal, body, credential, locator, expected)
+        raw, status, now, _ = self._send(
             method="POST", path="/api/v2/upload/task", credential=credential, body=body
         )
         return OriginalPricePostResponse(raw, status, 200 <= status < 300, now)
+
+    def post_prepared_once(self, *, prepared, body, credential, locator, expected):
+        """Consume exactly the prepared reserved state, not its dispatch version."""
+        if (
+            type(locator) is not RepricerJobLocator
+            or type(expected) is not RepricerExpectedState
+        ):
+            raise PriceHttpError()
+        return self._consume_prepared(
+            prepared=prepared,
+            body=body,
+            credential=credential,
+            locator=locator,
+            expected=expected,
+        )
+
+    def post_price_once(self, *, body, credential):
+        # Compatibility for direct callers: it still acquires quota exactly once.
+        # DurableApprovalWorker uses the bound prepare/consume path instead.
+        self._validate_body(body)
+        self._validate_credential(credential)
+        self._reserve_quota("POST", "/api/v2/upload/task")
+        prepared = _PreparedPricePost(
+            self, self._prepare_seal, body, credential, None, None
+        )
+        return self._consume_prepared(
+            prepared=prepared,
+            body=body,
+            credential=credential,
+            locator=None,
+            expected=None,
+        )
 
     def read_history_once(
         self, *, credential, expected_upload_id, details=False, offset=0, limit=1000

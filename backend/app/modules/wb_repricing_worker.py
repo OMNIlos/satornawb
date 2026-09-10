@@ -173,6 +173,13 @@ class DurableApprovalWorker(Redacted):
             raise RepricerJobError("REPRICER_CONTRACT_INVALID")
         if type(max_response_bytes) is not int or max_response_bytes <= 0:
             raise RepricerJobError("REPRICER_CONTRACT_INVALID")
+        prepare = getattr(transport, "prepare_price_once", None)
+        prepared_post = getattr(transport, "post_prepared_once", None)
+        if (prepare is not None or prepared_post is not None) and not (
+            callable(prepare) and callable(prepared_post)
+        ):
+            raise RepricerJobError("REPRICER_CONTRACT_INVALID")
+        self._prepare, self._prepared_post = prepare, prepared_post
         self._executor, self._transport, self._budget = (
             executor,
             transport,
@@ -291,6 +298,21 @@ class DurableApprovalWorker(Redacted):
         credential = self._executor.resolve_fetch(
             locator=locator, expected=state.expected
         )
+        # Real transport validates the exact reserved intent and obtains pacing
+        # after the resolver root closed, BEFORE a dispatch marker can exist.
+        # Quota denial/unavailability escapes, leaving the attempt reserved.
+        # This handle is pacing only, never a replacement for the live fence.
+        prepared_expected = state.expected
+        prepared = None
+        if self._prepare is not None:
+            prepared = self._prepare(
+                body=request.provider_bytes,
+                credential=credential,
+                locator=locator,
+                expected=prepared_expected,
+            )
+            if prepared is None:
+                raise RepricerJobError("REPRICER_CONTRACT_INVALID")
         dispatch = self._dispatch(
             locator=locator, expected=state.expected, credential=credential
         )
@@ -305,9 +327,20 @@ class DurableApprovalWorker(Redacted):
                 locator, dispatch.expected, "WB_APPLY_AUTHORIZATION_FAILED"
             )
         try:
-            response = self._transport.post_price_once(
-                body=request.provider_bytes, credential=credential
-            )
+            if self._prepared_post is not None:
+                response = self._prepared_post(
+                    prepared=prepared,
+                    body=request.provider_bytes,
+                    credential=credential,
+                    locator=locator,
+                    expected=prepared_expected,
+                )
+            else:
+                # Existing synthetic/non-preparing transports retain the
+                # single-POST protocol; never infer an admission bypass flag.
+                response = self._transport.post_price_once(
+                    body=request.provider_bytes, credential=credential
+                )
         except Exception:  # noqa: BLE001 - transport implementations have no common exception base.
             # A timeout/reset/exception does not prove provider nonacceptance.
             return self._uncertain(
