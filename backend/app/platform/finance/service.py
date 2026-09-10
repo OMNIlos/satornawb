@@ -25,7 +25,7 @@ from app.platform.finance.orm import (
     WbFinanceSyncRunSkuRollupRow,
 )
 from app.platform.integrations.orm import MarketplaceAccountRow
-from app.platform.period import MOSCOW, Period, PeriodValidationError
+from app.platform.period import MOSCOW, Period, PeriodTemporalState, PeriodValidationError
 
 ReportType = Literal["main", "redemptions", "unknown"]
 OperationKind = Literal["sale", "return", "correction", "other"]
@@ -636,6 +636,18 @@ def _snapshot(row: WbFinanceSyncRunRow) -> FinanceSnapshot:
         captured_at=_utc(row.captured_at),
         last_observed_at=_utc(row.last_observed_at),
     )
+
+
+def _source_state(
+    run: WbFinanceSyncRunRow, temporal_state: PeriodTemporalState, operation_count: int
+) -> FinanceSourceState:
+    if (
+        temporal_state == "partial"
+        or _utc(run.last_observed_at)
+        < Period(run.date_from, run.date_to).end_exclusive_at
+    ):
+        return "partial"
+    return "empty" if operation_count == 0 else "ready"
 
 
 class FinanceService:
@@ -1533,11 +1545,7 @@ class FinanceService:
             )
             for row in item_rows[offset : offset + limit]
         ]
-        state = (
-            "partial"
-            if temporal_state == "partial"
-            else "empty" if summary.operation_count == 0 else "ready"
-        )
+        state = _source_state(run, temporal_state, summary.operation_count)
         return FinancePage(
             state,
             period,
@@ -1567,9 +1575,10 @@ class FinanceService:
             return FinancePnlSource(state, period, None, [], {}, {})
 
         exact = run.date_from == period.date_from and run.date_to == period.date_to
+        # Exact membership can include fees with an earlier or unknown sale date.
         if run.is_pnl_rollup_materialized and exact:
             rows = self._materialized_pnl_rows(run)
-        elif run.is_daily_pnl_rollup_materialized:
+        elif run.is_daily_pnl_rollup_materialized and not exact:
             rows = self._materialized_daily_pnl_rows(run, period)
         else:
             rows = self._pnl_operation_rows(run, period)
@@ -1607,11 +1616,7 @@ class FinanceService:
             for row in rows
         ]
         operation_count = sum(fact.operation_count for fact in facts)
-        state: FinanceSourceState = (
-            "partial"
-            if temporal_state == "partial"
-            else "empty" if operation_count == 0 else "ready"
-        )
+        state = _source_state(run, temporal_state, operation_count)
         if run.is_daily_pnl_rollup_materialized:
             daily_net_units, daily_economics_basis = (
                 self._materialized_daily_bases(run, period)

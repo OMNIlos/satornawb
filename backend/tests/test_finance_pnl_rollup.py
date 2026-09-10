@@ -119,6 +119,25 @@ def test_pnl_source_materializes_signed_settlement_components(session: Session) 
     assert run.is_pnl_rollup_materialized is True
 
 
+def test_exact_pnl_fallback_preserves_all_report_membership(session: Session) -> None:
+    rows = settlement_rows() + [
+        {"rrdId": 3, "nmId": 101, "saleDt": "2026-08-10", "penalty": "10"},
+        {"rrdId": 4, "nmId": 101, "penalty": "2"},
+    ]
+    service = FinanceService(session, organization_id=1, now=lambda: NOW)
+    snapshot = service.ingest_snapshot(31, PERIOD, rows, observed_at=NOW)
+    materialized = service.get_pnl_source(31, PERIOD)
+    assert materialized.facts[0].operation_count == 4
+    assert materialized.facts[0].penalty_kopecks == 4_200
+
+    run = session.get(WbFinanceSyncRunRow, snapshot.sync_run_id)
+    assert run is not None and run.is_daily_pnl_rollup_materialized
+    run.is_pnl_rollup_materialized = False
+    session.commit()
+
+    assert service.get_pnl_source(31, PERIOD) == materialized
+
+
 def test_pnl_source_materializes_complete_loyalty_money(session: Session) -> None:
     rows = settlement_rows()
     rows[0].update(
