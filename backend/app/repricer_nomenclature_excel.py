@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from html import escape
 from io import BytesIO
+from math import isfinite
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -137,11 +138,28 @@ def _cell_xml(value: Any, cell_ref: str) -> str:
     if isinstance(value, bool):
         return f'<c r="{cell_ref}" t="b"><v>{1 if value else 0}</v></c>'
     if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(value, float) and not isfinite(value):
+            raise ValueError("XLSX numbers must be finite")
         return f'<c r="{cell_ref}"><v>{value}</v></c>'
-    return f'<c r="{cell_ref}" t="inlineStr"><is><t>{escape(str(value))}</t></is></c>'
+    text = str(value)
+    if any(
+        code not in (9, 10, 13)
+        and not 0x20 <= code <= 0xD7FF
+        and not 0xE000 <= code <= 0xFFFD
+        and not 0x10000 <= code <= 0x10FFFF
+        for code in map(ord, text)
+    ):
+        raise ValueError("Invalid XML character in XLSX text")
+    return f'<c r="{cell_ref}" t="inlineStr"><is><t>{escape(text)}</t></is></c>'
 
 
-def build_xlsx(rows: list[list[Any]]) -> bytes:
+def build_xlsx(rows: list[list[Any]], *, sheet_name: str = "repricer") -> bytes:
+    if (
+        not 1 <= len(sheet_name) <= 31
+        or any(character in "[]:*?/\\" for character in sheet_name)
+    ):
+        raise ValueError("Invalid XLSX sheet name")
+    _cell_xml(sheet_name, "A1")
     sheet_rows: list[str] = []
     for row_index, row in enumerate(rows, start=1):
         cells = [
@@ -162,7 +180,7 @@ def build_xlsx(rows: list[list[Any]]) -> bytes:
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-        '<sheets><sheet name="repricer" sheetId="1" r:id="rId1"/></sheets>'
+        f'<sheets><sheet name="{escape(sheet_name, quote=True)}" sheetId="1" r:id="rId1"/></sheets>'
         "</workbook>"
     )
     rels = (
