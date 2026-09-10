@@ -49,3 +49,12 @@ GRANT USAGE,SELECT ON SEQUENCE lk_organizations_organization_id_seq,lk_user_perm
  lk_user_preferences_preference_id_seq,lk_integrations_integration_id_seq,lk_audit_events_event_id_seq,
  iam_memberships_membership_id_seq,marketplace_accounts_marketplace_account_id_seq TO wb_live_api;
 GRANT EXECUTE ON FUNCTION public.wb_live_due_jobs(integer) TO wb_live_worker,wb_live_dispatch;
+-- Additive 0082 rights. The condition keeps the grant script usable by older
+-- isolated schema fixtures; the history runtime itself requires migration 0082.
+DO $$ BEGIN
+ IF to_regclass('public.wb_live_history_pages') IS NOT NULL THEN
+  GRANT SELECT,INSERT ON public.wb_live_history_requests TO wb_live_api;
+  GRANT SELECT,INSERT ON public.wb_live_history_pages,public.wb_live_history_rows TO wb_live_worker;
+  GRANT UPDATE(state,receipt,published_at) ON public.wb_live_history_pages TO wb_live_worker;
+ END IF;
+END $$;
