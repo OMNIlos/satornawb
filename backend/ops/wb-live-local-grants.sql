@@ -26,6 +26,34 @@ GRANT SELECT ON notification_in_app_events,notification_in_app_receipts,
  review_facts,review_observations,review_sync_runs_v2 TO wb_live_api;
 GRANT INSERT ON notification_in_app_receipts TO wb_live_api;
 GRANT UPDATE(read_at,dismissed_at) ON notification_in_app_receipts TO wb_live_api;
+-- Local Review context/manual draft/edit/approval/history only. Existing owner-
+-- seeded policy/source are read, never created or published by this API role.
+GRANT SELECT ON review_policy_versions,review_policy_heads,review_draft_revisions,
+ review_decisions,review_workflow_heads,review_local_audit,review_local_command_receipts TO wb_live_api;
+GRANT INSERT ON review_draft_revisions,review_decisions,review_workflow_heads,
+ review_local_audit,review_local_command_receipts TO wb_live_api;
+GRANT UPDATE(head_id,version,current_draft_id,current_draft_revision,current_decision_id,updated_at)
+ ON review_workflow_heads TO wb_live_api;
+-- Lock capability only: policy-head writes require separately privileged version
+-- advancement; fact first_observed_at is immutable and fact writes require version
+-- advancement too. Existing physical guards reject these column-only mutations.
+GRANT UPDATE(updated_at) ON review_policy_heads TO wb_live_api;
+GRANT UPDATE(first_observed_at) ON review_facts TO wb_live_api;
+-- Explicit pure codecs only; no trigger, send, enqueue or namespace-wide EXECUTE.
+GRANT EXECUTE ON FUNCTION public.review_local_integer_text(numeric,boolean),
+ public.review_local_timestamp_text(timestamp with time zone),
+ public.review_local_utf8_json_string(bytea),public.review_local_nonblank_utf8(bytea),
+ public.review_local_string(text,boolean),public.review_local_uuid(uuid,boolean),
+ public.review_local_number(numeric,boolean,boolean),public.review_local_label(text),
+ public.review_local_checksum(text),public.review_local_policy_bytes(public.review_policy_versions),
+ public.review_local_generation_bytes(public.review_draft_revisions),
+ public.review_local_decision_binding_bytes(public.review_draft_revisions,bytea),
+ public.review_local_audit_bytes(public.review_local_audit),
+ public.review_local_result_bytes(public.review_local_command_receipts),
+ public.review_local_request_bytes(public.review_local_command_receipts,public.review_policy_versions,
+  public.review_draft_revisions,public.review_decisions,bytea),
+ public.review_run_binding_bytes(integer,integer,text,text,text),
+ public.review_binding_ascii_string(text) TO wb_live_api;
 GRANT EXECUTE ON FUNCTION public.review_send_unicode_version(),public.review_send_uuid4(uuid),
  public.review_send_external_id(bytea),
  public.review_strict_utf8(bytea),public.review_local_integer_text(numeric,boolean),
