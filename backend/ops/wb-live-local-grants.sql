@@ -58,3 +58,12 @@ DO $$ BEGIN
   GRANT UPDATE(state,receipt,published_at) ON public.wb_live_history_pages TO wb_live_worker;
  END IF;
 END $$;
+-- Quota custody is infrastructure admission only, not price mutation authority.
+-- A distinct future price executor uses repricer-executor-grants.sql separately.
+-- Keep this after role creation and the reader privilege reset above.
+DO $$ BEGIN
+ IF to_regclass('public.wb_price_quota') IS NOT NULL THEN
+  GRANT SELECT,INSERT ON public.wb_price_quota TO wb_live_worker;
+  GRANT UPDATE(next_allowed_at,updated_at) ON public.wb_price_quota TO wb_live_worker;
+ END IF;
+END $$;

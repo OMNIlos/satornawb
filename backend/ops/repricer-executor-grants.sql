@@ -94,4 +94,24 @@ GRANT EXECUTE ON FUNCTION public.repricing_job_uuid(uuid), public.repricing_job_
  TO :"executor_role";
 -- Trigger functions have no direct EXECUTE grants. Missing columns/functions abort
 -- this transaction. No default privileges or unrelated ACLs are modified.
+-- Additive quota custody; older isolated schema fixtures remain supported.
+-- This does not provision a role or confer dispatch authorization.
+DO $$
+DECLARE executor_name text := current_setting('repricer.grant_executor_role'); item record;
+BEGIN
+ IF to_regclass('public.wb_price_quota') IS NOT NULL THEN
+  IF NOT EXISTS(SELECT 1 FROM pg_class WHERE oid='public.wb_price_quota'::regclass
+    AND relrowsecurity AND relforcerowsecurity)
+  THEN RAISE EXCEPTION 'executor_schema_invalid'; END IF;
+  IF has_table_privilege(executor_name,'public.wb_price_quota','UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+  THEN RAISE EXCEPTION 'executor_privileges_invalid'; END IF;
+  FOR item IN SELECT attname FROM pg_attribute WHERE attrelid='public.wb_price_quota'::regclass
+    AND attnum>0 AND NOT attisdropped AND attname NOT IN ('next_allowed_at','updated_at') LOOP
+   IF has_column_privilege(executor_name,'public.wb_price_quota',item.attname,'UPDATE')
+   THEN RAISE EXCEPTION 'executor_privileges_invalid'; END IF;
+  END LOOP;
+  EXECUTE format('GRANT SELECT,INSERT ON public.wb_price_quota TO %I',executor_name);
+  EXECUTE format('GRANT UPDATE(next_allowed_at,updated_at) ON public.wb_price_quota TO %I',executor_name);
+ END IF;
+END $$;
 COMMIT;

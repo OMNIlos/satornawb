@@ -118,6 +118,11 @@ ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
     GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO :"runtime_role";
 
 REVOKE ALL ON TABLE public.alembic_version FROM :"runtime_role";
+-- Quota admission belongs only to separately approved reader/executor custody.
+-- Conditional for older schema fixtures; never grant API quota rights.
+SELECT format('REVOKE ALL ON TABLE public.wb_price_quota FROM %I', :'runtime_role')
+WHERE to_regclass('public.wb_price_quota') IS NOT NULL
+\gexec
 
 -- Orders overrides must follow every broad runtime grant above.
 REVOKE ALL ON TABLE public.order_sync_runs, public.marketplace_orders,
