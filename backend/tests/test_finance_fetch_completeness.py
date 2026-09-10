@@ -75,12 +75,15 @@ def test_malformed_success_never_becomes_an_empty_or_partial_report(
     assert error.value.status_code == 502
 
 
-@pytest.mark.parametrize("identity", [None, 0, -1, True, 1.5, "bad"])
+@pytest.mark.parametrize(
+    "identity",
+    [None, 0, -1, True, 1.5, "bad", "1_0", "+10", " 10 ", "01", "١٠", "１０"],
+)
 def test_invalid_finance_identity_cannot_prove_complete_pagination(
     monkeypatch, identity
 ):
     with pytest.raises(HTTPException) as error:
-        fetch(monkeypatch, [(200, [row(identity)])])
+        fetch(monkeypatch, [(200, [row(identity)]), (204, None)])
     assert error.value.status_code == 502
 
 
@@ -94,6 +97,33 @@ def test_nonadvancing_cursor_does_not_publish_a_partial_report(monkeypatch, last
 def test_repeated_identity_with_changed_money_is_not_silently_discarded(monkeypatch):
     with pytest.raises(HTTPException) as error:
         fetch(monkeypatch, [(200, [row()]), (200, [row(retailAmount="2"), row(2)])])
+    assert error.value.status_code == 502
+
+
+@pytest.mark.parametrize("changed", [True, 1.0])
+def test_duplicate_payloads_do_not_hide_different_json_types(monkeypatch, changed):
+    with pytest.raises(HTTPException) as error:
+        fetch(
+            monkeypatch,
+            [
+                (200, [row(retailAmount=1)]),
+                (200, [row(retailAmount=changed), row(2)]),
+                (204, None),
+            ],
+        )
+    assert error.value.status_code == 502
+
+
+def test_unseen_identity_behind_the_requested_cursor_is_rejected(monkeypatch):
+    with pytest.raises(HTTPException) as error:
+        fetch(monkeypatch, [(200, [row(2)]), (200, [row(), row(3)]), (204, None)])
+    assert error.value.status_code == 502
+
+
+@pytest.mark.parametrize("status", [201, 202, 206])
+def test_unexpected_success_status_cannot_certify_an_empty_report(monkeypatch, status):
+    with pytest.raises(HTTPException) as error:
+        fetch(monkeypatch, [(status, [])])
     assert error.value.status_code == 502
 
 
@@ -127,3 +157,23 @@ def test_fake_finance_provider_models_cursor_pages_and_204():
     assert [response.statusCode for response in responses] == [200, 200, 204]
     assert [response.data["data"] for response in responses] == [[row()], [row(2)], []]
     assert client.fixtures[path]["data"] == [row(), row(2)]
+
+
+def test_fake_finance_does_not_sleep_or_change_real_provider_pacing(monkeypatch):
+    path = "/api/finance/v1/sales-reports/detailed"
+    client = FakeWbApiClient({path: {"data": [row()]}})
+    monkeypatch.setattr(
+        repricer_bff, "build_wb_finance_client", lambda *a, **kw: client
+    )
+    monkeypatch.setattr(repricer_bff, "_finance_report_last_request_at", 1_000.0)
+    monkeypatch.setattr(repricer_bff.time, "monotonic", lambda: 1_000.0)
+    monkeypatch.setattr(
+        repricer_bff.time, "sleep", lambda seconds: pytest.fail(f"fake slept {seconds}")
+    )
+
+    result = repricer_bff.fetch_finance_report_aggregates(
+        "complete", date_from=datetime(2026, 8, 17, tzinfo=timezone.utc)
+    )
+    assert result["rowsCount"] == 1
+    assert len(client.requests) == 2
+    assert repricer_bff._finance_report_last_request_at == 1_000.0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -16,6 +17,7 @@ from fastapi import HTTPException
 
 from app.config import get_settings
 from app.wb_api.client import (
+    FakeWbApiClient,
     RateLimitedWbApiClient,
     WbApiRequest,
     WbApiResponseEnvelope,
@@ -2040,8 +2042,11 @@ def _request_or_raise(client: RateLimitedWbApiClient, request: WbApiRequest) -> 
         response = client.request(request)
         last_response = response
         if response.ok:
-            if response.statusCode == 204 and request.path == "/api/finance/v1/sales-reports/detailed":
-                return []
+            if request.path == "/api/finance/v1/sales-reports/detailed":
+                if response.statusCode == 204:
+                    return []
+                if response.statusCode != 200:
+                    raise HTTPException(status_code=502, detail="WB_FINANCE_INVALID_RESPONSE")
             return _ensure_ok(response.data, request.path)
         if not _is_retryable_transport_response(response) or attempt >= _WB_TRANSPORT_MAX_ATTEMPTS - 1:
             _raise_upstream_error(response)
@@ -2119,6 +2124,8 @@ def _request_or_raise_calendar(client: RateLimitedWbApiClient, request: WbApiReq
 def _request_or_raise_finance_report(client: RateLimitedWbApiClient, request: WbApiRequest) -> Any:
     """Finance detailed report is seller-limited to roughly one request per minute."""
     global _finance_report_last_request_at
+    if isinstance(getattr(client, "inner", None), FakeWbApiClient):
+        return _request_or_raise(client, request)
     last_exc: HTTPException | None = None
     for attempt in range(_FINANCE_REPORT_MAX_ATTEMPTS):
         now = time.monotonic()
@@ -3510,14 +3517,22 @@ def fetch_finance_report_aggregates(
 
         for item in page_rows:
             raw_id = _finance_raw_first(item, "rrdId", "rrd_id")
-            item_rrd_id = _finance_int(raw_id) if type(raw_id) in (int, str) else 0
+            valid_id = type(raw_id) is int or (
+                isinstance(raw_id, str)
+                and raw_id.isascii()
+                and raw_id.isdecimal()
+                and not raw_id.startswith("0")
+            )
+            item_rrd_id = _finance_int(raw_id) if valid_id else 0
             if item_rrd_id <= 0:
                 raise HTTPException(status_code=502, detail="WB_FINANCE_INVALID_ROW_ID")
             if item_rrd_id in seen_rrd_ids:
-                if seen_rrd_ids[item_rrd_id] != item:
+                if json.dumps(seen_rrd_ids[item_rrd_id], sort_keys=True) != json.dumps(item, sort_keys=True):
                     raise HTTPException(status_code=502, detail="WB_FINANCE_CONFLICTING_ROWS")
                 duplicate_rows_skipped += 1
                 continue
+            if item_rrd_id <= rrd_id:
+                raise HTTPException(status_code=502, detail="WB_FINANCE_CURSOR_STALLED")
             seen_rrd_ids[item_rrd_id] = item
             rows.append(item)
         pages_loaded += 1
