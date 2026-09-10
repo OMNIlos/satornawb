@@ -137,6 +137,22 @@ def test_missing_source_read_preserves_refresh_and_does_not_allow_duplicate(runt
     assert runtime.refreshes == []
 
 
+@pytest.mark.parametrize(
+    "state,stage", [("running", "pnl"), ("waiting_1c", "waiting_1c")]
+)
+def test_source_refresh_reuses_its_replacement_builder(runtime, state, stage):
+    key, job = seed(runtime, "pnl", cached=False, state=state, stage=stage)
+    job["kind"] = "report_source_refresh"
+    runtime.cache[1, key] = job
+    response = runtime.api.post(
+        "/api/wb/reports/pnl/refresh-sources-job", params=PARAMS
+    )
+    assert response.status_code == 200
+    assert response.json()["reused"] is True
+    assert runtime.cache[1, key] == job
+    assert runtime.writes == runtime.refreshes == []
+
+
 @pytest.mark.parametrize("active", [False, True])
 def test_wow_derived_latest_cache_preserves_real_live_job(runtime, monkeypatch, active):
     key, job = seed(runtime, "week-over-week", cached=False)

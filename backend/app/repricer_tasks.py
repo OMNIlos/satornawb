@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from celery.exceptions import Retry
+from celery.exceptions import Ignore, Retry
 
 from app import repricer_bff as repricer_bff_module
 from app.avito.auth import resolve_user_avito_access_token
@@ -278,15 +278,20 @@ def refresh_report_sources_for_org(self, organization_id: int, user_id: str, rep
         if report_id == "digest":
             result = build_digest_for_org.run(organization_id, date_from_iso, date_to_iso, finance_allowed, None)
         else:
-            result = build_report_for_org.run(organization_id, user_id, report_id, date_from_iso, date_to_iso, group_by, source, finance_allowed, None)
+            return self.replace(build_report_for_org.s(
+                organization_id, user_id, report_id, date_from_iso, date_to_iso,
+                group_by, source, finance_allowed, None, source_refresh=refresh_result,
+            ))
         return save_job("completed", "Отчет обновлен", 100, "completed", sync=refresh_result, result=result, finishedAt=reports._utc_now_iso())
+    except Ignore:
+        raise
     except Exception as exc:
         save_job("failed", "Не удалось обновить данные отчета", 100, "failed", error=str(exc)[:500], finishedAt=reports._utc_now_iso())
         raise
 
 
 @celery_app.task(name="reports.build_report_for_org", bind=True, max_retries=240)
-def build_report_for_org(self, organization_id: int, user_id: str, report_id: str, date_from_iso: str, date_to_iso: str, group_by: str, source: str, finance_allowed: bool, wb_token: str | None) -> dict[str, Any]:
+def build_report_for_org(self, organization_id: int, user_id: str, report_id: str, date_from_iso: str, date_to_iso: str, group_by: str, source: str, finance_allowed: bool, wb_token: str | None, *, source_refresh: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build a heavy report outside the HTTP request and persist its exact response."""
     from datetime import date as date_type
     from app.routers import wb_reports_bff as reports
@@ -305,9 +310,10 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
         organization_id=organization_id,
         finance_allowed=finance_allowed,
     )
+    refresh_context = {"kind": "report_source_refresh", "sync": source_refresh} if source_refresh is not None else {}
     started_at = reports._utc_now_iso()
     def progress(stage: str, label: str, percent: int, state: str = "running") -> None:
-        reports.save_source_cache(organization_id, job_key, {"state": state, "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "stage": stage, "label": label, "percent": percent, "startedAt": started_at, "updatedAt": reports._utc_now_iso()})
+        reports.save_source_cache(organization_id, job_key, {**refresh_context, "state": state, "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "stage": stage, "label": label, "percent": percent, "startedAt": started_at, "updatedAt": reports._utc_now_iso()})
     progress("queued", "Задача принята", 0)
     try:
         required_daily_sources = REPORT_DAILY_SOURCES_BY_ID.get(report_id, ())
@@ -504,13 +510,13 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
         persisted_report = reports.get_source_cache(organization_id, cache_key, slim=False)
         if not isinstance(persisted_report, dict) or not isinstance(persisted_report.get("report"), dict):
             raise RuntimeError(f"Background report payload was not persisted: {cache_key}")
-        result = {"state": "completed", "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "source": source, "stage": "completed", "label": "Отчёт готов", "percent": 100, "finishedAt": reports._utc_now_iso()}
+        result = {**refresh_context, "state": "completed", "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "source": source, "stage": "completed", "label": "Отчёт готов", "percent": 100, "finishedAt": reports._utc_now_iso()}
         reports.save_source_cache(organization_id, job_key, result)
         return result
     except Retry:
         raise
     except Exception as exc:
-        result = {"state": "failed", "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "finishedAt": reports._utc_now_iso(), "error": str(exc)[:500]}
+        result = {**refresh_context, "state": "failed", "stage": "failed", "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "finishedAt": reports._utc_now_iso(), "error": str(exc)[:500]}
         reports.save_source_cache(organization_id, job_key, result)
         raise
 

@@ -2,7 +2,7 @@ from datetime import date
 from types import SimpleNamespace
 
 import pytest
-from celery.exceptions import Retry
+from celery.exceptions import Ignore, Retry
 
 from app import repricer_tasks
 
@@ -900,6 +900,11 @@ def test_report_source_refresh_task_refreshes_sources_then_builds_report(monkeyp
     build_calls: list[tuple[object, ...]] = []
     saved: dict[str, dict] = {}
 
+    def replace(signature):
+        build_calls.append(signature.args)
+        assert signature.kwargs["source_refresh"]["state"] == "completed"
+        raise Ignore()
+
     monkeypatch.setattr("app.repricer_tasks.get_user_wb_token_secret", lambda _user_id: None)
     monkeypatch.setattr("app.repricer_tasks.get_organization_wb_token_secret", lambda _organization_id: "org-wb-token")
     monkeypatch.setattr(
@@ -907,26 +912,25 @@ def test_report_source_refresh_task_refreshes_sources_then_builds_report(monkeyp
         lambda **kwargs: refresh_calls.append(kwargs) or {"state": "completed", "steps": [{"source": "baskets", "status": "ok"}]},
     )
     monkeypatch.setattr(
-        repricer_tasks.build_report_for_org,
-        "run",
-        lambda *args: build_calls.append(args) or {"state": "completed", "reportId": args[2]},
+        repricer_tasks.refresh_report_sources_for_org,
+        "replace",
+        replace,
     )
     monkeypatch.setattr(reports, "save_source_cache", lambda _organization_id, key, payload: saved.__setitem__(key, payload))
     monkeypatch.setattr(reports, "get_source_cache", lambda _organization_id, key, **_kwargs: saved.get(key))
 
-    result = repricer_tasks.refresh_report_sources_for_org.run(
-        1,
-        "viewer",
-        "rnp",
-        "2026-07-10",
-        "2026-07-16",
-        "sku",
-        "operational",
-        True,
-        None,
-    )
-
-    assert result["state"] == "completed"
+    with pytest.raises(Ignore):
+        repricer_tasks.refresh_report_sources_for_org.run(
+            1,
+            "viewer",
+            "rnp",
+            "2026-07-10",
+            "2026-07-16",
+            "sku",
+            "operational",
+            True,
+            None,
+        )
     assert refresh_calls[0]["trigger"] == "reports-rnp-manual-refresh"
     assert refresh_calls[0]["force"] is True
     assert refresh_calls[0]["wb_token"] == "org-wb-token"
@@ -934,7 +938,7 @@ def test_report_source_refresh_task_refreshes_sources_then_builds_report(monkeyp
     assert refresh_calls[0]["baskets_include_daily_detail"] is True
     assert refresh_calls[0]["execute_lock"] is False
     assert build_calls[0][2] == "rnp"
-    assert saved["reports_job_rnp_2026-07-10_2026-07-16_sku"]["stage"] == "completed"
+    assert saved["reports_job_rnp_2026-07-10_2026-07-16_sku"]["stage"] == "building_report"
 
 
 def test_report_source_refresh_task_fails_without_wb_token(monkeypatch):

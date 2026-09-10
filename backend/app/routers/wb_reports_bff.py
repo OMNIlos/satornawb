@@ -3891,7 +3891,7 @@ def _report_job_is_reusable(job: dict[str, Any]) -> bool:
 def _report_job_is_active_refresh(job: dict[str, Any]) -> bool:
     state = str(job.get("state") or "")
     stage = str(job.get("stage") or "")
-    return state in ACTIVE_REPORT_JOB_STATES and stage in ACTIVE_REPORT_JOB_STAGES and _report_job_is_reusable(job)
+    return state in ACTIVE_REPORT_JOB_STATES and (stage in ACTIVE_REPORT_JOB_STAGES or job.get("kind") == "report_source_refresh") and _report_job_is_reusable(job)
 
 
 def _report_job_is_finished_refresh(job: dict[str, Any]) -> bool:
