@@ -72,7 +72,15 @@ def test_pnl_supports_operative_and_final_states(monkeypatch):
     assert final_payload["blockerIds"] == []
 
 
-def test_ads_weak_attribution_stays_campaign_level_and_not_sku_level():
+def test_ads_weak_attribution_stays_campaign_level_and_not_sku_level(monkeypatch):
+    metrics = {"adSpendKopecks": 500, "impressions": 100, "clicks": 10,
+               "cartAdds": 3, "ordersCount": 2, "ordersKopecks": 10_000}
+    cache = {"aggregates": {
+        "campaign-only": {"campaignId": 55, **metrics},
+        "101": {"nmId": 101, "campaignId": 56, **metrics},
+    }}
+    monkeypatch.setattr("app.wb_reports_sprint_d.get_source_cache", lambda *_args, **_kwargs: cache)
+    monkeypatch.setattr("app.wb_reports_sprint_d.list_source_cache_ranges_by_prefix", lambda *_args, **_kwargs: [])
     api = client()
 
     campaign = api.get(

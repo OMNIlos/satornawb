@@ -1349,6 +1349,7 @@ def _build_cached_ads_snapshot(
     ads_cache = _period_cache(organization_id, "ads", date_from, date_to)
     aggregates = _cache_aggregates(ads_cache)
     rows: list[AdsAttributionRow] = []
+    unallocated = False
     totals = {
         "ad_spend_kopecks": 0,
         "impressions": 0,
@@ -1363,27 +1364,33 @@ def _build_cached_ads_snapshot(
         nm_id = _int_or_zero(aggregate.get("nmId") or aggregate.get("nmID") or raw_key)
         campaign_id_raw = aggregate.get("campaignId") or aggregate.get("advertId") or aggregate.get("advert_id")
         campaign_id = str(campaign_id_raw) if campaign_id_raw not in (None, "") else None
-        ad_spend = _nonnegative_int(aggregate.get("adSpendKopecks") or aggregate.get("spendKopecks") or aggregate.get("sumKopecks"))
-        impressions = _nonnegative_int(aggregate.get("adImpressions") or aggregate.get("impressions") or aggregate.get("views"))
-        clicks = _nonnegative_int(aggregate.get("adClicks") or aggregate.get("clicks"))
-        cart_adds = _nonnegative_int(aggregate.get("adCartAdds") or aggregate.get("cartAdds") or aggregate.get("cartCount") or aggregate.get("baskets"))
-        orders_count = _nonnegative_int(aggregate.get("adOrders") or aggregate.get("ordersCount") or aggregate.get("orderCount") or aggregate.get("orders"))
-        orders_kopecks = _nonnegative_int(aggregate.get("adSalesKopecks") or aggregate.get("ordersKopecks") or aggregate.get("orderSumKopecks") or aggregate.get("salesKopecks"))
+        ad_spend = _first_nonnegative_int_or_none(aggregate, "adSpendKopecks", "spendKopecks", "sumKopecks")
+        impressions = _first_nonnegative_int_or_none(aggregate, "adImpressions", "impressions", "views")
+        clicks = _first_nonnegative_int_or_none(aggregate, "adClicks", "clicks")
+        cart_adds = _first_nonnegative_int_or_none(aggregate, "adCartAdds", "cartAdds", "cartCount", "baskets")
+        orders_count = _first_nonnegative_int_or_none(aggregate, "adOrders", "ordersCount", "orderCount", "orders")
+        orders_kopecks = _first_nonnegative_int_or_none(aggregate, "adSalesKopecks", "ordersKopecks", "orderSumKopecks", "salesKopecks")
         if not any((nm_id > 0, campaign_id, ad_spend, impressions, clicks, cart_adds, orders_count, orders_kopecks)):
             continue
-        totals["ad_spend_kopecks"] += ad_spend
-        totals["impressions"] += impressions
-        totals["clicks"] += clicks
-        totals["cart_adds"] += cart_adds
-        totals["orders_count"] += orders_count
-        totals["orders_kopecks"] += orders_kopecks
+        if group_by == "sku" and nm_id <= 0:
+            unallocated = True
+            continue
+        for key, value in (
+            ("ad_spend_kopecks", ad_spend), ("impressions", impressions),
+            ("clicks", clicks), ("cart_adds", cart_adds),
+            ("orders_count", orders_count), ("orders_kopecks", orders_kopecks),
+        ):
+            if value is None:
+                totals.pop(key, None)
+            elif key in totals:
+                totals[key] += value
         sku_id = str(nm_id) if nm_id > 0 else None
         rows.append(
             AdsAttributionRow(
                 campaign_id=campaign_id,
                 sku_id=sku_id,
                 attribution_level="campaign_sku" if sku_id and campaign_id else ("exact_sku" if sku_id else "campaign_only"),
-                confidence="high" if ad_spend or orders_count else "medium",
+                confidence="high" if sku_id and (ad_spend or orders_count) else "medium",
                 ad_spend_kopecks=ad_spend,
                 impressions=impressions,
                 clicks=clicks,
@@ -1397,10 +1404,19 @@ def _build_cached_ads_snapshot(
             )
         )
     has_any_data = bool(rows)
+    blockers = []
+    if unallocated:
+        blockers.append("WB_ADS_SKU_ATTRIBUTION_INCOMPLETE")
+    if has_any_data and len(totals) < 6:
+        blockers.append("WB_ADS_METRICS_INCOMPLETE")
+    if not has_any_data and not unallocated:
+        blockers.append("WB_ADS_CACHE_EMPTY")
+    if blockers:
+        blockers.insert(0, "WB-02")
     return AdsAttributionSnapshot(
-        source_status="fresh" if has_any_data else "blocked",
-        confidence="high" if has_any_data else "blocked",
-        blocker_ids=[] if has_any_data else ["WB_ADS_CACHE_EMPTY"],
+        source_status=("partial" if blockers else "fresh") if has_any_data else "blocked",
+        confidence=("medium" if blockers else "high") if has_any_data else "blocked",
+        blocker_ids=blockers,
         source_evidence=_evidence(
             "wb-ads-attribution-cache",
             "wb_api",
@@ -1428,10 +1444,11 @@ def build_ads_performance_report(
         group_by=group_by,
     )
 
-    ad_spend = snapshot.totals.get("ad_spend_kopecks")
-    orders_kopecks = snapshot.totals.get("orders_kopecks")
-    drr_pct = _calc_drr_pct(ad_spend or 0, orders_kopecks or 0)
-    roi_pct = _calc_roi_pct(ad_spend or 0, orders_kopecks or 0)
+    totals = snapshot.totals if snapshot.rows else {}
+    ad_spend = totals.get("ad_spend_kopecks")
+    orders_kopecks = totals.get("orders_kopecks")
+    drr_pct = _calc_drr_pct(ad_spend, orders_kopecks) if ad_spend is not None and orders_kopecks else None
+    roi_pct = _calc_roi_pct(ad_spend, orders_kopecks) if ad_spend and orders_kopecks is not None else None
     romi_pct = roi_pct
 
     blocker_ids = snapshot.blocker_ids
@@ -1445,47 +1462,22 @@ def build_ads_performance_report(
             rowId=f"{group_by}-{row.campaign_id or 'unknown'}-{row.sku_id or index}",
             campaignId=row.campaign_id,
             skuId=row.sku_id,
-            brandId="brand-satorna",
-            managerId="maria",
+            brandId=None,
+            managerId=None,
             adSpendKopecks=ad_spend_row,
             impressions=row.impressions,
             clicks=row.clicks,
             cartAdds=row.cart_adds,
             ordersCount=row.orders_count,
             ordersKopecks=orders_row,
-            drrPct=_calc_drr_pct(ad_spend_row or 0, orders_row or 0),
-            romiPct=_calc_roi_pct(ad_spend_row or 0, orders_row or 0),
-            roiPct=_calc_roi_pct(ad_spend_row or 0, orders_row or 0),
+            drrPct=_calc_drr_pct(ad_spend_row, orders_row) if ad_spend_row is not None and orders_row else None,
+            romiPct=_calc_roi_pct(ad_spend_row, orders_row) if ad_spend_row and orders_row is not None else None,
+            roiPct=_calc_roi_pct(ad_spend_row, orders_row) if ad_spend_row and orders_row is not None else None,
             attributionLevel=row.attribution_level,
             confidence=row.confidence,
         )
 
     rows = [to_row(index, row) for index, row in enumerate(snapshot.rows, start=1)]
-    if not rows:
-        fallback_attribution: Literal["exact_sku", "campaign_sku", "campaign_only", "unknown"] = (
-            "campaign_sku" if group_by == "sku" else "campaign_only"
-        )
-        fallback_confidence: Literal["high", "medium", "low", "blocked"] = "medium" if group_by == "sku" else "low"
-        rows = [
-            AdsPerformanceRow(
-                rowId=f"{group_by}-fallback",
-                campaignId="unattributed",
-                skuId="FBBT_42" if group_by == "sku" else None,
-                brandId="brand-satorna",
-                managerId="maria",
-                adSpendKopecks=None,
-                impressions=None,
-                clicks=None,
-                cartAdds=None,
-                ordersCount=None,
-                ordersKopecks=None,
-                drrPct=None,
-                romiPct=None,
-                roiPct=None,
-                attributionLevel=fallback_attribution,
-                confidence=fallback_confidence,
-            )
-        ]
 
     return AdsPerformanceResponse(
         sourceStatus=source_status,
@@ -1497,10 +1489,10 @@ def build_ads_performance_report(
         groupBy=group_by,
         totals=AdsTotals(
             adSpendKopecks=ad_spend,
-            impressions=snapshot.totals.get("impressions"),
-            clicks=snapshot.totals.get("clicks"),
-            cartAdds=snapshot.totals.get("cart_adds"),
-            ordersCount=snapshot.totals.get("orders_count"),
+            impressions=totals.get("impressions"),
+            clicks=totals.get("clicks"),
+            cartAdds=totals.get("cart_adds"),
+            ordersCount=totals.get("orders_count"),
             ordersKopecks=orders_kopecks,
             drrPct=drr_pct,
             romiPct=romi_pct,
