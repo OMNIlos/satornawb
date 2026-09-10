@@ -111,6 +111,10 @@ def _preview_body(body, external):
     ):
         raise AccountOrderStatusError()
     rows, sanitized, seen = [], [], set()
+    # The existing adapter's evidenced aliases are row-level. Do not silently
+    # ignore a conflicting/new top-level owner shape or assign it buyer semantics.
+    if any(key in body for key in ("accountId", "userId", "sellerId")):
+        raise AccountOrderStatusError()
     for raw in body["orders"]:
         if type(raw) is not dict:
             raise AccountOrderStatusError()
@@ -120,9 +124,9 @@ def _preview_body(body, external):
         seen.add(identity)
         evidence = "credential_scope"
         for key in ("accountId", "userId", "sellerId"):
-            candidate = raw.get(key)
-            if candidate is None:
+            if key not in raw:
                 continue
+            candidate = raw[key]
             if type(candidate) not in (str, int) or str(candidate) != external:
                 raise AccountOrderStatusError()
             evidence = "provider_account_id"

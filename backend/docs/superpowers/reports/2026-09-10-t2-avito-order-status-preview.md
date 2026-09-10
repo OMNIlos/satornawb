@@ -67,11 +67,14 @@ fixed page size 20, no hidden auto-pagination/status filters. Responses always
 Even `hasMore=false` on page 1 remains `coverageState=partial`: this is not account
 completeness, a publication witness or a full canonical queue.
 
-Provider `accountId`/`userId`/`sellerId`, if non-null, must match the captured account
-exactly (lossless integer or exact string; no bool/float coercion). When absent/null,
+Provider row-level `accountId`/`userId`/`sellerId`, if present, must match the captured account
+exactly (lossless integer or exact string; no bool/float coercion). When absent,
 `credential_scope` explicitly means the request used that bound account credential,
 not that the provider returned an account-ID field. Duplicate order IDs, non-string
-IDs, malformed rows or more than 20 rows reject the page.
+IDs, malformed rows or more than 20 rows reject the page. Present-null aliases
+are invalid, not missing evidence. Top-level ownership aliases are not part of
+the observed existing adapter contract; any such field rejects the response until
+its source semantics are proved. No buyer-field ownership is invented.
 
 Timestamp projection accepts actual calendar-valid ISO date/time with seconds,
 optional 1–9 fractional digits and Z or valid hour/minute offset, preserving the
@@ -161,3 +164,14 @@ Independent local critic pass checked missing-status fabrication, float/default
 facts, source timestamp normalization, page-completeness overclaim and sensitive
 projection. No real credentials/.env, provider, production, pricing, OAuth, deploy,
 push, scheduler or business-rule mutations occurred. Existing flags remain unchanged.
+
+## ROOT review follow-up
+
+Present-null row ownership aliases are no longer treated as absent; unproven
+top-level ownership aliases fail closed. HTTP account/page numeric text must be
+canonical, without leading zeros. Frozen DTO shape is unchanged.
+Regression RED: 12 failed / 3 passed (null alias, three top aliases across three
+values, two numeric request cases). Final 75 offline passed (44 new + 31 existing),
+2 existing warnings, 1.69s, exit 0. Ruff/compile/diff checks succeeded. No extra
+PG run was needed for these pure transport/query guards; original 15 PG evidence
+is unchanged. No legacy files, schema, config or activation changes.

@@ -98,7 +98,7 @@ def test_missing_status_is_not_an_invented_raw_unknown():
         ).fetch_preview(date_from=date(2026, 9, 1), page=1)
 
 
-@pytest.mark.parametrize("account", ["999", True, 123.0])
+@pytest.mark.parametrize("account", ["999", True, 123.0, None])
 def test_present_foreign_or_lossy_account_identity_rejected(account):
     body = payload()
     body["orders"][0]["accountId"] = account
@@ -106,6 +106,25 @@ def test_present_foreign_or_lossy_account_identity_rejected(account):
         BoundedAvitoOrderStatusClient(
             resolved(), transport=httpx.MockTransport(lambda req: response(body))
         ).fetch_preview(date_from=date(2026, 9, 1), page=1)
+
+
+@pytest.mark.parametrize("alias", ["accountId", "userId", "sellerId"])
+@pytest.mark.parametrize("value", ["123", "999", None])
+def test_unproven_top_level_owner_alias_is_not_silently_ignored(alias, value):
+    body = payload()
+    body[alias] = value
+    with pytest.raises(AccountOrderStatusError):
+        BoundedAvitoOrderStatusClient(
+            resolved(), transport=httpx.MockTransport(lambda req: response(body))
+        ).fetch_preview(date_from=date(2026, 9, 1), page=1)
+
+
+@pytest.mark.parametrize("account,page", [("02", "1"), ("2", "01")])
+def test_noncanonical_numeric_request_is_rejected(monkeypatch, account, page):
+    result = client(monkeypatch).get(
+        f"/api/v2/avito/accounts/{account}/orders/status-preview?dateFrom=2026-09-01&page={page}"
+    )
+    assert result.status_code == 422
 
 
 @pytest.mark.parametrize(

@@ -25,6 +25,7 @@ def make_account_avito_order_status_router(*, service_dependency):
                 or not account_id.isdecimal()
                 or len(account_id) > 10
                 or not 0 < int(account_id) < 2**31
+                or account_id != str(int(account_id))
             ):
                 raise AccountOrderStatusError("AVITO_ORDER_STATUS_INVALID_REQUEST")
             try:
@@ -38,6 +39,8 @@ def make_account_avito_order_status_router(*, service_dependency):
                 ):
                     raise ValueError
                 page = int(raw_page)
+                if raw_page != str(page):
+                    raise ValueError
                 validate_preview_request(start, page)
             except ValueError:
                 raise AccountOrderStatusError(
