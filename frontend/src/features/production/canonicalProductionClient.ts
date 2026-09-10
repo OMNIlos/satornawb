@@ -111,6 +111,22 @@ export function createCanonicalProductionClient(token: string, scope: Production
       recovery = null
       return { item, previousOutcome: pending.outcome, commandOutcomeVerified: false as const }
     },
+    async readbackUnknownCreate() {
+      const pending = recovery
+      if (!pending || pending.operation !== 'create' || pending.outcome !== 'unknown' || pending.workItemId !== null) throw new ProductionClientError('readback-required')
+      currentItem = null
+      const item = await request(`${base}/by-order-item/${pending.orderItemId}?expectedSourceItemVersion=${pending.sourceItemVersion}`, value => {
+        const result = productionReadResponse.parse(value).item
+        if (result.organizationId !== captured.organizationId || result.marketplaceAccountId !== captured.marketplaceAccountId
+          || result.orderItemId !== pending.orderItemId || result.sourceItemVersion !== pending.sourceItemVersion) throw new Error()
+        return Object.freeze(result)
+      })
+      if (!active()) throw new ProductionClientError('stale')
+      currentItem = item; recovery = null
+      // Committed coherent state exists; this does not attribute creation to the
+      // unknown POST or authorize replay of its already-used command handle.
+      return { item, previousOutcome: 'unknown' as const, commandOutcomeVerified: false as const }
+    },
     prepareCreate(input: ProductionCreateInput) {
       authoring(); const value = validate(() => productionCreateInput.parse(input))
       return prepare({ path: base, body: JSON.stringify(value), used: false,
