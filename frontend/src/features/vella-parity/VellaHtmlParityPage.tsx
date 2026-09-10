@@ -6132,32 +6132,14 @@ function showAbcColumnControls(event: MouseEvent<HTMLButtonElement>) {
   window.toggleReportColumns?.(event.currentTarget)
 }
 
-function abcRowMatchesFilter(row: HTMLElement, state: AbcFilterState) {
-  const chip = state.chip || 'Все товары'
-  const query = state.query || ''
-  const manager = state.manager || 'all'
-  const status = state.status || 'all'
-  const promo = state.promo || 'all'
-  const abc = state.abc || 'all'
-  const managerKey = row.dataset.managerId === 'unassigned' ? '' : row.dataset.managerId || ''
-
-  const chipOk = chip === 'Все товары' || (row.dataset.filter || '').split('|').includes(chip)
-  const searchOk = !query || (row.dataset.search || '').includes(query)
-  const managerOk = !manager || manager === 'all' || (manager === 'unassigned' ? !managerKey : managerKey === manager)
-  const statusOk = status === 'all' || row.dataset.status === status
-  const promoOk = promo === 'all' || row.dataset.promo === promo
-  const abcOk = abc === 'all' || row.dataset.abc === abc
-  return chipOk && searchOk && managerOk && statusOk && promoOk && abcOk
-}
-
-function updateAbcSummaryFromRows(rows: HTMLElement[], state: AbcFilterState) {
-  const ordersKnown = rows.every((row) => row.dataset.ordersKnown !== 'false')
-  const profitKnown = rows.every((row) => row.dataset.profitKnown !== 'false')
-  const adsKnown = rows.every((row) => row.dataset.adsKnown !== 'false')
-  const orderCount = rows.reduce((sum, row) => sum + Number(row.dataset.ordersCount || 0), 0)
-  const orderRub = rows.reduce((sum, row) => sum + Number(row.dataset.ordersRub || 0), 0)
-  const profitRub = rows.reduce((sum, row) => sum + Number(row.dataset.profitRub || 0), 0)
-  const adsRub = rows.reduce((sum, row) => sum + Number(row.dataset.adsRub || 0), 0)
+function updateAbcSummaryFromRows(rows: AbcReportRow[], state: AbcFilterState) {
+  const ordersKnown = rows.every((row) => row.ordersKnown !== false)
+  const profitKnown = rows.every((row) => row.profitKnown !== false)
+  const adsKnown = rows.every((row) => row.adsKnown !== false)
+  const orderCount = rows.reduce((sum, row) => sum + parseAbcFirstNumber(row.orders), 0)
+  const orderRub = rows.reduce((sum, row) => sum + parseAbcSecondNumber(row.orders), 0)
+  const profitRub = rows.reduce((sum, row) => sum + parseAbcNumber(row.net), 0)
+  const adsRub = rows.reduce((sum, row) => sum + parseAbcFirstNumber(row.ads), 0)
   const marginPct = orderRub ? (profitRub / orderRub) * 100 : NaN
   const filterLabel = state.chip === 'Все товары' && !state.query
     ? 'все товары'
@@ -6200,13 +6182,7 @@ function applyAbcFilterFromDom(state: AbcFilterState = {}) {
   state.promo = state.promo || 'all'
   state.abc = state.abc || 'all'
 
-  const visibleRows: HTMLElement[] = []
-  tab.querySelectorAll<HTMLElement>('[data-report-row]').forEach((row) => {
-    const visible = abcRowMatchesFilter(row, state)
-    row.style.display = visible ? '' : 'none'
-    if (visible) visibleRows.push(row)
-  })
-  updateAbcSummaryFromRows(visibleRows, state)
+  window.__vellaPublishAbcRowsSnapshot?.()
 }
 
 function abcRowCell(cellName: string, content: string, leadingAttributes = '', trailingAttributes = '') {
@@ -6330,7 +6306,8 @@ function installAbcRowRendererBridge() {
     };
     window.__vellaPublishAbcRowsSnapshot = function(){
       const sourceRows = Array.isArray(window.__vellaAbcLiveRows) ? window.__vellaAbcLiveRows : [];
-      const rows = window.__vellaSortAbcRows(sourceRows, normalizeReportSortStack('abc'));
+      const filter = reportFilterState.abc;
+      const rows = window.__vellaSortAbcRows(sourceRows.filter(function(row){ return abcDataMatchesFilter(row, filter); }), normalizeReportSortStack('abc'));
       const originalIndexes = new Map(sourceRows.map(function(row, index){ return [row, index]; }));
       window.__vellaAbcRowsState = {
         rows: rows.map(function(row){
@@ -6341,7 +6318,8 @@ function installAbcRowRendererBridge() {
             html: ''
           };
         }),
-        count: rows.length
+        count: rows.length,
+        filter: { ...filter }
       };
       window.__vellaReactRenderAbcRows?.();
       window.dispatchEvent(new CustomEvent('vella:abc-rows-updated'));
@@ -6476,13 +6454,15 @@ function DigestBrandFilterIsland({ replacementKey }: { replacementKey: string })
 }
 
 function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
-  const { accessToken } = useAuth()
+  const { accessToken, cabinetMe } = useAuth()
   const location = useLocation()
   const routeTab = resolveParityRouteTarget(location.pathname, location.search).tab
   const [activeTab, setActiveTab] = useState(routeTab)
   const isAvitoTab = activeTab.startsWith('avito-')
   const isLiveWbPeriod = usesLiveWbPeriodControl(activeTab)
   const activeReportPeriodKey = reportPeriodKeyForTab(activeTab)
+  const canonicalPeriod = (activeTab === 'abc' || activeTab === 'pnl')
+    && resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId) !== null
   const readActivePeriod = () => activeReportPeriodKey ? readReportPeriodState(activeReportPeriodKey) : readProductsPeriodState()
   const [productsPeriod, setProductsPeriod] = useState(readActivePeriod)
   const [customFromIso, setCustomFromIso] = useState(() => readActivePeriod().fromIso)
@@ -6510,10 +6490,10 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
       const date = addLocalDays(gridStart, index)
       const iso = toLocalIsoDate(date)
       const coverageDay = coverageByDate.get(iso)
-      const state = coverageDay?.state ?? (coverageLoading ? 'loading' : 'missing')
+      const state = canonicalPeriod ? 'unknown' : coverageDay?.state ?? (coverageLoading ? 'loading' : 'missing')
       const inAllowedWindow = iso >= minCustomIso && iso <= todayIso
       const inCurrentMonth = date.getMonth() === firstOfMonth.getMonth()
-      const selectable = Boolean(coverageDay) && state !== 'missing' && inAllowedWindow
+      const selectable = inAllowedWindow && (canonicalPeriod || Boolean(coverageDay) && state !== 'missing')
       return {
         iso,
         label: String(date.getDate()),
@@ -6527,7 +6507,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
         isTo: iso === customToIso,
       }
     })
-  }, [calendarMonthIso, coverageByDate, coverageLoading, customFromIso, customToIso, minCustomIso, todayIso])
+  }, [calendarMonthIso, canonicalPeriod, coverageByDate, coverageLoading, customFromIso, customToIso, minCustomIso, todayIso])
   const canGoPrevMonth = addIsoMonths(calendarMonthIso, -1) >= monthStartIso(minCustomIso)
   const canGoNextMonth = addIsoMonths(calendarMonthIso, 1) <= monthStartIso(todayIso)
 
@@ -6565,7 +6545,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
   }, [activeReportPeriodKey, activeTab, isLiveWbPeriod])
 
   useEffect(() => {
-    if (!isLiveWbPeriod || !accessToken) {
+    if (!isLiveWbPeriod || !accessToken || canonicalPeriod) {
       setCoverage(null)
       setCoverageLoading(false)
       return
@@ -6589,7 +6569,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
       controller.abort()
       window.clearTimeout(timer)
     }
-  }, [accessToken, calendarOpen, coverageVersion, isLiveWbPeriod, minCustomIso, todayIso])
+  }, [accessToken, calendarOpen, canonicalPeriod, coverageVersion, isLiveWbPeriod, minCustomIso, todayIso])
 
   useEffect(() => {
     if (!isLiveWbPeriod) return
@@ -6849,7 +6829,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
                         ? `; нет ${day.coverageDay.missingSources.join(', ')}`
                         : ''
                       const title = day.selectable
-                        ? `${day.iso}: ${productsCoverageStateLabel(day.state)}${missingSources}`
+                        ? `${day.iso}: ${canonicalPeriod ? 'выбрать дату отчёта' : productsCoverageStateLabel(day.state) + missingSources}`
                         : coverageLoading
                           ? `${day.iso}: загружаем данные`
                           : `${day.iso}: нет данных еще`
@@ -6878,9 +6858,11 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
                     })}
                   </div>
                   <div className="products-cache-calendar-foot">
+                    {canonicalPeriod ? <span>Наличие данных проверяется при загрузке отчёта</span> : <>
                     <span><i className="is-complete" /> есть</span>
                     <span><i className="is-partial" /> частично</span>
                     <span><i className="is-missing" /> нет данных еще</span>
+                    </>}
                   </div>
                   {coverageLoading ? <div className="products-cache-calendar-summary">Загружаем календарь данных…</div> : null}
                 </div>
@@ -8307,10 +8289,15 @@ function PnlToolbarIsland({
   replacementKey,
   mode,
   onModeChange,
+  query, onQueryChange, manager, onManagerChange,
 }: {
   replacementKey: string
   mode: PnlReportMode
   onModeChange: (mode: PnlReportMode) => void
+  query: string
+  onQueryChange: (query: string) => void
+  manager: string
+  onManagerChange: (manager: string) => void
 }) {
   const chips: Array<{ label: string; mode: PnlReportMode }> = [
     { label: 'Операционный 1С', mode: 'operational' },
@@ -8322,7 +8309,7 @@ function PnlToolbarIsland({
       className="toolbar"
       data-vella-island="pnl-toolbar"
       data-vella-island-status="explicit-jsx"
-      data-vella-runtime-binding="applyGenericReportFilter"
+      data-vella-runtime-binding="react-pnl-filter"
       data-vella-event-owner="react"
     >
       <div className="search">
@@ -8335,7 +8322,8 @@ function PnlToolbarIsland({
           placeholder={mode === 'operational' ? 'Статья 1С, назначение или сумма...' : 'SKU для финансового разбора...'}
           data-demo-search-bound="1"
           data-vella-react-handlers="oninput"
-          onInput={(event) => applyGenericReportFilterFromElement(event.currentTarget)}
+          value={query}
+          onInput={(event) => onQueryChange(event.currentTarget.value)}
         />
       </div>
       <div className="chips">
@@ -8345,10 +8333,7 @@ function PnlToolbarIsland({
             className={mode === chip.mode ? 'chip active' : 'chip'}
             data-demo-chip-bound="1"
             data-vella-react-handlers="onclick"
-            onClick={(event) => {
-              activateGenericReportChip(event.currentTarget)
-              onModeChange(chip.mode)
-            }}
+            onClick={() => onModeChange(chip.mode)}
           >
             {chip.label}
           </div>
@@ -8358,10 +8343,10 @@ function PnlToolbarIsland({
         <select
           className="adv-select"
           style={{ width: 'auto' }}
-          defaultValue="all"
+          value={manager}
           data-demo-select-bound="1"
           data-vella-react-handlers="onchange"
-          onChange={updateGenericReportSelect}
+          onChange={(event) => onManagerChange(event.currentTarget.value)}
         >
           <option value="all">Все менеджеры</option>
           <option value="mine">Мои SKU</option>
@@ -12257,13 +12242,18 @@ function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as 
   )
 }
 
-function PnlLiveTableShellIsland({ replacementKey, state, mode = 'financial' }: { replacementKey: string; state: PnlLiveState; mode?: PnlReportMode }) {
-  const rows = state.status === 'ready' ? getPnlRows(state.report) : []
+function PnlLiveTableShellIsland({ replacementKey, state, query, manager, mode = 'financial' }: { replacementKey: string; state: PnlLiveState; query: string; manager: string; mode?: PnlReportMode }) {
+  const allRows = state.status === 'ready' ? getPnlRows(state.report) : []
+  const needle = query.trim().toLocaleLowerCase('ru-RU')
+  // The P&L DTO has no manager assignment; its rows are unassigned.
+  const rows = allRows.filter((row) => (manager === 'all' || manager === 'unassigned')
+    && (!needle || [row.articleId, row.sku, row.productName, row.label, row.category, row.nmId, row.comment]
+      .join(' ').toLocaleLowerCase('ru-RU').includes(needle)))
   const renderWindow = useReportTableRenderLimit(rows.length)
   const visibleRows = rows.slice(0, renderWindow.limit)
   const showOneCColumns = mode === 'operational'
   const isCanonical = state.status === 'ready' && !!state.report.canonical
-  if (state.status !== 'ready' || rows.length === 0) return null
+  if (state.status !== 'ready' || allRows.length === 0) return null
   return (
     <div
       key={replacementKey}
@@ -12328,11 +12318,12 @@ function PnlLiveTableShellIsland({ replacementKey, state, mode = 'financial' }: 
               {showOneCColumns ? <td className="num">{formatPnlKopecks(row.overheadKopecks)}</td> : null}
               <td className="num">{formatPnlKopecks(isCanonical ? row.profitAfterLoyaltyKopecks : row.netProfitKopecks)}</td>
               <td className="num">{formatPnlPercent(row.marginPct)}</td>
-              <td>{isCanonical ? canonicalPnlRowStatus(row) : row.sourceStatus || row.confidence ? 'готово' : 'данные загружены'}</td>
+              <td>{isCanonical ? canonicalPnlRowStatus(row) : row.sourceStatus === 'blocked' || row.confidence === 'blocked' ? 'требует проверки' : row.sourceStatus === 'partial' || row.confidence === 'partial' ? 'частично' : row.sourceStatus === 'ready' ? 'готово' : row.sourceStatus ?? 'данные загружены'}</td>
               <td>{row.comment ?? ''}</td>
             </tr>
             )
           })}
+          {rows.length === 0 ? <tr><td colSpan={showOneCColumns ? 14 : 13}>Нет позиций по выбранным фильтрам</td></tr> : null}
           <ReportTableMoreRow colSpan={showOneCColumns ? 14 : 13} shown={visibleRows.length} total={rows.length} onMore={renderWindow.loadMore} />
         </tbody>
       </table>
@@ -12847,6 +12838,8 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
   // no source of data and only ever renders its "ждём 1С" placeholder.  Open on
   // the WB financial report instead; the toggle still exposes both.
   const [pnlMode, setPnlMode] = useState<PnlReportMode>('financial')
+  const [query, setQuery] = useState('')
+  const [manager, setManager] = useState('all')
   const periodFromIso = periodState.fromIso
   const periodToIso = periodState.toIso
   const pnlSource: BackgroundReportSource = pnlMode === 'operational' ? 'operational' : 'financial'
@@ -13204,6 +13197,8 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
         replacementKey={`${replacementKey}-toolbar`}
         mode={pnlMode}
         onModeChange={setPnlMode}
+        query={query} onQueryChange={setQuery}
+        manager={manager} onManagerChange={setManager}
       />
       <PnlLiveSourceStripIsland replacementKey={`${replacementKey}-source`} state={state} period={periodState} source={pnlSource} />
       {isOperationalPnl ? (
@@ -13225,7 +13220,7 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
         pnlHasRows ? (
           <>
             <PnlLiveWorkbenchIsland replacementKey={`${replacementKey}-workbench`} state={state} />
-            <PnlLiveTableShellIsland replacementKey={`${replacementKey}-table`} state={state} mode="financial" />
+            <PnlLiveTableShellIsland replacementKey={`${replacementKey}-table`} state={state} query={query} manager={manager} mode="financial" />
           </>
         ) : (
           <ReportDataStateIsland
@@ -13966,7 +13961,7 @@ function useAbcRowsSnapshot() {
 
   useEffect(() => {
     const id = window.setTimeout(() => {
-      window.applyAbcFilter?.()
+      updateAbcSummaryFromRows(snapshot.rows.map((item) => item.row), snapshot.filter ?? {})
       window.initTooltips?.()
       window.enhanceA11yLabels?.()
     }, 0)
@@ -13979,7 +13974,7 @@ function useAbcRowsSnapshot() {
 function AbcTableBodyIsland({ replacementKey }: { replacementKey: string }) {
   const snapshot = useAbcRowsSnapshot()
   const [renderLimit, setRenderLimit] = useState(REPORT_TABLE_RENDER_BATCH)
-  useEffect(() => setRenderLimit(REPORT_TABLE_RENDER_BATCH), [snapshot.count])
+  useEffect(() => setRenderLimit(REPORT_TABLE_RENDER_BATCH), [snapshot])
   const visibleRows = snapshot.rows.slice(0, renderLimit)
   const showStatusRow = snapshot.rows.length === 0
 
@@ -16708,6 +16703,7 @@ type AbcRowsSnapshot = {
     html: string
   }>
   count: number
+  filter?: AbcFilterState
 }
 
 type ThresholdPreviewSnapshot = {
