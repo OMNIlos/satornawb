@@ -17,25 +17,42 @@ export async function readCanonicalMarketplaceAccounts(token: string, signal: Ab
   const controller = new AbortController(), abort = () => controller.abort()
   signal.addEventListener('abort', abort, { once: true })
   const timeout = setTimeout(abort, 20_000)
+  let response: Response | undefined, reader: ReadableStreamDefaultReader<Uint8Array> | undefined, complete = false
   try {
-    const response = await fetcher(buildApiUrl(`/api/v2/cabinet/marketplace-accounts${provider ? `?provider=${provider}` : ''}`), {
+    response = await fetcher(buildApiUrl(`/api/v2/cabinet/marketplace-accounts${provider ? `?provider=${provider}` : ''}`), {
       cache: 'no-store', credentials: 'omit', redirect: 'error', signal: controller.signal,
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
     })
-    if (response.status !== 200) { await response.body?.cancel(); throw new Error('ACCOUNT_DISCOVERY_UNAVAILABLE') }
+    if (response.status !== 200) throw new Error('ACCOUNT_DISCOVERY_UNAVAILABLE')
     if (response.headers.get('content-type')?.split(';')[0].trim() !== 'application/json' || !response.body) throw new Error('ACCOUNT_DISCOVERY_INVALID')
-    const reader = response.body.getReader(), decoder = new TextDecoder('utf-8', { fatal: true })
+    reader = response.body.getReader()
+    const decoder = new TextDecoder('utf-8', { fatal: true })
     let bytes = 0, text = ''
     while (true) {
       const chunk = await reader.read()
       if (chunk.done) break
       bytes += chunk.value.byteLength
-      if (bytes > 1_048_576) { await reader.cancel(); throw new Error('ACCOUNT_DISCOVERY_INVALID') }
+      if (bytes > 1_048_576) throw new Error('ACCOUNT_DISCOVERY_INVALID')
       text += decoder.decode(chunk.value, { stream: true })
     }
     if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError')
-    return parseCanonicalMarketplaceAccounts(JSON.parse(text + decoder.decode())?.data, provider)
-  } finally { clearTimeout(timeout); signal.removeEventListener('abort', abort) }
+    const accounts = parseCanonicalMarketplaceAccounts(JSON.parse(text + decoder.decode())?.data, provider)
+    complete = true
+    return accounts
+  } catch (error) {
+    if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError')
+    if (error instanceof Error && error.message === 'ACCOUNT_DISCOVERY_UNAVAILABLE') throw error
+    throw new Error('ACCOUNT_DISCOVERY_INVALID')
+  } finally {
+    if (!complete) {
+      abort()
+      // Cleanup failures must not replace the sanitized response/read error.
+      try { if (reader) await reader.cancel(); else await response?.body?.cancel() } catch { /* already failed transport */ }
+    }
+    try { reader?.releaseLock() } catch { /* preserve the original read result */ } finally {
+      clearTimeout(timeout); signal.removeEventListener('abort', abort)
+    }
+  }
 }
 
 /** Metadata discovery only. Consumers derive scope; server capabilities authorize actions. */
