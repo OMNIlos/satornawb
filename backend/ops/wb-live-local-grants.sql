@@ -21,6 +21,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
  iam_memberships,marketplace_accounts,marketplace_account_credentials TO wb_live_api;
 GRANT SELECT,INSERT,UPDATE ON wb_live_sync_jobs,wb_live_sync_sources,wb_live_sync_requests TO wb_live_api;
 GRANT SELECT ON wb_live_products,wb_live_product_sizes,wb_live_pages TO wb_live_api;
+-- Historical overrides remain readable after offer unmapping; no writer rights.
+GRANT SELECT ON wb_repricing_sku_override_heads,wb_repricing_sku_override_versions TO wb_live_api;
 -- Inbox discovery/list and recipient receipts only; no notification production.
 GRANT SELECT ON notification_in_app_events,notification_in_app_receipts,
  review_facts,review_observations,review_sync_runs_v2 TO wb_live_api;
