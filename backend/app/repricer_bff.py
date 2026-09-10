@@ -2040,6 +2040,8 @@ def _request_or_raise(client: RateLimitedWbApiClient, request: WbApiRequest) -> 
         response = client.request(request)
         last_response = response
         if response.ok:
+            if response.statusCode == 204 and request.path == "/api/finance/v1/sales-reports/detailed":
+                return []
             return _ensure_ok(response.data, request.path)
         if not _is_retryable_transport_response(response) or attempt >= _WB_TRANSPORT_MAX_ATTEMPTS - 1:
             _raise_upstream_error(response)
@@ -3477,7 +3479,7 @@ def fetch_finance_report_aggregates(
     limit = 100_000
     rrd_id = 0
     rows: list[dict[str, Any]] = []
-    seen_rrd_ids: set[int] = set()
+    seen_rrd_ids: dict[int, dict[str, Any]] = {}
     duplicate_rows_skipped = 0
     pages_loaded = 0
     while True:
@@ -3496,26 +3498,32 @@ def fetch_finance_report_aggregates(
                 },
             ),
         )
-        raw_rows = payload.get("data", []) if isinstance(payload, dict) else payload
-        page_rows = [item for item in raw_rows if isinstance(item, dict)] if isinstance(raw_rows, list) else []
+        page_rows = payload.get("data") if isinstance(payload, dict) else payload
+        if (
+            not isinstance(page_rows, list)
+            or any(not isinstance(item, dict) for item in page_rows)
+            or isinstance(payload, dict) and payload.get("error") not in (None, False)
+        ):
+            raise HTTPException(status_code=502, detail="WB_FINANCE_INVALID_RESPONSE")
         if not page_rows:
             break
 
         for item in page_rows:
-            item_rrd_id = int(_number_or_none(item.get("rrdId") or item.get("rrd_id")) or 0)
-            if item_rrd_id > 0 and item_rrd_id in seen_rrd_ids:
+            raw_id = _finance_raw_first(item, "rrdId", "rrd_id")
+            item_rrd_id = _finance_int(raw_id) if type(raw_id) in (int, str) else 0
+            if item_rrd_id <= 0:
+                raise HTTPException(status_code=502, detail="WB_FINANCE_INVALID_ROW_ID")
+            if item_rrd_id in seen_rrd_ids:
+                if seen_rrd_ids[item_rrd_id] != item:
+                    raise HTTPException(status_code=502, detail="WB_FINANCE_CONFLICTING_ROWS")
                 duplicate_rows_skipped += 1
                 continue
-            if item_rrd_id > 0:
-                seen_rrd_ids.add(item_rrd_id)
+            seen_rrd_ids[item_rrd_id] = item
             rows.append(item)
         pages_loaded += 1
-        if len(page_rows) < limit:
-            break
-        next_rrd_id = int(_number_or_none(page_rows[-1].get("rrdId") or page_rows[-1].get("rrd_id")) or 0)
-        if next_rrd_id <= 0 or next_rrd_id == rrd_id:
-            break
-        rrd_id = next_rrd_id
+        if item_rrd_id <= rrd_id:
+            raise HTTPException(status_code=502, detail="WB_FINANCE_CURSOR_STALLED")
+        rrd_id = item_rrd_id
 
     result: dict[str, dict[str, Any]] = {}
     global_rows: list[dict[str, Any]] = []
