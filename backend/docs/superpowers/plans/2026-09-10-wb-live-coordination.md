@@ -482,6 +482,48 @@ and explicit history-to-saved-queue wiring. API reads must not acquire publisher
 grants. No production, provider requests, real keys, operational provisioning,
 rollout, printing, exports or remote pushes occurred.
 
+### Snapshot publisher discovery and design gate (base 923ac15)
+
+T3's read-only inventory and ROOT source inspection found no application callers
+of `freeze_orders_view` or composition of `WbHistoryProjectionJobs`. Existing
+history POST initializes capture, while saved Orders GET/UI are already wired.
+The remaining publisher boundary is not a reader/UI rewrite.
+
+T1's proposal, not implementation approval: a separate explicit WB-only command
+with its own restricted identity, original live `sync:run` plus `cabinet:read`
+authority, and a durable immutable idempotency receipt. Never expand API or pinned
+history-projection privileges. Existing snapshot tables have no command key;
+new receipt persistence requires an additive schema contract. No schema or roles
+were changed during this discovery.
+
+Independent critic identified requirements that must be resolved before code:
+
+- Current assembly is an accumulated current-account view, NOT membership scoped
+  to the selected run. Preserve that distinction and validate every contributing
+  run; do not silently describe or change it to a run-specific snapshot.
+- Extract a transaction-owned participant before adding command orchestration.
+  Current freeze owns and commits its root, so wrapping it with a separately
+  committed receipt would leave an atomicity gap. Snapshot and receipt must commit
+  together, with exact participant/source/account/query/result binding; a foreign
+  key to an arbitrary existing snapshot is insufficient.
+- Replay checks fresh authority and exact binding, compares canonical request,
+  and returns the original immutable result. Unknown commit uses authorized
+  same-key readback, not an automatic new snapshot or provider refetch.
+- Bounds must apply before materialization/JSON decoding, including individual
+  and aggregate bytes, parents/items/deadlines/Catalog fanout/contributing runs,
+  and SQL/lock/overall duration. Exceeding a bound rolls back, never truncates.
+  Existing source-page, chunk, HTTP and read-pagination limits do not bound this
+  accumulated view. No configured snapshot resource policy exists at this base.
+  Required versioned injected policy with fail-closed absence is a proposal;
+  operational values must not be invented from synthetic fixtures.
+- Dedicated-role tests must prove exact effective permissions and physical final
+  authority/role fences. Current lock rights on immutable identifiers differ from
+  auth/Catalog timestamp UPDATE capabilities, which are real limited mutations.
+  Zero sequence privileges remain a test requirement, not an established fact.
+
+T1 read-only inventory is complete; no publisher implementation or activation is
+approved by this checkpoint. No production/provider actions or remote operations.
+
 ## Historical deferral (superseded where explicitly resumed above)
 
 Production/printing/KIZ/standalone matcher; new financial formulas/redesign; all 70 historical failures except an actual current-path blocker; broad fault matrix and backup-restore program. Package 2 waits for the real-data first-path acceptance rather than silently proceeding on fixtures.
