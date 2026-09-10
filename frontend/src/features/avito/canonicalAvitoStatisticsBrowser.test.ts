@@ -1,6 +1,8 @@
 import { expect, it } from 'vitest'
 import { chromium } from 'playwright'
 import { createServer } from 'vite'
+import react from '@vitejs/plugin-react'
+import { withSyntheticVite } from '../../test-support/syntheticVite'
 import { fileURLToPath } from 'node:url'
 import { mkdir } from 'node:fs/promises'
 
@@ -23,10 +25,10 @@ it('synthetic Avito statistics: default-off legacy, explicit reads, exact values
   const browser = await chromium.launch({ headless: true })
   try {
     for (const enabled of [false, true]) {
-      const server = await createServer({ root, configFile: `${root}vite.config.ts`, cacheDir: `${screenshots}/vite-cache`,
+      const server = await createServer({ root, configFile: false, envFile: false, resolve: { alias: { '@': `${root}src` } }, cacheDir: `${screenshots}/vite-cache`,
         define: { 'import.meta.env.VITE_CANONICAL_AVITO_STATS_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('') },
         server: { host: '127.0.0.1', port: 0, strictPort: true },
-        plugins: [{ name: 'synthetic-avito-statistics', resolveId(id) { if (id === '/__synthetic-avito.jsx') return '\0synthetic-avito.jsx' },
+        plugins: [react(), { name: 'synthetic-avito-statistics', resolveId(id) { if (id === '/__synthetic-avito.jsx') return '\0synthetic-avito.jsx' },
           load(id) { if (id === '\0synthetic-avito.jsx') return fixture },
           configureServer(vite) { vite.middlewares.use(async (req, res, next) => {
             if (req.url !== '/__synthetic-avito') return next()
@@ -34,6 +36,7 @@ it('synthetic Avito statistics: default-off legacy, explicit reads, exact values
           }) },
         }],
       })
+      await withSyntheticVite(server, `avito-statistics-${enabled}`, async origin => {
       const page = await browser.newPage({ viewport: { width: 1366, height: 900 }, serviceWorkers: 'block' })
       page.setDefaultTimeout(15_000)
       const errors: string[] = [], unexpected: string[] = [], stats: string[] = []
@@ -41,10 +44,6 @@ it('synthetic Avito statistics: default-off legacy, explicit reads, exact values
       page.on('pageerror', error => errors.push(error.message))
       page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
       try {
-        await server.listen()
-        const address = server.httpServer!.address()
-        if (!address || typeof address === 'string') throw new Error('Missing synthetic port')
-        const origin = `http://127.0.0.1:${address.port}`
         await page.route('**/*', async route => {
           const request = route.request(), url = new URL(request.url())
           const json = (value: unknown) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(value) })
@@ -118,7 +117,16 @@ it('synthetic Avito statistics: default-off legacy, explicit reads, exact values
         }
         expect(await page.locator('vite-error-overlay').count()).toBe(0)
         expect(errors).toEqual([]); expect(unexpected).toEqual([])
-      } finally { await page.close(); await server.close() }
+      } finally { await page.close() }
+      })
     }
   } finally { await browser.close() }
 }, 60_000)
+
+it('ephemeral fixture closes its listener if browser/page setup fails after binding', async () => {
+  const server = await createServer({ root, configFile: false, envFile: false, server: { host: '127.0.0.1', hmr: false },
+    cacheDir: '/tmp/satorna-avito-statistics-ui-proof/failed-setup-cache', optimizeDeps: { noDiscovery: true, include: [] } })
+  await expect(withSyntheticVite(server, 'intentional-setup-failure', async () => { throw new Error('Synthetic setup failure') })).rejects.toThrow('Synthetic setup failure')
+  expect(server.httpServer?.listening).toBe(false)
+  expect(server.httpServer?.address()).toBeNull()
+})

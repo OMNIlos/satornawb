@@ -1,6 +1,8 @@
 import { it, expect } from 'vitest'
 import { chromium } from 'playwright'
 import { createServer } from 'vite'
+import react from '@vitejs/plugin-react'
+import { withSyntheticVite } from '../../test-support/syntheticVite'
 import { fileURLToPath } from 'node:url'
 import { mkdir } from 'node:fs/promises'
 import ordersFixture from '../orders/__fixtures__/canonicalOrdersBackendWire.json'
@@ -43,13 +45,13 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
   await mkdir(screenshots, { recursive: true })
   try {
     for (const enabled of [false, true]) {
-      const server = await createServer({ root, configFile: `${root}vite.config.ts`,
+      const server = await createServer({ root, configFile: false, envFile: false, resolve: { alias: { '@': `${root}src` } },
         cacheDir: `${screenshots}/vite-cache`,
         define: { 'import.meta.env.VITE_CANONICAL_NOTIFICATIONS_ENABLED': JSON.stringify(String(enabled)),
           'import.meta.env.VITE_CANONICAL_REVIEWS_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_CANONICAL_ORDERS_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_WB_LIVE_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('') },
         // The real /orders component retains its original screen when this flag is off.
         server: { host: '127.0.0.1', port: 0, strictPort: true },
-        plugins: [{ name: 'synthetic-canonical-browser-fixture',
+        plugins: [react(), { name: 'synthetic-canonical-browser-fixture',
           resolveId(id) { if (id === '/__synthetic.jsx') return '\0synthetic.jsx' },
           load(id) { if (id === '\0synthetic.jsx') return fixture },
           configureServer(vite) { vite.middlewares.use(async (req, res, next) => {
@@ -58,10 +60,7 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
           }) },
         }],
       })
-      await server.listen()
-      const address = server.httpServer!.address()
-      if (!address || typeof address === 'string') throw new Error('Missing fixture port')
-      const origin = `http://127.0.0.1:${address.port}`
+      await withSyntheticVite(server, `workflow-${enabled}`, async origin => {
       const page = await browser.newPage({ viewport: { width: 1366, height: 900 }, serviceWorkers: 'block' })
       page.setDefaultTimeout(8_000)
       const errors: string[] = [], unexpected: string[] = [], writes: unknown[] = []
@@ -260,7 +259,8 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
         expect(await page.locator('vite-error-overlay').count()).toBe(0)
         expect(unexpected).toEqual([])
       } catch (failure) { throw new Error(`${String(failure)}; browser errors=${JSON.stringify(errors)}; DOM=${(await page.locator('body').innerText()).slice(0, 1200)}`) }
-      finally { await page.close(); await server.close() }
+      finally { await page.close() }
+      })
     }
   } finally { await browser.close() }
 }, 90_000)
