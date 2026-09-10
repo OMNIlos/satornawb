@@ -66,7 +66,7 @@ async function mount(page: Page, tab: 'abc' | 'pnl', responseMode: 'xlsx' | '403
   page.on('requestfailed', request => { if (request.url().endsWith('table.xlsx')) network.push(`failed ${request.failure()?.errorText}`) })
   let release: (() => void) | undefined
   page.on('pageerror', error => errors.push(error.message))
-  page.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('An empty string') && !message.text().includes('403')) errors.push(message.text()) })
+  page.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('An empty string') && !(responseMode === '403' && message.text() === 'Failed to load resource: the server responded with a status of 403 (Forbidden)')) errors.push(message.text()) })
   await page.clock.setFixedTime(new Date('2026-09-11T12:00:00Z'))
   await page.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url())
