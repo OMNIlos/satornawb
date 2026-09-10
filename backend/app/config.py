@@ -76,6 +76,31 @@ def _canonical_notification_settings() -> dict[str, object]:
             "canonical_notification_accounts": tuple(accounts)}
 
 
+def _canonical_account_discovery_enabled() -> bool:
+    raw = os.getenv("VELLA_CANONICAL_ACCOUNT_DISCOVERY_ENABLED", "false").strip().lower()
+    if raw not in {"true", "false"}:
+        raise RuntimeError("canonical_account_discovery_configuration_invalid")
+    return raw == "true"
+
+
+def _wb_sku_override_settings() -> dict[str, object]:
+    invalid = "wb_sku_overrides_configuration_invalid"
+    enabled = os.getenv("VELLA_WB_SKU_OVERRIDES_ENABLED", "false").strip().lower()
+    if enabled not in {"true", "false"}:
+        raise RuntimeError(invalid)
+    raw = os.getenv("VELLA_WB_SKU_OVERRIDE_ACCOUNT_PAIRS", "")
+    pairs: list[tuple[int, int]] = []
+    for entry in raw.split(",") if raw.strip() else ():
+        match = re.fullmatch(r"([1-9][0-9]{0,9}):([1-9][0-9]{0,9})", entry.strip())
+        if match is None:
+            raise RuntimeError(invalid)
+        pair = tuple(int(value) for value in match.groups())
+        if any(value > _INT4_MAX for value in pair) or pair in pairs:
+            raise RuntimeError(invalid)
+        pairs.append(pair)
+    return {"wb_sku_overrides_enabled": enabled == "true", "wb_sku_override_account_pairs": tuple(pairs)}
+
+
 def _raise_review_shadow_configuration_invalid() -> None:
     raise RuntimeError(_REVIEW_SHADOW_CONFIGURATION_INVALID) from None
 
@@ -176,6 +201,9 @@ def _parse_key_versions_env(name: str) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class Settings:
+    canonical_account_discovery_enabled: bool = False
+    wb_sku_overrides_enabled: bool = False
+    wb_sku_override_account_pairs: tuple[tuple[int, int], ...] = ()
     canonical_notifications_enabled: bool = False
     canonical_notification_accounts: tuple[tuple[int, int, str], ...] = ()
     app_name: str = "Vella WB Backend"
@@ -306,6 +334,8 @@ def get_settings() -> Settings:
     return Settings(
         **_heartbeat_env_settings(),
         **_canonical_notification_settings(),
+        **_wb_sku_override_settings(),
+        canonical_account_discovery_enabled=_canonical_account_discovery_enabled(),
         app_name=os.getenv("VELLA_APP_NAME", "Vella WB Backend"),
         environment=environment,
         api_prefix=os.getenv("VELLA_API_PREFIX", "/api/v1"),
@@ -477,6 +507,22 @@ def is_review_shadow_enabled(
         organization_id,
         marketplace_account_id,
     ) in settings.review_shadow_account_pairs
+
+
+def is_wb_sku_overrides_enabled(*, organization_id, marketplace_account_id, settings=None) -> bool:
+    settings = get_settings() if settings is None else settings
+    if type(settings) is not Settings:
+        raise RuntimeError("wb_sku_overrides_configuration_invalid")
+    enabled, pairs = settings.wb_sku_overrides_enabled, settings.wb_sku_override_account_pairs
+    if (type(enabled) is not bool or type(pairs) is not tuple or any(
+            type(pair) is not tuple or len(pair) != 2
+            or any(type(value) is not int or not 0 < value <= _INT4_MAX for value in pair)
+            for pair in pairs) or len(pairs) != len(set(pairs))):
+        raise RuntimeError("wb_sku_overrides_configuration_invalid")
+    if any(type(value) is not int or not 0 < value <= _INT4_MAX
+           for value in (organization_id, marketplace_account_id)):
+        return False
+    return enabled and (organization_id, marketplace_account_id) in pairs
 
 
 def load_marketplace_credential_keyring(settings: Settings) -> CredentialKeyring:
