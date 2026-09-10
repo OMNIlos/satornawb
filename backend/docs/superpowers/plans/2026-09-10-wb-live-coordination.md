@@ -420,6 +420,33 @@ read), not at setup. Used-history downgrade refusal, full replay, late role
 drift and final API-reader grants remain separate gates. T3 owns only a new
 genuine used-history downgrade regression; it must preserve stored evidence.
 
+### Runtime integration checkpoint (2026-09-10, HEAD d64d442)
+
+Bounded raw Avito fetch/orchestration `118f789` passed independent review and
+ROOT pure272 (0.85s), PostgreSQL13 (4.04s), Ruff and owned cleanup. Same original
+binding/incarnation is captured before resolution and checked across closed
+roots; one GET runs outside transactions. Timeouts are per-operation plus
+elapsed checks, not a hard 30-second deadline. No provider call/activation.
+
+History runtime `e02b62e`, T3 participant `f3a5cdf`, child fix `1413419` and
+genuine regression files `1b87866`/`d64d442` are integrated after source review.
+ROOT pure187 passed in 0.74s. ROOT actual3 passed in 12.08s: genuine child
+publication, used-data downgrade refusal with 13 unchanged scoped table hashes,
+and required per-run decision columns. Owned databases/roles were removed with
+explicit absence checks. An earlier accidental pure invocation included a PG
+test and failed at sandbox socket setup; a mistyped sandbox path also prevented
+one launch. Neither is a source regression or passing gate; corrected commands
+above completed normally.
+
+T1 owner status2 and late-ACL/unsupported-path5 gates passed after causal REDs.
+ROOT found an additional contract mismatch during full source review: an already
+existing empty identity (version1, no current run/evidence) is eligible for initial
+projection under the agreed contract, but the private baseline comparison rejects
+it. T1 owns the narrow comparator fix; T3 owns its genuine regression and then
+same-fixture replay/EOF checks. No schema or legacy-rule weakening is authorized.
+An independent test-only helper prepares the final wb_live_api Avito writer gate;
+T1 retains exact grants ownership. These outstanding gates are not completion.
+
 ## Historical deferral (superseded where explicitly resumed above)
 
 Production/printing/KIZ/standalone matcher; new financial formulas/redesign; all 70 historical failures except an actual current-path blocker; broad fault matrix and backup-restore program. Package 2 waits for the real-data first-path acceptance rather than silently proceeding on fixtures.
