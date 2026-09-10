@@ -209,6 +209,8 @@ class ReviewLocalRepository:
                          "REVIEW_LOCAL_POLICY_CHANGED")
                 if g["mode"] == "manual_edit":
                     _require(h is not None and h["current_draft_id"] == _uuid(g["previousDraftId"]))
+                elif g["mode"] == "manual":
+                    _require(h is None and data["expectedDraftRevision"] == 0)
                 _require(self.get(DRAFT, generation_id=_uuid(g["generationId"])) is None)
                 revision = data["expectedDraftRevision"] + 1
                 raw_text = data["text"].encode("utf-8")

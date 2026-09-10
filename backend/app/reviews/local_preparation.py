@@ -15,19 +15,23 @@ from app.reviews.storage_payloads import StoragePayloadError
 def prepare_local_review_draft(context: dict, *, local_command_id: UUID, draft_id: UUID,
                                generation_id: UUID, mode: str, text: str | None = None,
                                prepared_at: datetime | None = None):
-    """Return immutable canonical command bytes for offline fake or explicit manual edit.
+    """Return immutable command bytes for fake, first manual draft, or manual edit.
 
 The fake answer is visibly synthetic, not an LLM answer and never automatically
 approved. Manual edit requires the immediately current predecessor, even when
 text is unchanged. Call once per explicit user action, not on transport retries.
+Manual is first human text only; template/model labels capture selected policy
+metadata and do not claim AI generation. A missing policy is never manufactured.
 """
     try:
-        if context["schemaVersion"] != "review-local-context-v1" or mode not in {"fake", "manual_edit"}:
+        if context["schemaVersion"] != "review-local-context-v1" or mode not in {"fake", "manual", "manual_edit"}:
             raise StoragePayloadError()
         policy, ph, review, wh = context["policy"], context["policyHead"], context["review"], context["workflowHead"]
         if policy is None or ph is None or review is None:
             raise StoragePayloadError()
         if mode == "manual_edit" and (context["draft"] is None or wh is None or type(text) is not str):
+            raise StoragePayloadError()
+        if mode == "manual" and (context["draft"] is not None or wh is not None or type(text) is not str):
             raise StoragePayloadError()
         if mode == "fake" and text is not None:
             raise StoragePayloadError()

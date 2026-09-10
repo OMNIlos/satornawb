@@ -105,6 +105,8 @@ def encode_review_local_request(payload: object) -> EncodedStoragePayload:
         _nonnegative(data["expectedDraftRevision"])
         _require((data["expectedHeadVersion"] == 0) == (data["expectedDraftRevision"] == 0))
         encode_review_generation(data["generation"])
+        if data["generation"]["mode"] == "manual":
+            _require(data["expectedHeadVersion"] == data["expectedDraftRevision"] == 0)
         _require(data["generation"]["actorMembershipId"] == value["actorMembershipId"])
         _require(type(data["text"]) is str and bool(data["text"].strip()))
     else:

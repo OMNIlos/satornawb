@@ -95,7 +95,7 @@ def encode_review_policy(payload: object) -> EncodedStoragePayload:
 def encode_review_generation(payload: object) -> EncodedStoragePayload:
     _require(type(payload) is dict)
     mode = payload.get("mode")
-    _require(type(mode) is str and mode in {"fake", "manual_edit"})
+    _require(type(mode) is str and mode in {"fake", "manual", "manual_edit"})
     keys = {"schemaVersion", "generationId", "sourceObservationId", "sourceChecksum",
             "policyId", "policyVersion", "policyChecksum", "templateVersion", "modelVersion",
             "mode", "actorMembershipId", "startedAt", "completedAt"}
