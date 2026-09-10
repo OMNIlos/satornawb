@@ -87,7 +87,7 @@ policy is a decision blocker: retain null rather than invent a formula.
 KIZ/standalone matcher and redesign remain excluded; no actual production,
 price changes, message sends, printing or exports are authorized by this restart.
 
-### Integration checkpoint (2026-09-10, HEAD 814a69d)
+### Historical integration checkpoint (2026-09-10, HEAD 814a69d)
 
 Notification list/receipt client and UI are integrated (`8f88f7a`, `a926728`,
 `7f2dea7`); shared default-off API registration `3e911c0` has five focused
@@ -115,6 +115,48 @@ generic trust authentication. No existing database/role, HBA, kernel setting,
 IPC segment or server was modified; no persistent service or live WB key is
 active. Disposable synthetic test databases are not approval to store real
 credentials on that shared server.
+
+### Current integration checkpoint (2026-09-10, HEAD 7c93728)
+
+- Notification preferences/config and registration are now composed through
+  `74dcfb7`; 30 focused entrypoint/HTTP tests passed. The final local API role
+  exercised list/read/dismiss and two recipients plus preferences: one actual
+  PostgreSQL test passed in 17.90s, owned DB/roles cleanup asserted. Independent
+  bounded Notifications review passed. This is not bearer/live acceptance.
+- First manual Review SQL0083 `7c93728` is imported after history0082. T1's
+  15-case gate covered canonical bytes, initial revision, replay/edit/approval,
+  revocations, downgrade and retained SQL identities. Root's independent SQL
+  review is pending; local workflow and streamed64KiB HTTP boundary were reviewed.
+- Shared WB/Avito account discovery `9db095a` + registration `7e76b4c` and Orders
+  UI `772069c` are integrated and independently reviewed. Metadata has its own
+  default-off flag, not the WB collector flag. Root's 15 entrypoint/HTTP tests
+  passed; T2's 10 actual PG cases passed. Orders remains a limited saved view.
+- SKU context/config `a2714d8` and read composition `9ecb4a9` are integrated,
+  with 29 focused HTTP tests and independent review passing. Write admission
+  remains permanently false until an actual verified legacy-writer cutover.
+- History0082 `1a4954d` and runtime `6b563d4` are integrated and independently
+  reviewed. T1's four unique PostgreSQL cases include the real streaming worker
+  and non-bypass-owner downgrade refusal. Staged source evidence is NOT current
+  canonical Orders projection. A separate explicit sync:run projection intent
+  is the approved direction; the original read subscription is not write authority.
+- Production service `70acd18` adds guarded create/read/manual assignment and
+  passed independent source review. T3's 16 unique PG cases and six new pure
+  cases passed. It is dormant: no HTTP, local API grant acceptance, calendar,
+  batches, print/export, or prototype retirement is claimed.
+- Synthetic Chromium component proof `a4b5fe5` extended by OrdersUI passed on
+  owner worktree. Root built the integrated frontend with canonical flags true:
+  direct Vite build passed in 6.17s; existing large-chunk warnings remain. This
+  is not styled parity or live-data acceptance; no snapshot generator was run.
+- Scoped CI `3cc3a0d` is source/static-validated only, not executed on GitHub.
+  It explicitly does not replace full release/debt/restore/rollback gates.
+
+Active work: T1 sole schema/guard owner prepares durable shared price quota then
+explicit Orders projection authority; T2 migrates a bounded Avito statistics
+consumer without org cache/plaintext fallback; T3 prepares bounded staged-source
+decoding and projection semantics; T4 adds explicit history initialization UI.
+All external mutation flags remain off. Missing real WB input, dedicated local
+infrastructure acceptance, final finance decisions and complete Production
+renderer/calendar parity remain separate blockers, not completed tasks.
 
 ## Historical deferral (superseded where explicitly resumed above)
 
