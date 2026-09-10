@@ -56,6 +56,7 @@ import {
   type CanonicalAbcPnlRollout,
   type CanonicalCompatibilityMeta,
 } from '@/features/wb-finance/canonicalAbcPnl'
+import { buildAbcTableRows, buildPnlTableRows, downloadReportTableXlsx, filterPnlTableRows, PNL_TABLE_EXPORT_HEADERS, reportTableSource, type ReportTableExportPayload } from '@/features/wb-finance/reportTableExport'
 import {
   describePnlReportJob,
   type PnlReportJobPayload,
@@ -172,6 +173,7 @@ import { sharedStatusRequest } from '@/features/wb-repricer/sharedStatusRequest'
 const SHELL_ISLAND_STATUS = 'explicit-jsx'
 const ActiveParityTabContext = createContext<string | null>(null)
 const PnlReportModeContext = createContext<[PnlReportMode, (mode: PnlReportMode) => void] | null>(null)
+const PnlTableExportContext = createContext<{ current: (() => ReportTableExportPayload) | null } | null>(null)
 
 export function shouldMountParityTabIsland(
   activeTab: string | null | undefined,
@@ -6308,7 +6310,8 @@ function installAbcRowRendererBridge() {
     window.__vellaPublishAbcRowsSnapshot = function(){
       const sourceRows = Array.isArray(window.__vellaAbcLiveRows) ? window.__vellaAbcLiveRows : [];
       const filter = reportFilterState.abc;
-      const rows = window.__vellaSortAbcRows(sourceRows.filter(function(row){ return abcDataMatchesFilter(row, filter); }), normalizeReportSortStack('abc'));
+      const sort = normalizeReportSortStack('abc');
+      const rows = window.__vellaSortAbcRows(sourceRows.filter(function(row){ return abcDataMatchesFilter(row, filter); }), sort);
       const originalIndexes = new Map(sourceRows.map(function(row, index){ return [row, index]; }));
       window.__vellaAbcRowsState = {
         rows: rows.map(function(row){
@@ -6320,7 +6323,8 @@ function installAbcRowRendererBridge() {
           };
         }),
         count: rows.length,
-        filter: { ...filter }
+        filter: { ...filter },
+        sort: sort.map(function(item){ return { ...item }; })
       };
       window.__vellaReactRenderAbcRows?.();
       window.dispatchEvent(new CustomEvent('vella:abc-rows-updated'));
@@ -6911,6 +6915,77 @@ function LiveStatusIsland({ replacementKey }: { replacementKey: string }) {
 }
 
 function ExportDropdownIsland({ replacementKey }: { replacementKey: string }) {
+  const { accessToken, cabinetMe, isAuthenticated } = useAuth()
+  const activeTab = useContext(ActiveParityTabContext)
+  const pnlMode = useContext(PnlReportModeContext)?.[0]
+  const pnlExport = useContext(PnlTableExportContext)
+  const abc = useAbcLiveState()
+  const [pending, setPending] = useState(false)
+  const inFlight = useRef<AbortController | null>(null)
+  const latest = useRef({ accessToken, cabinetMe, isAuthenticated, activeTab, pnlMode, abc })
+  latest.current = { accessToken, cabinetMe, isAuthenticated, activeTab, pnlMode, abc }
+  const accountId = resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId)?.marketplaceAccountId
+
+  useEffect(() => {
+    const cancel = () => { inFlight.current?.abort(); inFlight.current = null; setPending(false) }
+    window.addEventListener(REPORT_PERIOD_EVENT, cancel)
+    return () => { window.removeEventListener(REPORT_PERIOD_EVENT, cancel); cancel() }
+  }, [accessToken, cabinetMe?.organization.organizationId, accountId, isAuthenticated, activeTab, pnlMode])
+
+  function scope() {
+    const current = latest.current
+    const rollout = resolveCanonicalAbcPnlRollout(current.cabinetMe?.organization.organizationId)
+    const period = current.activeTab === 'abc' || current.activeTab === 'pnl' ? readReportPeriodState(current.activeTab) : null
+    // Auth identity is compared only in memory, never in the payload or filename.
+    return JSON.stringify([current.accessToken, current.isAuthenticated, rollout, current.activeTab, current.pnlMode, period?.fromIso, period?.toIso])
+  }
+
+  function selection(): ReportTableExportPayload {
+    const current = latest.current
+    const rollout = resolveCanonicalAbcPnlRollout(current.cabinetMe?.organization.organizationId)
+    if (!current.isAuthenticated || !current.accessToken || !rollout) throw new Error('Экспорт недоступен: войдите в аккаунт с загруженным canonical-отчётом.')
+    if (current.activeTab === 'pnl' && current.pnlMode === 'financial' && pnlExport?.current) return pnlExport.current()
+    if (current.activeTab !== 'abc') throw new Error('Экспорт доступен для загруженных ABC и финансового P&L. Выберите соответствующий отчёт.')
+    const state = current.abc
+    if (state.loading || state.error || state.authExpired || state.accessDenied) throw new Error('Дождитесь успешной загрузки ABC и повторите экспорт.')
+    const period = readReportPeriodState('abc')
+    const snapshot = window.__vellaAbcRowsSnapshot?.()
+    if (!snapshot) throw new Error('Таблица ABC ещё не готова к экспорту.')
+    return {
+      reportKind: 'abc', marketplaceAccountId: rollout.marketplaceAccountId, dateFrom: period.fromIso, dateTo: period.toIso,
+      source: reportTableSource(state.report?.canonical, rollout.marketplaceAccountId, period, JSON.stringify({ filters: snapshot.filter ?? {}, sort: snapshot.sort ?? [] })),
+      headers: ABC_TABLE_COLUMNS.map(column => column.column === 'net' ? 'Прибыль после лояльности' : column.column === 'abc' ? 'Класс продаж' : column.label),
+      rows: buildAbcTableRows(abcRawRows(state.report), state.rows, snapshot, ABC_TABLE_COLUMNS.map(column => column.column)),
+    }
+  }
+
+  async function exportTable() {
+    if (inFlight.current) return
+    const controller = new AbortController()
+    const requestScope = scope()
+    inFlight.current = controller
+    setPending(true)
+    try {
+      const payload = selection()
+      if (controller.signal.aborted || requestScope !== scope()) return
+      const blob = await downloadReportTableXlsx({ accessToken: latest.current.accessToken!, payload, signal: controller.signal })
+      if (controller.signal.aborted || requestScope !== scope()) return
+      selection() // Revalidate the loaded owner as well as auth/period/mode before download.
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      try {
+        anchor.href = url
+        anchor.download = `wb-${payload.reportKind}-${payload.dateFrom}-${payload.dateTo}.xlsx`
+        document.body.append(anchor)
+        anchor.click()
+      } finally { anchor.remove(); URL.revokeObjectURL(url) }
+      window.showToast?.(`Скачана копия таблицы: ${payload.rows.length} строк. Прибыль предварительная.`, 'info')
+    } catch (error) {
+      if (!controller.signal.aborted && requestScope === scope()) window.showToast?.(error instanceof Error ? error.message : 'Не удалось выгрузить XLSX.', 'warn')
+    } finally {
+      if (inFlight.current === controller) { inFlight.current = null; setPending(false) }
+    }
+  }
   return (
     <div
       key={replacementKey}
@@ -6933,17 +7008,21 @@ function ExportDropdownIsland({ replacementKey }: { replacementKey: string }) {
         Экспорт
       </button>
       <div className="dd-menu">
-        <div
+        <button
+          type="button"
           className="dd-item"
+          style={{ width: '100%', border: 0, textAlign: 'left', fontFamily: 'inherit' }}
+          title="Копия всех строк текущей таблицы с фильтрами; прибыль предварительная"
+          disabled={pending}
           data-vella-react-handlers="onclick"
-          onClick={() => window.showToast?.('XLSX будет сформирован по текущим фильтрам', 'info')}
+          onClick={() => void exportTable()}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
             <polyline points="14 2 14 8 20 8" />
           </svg>
-          Экспорт XLSX
-        </div>
+          {pending ? 'Формируем XLSX…' : 'Экспорт XLSX'}
+        </button>
         <div
           className="dd-item"
           data-export-action="price-import"
@@ -6960,7 +7039,7 @@ function ExportDropdownIsland({ replacementKey }: { replacementKey: string }) {
           className="dd-item"
           data-export-action="report-history"
           data-vella-react-handlers="onclick"
-          onClick={() => window.showToast?.('История выгрузок: последний отчёт сформирован сегодня в 08:16', 'info')}
+          onClick={() => window.showToast?.('История выгрузок пока недоступна', 'info')}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 12a9 9 0 101.8-5.4" />
@@ -12246,11 +12325,7 @@ function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as 
 
 function PnlLiveTableShellIsland({ replacementKey, state, query, manager, mode = 'financial' }: { replacementKey: string; state: PnlLiveState; query: string; manager: string; mode?: PnlReportMode }) {
   const allRows = state.status === 'ready' ? getPnlRows(state.report) : []
-  const needle = query.trim().toLocaleLowerCase('ru-RU')
-  // The P&L DTO has no manager assignment; its rows are unassigned.
-  const rows = allRows.filter((row) => (manager === 'all' || manager === 'unassigned')
-    && (!needle || [row.articleId, row.sku, row.productName, row.label, row.category, row.nmId, row.comment]
-      .join(' ').toLocaleLowerCase('ru-RU').includes(needle)))
+  const rows = filterPnlTableRows(allRows, query, manager)
   const renderWindow = useReportTableRenderLimit(rows.length)
   const visibleRows = rows.slice(0, renderWindow.limit)
   const showOneCColumns = mode === 'operational'
@@ -12850,6 +12925,22 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
     canonicalPnlEnabled, periodFromIso, periodToIso, pnlSource,
   ])
   const state = selectScopedReportState<PnlLiveState>(requestScope, publishedState, { status: 'loading' })
+  const pnlExport = useContext(PnlTableExportContext)
+  useLayoutEffect(() => {
+    if (!pnlExport) return
+    const select = (): ReportTableExportPayload => {
+      if (!accessToken || !canonicalRollout || !canonicalPnlEnabled || activeTab !== 'pnl' || state.status !== 'ready') throw new Error('Дождитесь загрузки финансового canonical P&L и повторите экспорт.')
+      const period = readReportPeriodState('pnl')
+      return {
+        reportKind: 'pnl', marketplaceAccountId: canonicalRollout.marketplaceAccountId, dateFrom: period.fromIso, dateTo: period.toIso,
+        source: reportTableSource(state.report.canonical, canonicalRollout.marketplaceAccountId, period, JSON.stringify({ query, manager })),
+        headers: PNL_TABLE_EXPORT_HEADERS,
+        rows: buildPnlTableRows(filterPnlTableRows(getPnlRows(state.report), query, manager)),
+      }
+    }
+    pnlExport.current = select
+    return () => { if (pnlExport.current === select) pnlExport.current = null }
+  }, [accessToken, activeTab, canonicalPnlEnabled, canonicalRollout, manager, pnlExport, query, state])
   const operationalCashFlowReady = isOperationalPnl && state.status === 'ready' && state.report.cashFlow?.status === 'ready'
   const operationalWaitingJob = state.status === 'ready'
     ? describePnlReportJob(state.report.reportJob ?? { state: operationalCashFlowReady ? 'completed' : 'waiting_1c', stage: operationalCashFlowReady ? 'completed' : 'waiting_1c', label: operationalCashFlowReady ? '1С ДДС готова' : 'Ждём 1С ДДС', percent: operationalCashFlowReady ? 100 : 20 })
@@ -16703,6 +16794,7 @@ type AbcRowsSnapshot = {
   }>
   count: number
   filter?: AbcFilterState
+  sort?: AbcSortStackItem[]
 }
 
 type ThresholdPreviewSnapshot = {
@@ -34896,6 +34988,7 @@ export function VellaHtmlParityPage() {
   const [sourceHtml, setSourceHtml] = useState<string | null>(null)
   // 1C remains disabled; both the report loader and calendar start on WB finance.
   const pnlModeState = useState<PnlReportMode>('financial')
+  const pnlTableExport = useRef<(() => ReportTableExportPayload) | null>(null)
   const shellSettingsSnapshotRef = useRef<SettingsShellSnapshot | null>(null)
   const shellSettingsLoadingRef = useRef(false)
   const [shellSettingsVersion, setShellSettingsVersion] = useState(0)
@@ -40262,6 +40355,7 @@ export function VellaHtmlParityPage() {
         }
       `}</style>
       <PnlReportModeContext.Provider value={pnlModeState}>
+      <PnlTableExportContext.Provider value={pnlTableExport}>
       <ActiveParityTabContext.Provider value={effectiveActiveParityTab}>
         <div
           className={rootClassName}
@@ -40275,6 +40369,7 @@ export function VellaHtmlParityPage() {
           <AdsCacheRefreshButton accessToken={accessToken} active={routeTarget.tab === 'ads'} />
         </div>
       </ActiveParityTabContext.Provider>
+      </PnlTableExportContext.Provider>
       </PnlReportModeContext.Provider>
     </>
   )

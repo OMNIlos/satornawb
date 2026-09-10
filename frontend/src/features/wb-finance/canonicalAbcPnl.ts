@@ -304,6 +304,7 @@ export async function fetchCanonicalAbcPnl(input: {
 }
 
 export type CanonicalCompatibilityMeta = {
+  marketplaceAccountId: number
   state: CanonicalAbcPnlState
   formulaVersion: CanonicalAbcPnlPage['meta']['formulaVersion']
   advertisingSource: CanonicalAbcPnlPage['meta']['advertisingSource']
@@ -318,6 +319,7 @@ export type CanonicalCompatibilityMeta = {
 
 function compatibilityMeta(page: CanonicalAbcPnlPage): CanonicalCompatibilityMeta {
   return {
+    marketplaceAccountId: page.meta.marketplaceAccountId,
     state: page.meta.state,
     formulaVersion: page.meta.formulaVersion,
     advertisingSource: page.meta.advertisingSource,
