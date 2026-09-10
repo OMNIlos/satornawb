@@ -18,6 +18,7 @@ import {CanonicalNotificationPreferencesForm} from '/src/features/notifications/
 import {CanonicalReviewDrawer,canonicalReviewSelectionEvent} from '/src/features/wb-reviews/CanonicalReviewDrawer.tsx';
 import {canonicalReviewsEnabled} from '/src/features/wb-reviews/canonicalReviewDetail.ts';
 import {OrdersPrintListPage} from '/src/features/orders/OrdersPrintListPage.tsx';
+import {WbConnection} from '/src/features/wb-live/WbConnection.tsx';
 const h=React.createElement;
 function Fixture(){
  const [tab,setTab]=React.useState('notifications'),[session,setSession]=React.useState(1);
@@ -26,9 +27,11 @@ function Fixture(){
  h('button',{onClick:()=>setTab('notifications')},'Notifications fixture'),
  h('button',{onClick:()=>setTab('reviews')},'Reviews fixture'),
  h('button',{onClick:()=>setTab('orders')},'Orders fixture'),
+ h('button',{onClick:()=>setTab('wb')},'WB fixture'),
  h('button',{onClick:()=>setSession(x=>x+1)},'New synthetic session'),
  h('p',{'data-flags':String(canonicalNotificationsEnabled)+':'+String(canonicalReviewsEnabled)},'Default-off gates'),
  tab==='orders'?h(OrdersPrintListPage):null,
+ tab==='wb'&&import.meta.env.VITE_WB_LIVE_ENABLED==='true'?h(WbConnection):null,
  tab==='notifications'&&canonicalNotificationsEnabled?h(React.Fragment,null,h(CanonicalNotificationsIsland),h(CanonicalNotificationPreferencesForm)):null,
  tab==='reviews'&&canonicalReviewsEnabled?h(React.Fragment,null,h('button',{onClick:()=>{document.getElementById('reviewDrawer').classList.add('open');window.dispatchEvent(new CustomEvent(canonicalReviewSelectionEvent,{detail:'synthetic-review-a'}));}},'Open synthetic review'),h(CanonicalReviewDrawer)):null);
 }
@@ -43,7 +46,7 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
       const server = await createServer({ root, configFile: `${root}vite.config.ts`,
         cacheDir: `${screenshots}/vite-cache`,
         define: { 'import.meta.env.VITE_CANONICAL_NOTIFICATIONS_ENABLED': JSON.stringify(String(enabled)),
-          'import.meta.env.VITE_CANONICAL_REVIEWS_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_CANONICAL_ORDERS_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('') },
+          'import.meta.env.VITE_CANONICAL_REVIEWS_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_CANONICAL_ORDERS_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_WB_LIVE_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('') },
         // The real /orders component retains its original screen when this flag is off.
         server: { host: '127.0.0.1', port: 0, strictPort: true },
         plugins: [{ name: 'synthetic-canonical-browser-fixture',
@@ -67,6 +70,7 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
       orderPage.marketplace_account_ids = [1001, 1002]
       orderPage.account_coverage.push({ marketplace_account_id: 1002, source_kind: 'wb-statistics-supplier-orders', source_version: 'v1', state: 'missing', source_snapshot: null, requested_from: null, requested_to: null })
       let read = false, markFailure = false, prefConflict = true, preferenceVersion = '1'
+      let historyInitialized = false
       let heldCommand: (() => Promise<void>) | null = null
       page.on('pageerror', error => errors.push(error.message))
       page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
@@ -79,6 +83,12 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
           const json = (value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) })
           if (url.origin !== origin) { unexpected.push(`${req.method()} ${url.origin}${url.pathname}`); return route.abort() }
           if (!url.pathname.startsWith('/api/')) return route.continue()
+          if (/^\/api\/v1\/cabinet\/marketplace-accounts\/11\/credentials\/wb\/wb_api$/.test(url.pathname)) return json({ data: { marketplaceAccountId: 11, status: 'active', updatedAt: at } })
+          if (url.pathname === '/api/v2/wb/accounts/11/sync') return json({ data: { marketplaceAccountId: 11, jobId: historyInitialized ? 'synthetic-job' : null, state: historyInitialized ? 'queued' : 'idle', updatedAt: null, sources: historyInitialized ? [{ source: 'wb-statistics-supplier-orders', state: 'queued', processed: 0, updatedAt: null, errorCode: null }] : [] } })
+          if (url.pathname === '/api/v2/wb/accounts/11/history') {
+            writes.push({ history: req.postDataJSON(), key: req.headers()['idempotency-key'] }); historyInitialized = true
+            return json({}, 503)
+          }
           if (url.pathname === '/api/v2/cabinet/marketplace-accounts') return json({ data: [{ marketplaceAccountId: 1001, provider: 'avito', externalAccountId: 'synthetic-avito', displayName: 'Synthetic Avito', status: 'active' }, { marketplaceAccountId: 1002, provider: 'wb', externalAccountId: 'synthetic-wb', displayName: 'Synthetic WB', status: 'disconnected' }] })
           if (url.pathname === '/api/v2/orders/snapshots/latest') {
             expect(url.searchParams.getAll('account_id')).toEqual(['1001', '1002'])
@@ -198,12 +208,28 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
           expect(ordersQueries).toHaveLength(2)
           expect(new URLSearchParams(ordersQueries[1]).get('external_order_id')).toBe('000123')
           await page.screenshot({ path: `${screenshots}/orders.png`, fullPage: true })
+          await page.getByRole('button', { name: 'WB fixture', exact: true }).click()
+          const historyButton = page.getByRole('button', { name: 'Инициализировать историю с выбранной даты', exact: true })
+          await historyButton.waitFor()
+          expect(await page.getByLabel('Начальная дата истории (по московскому времени)').inputValue()).toBe('')
+          expect(await historyButton.isDisabled()).toBe(true)
+          await page.getByLabel('Начальная дата истории (по московскому времени)').fill('2026-06-12')
+          await historyButton.click()
+          await page.locator('[data-wb-history]').getByRole('alert').waitFor()
+          expect(await historyButton.isDisabled()).toBe(true)
+          expect(writes.filter((entry: any) => entry.history)).toEqual([{ history: { dateFrom: '2026-06-12' }, key: expect.any(String) }])
+          await page.getByRole('button', { name: 'Перечитать состояние истории', exact: true }).click()
+          await page.getByText(/История уже инициализирована/).waitFor()
+          expect(await historyButton.count()).toBe(0)
+          expect(writes.filter((entry: any) => entry.history)).toHaveLength(1)
+          await page.screenshot({ path: `${screenshots}/wb-history.png`, fullPage: true })
         }
         // Chromium reports the two deliberately injected HTTP failures in console.
         // No exception, overlay, external request, or additional console error is accepted.
         expect(errors).toEqual(enabled ? [
           'Failed to load resource: the server responded with a status of 503 (Service Unavailable)',
           'Failed to load resource: the server responded with a status of 409 (Conflict)',
+          'Failed to load resource: the server responded with a status of 503 (Service Unavailable)',
         ] : [])
         expect(await page.locator('vite-error-overlay').count()).toBe(0)
         expect(unexpected).toEqual([])

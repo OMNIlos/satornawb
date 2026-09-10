@@ -5,6 +5,7 @@ import { authorizationHeaders } from '@/features/auth/authApi'
 import { credentialPath, readWbData, revokeWbCredential, saveWbCredential, shouldPollWbSync, startWbSync, syncPath, wbErrorMessage, type WbAccount, type WbCredential, type WbSync } from './api'
 import { parseWbAccounts, parseWbConnection, parseWbCredential, parseWbSync } from './validation'
 import { createWbWriteEpoch } from './writeEpoch'
+import { WbHistoryInitialization } from './WbHistoryInitialization'
 
 const selections = new Map<string, number>()
 const selectionEvent = 'satorna:wb-account-selected'
@@ -123,7 +124,9 @@ export function WbConnection() {
   const [credential, setCredential] = useState<WbCredential | null>(null)
   const [draft, setDraft] = useState('')
   const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [connectionBusy, setBusy] = useState(false)
+  const [historyBusy, setHistoryBusy] = useState(false)
+  const busy = connectionBusy || historyBusy
   const [error, setError] = useState<string | null>(null)
   const [revision, setRevision] = useState(0)
   const [unknown, setUnknown] = useState(false)
@@ -193,7 +196,9 @@ export function WbConnection() {
     {account.accounts.length > 0 ? <button className="btn btn-ghost btn-sm" type="button" disabled={busy} onClick={() => { setAdding((value) => !value); setDraft('') }}>{adding ? 'Отменить добавление' : 'Добавить аккаунт WB'}</button> : null}
     {!account.loading && !account.error && (account.accounts.length === 0 || adding) ? <div className="profile-token-actions"><input aria-label="Название аккаунта WB" className="profile-input" value={name} onChange={(event) => setName(event.target.value)} placeholder="Название аккаунта (необязательно)" /><input aria-label="WB Base token" className="profile-input" type="password" autoComplete="new-password" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Ключ Wildberries" disabled={busy || unknown} /><button type="button" className="btn btn-primary btn-sm" disabled={!draft.trim() || busy || unknown} onClick={() => void createAccount()}>Проверить и сохранить подключение</button></div> : null}
     {accountId && !adding ? <><div className="profile-token-grid"><div className="profile-field"><label htmlFor="settingsProfileWbToken">WB Base token</label><input id="settingsProfileWbToken" className="profile-input" type="password" autoComplete="new-password" value={draft} onChange={(event) => setDraft(event.target.value)} disabled={busy || unknown} /></div><div className="profile-token-status"><b>{activeCredential?.status === 'active' ? 'Ключ сохранён' : activeCredential?.status === 'expired' ? 'Ключ истёк' : 'Добавьте ключ WB'}</b><p>Ключ хранится зашифрованным. Проверка доступа выполняется при загрузке; сохранение ключа не подтверждает доступ к каждому источнику.</p></div></div>
-    <div className="profile-token-actions"><button className="btn btn-primary btn-sm" type="button" disabled={busy || unknown || !draft.trim()} onClick={() => void write('save')}>Сохранить ключ</button><button className="btn btn-default btn-sm" type="button" disabled={busy || unknown || activeCredential?.status !== 'active' || sync.data?.state === 'queued' || sync.data?.state === 'running'} onClick={() => void write('sync')}>Проверить доступ и загрузить</button><button className="btn btn-ghost btn-sm" type="button" disabled={busy || unknown || activeCredential?.status !== 'active'} onClick={() => void write('revoke')}>Удалить ключ</button></div><WbSyncStatus sync={sync} /></> : null}
+    <div className="profile-token-actions"><button className="btn btn-primary btn-sm" type="button" disabled={busy || unknown || !draft.trim()} onClick={() => void write('save')}>Сохранить ключ</button><button className="btn btn-default btn-sm" type="button" disabled={busy || unknown || activeCredential?.status !== 'active' || sync.data?.state === 'queued' || sync.data?.state === 'running'} onClick={() => void write('sync')}>Проверить доступ и загрузить</button><button className="btn btn-ghost btn-sm" type="button" disabled={busy || unknown || activeCredential?.status !== 'active'} onClick={() => void write('revoke')}>Удалить ключ</button></div><WbSyncStatus sync={sync} />
+      {accessToken ? <WbHistoryInitialization key={`${scope}:${accountId}:${accessToken}`} token={accessToken} accountId={accountId} sync={sync.data} credentialActive={activeCredential?.status === 'active'} blocked={connectionBusy || unknown} onBusyChange={setHistoryBusy} refresh={sync.refresh} /> : null}
+    </> : null}
     {busy ? <div role="status">Выполняем действие…</div> : null}
     {error ? <div className="profile-token-feedback is-error" role="alert">{error}</div> : null}
     {unknown || error ? <button className="btn btn-default btn-sm" type="button" onClick={() => { setRevision((value) => value + 1); account.reload(); sync.refresh() }}>Прочитать сохранённое состояние</button> : null}
