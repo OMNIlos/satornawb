@@ -43,6 +43,49 @@ Measure first useful page, source throughput, main query timings, peak memory an
 - Persistent job/provider/read composition is not yet verified. No live credential accepted in this task yet.
 - Foundation tests are historical evidence, not acceptance of this new operational path.
 
-## Deferred (do not reopen)
+### Accepted implementation details
+
+- T1 verified native PostgreSQL and Redis tools available; Docker CLI absent. Use dedicated persistent native resources, not existing application databases.
+- T1 account discovery: GET `/api/v1/cabinet/marketplace-accounts?provider=wb` returns `{data:[{marketplaceAccountId,provider,externalAccountId,displayName,status}]}`. Connect: POST `/api/v1/cabinet/marketplace-accounts/connect/wb` with `{wbToken,displayName?}` returns `{data:{account:{same fields},credential:{existing MarketplaceCredentialStatusView}}}` after actual seller verification and encrypted persistence. Existing account credential PUT is replacement. Never derive account identity from the legacy `wb-primary` capability label.
+- `Settings.wb_live_sync_enabled` / `VELLA_WB_LIVE_SYNC_ENABLED` default false. T2 implements `app.wb_live.tasks`: `wb_live.dispatch_pending`, `wb_live.run_batch(organization_id, marketplace_account_id, job_id)`. Coordinator registers a 30-second dispatcher tick and `vella.wb-live` routes; initial worker concurrency one. Legacy execution schedules remain off in launcher.
+- First sources are `content` and `prices`; goods is their read projection, not a duplicate source fetch. History is subsequent work within package 1, not represented as already loaded.
+- T2 inspected official browser documentation on 2026-09-10 at https://dev.wildberries.ru/docs/openapi/item-management. Content uses ascending updatedAt/nmID cursor, 100 cards/page. Price listing is GET `/api/v2/list/goods/filter`, limit 1000/offset, continuing until empty; POST is nmList lookup, not equivalent provenance. Existing 0077 POST evidence cannot be reused to label a GET. T1 owns any necessary codec/schema accommodation.
+- Documented base price token limit is four/hour (900 seconds between calls); faster service profile requires explicit verified entitlement. Persist retry/due time and release worker instead of sleeping for 900 seconds. Content-only rows are partial, missing prices are null. Honor server throttle feedback. Static web fetches returned 498; fresh evidence is T2's official browser read, not stale search index.
+- T3 product query: limit default50/max200; sort `nmId|vendorCode|title|brand`, direction asc/desc, literal `q`, exact `brand`, opaque cursor. Envelope data has integer marketplaceAccountId, items, nextCursor, readiness, sources and opaque readVersion. Items: string nmId, nullable vendorCode/title/brand/subjectId(string)/subjectName/photoUrl/contentUpdatedAt/pricesUpdatedAt, sizes and sizesTruncated. Size: string chrtId, nullable techSize, skus, skusTruncated, nullable decimal-string priceKopecks/discountedPriceKopecks. Bound first100 sizes and first100 barcodes each, flag truncation. Current-source table has no historical-period semantics. Signed cursor binds principal/account/query/source revision; one statement reads source revisions and rows at one MVCC snapshot. Changed publication returns409 `WB_PRODUCTS_CHANGED`; frontend resets pagination without a retry loop.
+
+## Superseding user instruction — full original T1–T4 completion
+
+The user explicitly resumed all unfinished original requirements after reading
+attachment `42220e2b-3a63-4b43-a8e4-78334716fb3f`. This supersedes the earlier
+package-2 implementation wait and Production deferral, not external-action
+authorization. Independent implementation may proceed before a real WB key is
+available; fixture proof must never be called live acceptance.
+
+Current delivery ledger:
+
+| Owner | Active bounded package | Acceptance / dependency |
+|---|---|---|
+| T1 | Explicit retry of failed source in partial WB job, then history staging/publication | Preserve replay, successful sibling and authority; sole DDL owner |
+| T2 | Bounded historical orders pipeline, then existing repricer runtime wiring | T1 EOF/staging contract; no blind retries or invented finance policy |
+| T3 | Complete Orders read/filter contract for UI, then Production commands/CAS | Preserve separate marketplace status rules and all legacy print/export behavior |
+| T4 | Existing Notifications UI to persistent list/read contracts | Existing server DTO only; missing preferences write contract must be handed to T1 |
+| ROOT | Shared entrypoints, native startup, assembled verification and merges | Heavy test slot held here; no simultaneous heavy owner runs |
+
+Imports: final native-cursor/URL fix `fba66f6` -> `d603aa7`; worker cursor
+regression `edf9cd` -> `8b9ddf8`. Explicit partial-source retry remains open.
+T3 actual product bounds supersede the earlier paragraph: first **5** sizes;
+barcodes omitted with explicit null/empty/truncated semantics, not 100 x 100.
+
+Original requirements not yet accepted: all-consumer credential lifecycle and
+Avito isolation, repricer runtime/settings/recovery, history/revision evidence,
+Orders UI, Production parity/commands/batches/print/archive, complete Reviews and
+Notifications flows, remaining canonical consumers, CI/debt/rollback acceptance.
+Track them as implementation plus verification, never merely a merge checklist.
+Existing authoritative business decisions are reused. Missing final-profit
+policy is a decision blocker: retain null rather than invent a formula.
+KIZ/standalone matcher and redesign remain excluded; no actual production,
+price changes, message sends, printing or exports are authorized by this restart.
+
+## Historical deferral (superseded where explicitly resumed above)
 
 Production/printing/KIZ/standalone matcher; new financial formulas/redesign; all 70 historical failures except an actual current-path blocker; broad fault matrix and backup-restore program. Package 2 waits for the real-data first-path acceptance rather than silently proceeding on fixtures.

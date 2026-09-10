@@ -1,0 +1,22 @@
+#!/bin/sh
+# Dedicated local WB reader. No price/message execution is enabled here.
+set -eu
+SATORNA_LIVE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$SATORNA_LIVE_ROOT"
+command -v node >/dev/null 2>&1 || { echo 'Node.js is required.' >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo 'Python 3 is required.' >&2; exit 1; }
+test -f frontend/node_modules/vite/bin/vite.js || {
+  echo 'Frontend dependencies are missing: run npm ci in frontend first.' >&2
+  exit 1
+}
+python3 backend/ops/wb_live_local.py start
+echo 'Satorna UI: http://127.0.0.1:5173'
+echo 'Enter the WB key only in the connection form, never in this terminal.'
+echo 'Ctrl+C stops the UI. Persistent backend services: python3 backend/ops/wb_live_local.py stop'
+cd frontend
+exec env -i PATH="$PATH" HOME="$HOME" \
+  VITE_ENABLE_MSW=false \
+  VITE_WB_LIVE_ENABLED=true \
+  VITE_API_BASE_URL=http://127.0.0.1:58000 \
+  VITE_API_PROXY_TARGET=http://127.0.0.1:58000 \
+  node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort

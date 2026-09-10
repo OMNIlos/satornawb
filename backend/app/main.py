@@ -123,6 +123,8 @@ def create_app() -> FastAPI:
             "status": "ok",
             "environment": settings.environment,
             "contractVersion": settings.contract_version,
+            "wbApiMode": settings.wb_api_mode,
+            "wbLiveSyncEnabled": settings.wb_live_sync_enabled,
             "realPriceApplyEnabled": settings.real_price_apply_enabled,
             "repricerLocalPriceApplyEnabled": settings.repricer_local_price_apply_enabled,
             "repricerPreserveLocalPriceOverrides": settings.repricer_preserve_local_price_overrides,
@@ -158,6 +160,12 @@ def create_app() -> FastAPI:
     app.include_router(avito_reviews_router)
     app.include_router(avito_stats_router)
     app.include_router(cabinet_router)
+    if settings.wb_live_sync_enabled:
+        from app.wb_live.products_router import router as wb_live_products_router
+        from app.wb_live.router import router as wb_live_router
+
+        app.include_router(wb_live_router)
+        app.include_router(wb_live_products_router)
     app.include_router(catalog_v2_router)
     app.include_router(canonical_orders_router)
     app.include_router(canonical_reviews_router)

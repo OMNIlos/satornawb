@@ -22,6 +22,12 @@ def get_celery_app() -> Celery:
         backend=settings.celery_result_backend,
     )
     beat_schedule = {}
+    if getattr(settings, "wb_live_sync_enabled", False):
+        beat_schedule["wb-live-dispatch-pending"] = {
+            "task": "wb_live.dispatch_pending",
+            "schedule": timedelta(seconds=30),
+            "options": {"queue": "vella.wb-live"},
+        }
     if settings.canonical_shadow_collection_enabled:
         beat_schedule["canonical-collect-shadow-daily"] = {
             "task": "canonical.collect_shadow_all_orgs",
@@ -82,7 +88,9 @@ def get_celery_app() -> Celery:
         timezone="UTC",
         beat_schedule=beat_schedule,
         task_routes={
-            "canonical.collect_shadow_for_org": {"queue": "vella.canonical-shadow"}
+            "canonical.collect_shadow_for_org": {"queue": "vella.canonical-shadow"},
+            "wb_live.dispatch_pending": {"queue": "vella.wb-live"},
+            "wb_live.run_batch": {"queue": "vella.wb-live"},
         },
     )
     install_process_heartbeat(app, settings)
@@ -95,6 +103,9 @@ import app.repricer_tasks  # noqa: F401, E402
 import app.review_tasks  # noqa: F401, E402
 import app.avito.returns_tasks  # noqa: F401, E402
 import app.canonical_shadow_tasks  # noqa: F401, E402
+
+if getattr(get_settings(), "wb_live_sync_enabled", False):
+    import app.wb_live.tasks  # noqa: F401, E402
 
 
 @celery_app.task(name="infra.ping")
