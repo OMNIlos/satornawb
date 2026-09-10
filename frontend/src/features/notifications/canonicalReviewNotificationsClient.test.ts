@@ -41,6 +41,24 @@ const list = () => ({ ...visible(), schemaVersion: 'review-notification-list-v1'
   eventSetVersion: '1', capabilities: { canRead: true, canMarkRead: true, canDismiss: true } })
 
 describe('canonical notification discovery and UI cutover', () => {
+  it('uses Avito scope for list and personal receipt while preserving review routing', async () => {
+    const avitoScope = { ...scope, marketplace: 'avito' as const }
+    const payload = { ...list(), marketplace: 'avito' }
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(json(payload)).mockResolvedValueOnce(json({ ...marked(), marketplace: 'avito' }))
+    const bound = createCanonicalReviewNotificationsClient({ scope: avitoScope, recipientMembershipId: 7, accessToken: 'synthetic-only', isCurrent: () => true, maxVisibleIds: 50, maxResponseBytes: 8192, fetch: fetcher })
+    const result = await bound.list()
+    expect(result.state).toBe('ready')
+    if (result.state !== 'ready') throw new Error('Expected Avito list')
+    expect(canonicalNotificationItems(result.data)[0]).toMatchObject({ source: 'Отзывы Авито', route: '/avito/reviews' })
+    expect((await bound.mark([eventId], 'read')).state).toBe('ready')
+    expect(String(fetcher.mock.calls[0][0])).toContain('marketplace=avito')
+    expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).toMatchObject({ marketplace: 'avito', marketplaceAccountId: 11, eventIds: [eventId] })
+  })
+  it('rejects a WB payload after authoritative selection changes to Avito', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(list()))
+    const client = createCanonicalReviewNotificationsClient({ scope: { ...scope, marketplace: 'avito' }, accessToken: 'synthetic-only', isCurrent: () => true, maxVisibleIds: 50, maxResponseBytes: 8192, fetch: fetcher })
+    expect((await client.list()).state).toBe('invalid-response')
+  })
   it('discovers a bounded account page and the server-derived membership without an input member or event IDs', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(list()))
     const client = createCanonicalReviewNotificationsClient({ scope, accessToken: 'synthetic-test-only', isCurrent: () => true, maxVisibleIds: 50, maxResponseBytes: 8192, fetch: fetcher })

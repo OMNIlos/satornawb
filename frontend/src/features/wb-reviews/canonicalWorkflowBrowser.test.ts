@@ -70,13 +70,14 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
       orderPage.marketplace_account_ids = [1001, 1002]
       orderPage.account_coverage.push({ marketplace_account_id: 1002, source_kind: 'wb-statistics-supplier-orders', source_version: 'v1', state: 'missing', source_snapshot: null, requested_from: null, requested_to: null })
       let read = false, markFailure = false, prefConflict = true, preferenceVersion = '1'
+      let avitoRead = false, showAvito = true, legacyAccountReads = 0
       let historyInitialized = false
       let heldCommand: (() => Promise<void>) | null = null
       page.on('pageerror', error => errors.push(error.message))
       page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
       const scope = (account: number) => ({ organizationId: 1, marketplaceAccountId: account, marketplace: 'wb' })
-      const receipt = () => ({ value: { schemaVersion: 'notification-in-app-receipt-v1', organizationId: 1,
-        marketplaceAccountId: 11, eventId: uid(9), recipientMembershipId: 7, readAt: at, dismissedAt: null }, version: '1' })
+      const receipt = (account = 11) => ({ value: { schemaVersion: 'notification-in-app-receipt-v1', organizationId: 1,
+        marketplaceAccountId: account, eventId: uid(account === 11 ? 9 : 19), recipientMembershipId: 7, readAt: at, dismissedAt: null }, version: '1' })
       try {
         await page.route('**/*', async route => {
           const req = route.request(), url = new URL(req.url())
@@ -89,7 +90,10 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
             writes.push({ history: req.postDataJSON(), key: req.headers()['idempotency-key'] }); historyInitialized = true
             return json({}, 503)
           }
-          if (url.pathname === '/api/v2/cabinet/marketplace-accounts') return json({ data: [{ marketplaceAccountId: 1001, provider: 'avito', externalAccountId: 'synthetic-avito', displayName: 'Synthetic Avito', status: 'active' }, { marketplaceAccountId: 1002, provider: 'wb', externalAccountId: 'synthetic-wb', displayName: 'Synthetic WB', status: 'disconnected' }] })
+          if (url.pathname === '/api/v2/cabinet/marketplace-accounts') return json({ data: [
+            ...[11, 12].map(id => ({ marketplaceAccountId: id, provider: 'wb', externalAccountId: `synthetic-seller-${id}`, displayName: `Synthetic WB ${id}`, status: 'active' })),
+            ...(showAvito ? [{ marketplaceAccountId: 1001, provider: 'avito', externalAccountId: 'synthetic-avito', displayName: 'Synthetic Avito', status: 'active' }] : []),
+            { marketplaceAccountId: 1002, provider: 'wb', externalAccountId: 'synthetic-wb', displayName: 'Synthetic WB', status: 'disconnected' }] })
           if (url.pathname === '/api/v2/orders/snapshots/latest') {
             expect(url.searchParams.getAll('account_id')).toEqual(['1001', '1002'])
             const { rows: unusedRows, next_cursor: unusedCursor, ...metadata } = orderPage
@@ -104,18 +108,24 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
             return json({ ...orderPage, rows: url.searchParams.has('external_order_id') ? [] : orderPage.rows })
           }
           const account = Number(url.searchParams.get('marketplace_account_id')) || 11
-          if (url.pathname === '/api/v1/cabinet/marketplace-accounts') return json({ data: [11, 12].map(id => ({ marketplaceAccountId: id, provider: 'wb', externalAccountId: `synthetic-seller-${id}`, displayName: `Synthetic WB ${id}`, status: 'active' })) })
+          if (url.pathname === '/api/v1/cabinet/marketplace-accounts') { legacyAccountReads++; return json({ data: [11, 12].map(id => ({ marketplaceAccountId: id, provider: 'wb', externalAccountId: `synthetic-seller-${id}`, displayName: `Synthetic WB ${id}`, status: 'active' })) }) }
           if (url.pathname === '/api/v2/notifications/preferences') {
             if (req.method() === 'PUT') { writes.push(req.postDataJSON()); if (prefConflict) { preferenceVersion = '2'; return json({}, 409) } }
             return json({ schemaVersion: 'notification-preferences-v1', version: preferenceVersion, email: { enabled: true, dailyDigest: false, criticalAlerts: true }, telegram: { enabled: false } })
           }
-          if (url.pathname === '/api/v2/reviews/notifications') return json({ schemaVersion: 'review-notification-list-v1', ...scope(account), recipientMembershipId: 7,
-            eventIds: account === 11 ? [uid(9)] : [], items: account === 11 ? [{ event: { schemaVersion: 'notification-event-v1', eventId: uid(9), organizationId: 1, marketplaceAccountId: 11, scope: 'account', producer: 'reviews', entityId: uid(1), sourceVersion: '1', kind: 'approval_required', occurredAt: at,
-              dedupeKey: 'b6c58324017df7859f2f6779f26f71d19ec304d238a853c508714969e6ddafce', title: 'Ответ на отзыв требует подтверждения', details: 'Проверьте текущую версию черновика в разделе отзывов.', severity: 'info' }, receipt: read ? receipt() : null }] : [],
-            nextCursor: null, eventSetVersion: account === 11 ? '1' : '0', capabilities: { canRead: true, canMarkRead: true, canDismiss: true } })
+          if (url.pathname === '/api/v2/reviews/notifications') {
+            expect(url.searchParams.get('marketplace')).toBe(account === 1001 ? 'avito' : 'wb')
+            const visible = account === 11 || account === 1001, eventId = uid(account === 11 ? 9 : 19)
+            return json({ schemaVersion: 'review-notification-list-v1', ...scope(account), marketplace: account === 1001 ? 'avito' : 'wb', recipientMembershipId: 7,
+              eventIds: visible ? [eventId] : [], items: visible ? [{ event: { schemaVersion: 'notification-event-v1', eventId, organizationId: 1, marketplaceAccountId: account, scope: 'account', producer: 'reviews', entityId: uid(1), sourceVersion: '1', kind: 'approval_required', occurredAt: at,
+                dedupeKey: 'b6c58324017df7859f2f6779f26f71d19ec304d238a853c508714969e6ddafce', title: 'Ответ на отзыв требует подтверждения', details: 'Проверьте текущую версию черновика в разделе отзывов.', severity: 'info' }, receipt: (account === 11 ? read : avitoRead) ? receipt(account) : null }] : [],
+              nextCursor: null, eventSetVersion: visible ? '1' : '0', capabilities: { canRead: true, canMarkRead: true, canDismiss: true } })
+          }
           if (url.pathname === '/api/v2/reviews/notifications/receipts') {
-            writes.push(req.postDataJSON()); read = true
-            return markFailure ? json({}, 503) : json({ schemaVersion: 'review-notification-receipts-v1', ...scope(11), recipientMembershipId: 7, eventIds: [uid(9)], action: 'read', items: [receipt()] })
+            const action = req.postDataJSON(), selectedAccount = action.marketplaceAccountId
+            writes.push(action)
+            if (selectedAccount === 1001) avitoRead = true; else read = true
+            return markFailure && selectedAccount === 11 ? json({}, 503) : json({ schemaVersion: 'review-notification-receipts-v1', ...scope(selectedAccount), marketplace: selectedAccount === 1001 ? 'avito' : 'wb', recipientMembershipId: 7, eventIds: [uid(selectedAccount === 11 ? 9 : 19)], action: 'read', items: [receipt(selectedAccount)] })
           }
           if (url.pathname === '/api/v2/reviews/wb/fact') return json({ schema_version: 'canonical-review-fact-v1', organization_id: 1, marketplace_account_id: account, marketplace: 'wb', external_review_id: 'synthetic-review-a', review_id: uid(1), current_observation_id: uid(2), version: '1', revision: '1', text: `Synthetic fact ${account}`, answered: false, can_answer: true, source_order_state: 'current', content_checksum: 'a'.repeat(64), external_product_id: null, source_created_at: at, source_updated_at: null, source_schema_version: 'v1', normalization_version: 'v1' })
           if (url.pathname === '/api/v2/reviews/local/context') return json({ schemaVersion: 'review-local-context-v1', ...scope(account), actorMembershipId: 7,
@@ -143,20 +153,35 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
           await page.getByRole('button', { name: 'Orders fixture', exact: true }).click()
           await page.getByRole('heading', { name: 'Лист печати на сегодня', exact: true }).waitFor()
         } else {
-          await page.getByRole('combobox', { name: 'Аккаунт Wildberries' }).selectOption('11')
+          await page.getByRole('combobox', { name: 'Аккаунт уведомлений' }).selectOption('11')
           await page.getByRole('cell', { name: /Ответ на отзыв требует подтверждения/ }).click()
           const mark = page.getByRole('button', { name: 'Пометить прочитанным', exact: true })
           await mark.click(); await page.waitForFunction(() => document.querySelector('.notif-detail-body')?.textContent?.includes('Прочитано:'))
           expect(await mark.isDisabled()).toBe(true)
-          await page.getByRole('combobox', { name: 'Аккаунт Wildberries' }).selectOption('12')
+          await page.getByRole('combobox', { name: 'Аккаунт уведомлений' }).selectOption('12')
           await page.getByText('Уведомлений об отзывах пока нет.', { exact: true }).waitFor()
           read = false; markFailure = true
-          await page.getByRole('combobox', { name: 'Аккаунт Wildberries' }).selectOption('11')
+          await page.getByRole('combobox', { name: 'Аккаунт уведомлений' }).selectOption('11')
           await mark.click(); await page.getByText(/Результат.*неизвестен/).waitFor()
           expect(await mark.isDisabled()).toBe(true)
           await page.getByRole('button', { name: 'Обновить список', exact: true }).click()
           await page.waitForFunction(() => document.querySelector('.notif-detail-body')?.textContent?.includes('Прочитано:'))
           expect(writes.filter((w: any) => w.action === 'read')).toHaveLength(2)
+          await page.getByRole('combobox', { name: 'Аккаунт уведомлений' }).selectOption('1001')
+          await page.getByRole('cell', { name: 'Отзывы Авито', exact: true }).waitFor()
+          expect(await page.getByRole('link', { name: 'Открыть отзывы', exact: true }).getAttribute('href')).toBe('/avito/reviews')
+          await mark.click(); await page.waitForFunction(() => document.querySelector('.notif-detail-body')?.textContent?.includes('Прочитано:'))
+          expect(writes.filter((entry: any) => entry.action === 'read' && entry.marketplace === 'avito')).toHaveLength(1)
+          expect(legacyAccountReads).toBe(0)
+          showAvito = false
+          await page.getByRole('button', { name: 'Перечитать аккаунты уведомлений', exact: true }).click()
+          await page.waitForFunction(() => !document.querySelector('option[value="1001"]'))
+          expect(await page.locator('.notif-table tbody tr').count()).toBe(0)
+          expect(await mark.count()).toBe(0)
+          showAvito = true
+          await page.getByRole('button', { name: 'Перечитать аккаунты уведомлений', exact: true }).click()
+          await page.getByRole('combobox', { name: 'Аккаунт уведомлений' }).selectOption('1001')
+          await page.getByRole('cell', { name: 'Отзывы Авито', exact: true }).waitFor()
           await page.getByRole('checkbox', { name: 'Ежедневный дайджест', exact: true }).check()
           await page.getByRole('button', { name: 'Сохранить настройки уведомлений', exact: true }).click()
           await page.getByText(/Настройки изменились/).waitFor()
@@ -168,6 +193,7 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
           expect(await page.getByRole('checkbox', { name: 'Ежедневный дайджест', exact: true }).isChecked()).toBe(false)
           await page.screenshot({ path: `${screenshots}/notifications.png`, fullPage: true })
           await page.getByRole('button', { name: 'Reviews fixture', exact: true }).click()
+          await page.getByRole('combobox', { name: 'Аккаунт Wildberries' }).selectOption('11')
           await page.getByRole('button', { name: 'Open synthetic review' }).click()
           const draft = page.getByRole('textbox', { name: 'Ручной черновик ответа' })
           await draft.fill('Synthetic human first draft')
@@ -195,7 +221,7 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
           await page.setViewportSize({ width: 1366, height: 900 })
           await page.getByRole('button', { name: 'Orders fixture', exact: true }).click()
           await page.getByRole('checkbox', { name: /AVITO · Synthetic Avito/ }).check()
-          await page.getByRole('checkbox', { name: /WB · Synthetic WB/ }).check()
+          await page.getByRole('checkbox', { name: /^WB · Synthetic WB · disconnected$/ }).check()
           await page.getByRole('button', { name: 'Открыть сохранённое представление', exact: true }).click()
           await page.getByRole('button', { name: 'synthetic-order', exact: true }).click()
           await page.getByText('Сохранённая строка заказа', { exact: true }).waitFor()

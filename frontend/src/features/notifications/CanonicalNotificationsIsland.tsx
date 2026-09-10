@@ -1,20 +1,21 @@
 import { useMemo, useState } from 'react'
-import { useAuth } from '@/features/auth/authContext'
-import { useWbAccount, WbAccountSelect } from '@/features/wb-live/WbConnection'
+import { useCanonicalMarketplaceAccounts } from '@/features/marketplace-accounts/canonicalMarketplaceAccounts'
 import { useCanonicalNotificationInbox } from './useCanonicalNotificationInbox'
 
 export const canonicalNotificationsEnabled = import.meta.env.VITE_CANONICAL_NOTIFICATIONS_ENABLED === 'true'
 
 export function CanonicalNotificationsIsland() {
-  const account = useWbAccount()
-  const { cabinetMe } = useAuth()
+  const account = useCanonicalMarketplaceAccounts()
+  const { cabinetMe } = account
+  const [accountSelection, setAccountSelection] = useState<{ session: string; id: number | null }>({ session: '', id: null })
+  const selectedAccount = account.accounts.find(item => item.marketplaceAccountId === (accountSelection.session === account.session ? accountSelection.id : null)) ?? null
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [read, setRead] = useState('all')
-  const scope = useMemo(() => cabinetMe && account.accountId ? {
-    organizationId: cabinetMe.organization.organizationId, marketplaceAccountId: account.accountId, marketplace: 'wb' as const,
-  } : null, [cabinetMe?.organization.organizationId, account.accountId])
-  const inbox = useCanonicalNotificationInbox({ scope, accessToken: account.accessToken, sessionKey: account.scope })
+  const scope = useMemo(() => cabinetMe && selectedAccount ? {
+    organizationId: cabinetMe.organization.organizationId, marketplaceAccountId: selectedAccount.marketplaceAccountId, marketplace: selectedAccount.provider,
+  } : null, [cabinetMe?.organization.organizationId, selectedAccount?.marketplaceAccountId, selectedAccount?.provider])
+  const inbox = useCanonicalNotificationInbox({ scope, accessToken: account.accessToken, sessionKey: account.session })
   const rows = useMemo(() => inbox.items.filter((item) => (read === 'all' || (read === 'read') === Boolean(item.readAt))
     && `${item.title} ${item.details} ${item.entityId}`.toLocaleLowerCase('ru-RU').includes(query.toLocaleLowerCase('ru-RU'))), [inbox.items, query, read])
   const selected = rows.find((item) => item.id === selectedId) ?? rows[0] ?? null
@@ -22,7 +23,15 @@ export function CanonicalNotificationsIsland() {
   return <div className="notif-page" data-canonical-notifications="true">
     <section className="notif-main">
       <div className="profile-page-head"><h1 className="profile-page-title">Центр уведомлений</h1><button type="button" className="btn btn-default btn-sm" disabled={inbox.loading || inbox.writing || !scope} onClick={inbox.refresh}>Обновить список</button></div>
-      <WbAccountSelect account={account} disabled={inbox.writing} />
+      <div className="profile-field"><label htmlFor="canonical-notification-account">Аккаунт уведомлений</label>
+        <select id="canonical-notification-account" className="profile-input" disabled={account.loading || inbox.writing} value={selectedAccount?.marketplaceAccountId ?? ''} onChange={event => setAccountSelection({ session: account.session, id: event.target.value ? Number(event.target.value) : null })}>
+          <option value="">{account.loading ? 'Загрузка аккаунтов…' : 'Выберите WB или Avito'}</option>
+          {account.accounts.map(item => <option key={item.marketplaceAccountId} value={item.marketplaceAccountId}>{item.provider.toUpperCase()} · {item.displayName || item.externalAccountId} · {item.status}</option>)}
+        </select>
+        {account.error ? <p role="alert">{account.error}</p> : null}
+        {!account.loading && !account.error && account.accounts.length === 0 ? <p>Доступных аккаунтов нет.</p> : null}
+        <button type="button" className="btn btn-ghost btn-sm" disabled={account.loading || inbox.writing} onClick={account.reload}>Перечитать аккаунты уведомлений</button>
+      </div>
       <p className="profile-helper-text">Уведомления об отзывах выбранного аккаунта. Отметки прочтения сохраняются только для вас. Поиск и статус ниже применяются к текущей странице.</p>
       <div className="notif-toolbar">
         <input className="profile-input" aria-label="Поиск уведомлений на странице" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Текст или идентификатор отзыва" />
@@ -33,7 +42,7 @@ export function CanonicalNotificationsIsland() {
       {inbox.error ? <div className="profile-token-feedback is-error" role="alert">{inbox.error}{inbox.data ? ' Показана предыдущая успешная загрузка этой страницы.' : ''}</div> : null}
       {inbox.loading ? <div className="profile-token-feedback" role="status">Загрузка уведомлений…</div> : null}
       {inbox.writing ? <div className="profile-token-feedback" role="status">Сохраняем отметку прочтения…</div> : null}
-      {!scope && !account.loading ? <p>Выберите аккаунт WB. Подключить аккаунт можно в <a href="/settings/profile">настройках</a>.</p> : null}
+      {!scope && !account.loading ? <p>Выберите доступный аккаунт WB или Avito. Список аккаунтов не является разрешением на действия.</p> : null}
       {inbox.data && !inbox.data.capabilities.canRead ? <div role="alert">Нет доступа к уведомлениям выбранного аккаунта.</div> : null}
       {!inbox.loading && !inbox.error && inbox.data?.capabilities.canRead && rows.length === 0 ? <div className="notif-table-wrap"><p>{inbox.items.length === 0 ? 'Уведомлений об отзывах пока нет.' : 'На этой странице нет уведомлений по выбранным условиям.'}</p></div> : null}
       {rows.length > 0 ? <div className="notif-table-wrap" style={{ display: 'block' }}><table className="notif-table"><thead><tr><th>Событие</th><th>Категория</th><th>Менеджер</th><th>Источник</th><th>Время</th><th>Статус</th></tr></thead><tbody>
