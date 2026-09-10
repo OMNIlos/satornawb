@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createCanonicalReviewNotificationsClient } from './canonicalReviewNotificationsClient'
+import { canonicalNotificationItems } from './canonicalNotificationView'
+import { fetchNotifications, markAllBackendNotificationsRead, markBackendNotificationRead } from './api'
+
+afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.unstubAllGlobals() })
 
 // Literal0074 golden identities/copy; expected wire versions are not produced by
 // the decoder under test. Only HTTP I/O is substituted; real client/parsers run.
@@ -32,6 +36,74 @@ function setup(fetcher: typeof fetch, isCurrent = () => true, maxResponseBytes =
   return createCanonicalReviewNotificationsClient({ scope, recipientMembershipId: 7,
     accessToken: 'synthetic-test-only', isCurrent, maxVisibleIds: 4, maxResponseBytes, fetch: fetcher })
 }
+
+const list = () => ({ ...visible(), schemaVersion: 'review-notification-list-v1', nextCursor: null as string | null,
+  eventSetVersion: '1', capabilities: { canRead: true, canMarkRead: true, canDismiss: true } })
+
+describe('canonical notification discovery and UI cutover', () => {
+  it('discovers a bounded account page and the server-derived membership without an input member or event IDs', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(list()))
+    const client = createCanonicalReviewNotificationsClient({ scope, accessToken: 'synthetic-test-only', isCurrent: () => true, maxVisibleIds: 50, maxResponseBytes: 8192, fetch: fetcher })
+    const result = await client.list('opaque+/=')
+    expect(result.state).toBe('ready')
+    if (result.state !== 'ready') throw new Error('Expected discovery')
+    expect(result.data.recipientMembershipId).toBe(7)
+    expect(result.data.eventSetVersion).toBe('1')
+    expect(canonicalNotificationItems(result.data)[0]).toMatchObject({ id: eventId, readAt: null, source: 'Отзывы WB', route: '/wb/reviews' })
+    const url = new URL(String(fetcher.mock.calls[0][0]), 'https://local.invalid')
+    expect(url.pathname).toBe('/api/v2/reviews/notifications')
+    expect(Object.fromEntries(url.searchParams)).toEqual({ marketplace_account_id: '11', marketplace: 'wb', limit: '50', cursor: 'opaque+/=' })
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
+
+  it('distinguishes a validated empty inbox from unavailability', async () => {
+    const result = await setup(vi.fn<typeof fetch>().mockResolvedValue(json({ ...list(), eventIds: [], items: [], eventSetVersion: '0' }))).list()
+    expect(result.state).toBe('ready')
+    if (result.state === 'ready') expect(canonicalNotificationItems(result.data)).toEqual([])
+    expect(await setup(vi.fn<typeof fetch>().mockResolvedValue(new Response('', { status: 503 }))).list()).toEqual({ state: 'unavailable', outcome: 'not-submitted' })
+  })
+
+  it.each(['account', 'nested-account', 'member-receipt', 'missing-items', 'numeric-version', 'unbounded'] as const)('rejects malformed discovery: %s', async issue => {
+    const payload = list()
+    if (issue === 'account') payload.marketplaceAccountId = 12
+    if (issue === 'nested-account') payload.items[0].event.marketplaceAccountId = 12
+    if (issue === 'member-receipt') { payload.items[0].receipt = receipt(); payload.items[0].receipt.value.recipientMembershipId = 8 }
+    const wire: Record<string, unknown> = payload
+    if (issue === 'missing-items') delete wire.items
+    if (issue === 'numeric-version') wire.eventSetVersion = 1
+    if (issue === 'unbounded') wire.items = Array(101).fill(payload.items[0])
+    expect(await setup(vi.fn<typeof fetch>().mockResolvedValue(json(wire))).list()).toEqual({ state: 'invalid-response', outcome: 'not-submitted' })
+  })
+
+  it('uses only persisted personal receipts and excludes dismissed events from the display', async () => {
+    const payload = list(); payload.items[0].receipt = receipt()
+    const result = await setup(vi.fn<typeof fetch>().mockResolvedValue(json(payload))).list()
+    if (result.state !== 'ready') throw new Error('Expected validated list')
+    expect(canonicalNotificationItems(result.data)[0].readAt).toBe(occurredAt)
+    result.data.items[0].receipt!.value.dismissedAt = occurredAt
+    expect(canonicalNotificationItems(result.data)).toEqual([])
+  })
+
+  it('bounds a stalled read without replay', async () => {
+    vi.useFakeTimers()
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+    }))
+    const pending = setup(fetcher).list()
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(await pending).toEqual({ state: 'unavailable', outcome: 'not-submitted' })
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
+
+  it('blocks the organization-global inbox and both old receipt writers when canonical UI is enabled', async () => {
+    vi.stubEnv('VITE_CANONICAL_NOTIFICATIONS_ENABLED', 'true')
+    const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher)
+    await expect(fetchNotifications('synthetic')).rejects.toThrow('выбранного аккаунта')
+    await expect(markBackendNotificationRead('synthetic', eventId)).rejects.toThrow('выбранного аккаунта')
+    await expect(markAllBackendNotificationsRead('synthetic')).rejects.toThrow('выбранного аккаунта')
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+})
 
 describe('essential canonical notification acceptance (no network)', () => {
   it('preserves exact UUIDs and >BIGINT versions across HTTP without marking a read', async () => {

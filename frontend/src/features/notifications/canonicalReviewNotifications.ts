@@ -45,6 +45,36 @@ export type ReviewNotificationReceipts = z.infer<typeof receiptsSchema>
 export type ReviewNotificationCapabilities = z.infer<typeof capabilitiesSchema>
 export type ReviewNotificationExpectation = ReviewNotificationScope & { recipientMembershipId: number; eventIds: string[] }
 
+const listSchema = z.object({
+  schemaVersion: z.literal('review-notification-list-v1'), ...scopeSchema.shape, recipientMembershipId: id,
+  eventSetVersion: z.string().regex(/^(0|[1-9][0-9]*)$/),
+  eventIds: z.array(uuid).max(100).refine(values => new Set(values).size === values.length),
+  items: visibleSchema.shape.items.max(100), nextCursor: z.string().min(1).max(4096).nullable(),
+  capabilities: z.object({ canRead: z.boolean(), canMarkRead: z.boolean(), canDismiss: z.boolean() }).strict(),
+}).strict()
+export type ReviewNotificationList = z.infer<typeof listSchema>
+
+export function parseReviewNotificationList(input: unknown, expected: ReviewNotificationScope): ReviewNotificationList {
+  const checked = scopeSchema.safeParse(expected), parsed = listSchema.safeParse(input)
+  if (!checked.success || !parsed.success) return invalid()
+  const value = parsed.data
+  if (!owner(value, expected) || value.marketplace !== expected.marketplace
+    || value.eventIds.length !== value.items.length || (!value.capabilities.canRead && value.items.length > 0)) return invalid()
+  if (value.eventIds.length > 0) parseReviewNotificationVisible({
+    schemaVersion: 'review-notification-visible-v1', ...expected,
+    recipientMembershipId: value.recipientMembershipId, eventIds: value.eventIds, items: value.items,
+  }, { ...expected, recipientMembershipId: value.recipientMembershipId, eventIds: value.eventIds })
+  return value
+}
+
+export function reviewNotificationListPath(scope: ReviewNotificationScope, cursor: string | null = null) {
+  const checked = scopeSchema.safeParse(scope)
+  if (!checked.success || (cursor !== null && (typeof cursor !== 'string' || !cursor || cursor.length > 4096))) return invalid()
+  const query = new URLSearchParams({ marketplace_account_id: String(scope.marketplaceAccountId), marketplace: scope.marketplace, limit: '50' })
+  if (cursor !== null) query.set('cursor', cursor)
+  return `/api/v2/reviews/notifications?${query}`
+}
+
 function invalid(): never { throw new Error('CANONICAL_REVIEW_NOTIFICATION_INVALID') }
 function owner(value: { organizationId: number; marketplaceAccountId: number }, expected: ReviewNotificationScope) {
   return value.organizationId === expected.organizationId && value.marketplaceAccountId === expected.marketplaceAccountId

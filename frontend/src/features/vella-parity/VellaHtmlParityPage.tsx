@@ -6,6 +6,8 @@ import QRCode from 'qrcode'
 import { AuthContext, useAuth } from '@/features/auth/authContext'
 import { WbConnection } from '@/features/wb-live/WbConnection'
 import { WbProducts } from '@/features/wb-live/WbProducts'
+import { CanonicalNotificationsIsland, canonicalNotificationsEnabled } from '@/features/notifications/CanonicalNotificationsIsland'
+import { CanonicalNotificationPreferencesForm } from '@/features/notifications/NotificationPreferencesForm'
 
 // The canonical account-scoped screen owns WB product reads after this cutover.
 const WB_ACCOUNT_PRODUCTS_ENABLED = import.meta.env.VITE_WB_LIVE_ENABLED === 'true'
@@ -2485,6 +2487,19 @@ function installSecondaryReportRowsBridge() {
 
 function installNotificationsReactBridge() {
   if (window.__vellaNotificationsReactBridgeInstalled || typeof window.renderNotificationsPage !== 'function') return
+  if (canonicalNotificationsEnabled) window.eval?.(`
+    var __canonicalLegacyNotifPanel = renderNotifPanel;
+    renderNotifPanel = function() {
+      if (location.pathname.indexOf('/avito/notifications') !== -1) return __canonicalLegacyNotifPanel();
+      ['notifBadge', 'notifHeadCount', 'notifMarkAll', 'navNotifCount', 'notifSubtabCount'].forEach(function(id) {
+        var node = document.getElementById(id); if (node) node.style.display = 'none';
+      });
+      var count = document.getElementById('profileNotifCount'); if (count) count.textContent = '—';
+      var body = document.getElementById('notifBody');
+      if (body) body.innerHTML = '<div class="notif-empty">Уведомления доступны для выбранного аккаунта.<br><a href="/notifications">Открыть центр уведомлений</a></div>';
+    };
+    renderNotifPanel();
+  `)
   const originalRenderNotificationsPage = window.renderNotificationsPage
   window.__vellaNotificationsReactBridgeInstalled = true
   window.eval?.(`
@@ -23516,6 +23531,17 @@ function NotificationsTableShellIsland({ loading = false, error = null }: { load
 }
 
 function NotificationsIsland({ replacementKey }: { replacementKey: string }) {
+  const location = useLocation()
+  const tab = resolveParityRouteTarget(location.pathname, location.search).tab
+  if (canonicalNotificationsEnabled && tab !== 'avito-notifications') return (
+    <div key={replacementKey} className={`tab-content ${tab === 'notifications' ? 'active' : ''}`} id="tab-notifications" data-vella-island="notifications" data-vella-island-status="explicit-jsx">
+      {tab === 'notifications' ? <CanonicalNotificationsIsland /> : null}
+    </div>
+  )
+  return <LegacyNotificationsIsland replacementKey={replacementKey} />
+}
+
+function LegacyNotificationsIsland({ replacementKey }: { replacementKey: string }) {
   const { accessToken } = useAuth()
   const location = useLocation()
   const [notificationsLoading, setNotificationsLoading] = useState(true)
@@ -23979,6 +24005,7 @@ function SettingsProfileIsland({ replacementKey }: { replacementKey: string }) {
                     <div className="profile-input-wrap"><input className="profile-input has-status" id="settingsProfileWorkspace" defaultValue="Огни" readOnly /><span className="profile-input-status">workspace</span></div>
                   </div>
                 </div>
+                {canonicalNotificationsEnabled && isProfileRoute ? <CanonicalNotificationPreferencesForm /> : null}
                 {WB_ACCOUNT_PRODUCTS_ENABLED ? (isProfileRoute ? <WbConnection /> : null) : (
                 <div className="profile-token-card">
                   <div className="profile-token-head">

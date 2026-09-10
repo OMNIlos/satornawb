@@ -2,6 +2,7 @@ import { buildApiUrl } from '@/lib/api'
 import {
   encodeReviewNotificationAction, parseReviewNotificationCapabilities, parseReviewNotificationReceipts,
   parseReviewNotificationVisible, reviewNotificationPath, reviewNotificationReceiptsPath,
+  parseReviewNotificationList, reviewNotificationListPath,
   type ReviewNotificationAction, type ReviewNotificationScope,
 } from './canonicalReviewNotifications'
 
@@ -10,17 +11,19 @@ export type ReviewNotificationFailure = { state: 'invalid-request' | 'unauthenti
 export type ReviewNotificationResponse<T> = { state: 'ready'; data: T } | ReviewNotificationFailure
 
 /** Dormant client. Create per session/membership/account epoch, including A→B→A.
- * No local storage, global cache, token refresh, implicit retry, UI or auto-mark.
+ * No local storage, global cache, token refresh, implicit retry or auto-mark.
  * After any unknown receipt result, explicitly reload visible IDs before deciding.
  */
 export function createCanonicalReviewNotificationsClient(options: {
-  scope: ReviewNotificationScope; recipientMembershipId: number; accessToken: string
-  isCurrent: () => boolean; maxVisibleIds: number; maxResponseBytes: number; fetch?: typeof fetch
+  scope: ReviewNotificationScope; recipientMembershipId?: number; accessToken: string
+  isCurrent: () => boolean; maxVisibleIds: number; maxResponseBytes: number; fetch?: typeof fetch; timeoutMs?: number
 }) {
-  const scope = { ...options.scope }, member = options.recipientMembershipId, token = options.accessToken
+  const scope = { ...options.scope }, member = options.recipientMembershipId ?? 0, token = options.accessToken
   const current = options.isCurrent, fetcher = options.fetch ?? globalThis.fetch
   const maxIds = options.maxVisibleIds, maxBytes = options.maxResponseBytes
+  const timeoutMs = options.timeoutMs ?? 20_000
   if (![maxIds, maxBytes].every(n => Number.isInteger(n) && n > 0 && n <= 2147483647)
+    || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000
     || typeof current !== 'function') throw new Error('CANONICAL_REVIEW_NOTIFICATION_CONFIGURATION_INVALID')
   const pending = new Set<AbortController>()
   let disposed = false, sequence = 0
@@ -34,13 +37,14 @@ export function createCanonicalReviewNotificationsClient(options: {
     reviewNotificationPath(scope, copied)
     return copied
   }
-  async function request<T>(path: string, parse: (input: unknown) => T, body?: string): Promise<ReviewNotificationResponse<T>> {
+  async function request<T>(path: string, parse: (input: unknown) => T, body?: string, discovery = false): Promise<ReviewNotificationResponse<T>> {
     const requestSequence = ++sequence
     if (!active()) return failure('stale')
-    if (!Number.isInteger(member) || member < 1 || member > 2147483647 || typeof token !== 'string'
+    if ((!discovery && (!Number.isInteger(member) || member < 1 || member > 2147483647)) || typeof token !== 'string'
       || !token || /[^\x21-\x7e]/.test(token)) return failure('unauthenticated')
     const controller = new AbortController(), submitted = body !== undefined
     pending.add(controller)
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
     const stale = () => !active() || sequence !== requestSequence
     try {
       const response = await fetcher(buildApiUrl(path), { method: submitted ? 'POST' : 'GET', cache: 'no-store',
@@ -80,10 +84,19 @@ export function createCanonicalReviewNotificationsClient(options: {
       catch { return failure(stale() ? 'stale' : 'invalid-response', submitted) }
       return stale() ? failure('stale', submitted) : { state: 'ready', data }
     } catch { return failure(stale() ? 'stale' : 'unavailable', submitted) }
-    finally { pending.delete(controller) }
+    finally { clearTimeout(timeout); pending.delete(controller) }
   }
   return {
     dispose() { disposed = true; for (const controller of pending) controller.abort(); pending.clear() },
+    async list(cursor: string | null = null) {
+      let path: string
+      try { path = reviewNotificationListPath(scope, cursor) } catch { return failure('invalid-request') }
+      return request(path, input => {
+        const result = parseReviewNotificationList(input, scope)
+        if (result.items.length > maxIds) throw new Error('CANONICAL_REVIEW_NOTIFICATION_INVALID')
+        return result
+      }, undefined, true)
+    },
     async visible(eventIds: string[]) {
       let selected: string[]
       try { selected = ids(eventIds) } catch { return failure('invalid-request') }
