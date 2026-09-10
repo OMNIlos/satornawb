@@ -158,7 +158,7 @@ All external mutation flags remain off. Missing real WB input, dedicated local
 infrastructure acceptance, final finance decisions and complete Production
 renderer/calendar parity remain separate blockers, not completed tasks.
 
-### Current integration checkpoint (2026-09-10, HEAD 478c15a)
+### Historical integration checkpoint (2026-09-10, HEAD 478c15a)
 
 - Shared price quota schema0084 `d9adb37` and service `ae4df5d` are integrated
   and independently reviewed. Owner proof: 31 pure / 12 PostgreSQL tests;
@@ -199,6 +199,40 @@ pre-dispatch price composition, T3 Production HTTP factory while awaiting the
 exact projection handle, and T4 typed explicit-load Avito client. All new gates
 remain off; the dedicated local infrastructure and actual WB-key blockers above
 are unchanged. This checkpoint is not complete architecture/release acceptance.
+
+### Current integration checkpoint (2026-09-10, HEAD 97fc255)
+
+- Final local API Review grants `4f22de9` and SKU read-only grants `2ab1f31`
+  are integrated. ROOT's assembled Review, SKU and encrypted Avito statistics
+  tests passed together: **3 passed in 10.29s**, with actual limited API logins,
+  synthetic owner seeds and allocator cleanup. Reviews cannot enqueue/send;
+  SKU reads require no current mapping or write permission. Avito statistics
+  reuses existing credential-read rights and performs no SQL mutation.
+- Avito daily-completeness correction `4841499` is independently accepted:
+  incomplete/null days cannot become a complete total. Explicit zero and null
+  totals remain distinct. Config `b29b3ce` supplies strict default-off exact-pair
+  rollout; own route does not depend on WB collection or metadata flags.
+- ROOT's exact migration ancestry, Avito entrypoint and config checks passed:
+  **24 passed in 1.84s**. `f3b06c3` fixes the old test that incorrectly required
+  0083 to remain the newest migration forever: exactly one head, 0083 ancestry
+  and its exact 0082 parent remain required. An initial broad `-k head` selector
+  also selected one PG fixture, whose native initdb failed before starting a
+  server; its allocated directory was empty. The corrected exact-node check
+  was run independently. No existing server or database was changed by that
+  setup failure.
+- Typed Avito client `97fc255` has 40 owner tests and TypeScript passing.
+  Canonical UI is still being implemented behind its own default-off flag;
+  it will load only after explicit submission, never on every date edit.
+- The shared role proof is not live/bearer acceptance, nor full migration or
+  release acceptance. Existing lint debt remains: unchanged SIM117 in the
+  manual-schema test and unchanged config import ordering were reproduced in
+  pre-patch sources. No blanket lint waiver or all-green claim is made.
+
+The heavy PostgreSQL slot is now T1's exact six-case general WB runtime ACL
+gate. Migration0085 is reserved exclusively for T1's history projection authority.
+T2 prepared-price composition, T3 Production HTTP and T4 explicit-load UI
+continue independently. No runtime policy values, production actions or legacy
+retirement are introduced by these approvals.
 
 ## Historical deferral (superseded where explicitly resumed above)
 

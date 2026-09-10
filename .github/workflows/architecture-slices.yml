@@ -108,6 +108,7 @@ jobs:
             src/features/orders/canonicalOrdersClient.test.ts \
             src/features/marketplace-accounts/canonicalMarketplaceAccounts.test.ts \
             src/features/wb-live/history.test.ts \
+            src/features/avito/canonicalAvitoStatisticsClient.test.ts \
             src/features/wb-reviews/canonicalLocalReviewsClient.test.ts \
             src/features/wb-reviews/canonicalReviewDetail.test.ts \
             src/features/wb-reviews/canonicalWorkflowBrowser.test.ts
