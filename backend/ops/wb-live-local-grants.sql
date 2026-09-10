@@ -49,6 +49,31 @@ GRANT SELECT ON wb_live_products,wb_live_product_sizes,wb_live_pages TO wb_live_
 GRANT SELECT ON wb_repricing_sku_override_heads,wb_repricing_sku_override_versions TO wb_live_api;
 -- Saved Orders views only; snapshot publication and ingestion stay separate.
 GRANT SELECT ON order_read_snapshots,order_read_snapshot_rows TO wb_live_api;
+-- Production reads existing evidence and records manual assignments; it cannot
+-- insert Orders source facts or advance their projection/version columns.
+GRANT SELECT ON production_work_items,production_assignment_receipts,production_assignment_history,
+ marketplace_order_items,marketplace_orders,order_sync_runs,order_sync_memberships,
+ order_observations,catalog_skus TO wb_live_api;
+GRANT INSERT(organization_id,marketplace_account_id,order_id,order_item_id,source_item_version,required_quantity)
+ ON production_work_items TO wb_live_api;
+GRANT INSERT(organization_id,marketplace_account_id,work_item_id,idempotency_key,request_schema_version,
+ request_payload,canonical_request_bytes,request_checksum,actor_membership_id,
+ result_version,result_schema_version,result_payload,created_at) ON production_assignment_receipts TO wb_live_api;
+GRANT INSERT(organization_id,marketplace_account_id,work_item_id,receipt_id,actor_membership_id,
+ event_kind,from_version,to_version,previous_catalog_sku_id,catalog_sku_id,reason,occurred_at)
+ ON production_assignment_history TO wb_live_api;
+GRANT UPDATE(catalog_sku_id,version,updated_at,current_assignment_receipt_id) ON production_work_items TO wb_live_api;
+-- FOR SHARE requires an UPDATE privilege. Existing Orders guards reject changes
+-- to these identity fields; no Orders version or source publication right.
+GRANT UPDATE(order_item_id) ON marketplace_order_items TO wb_live_api;
+GRANT UPDATE(order_id) ON marketplace_orders TO wb_live_api;
+GRANT UPDATE(started_at) ON order_sync_runs TO wb_live_api;
+-- Unlike Orders identities, this is contained, mutable timestamp DML, not an
+-- immutable-column guarantee. No SKU identity or business field UPDATE is granted.
+GRANT UPDATE(updated_at) ON catalog_skus TO wb_live_api;
+GRANT EXECUTE ON FUNCTION public.production_exact_text(text),
+ public.production_ascii_json_string(text),
+ public.production_assignment_bytes(bigint,bigint,integer,text,text) TO wb_live_api;
 -- Inbox discovery/list and recipient receipts only; no notification production.
 GRANT SELECT ON notification_in_app_events,notification_in_app_receipts,
  review_facts,review_observations,review_sync_runs_v2 TO wb_live_api;
