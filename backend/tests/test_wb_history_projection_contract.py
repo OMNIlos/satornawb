@@ -1,16 +1,19 @@
 """Pure request/dependency admission, not publication authority or SQL proof."""
-from dataclasses import replace
-from datetime import date
 import hashlib
 import importlib
 import json
+from dataclasses import replace
+from datetime import date
 from uuid import UUID
 
 import pytest
 
 from app.platform.integrations.user_orders_job_contract import (
-    OrdersExecutionPolicy, OrdersJobError, OrdersJobRequest,
-    TrustedOrdersSourceBinding, WbOrdersSourceRequest,
+    OrdersExecutionPolicy,
+    OrdersJobError,
+    OrdersJobRequest,
+    TrustedOrdersSourceBinding,
+    WbOrdersSourceRequest,
 )
 
 JOB = UUID("11111111-1111-4111-8111-111111111111")
@@ -29,6 +32,19 @@ def module():
 
 def request():
     return module().WbHistoryProjectionRequest(1, 2, JOB, RUN, "a" * 64, 2, PAGE)
+
+
+def test_receipt_is_closed_partial_data_not_authority():
+    factory = getattr(module(), "HistoryProjectionReceipt", None)
+    assert factory is not None, "Immutable partial receipt view is missing"
+    value = factory(1, 2, 3, str(JOB), str(RUN), str(PAGE), 0, 1, "a" * 64,
+        f"wb-history-chunk-v1:{JOB}:{PAGE}:0:1", f"wb-history-run-v1:{JOB}:{RUN}",
+        "wb-history-positive-partial-v1", str(JOB), 1, 1, 0, "partial")
+    assert "redacted" in repr(value)
+    with pytest.raises(OrdersJobError, match="^JOB_CONTRACT_INVALID$"):
+        replace(value, coverage_state="complete")
+    with pytest.raises(OrdersJobError, match="^JOB_CONTRACT_INVALID$"):
+        replace(value, source_run_key="arbitrary")
 
 
 def test_new_request_preserves_frozen_selection_identity():
@@ -83,9 +99,9 @@ def test_request_decoder_rejects_noncanonical_or_legacy_coercion(mutation):
 
 
 def dependencies(**changes):
-    values = dict(session_factory=lambda: None,
-        execution_policy=OrdersExecutionPolicy("synthetic-only", 1, 2, 30, (5,)),
-        authority_deadline_provider=lambda **kw: kw["database_now"], max_selection_pages=2)
+    values = {"session_factory": lambda: None,
+        "execution_policy": OrdersExecutionPolicy("synthetic-only", 1, 2, 30, (5,)),
+        "authority_deadline_provider": lambda **kw: kw["database_now"], "max_selection_pages": 2}
     values.update(changes)
     return module().HistoryProjectionDependencies(**values)
 

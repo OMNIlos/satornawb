@@ -115,6 +115,17 @@ def _require_original(snapshot, principal):
         raise OrdersJobError("JOB_ACCESS_DENIED")
 
 
+def _require_legacy_operation(snapshot):
+    if snapshot.row["operation_kind"] != "orders.sync.v1":
+        raise OrdersJobError("SOURCE_CONTRACT_UNAVAILABLE")
+
+
+def _validate_operation_snapshot(session, snapshot):
+    if snapshot.row["operation_kind"] == "orders.wb-history.project.v1":
+        from app.platform.integrations.wb_history_projection_store import validate_snapshot
+        validate_snapshot(session, snapshot)
+
+
 def _require_claim(snapshot, attempt, claim, now, *, live_lease=True):
     if type(claim) is not ClaimedUserOrdersJob:
         raise OrdersJobError("JOB_FENCE_INVALID")
@@ -140,15 +151,18 @@ class UserOrdersPublicationHandle:
     then calls complete(result_sync_run_id=...). This handle holds all preceding
     user/account/job/attempt locks and final checks through the caller's commit.
     """
-    __slots__ = ("_session_ref", "_guard", "_snapshot", "_attempt", "_consumed", "_deadline_required", "_publication")
+    __slots__ = ("_session_ref", "_guard", "_snapshot", "_attempt", "_consumed", "_deadline_required", "_publication",
+        "_history_baseline", "_history_seal", "_history_role_identity")
 
-    def __init__(self, session, guard, snapshot, attempt, *, publication=False, deadline_required=True):
+    def __init__(self, session, guard, snapshot, attempt, *, publication=False, deadline_required=True, _history_role_identity=None):
         self._session_ref = ref(session)
         self._guard = guard
         self._snapshot, self._attempt = snapshot, attempt
         self._consumed = False
         self._deadline_required = deadline_required
         self._publication = publication
+        self._history_baseline = self._history_seal = None
+        self._history_role_identity = _history_role_identity
         _register_user_orders_fence(guard, self)
 
     def __repr__(self):
@@ -167,6 +181,7 @@ class UserOrdersPublicationHandle:
     @property
     def source_run_key(self):
         self._validate_final()
+        _require_legacy_operation(self._snapshot)
         if self._attempt is None:
             raise OrdersJobError("JOB_FENCE_INVALID")
         return f"orders-job-v1:{self._snapshot.locator.job_id}:{self._attempt['attempt_id']}"
@@ -199,6 +214,13 @@ class UserOrdersPublicationHandle:
             attempt = db.read_attempt(session, current)
             if not self._snapshot.same_delegation(current) or current.row != self._snapshot.row or attempt != self._attempt:
                 raise OrdersJobError("JOB_FENCE_INVALID")
+            _validate_operation_snapshot(session, current)
+            if current.row["operation_kind"] == "orders.wb-history.project.v1" and self._guard._finalizing:
+                from app.platform.integrations.wb_history_projection_role import inspect_projection_role
+                inspect_projection_role(session, self._history_role_identity)
+            if current.row["operation_kind"] == "orders.wb-history.project.v1" and self._publication:
+                from app.platform.integrations.wb_history_projection import _validate_history_final
+                _validate_history_final(self)
             now = db.now(session)  # after every potential domain/fence lock wait
             if self._deadline_required and (current.row["authority_expires_at"] <= now or
                     (attempt is not None and attempt["lease_expires_at"] <= now)):
@@ -214,6 +236,7 @@ class UserOrdersPublicationHandle:
             self._guard._failed = True
             raise OrdersJobError("JOB_FENCE_INVALID")
         try:
+            _require_legacy_operation(self._snapshot)
             integer(result_sync_run_id, 2**63 - 1)
             session = self._guard._context()
             self._guard.revalidate_before_write()
@@ -258,7 +281,7 @@ class UserOrdersJobs:
     Supplying reviewed selector bindings still does not register a provider handler.
     Session factory must create a fresh, Engine-bound PostgreSQL Session each time.
     """
-    def __init__(self, *, session_factory, trusted_sources=(), credential_resolver=resolve_marketplace_credential_for_fetch):
+    def __init__(self, *, session_factory, trusted_sources=(), credential_resolver=resolve_marketplace_credential_for_fetch, _history_role_identity=None):
         if not callable(session_factory) or not callable(credential_resolver) or type(trusted_sources) is not tuple:
             raise OrdersJobError("JOB_CONTRACT_INVALID")
         for source in trusted_sources:
@@ -268,6 +291,11 @@ class UserOrdersJobs:
         if len(set(trusted_sources)) != len(trusted_sources):
             raise OrdersJobError("JOB_CONTRACT_INVALID")
         self._factory, self._sources, self._resolver = session_factory, trusted_sources, credential_resolver
+        self._history_role_identity = _history_role_identity
+
+    def _make_handle(self, session, guard, snapshot, attempt, **options):
+        return UserOrdersPublicationHandle(session, guard, snapshot, attempt,
+            _history_role_identity=self._history_role_identity, **options)
 
     def _source(self, binding):
         if binding not in self._sources:
@@ -279,6 +307,9 @@ class UserOrdersJobs:
         locator.__post_init__()
         db.scope(session, locator.organization_id, locator.marketplace_account_id)
         original = db.read_job(session, locator)
+        if original.row["operation_kind"] == "orders.wb-history.project.v1":
+            from app.platform.integrations.wb_history_projection_role import inspect_projection_role
+            inspect_projection_role(session, self._history_role_identity)
         if source_required:
             self._source(original.binding)
         guard = acquire_publication_guard(session, principal=original.principal, required_permissions=frozenset({permission}),
@@ -287,12 +318,15 @@ class UserOrdersJobs:
         if not original.same_delegation(locked):
             raise OrdersJobError("JOB_FENCE_INVALID")
         attempt = db.read_attempt(session, locked)
+        _validate_operation_snapshot(session, locked)
         return guard, locked, attempt, db.now(session)
 
     def create(self, *, authenticated_actor, request, idempotency_key, execution_policy, authority_expires_at):
         if type(request) is not OrdersJobRequest or type(execution_policy) is not OrdersExecutionPolicy:
             raise OrdersJobError("JOB_CONTRACT_INVALID")
         request.__post_init__()
+        if request.binding.source_contract_version == "wb-history-positive-partial-v1":
+            raise OrdersJobError("SOURCE_CONTRACT_UNAVAILABLE")
         execution_policy.__post_init__()
         uuid4_value(idempotency_key)
         deadline = timestamp(authority_expires_at)
@@ -323,18 +357,27 @@ class UserOrdersJobs:
                     raise OrdersJobError("JOB_CONTRACT_INVALID")
                 snapshot = db.create(session, request=request, policy=execution_policy, principal=principal, account=account,
                     credential=credential, idempotency_key=idempotency_key, deadline=deadline, created_at=now, job_id=uuid4())
-                UserOrdersPublicationHandle(session, guard, snapshot, None)
+                self._make_handle(session, guard, snapshot, None)
                 result = db.view(snapshot)
         return result
 
     def status(self, *, authenticated_actor, locator):
         with _root(self._factory) as session:
+            if self._history_role_identity is not None:
+                from app.platform.integrations.wb_history_projection_role import inspect_projection_role
+                inspect_projection_role(session, self._history_role_identity)
             db.scope(session, locator.organization_id, locator.marketplace_account_id)
             principal = _actor_principal(session, authenticated_actor, locator.organization_id)
             account = _account_metadata(session, locator.organization_id, locator.marketplace_account_id)
-            acquire_publication_guard(session, principal=principal, required_permissions=frozenset({"cabinet:read"}), accounts=(account,), authorities=())
+            guard = acquire_publication_guard(session, principal=principal, required_permissions=frozenset({"cabinet:read"}), accounts=(account,), authorities=())
             snapshot = db.read_job(session, locator)
             _require_original(snapshot, principal)
+            if snapshot.row["operation_kind"] == "orders.wb-history.project.v1":
+                from app.platform.integrations.wb_history_projection_role import inspect_projection_role
+                inspect_projection_role(session, self._history_role_identity)
+                snapshot = db.read_job(session, locator, lock=True)
+                _require_original(snapshot, principal)
+                self._make_handle(session, guard, snapshot, db.read_attempt(session, snapshot), deadline_required=False)
             result = db.view(snapshot)
         return result
 
@@ -343,6 +386,8 @@ class UserOrdersJobs:
         if type(request) is not OrdersJobRequest or type(execution_policy) is not OrdersExecutionPolicy:
             raise OrdersJobError("JOB_CONTRACT_INVALID")
         request.__post_init__()
+        if request.binding.source_contract_version == "wb-history-positive-partial-v1":
+            raise OrdersJobError("SOURCE_CONTRACT_UNAVAILABLE")
         execution_policy.__post_init__()
         uuid4_value(idempotency_key)
         deadline = timestamp(authority_expires_at)
@@ -373,12 +418,18 @@ class UserOrdersJobs:
             guard = acquire_publication_guard(session, principal=principal, required_permissions=frozenset({"cabinet:read"}), accounts=(account,), authorities=())
             snapshot = db.read_job(session, locator, lock=True)
             _require_original(snapshot, principal)
+            history_operation = snapshot.row["operation_kind"] == "orders.wb-history.project.v1"
+            if history_operation:
+                from app.platform.integrations.wb_history_projection_role import inspect_projection_role
+                inspect_projection_role(session, self._history_role_identity)
             attempt = db.read_attempt(session, snapshot)
             if snapshot.row["state"] not in TERMINAL:
                 state, reason = ("revoked", "AUTHORITY_REVOKED") if revoke else ("cancelled", "USER_CANCELLED")
                 snapshot, attempt = db.transition(session, snapshot, attempt, event="job." + state, state=state,
                     attempt_state=state if attempt is not None else None, at=db.now(session), reason=reason, membership_id=principal.membership_id)
-                UserOrdersPublicationHandle(session, guard, snapshot, attempt, deadline_required=False)
+                self._make_handle(session, guard, snapshot, attempt, deadline_required=False)
+            elif history_operation:
+                self._make_handle(session, guard, snapshot, attempt, deadline_required=False)
             result = db.view(snapshot)
         return result
 
@@ -390,19 +441,23 @@ class UserOrdersJobs:
             guard, snapshot, attempt, now = self._worker(session, locator)
             r = snapshot.row
             if r["state"] != "queued":
+                if r["operation_kind"] == "orders.wb-history.project.v1":
+                    self._make_handle(session, guard, snapshot, attempt, deadline_required=False)
                 result = db.view(snapshot)
             elif r["next_attempt_at"] > now:
+                if r["operation_kind"] == "orders.wb-history.project.v1":
+                    self._make_handle(session, guard, snapshot, attempt, deadline_required=False)
                 result = db.view(snapshot)
             elif r["attempt_count"] >= r["max_attempts"]:
                 raise OrdersJobError("JOB_NOT_CLAIMABLE")
             elif snapshot.policy.lease_end(now) > r["authority_expires_at"]:
                 snapshot, attempt = db.transition(session, snapshot, None, event="job.expired", state="expired", at=now, reason="AUTHORITY_EXPIRED")
-                UserOrdersPublicationHandle(session, guard, snapshot, attempt, deadline_required=False)
+                self._make_handle(session, guard, snapshot, attempt, deadline_required=False)
                 result = db.view(snapshot)
             else:
                 snapshot, attempt = db.transition(session, snapshot, None, event="job.claimed", state="running", at=now,
                     lease_expires_at=snapshot.policy.lease_end(now))
-                UserOrdersPublicationHandle(session, guard, snapshot, attempt)
+                self._make_handle(session, guard, snapshot, attempt)
                 committed = snapshot, attempt
         # Physical root committed and closed before the usable claim is minted.
         return _committed(*committed) if committed is not None else result
@@ -418,12 +473,12 @@ class UserOrdersJobs:
             if end > snapshot.row["authority_expires_at"]:
                 snapshot, attempt = db.transition(session, snapshot, attempt, event="job.expired", state="expired",
                     attempt_state="expired", at=now, reason="AUTHORITY_EXPIRED")
-                UserOrdersPublicationHandle(session, guard, snapshot, attempt, deadline_required=False)
+                self._make_handle(session, guard, snapshot, attempt, deadline_required=False)
                 result = db.view(snapshot)
             else:
                 snapshot, attempt = db.transition(session, snapshot, attempt, event="job.lease_renewed", state="running",
                     attempt_state="claimed", at=now, lease_expires_at=end)
-                UserOrdersPublicationHandle(session, guard, snapshot, attempt)
+                self._make_handle(session, guard, snapshot, attempt)
                 committed = snapshot, attempt
         return _committed(*committed) if committed is not None else result
 
@@ -435,7 +490,7 @@ class UserOrdersJobs:
             guard, snapshot, attempt, now = self._worker(session, claim.locator)
             _require_claim(snapshot, attempt, claim, now)
             snapshot, attempt = self._end_attempt(session, snapshot, attempt, now, reason=safe_reason, abandoned=False)
-            UserOrdersPublicationHandle(session, guard, snapshot, db.read_attempt(session, snapshot), deadline_required=False)
+            self._make_handle(session, guard, snapshot, db.read_attempt(session, snapshot), deadline_required=False)
             result = db.view(snapshot)
         return result
 
@@ -450,7 +505,7 @@ class UserOrdersJobs:
                     or attempt["version"] != expected_attempt_version or attempt["state"] != "claimed" or attempt["lease_expires_at"] > now):
                 raise OrdersJobError("JOB_FENCE_INVALID")
             snapshot, attempt = self._end_attempt(session, snapshot, attempt, now, reason="LEASE_EXPIRED", abandoned=True)
-            UserOrdersPublicationHandle(session, guard, snapshot, db.read_attempt(session, snapshot), deadline_required=False)
+            self._make_handle(session, guard, snapshot, db.read_attempt(session, snapshot), deadline_required=False)
             result = db.view(snapshot)
         return result
 
@@ -479,7 +534,7 @@ class UserOrdersJobs:
         try:
             guard, snapshot, attempt, now = self._worker(session, claim.locator)
             _require_claim(snapshot, attempt, claim, now)
-            return UserOrdersPublicationHandle(session, guard, snapshot, attempt, publication=True)
+            return self._make_handle(session, guard, snapshot, attempt, publication=True)
         except Exception:
             # Caller must roll back; the existing guard poisons its own failures.
             guard_state = getattr(session, "_satorna_publication_guard", None)
@@ -497,6 +552,7 @@ class UserOrdersJobs:
             raise OrdersJobError("JOB_CONTRACT_INVALID")
         handle = self.acquire_publication_guard(session, claim=claim)
         try:
+            _require_legacy_operation(handle._snapshot)
             result_sync_run_id = participant(session, handle)
             return handle.complete(result_sync_run_id=result_sync_run_id)
         except OrdersJobError:
@@ -515,7 +571,8 @@ class UserOrdersJobs:
         with _root(self._factory) as session:
             guard, snapshot, attempt, now = self._worker(session, claim.locator)
             _require_claim(snapshot, attempt, claim, now)
-            UserOrdersPublicationHandle(session, guard, snapshot, attempt)
+            _require_legacy_operation(snapshot)
+            self._make_handle(session, guard, snapshot, attempt)
             expected_account, expected_credential = snapshot.account, snapshot.credential
         owner = MarketplaceAccountCredentialOwner(claim.locator.organization_id, claim.locator.marketplace_account_id, expected_account.provider)
         try:
@@ -543,7 +600,8 @@ class UserOrdersJobs:
         with _root(self._factory) as session:
             guard, snapshot, attempt, now = self._worker(session, claim.locator)
             _require_claim(snapshot, attempt, claim, now)
-            UserOrdersPublicationHandle(session, guard, snapshot, attempt)
+            _require_legacy_operation(snapshot)
+            self._make_handle(session, guard, snapshot, attempt)
             request = snapshot.request
         return request
 
@@ -562,6 +620,7 @@ class UserOrdersJobs:
         with _root(self._factory) as session:
             db.scope(session, organization_id, marketplace_account_id)
             snapshot = db.read_job(session, locator, lock=True)
+            _require_legacy_operation(snapshot)
             attempt = db.read_attempt(session, snapshot)
             if snapshot.row["state"] not in TERMINAL:
                 denial = self._observed_denial(session, snapshot)
@@ -620,6 +679,7 @@ class UserOrdersJobs:
             db.scope(session, organization_id, marketplace_account_id)
             # Content-free trusted housekeeping: no newly minted claim/token.
             snapshot = db.read_job(session, locator)
+            _require_legacy_operation(snapshot)
             result = db.view(snapshot).delivery_result()
         return result
 
@@ -651,10 +711,13 @@ class UserOrdersJobs:
         integer(limit, 1000)
         if not callable(deliver):
             raise OrdersJobError("JOB_CONTRACT_INVALID")
+        if any(source.source_contract_version == "wb-history-positive-partial-v1" for source in self._sources):
+            raise OrdersJobError("SOURCE_CONTRACT_UNAVAILABLE")
         with _root(self._factory) as session:
             db.scope(session, organization_id, marketplace_account_id)
             ids = session.scalars(select(db.jobs.c.job_id).where(db.jobs.c.organization_id == organization_id,
                 db.jobs.c.marketplace_account_id == marketplace_account_id, db.jobs.c.state == "queued",
+                db.jobs.c.operation_kind == "orders.sync.v1",
                 db.jobs.c.next_attempt_at <= db.now(session)).order_by(db.jobs.c.next_attempt_at, db.jobs.c.job_id).limit(limit)).all()
         delivered = 0
         for job_id in ids:
@@ -663,7 +726,7 @@ class UserOrdersJobs:
                 guard, snapshot, attempt, now = self._worker(session, locator)
                 ready = snapshot.row["state"] == "queued" and snapshot.row["next_attempt_at"] <= now and snapshot.policy.lease_end(now) <= snapshot.row["authority_expires_at"]
                 if ready:
-                    UserOrdersPublicationHandle(session, guard, snapshot, None)
+                    self._make_handle(session, guard, snapshot, None)
             if ready:
                 try:
                     deliver(locator.queue_payload())

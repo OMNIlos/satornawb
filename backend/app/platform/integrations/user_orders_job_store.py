@@ -123,6 +123,18 @@ class JobSnapshot:
 
     @property
     def request(self):
+        if self.row["operation_kind"] == "orders.wb-history.project.v1":
+            from app.platform.integrations.wb_history_projection_contract import BINDING, WbHistoryProjectionRequest
+            if self.binding != BINDING:
+                raise OrdersJobError("JOB_CONTRACT_INVALID")
+            request = WbHistoryProjectionRequest.from_bytes(bytes(self.row["request_bytes"]))
+            if (request.organization_id, request.marketplace_account_id, request.checksum) != (
+                    self.row["organization_id"], self.row["marketplace_account_id"], self.row["request_checksum"]):
+                raise OrdersJobError("JOB_CONTRACT_INVALID")
+            for name in ("history_job_id", "history_run_id", "history_selection_digest", "history_page_count", "history_terminal_page_id"):
+                if self.row[name] != getattr(request, name):
+                    raise OrdersJobError("JOB_CONTRACT_INVALID")
+            return request
         return OrdersJobRequest.from_bytes(bytes(self.row["request_bytes"]), trusted_binding=self.binding)
 
     @property
@@ -131,8 +143,11 @@ class JobSnapshot:
         return OrdersExecutionPolicy(r["policy_reference"], r["policy_version"], r["max_attempts"], r["lease_seconds"], tuple(r["retry_backoff_seconds"]))
 
     def same_delegation(self, other):
-        return ({k: v for k, v in self.row.items() if k not in _MUTABLE} ==
-                {k: v for k, v in other.row.items() if k not in _MUTABLE} and self.authority == other.authority)
+        mutable = _MUTABLE
+        if self.row["operation_kind"] == "orders.wb-history.project.v1":
+            mutable = mutable | {"history_cursor_page", "history_cursor_ordinal", "history_progress_version"}
+        return ({k: v for k, v in self.row.items() if k not in mutable} ==
+                {k: v for k, v in other.row.items() if k not in mutable} and self.authority == other.authority)
 
 
 def read_job(session, locator, *, lock=False):
@@ -142,6 +157,9 @@ def read_job(session, locator, *, lock=False):
     row = session.execute(stmt).mappings().one_or_none()
     if row is None:
         raise OrdersJobError("JOB_NOT_FOUND")
+    if row["operation_kind"] == "orders.wb-history.project.v1":
+        from app.platform.integrations.wb_history_projection_store import read_job_row
+        row = read_job_row(session, locator, lock=lock)
     dependencies = session.execute(select(authorities).where(*where(authorities, locator))).mappings().all()
     if len(dependencies) != 1:
         raise OrdersJobError("JOB_AUTHORITY_DENIED")
@@ -166,10 +184,11 @@ def view(snapshot):
         "completed_at", "safe_reason", "result_sync_run_id", "result_coverage_state")))
 
 
-def find_idempotency(session, *, organization_id, marketplace_account_id, membership_id, idempotency_key):
+def find_idempotency(session, *, organization_id, marketplace_account_id, membership_id, idempotency_key,
+        operation_kind="orders.sync.v1"):
     return session.scalar(select(jobs.c.job_id).where(jobs.c.organization_id == organization_id,
         jobs.c.marketplace_account_id == marketplace_account_id, jobs.c.initiator_membership_id == membership_id,
-        jobs.c.operation_kind == "orders.sync.v1", jobs.c.idempotency_key == idempotency_key))
+        jobs.c.operation_kind == operation_kind, jobs.c.idempotency_key == idempotency_key))
 
 
 def create(session, *, request, policy, principal, account, credential, idempotency_key, deadline, created_at, job_id):

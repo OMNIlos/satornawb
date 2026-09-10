@@ -2,18 +2,22 @@
 
 These values carry no publication authority and never resolve a credential.
 """
-from dataclasses import asdict, dataclass
-from datetime import UTC
 import hashlib
 import json
 import re
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
+from datetime import UTC
 from uuid import UUID
 
 from app.orders.history_bridge import HistoryPageEvidence
 from app.platform.integrations.user_orders_job_contract import (
-    OrdersExecutionPolicy, OrdersJobError, TrustedOrdersSourceBinding,
-    _Redacted, integer, uuid4_value,
+    OrdersExecutionPolicy,
+    OrdersJobError,
+    TrustedOrdersSourceBinding,
+    _Redacted,
+    integer,
+    uuid4_value,
 )
 
 OPERATION = "orders.wb-history.project.v1"
@@ -136,6 +140,51 @@ class FrozenHistorySelection(_Redacted):
     request: WbHistoryProjectionRequest
     pages: tuple[HistoryPageEvidence, ...]
     header_checksums: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class HistoryProjectionReceipt(_Redacted):
+    """Immutable past-commit evidence, never a current authorization capability."""
+    organization_id: int
+    marketplace_account_id: int
+    sync_run_id: int
+    history_job_id: str
+    history_run_id: str
+    history_page_id: str
+    first_ordinal: int
+    next_ordinal: int
+    input_checksum: str
+    source_run_key: str
+    source_snapshot: str
+    source_contract_version: str
+    credential_id: str
+    credential_generation: int
+    account_incarnation: int
+    reconciliation_count: int
+    coverage_state: str
+
+    def __post_init__(self):
+        integer(self.organization_id)
+        integer(self.marketplace_account_id)
+        integer(self.sync_run_id, 2**63 - 1)
+        integer(self.credential_generation, 2**63 - 1)
+        integer(self.account_incarnation, 2**63 - 1)
+        integer(self.first_ordinal, 99000, zero=True)
+        integer(self.next_ordinal, 100000, zero=True)
+        integer(self.reconciliation_count, 1000, zero=True)
+        checksum_value(self.input_checksum)
+        try:
+            for value in (self.history_job_id, self.history_run_id, self.history_page_id, self.credential_id):
+                if type(value) is not str or str(UUID(value)) != value:
+                    raise ValueError()
+        except (TypeError, ValueError, AttributeError):
+            raise OrdersJobError("JOB_CONTRACT_INVALID") from None
+        if (self.first_ordinal % 1000 or not self.first_ordinal <= self.next_ordinal <= self.first_ordinal + 1000
+                or (self.next_ordinal == self.first_ordinal and self.first_ordinal != 0)
+                or self.coverage_state != "partial" or self.source_contract_version != SOURCE_CONTRACT
+                or self.source_run_key != f"wb-history-chunk-v1:{self.history_job_id}:{self.history_page_id}:{self.first_ordinal}:{self.next_ordinal}"
+                or self.source_snapshot != f"wb-history-run-v1:{self.history_job_id}:{self.history_run_id}"):
+            raise OrdersJobError("JOB_CONTRACT_INVALID")
 
 
 def freeze_history_selection(*, organization_id, marketplace_account_id, history_job_id,

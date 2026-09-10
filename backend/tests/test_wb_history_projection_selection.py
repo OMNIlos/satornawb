@@ -1,7 +1,7 @@
 """Bounded source selection validation; captured values are not authority."""
+import importlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
-import importlib
 from uuid import UUID
 
 import pytest
@@ -27,9 +27,9 @@ def freeze(pages, **changes):
     mod = importlib.import_module("app.platform.integrations.wb_history_projection_contract")
     fn = getattr(mod, "freeze_history_selection", None)
     assert callable(fn), "Bounded native-chain selection capture is missing"
-    args = dict(organization_id=1, marketplace_account_id=2, history_job_id=UUID(JOB),
-        history_run_id=UUID(RUN), credential_id=UUID(CRED), credential_generation=3,
-        account_incarnation=7, pages=pages, max_selection_pages=2)
+    args = {"organization_id": 1, "marketplace_account_id": 2, "history_job_id": UUID(JOB),
+        "history_run_id": UUID(RUN), "credential_id": UUID(CRED), "credential_generation": 3,
+        "account_incarnation": 7, "pages": pages, "max_selection_pages": 2}
     args.update(changes)
     return fn(**args)
 
