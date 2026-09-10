@@ -258,3 +258,91 @@ WB flow. Нет decrypt/provider calls, новых credentials, network или p
 mutations. Следующий разрешённый интеграционный slice требует ROOT/T1 wiring и
 проверки реальных ограниченных role grants. Source answer body/list projection,
 bounded fetch orchestration, crash recovery и activation этим commit не закрыты.
+
+## Следующий bounded slice: one-GET orchestration
+
+Этот раздел supersedes только прежний пункт о missing fetch orchestration;
+final API-role, wiring, activation и crash recovery всё ещё не реализованы.
+ROOT разрешил ровно пять файлов: новые `canonical_avito_fetch.py`,
+`canonical_avito_sync.py`, два соответствующих test files и этот existing report.
+Прежние WB/Avito clients, preview, decoder, publisher, config и routers не меняются.
+
+Reuse: `LiveAvitoReviewsClient._get_json()` выполняет один точный GET/header path
+через новый bounded HTTP facade. Не используется `fetch_reviews()` (он делает
+два GET) или `_review_row()` (lossy defaults), не вызывается metadata preview.
+Facade возвращает уже один раз строго разобранный native JSON без повторной
+сериализации. Raw tuple поступает в existing received-page publisher/decoder.
+Нет info GET, answer POST/DELETE, refresh/exchange, provider retry или cache.
+
+```text
+validate original actor + internal account + UUID4 request + offset + exact gate
+  -> private resolution root, reviews:write/live session
+  -> capture incarnation BEFORE paired credential SELECT/decrypt
+  -> original account/access guard + private closing fence -> physical commit
+  -> begin using SAME binding -> durable reservation/commit
+  -> returned ticket must equal captured principal/account/access/incarnation
+  -> SAME resolved credential -> exactly one GET outside all DB roots
+  -> SAME ticket -> existing guarded publish -> physical commit -> receipt
+```
+
+No keyloader до проверки request/gate и live membership. Resolution root использует
+ровно existing private Core-only guard contract, подтверждённый Т1: fresh private
+Session, no pending ORM/callback exposure, exact private/shared final dispatch.
+Нет fresh credential/actor substitution после resolution; несовпадение с ticket
+блокирует GET. Если begin уже закоммитил run, тот остаётся running, а не удаляется.
+Credential wrapper не копируется/сериализуется, его redacted binding — не authority.
+
+Request checksum SHA-256 canonical sorted compact JSON v1 включает org/internal
+account/provider/GET/path/offset/fixed50/decoder contract version. Request UUID4
+задаёт `avito-page:<uuid>` source key, не provider review ID. Existing content
+checksum/replay алгоритм не меняется. Same UUID+changed offset конфликтует до GET.
+Явный повтор того же запроса может снова выполнить GET и затем replay/conflict;
+нет автоматического retry, network deduplication или exactly-once GET promise.
+Coverage всегда partial; total не превращается в provider-end/full-pagination.
+
+Transport: 4MiB response limit, strict UTF-8/JSON, duplicate key и NaN/Infinity
+denial, object/list<=50 shape, top-level unproven owner aliases denied. Только
+200 application/json с identity encoding, проверяется Content-Length. Default
+httpx client trust_env=False/follow_redirects=False, без retry. Timeout каждого
+blocking operation ограничен min(20s, initial remaining elapsed budget); elapsed
+30s проверяется на каждом реальном transport chunk и после stream. Это **не
+жёсткий wall-clock deadline 30s**: блокирующая операция может пересечь порог,
+а общий timeout не обещается как cancellation SLA. Удалено дополнительное 64KiB
+накопление chunks, чтобы trickle stream не скрывал множество reads до проверки.
+Ни raw exception context, ни request headers/token/provider payload не возвращаются
+как diagnostic; consumer получает только allowlisted safe error.
+
+### Evidence нового orchestration
+
+- Initial pure RED: 41 missing-module failures; один затем найденный test-fixture
+  `dataclasses.replace(ResolvedCredentialForFetch)` исправлен через явный constructor:
+  wrapper по existing contract не dataclass и запрещает generic copies.
+- Pure41 GREEN: 0.60s. Дополнительный trickle-stream regression RED1/0.60s:
+  adapter потреблял следующий chunk после elapsed31 из-за 64KiB buffering.
+  После перехода к native transport chunks **42 passed, 0.62s, exit 0**.
+- Genuine PG causal RED1: **1 failed, 4.40s** — legitimate binding roundtrip во
+  время paired resolution дошёл до запрещённого synthetic HTTP. Исправление:
+  capture incarnation перед paired SELECT, не после. No trigger/guard weakening.
+- Frozen PG13: **13 passed, 4.33s, exit 0**, включая этот causal regression,
+  permission/credential/incarnation changes resolution→begin и begin→HTTP→publish,
+  session revoke, physical resolution commit failure (callback reached, zero GET),
+  locked-row NOWAIT из fake HTTP, committed intent до HTTP, replay/changed checksum,
+  malformed raw leaves running intent/no facts и denied member/zero keyloader.
+- Owned DB `orders_test_17b71754246b40e0844609743071116e` и role
+  `orders_exact_a0d6edccc08b4de5bdef98ecdea5fd3d` удалены; absence verified,
+  ROOT slot released. Никакой реальный provider/network не вызывался.
+
+Тестовые команды — прежний env-i/offline sandbox/Python3.11, для pure
+`pytest -q --tb=short tests/test_review_canonical_avito_fetch.py`, для allocated PG
+`ORDERS_TEST_USE_LOCAL_CLUSTER=1 ...pytest -q -rP --tb=short tests/test_review_canonical_avito_sync_postgres.py`.
+PG uses existing owned source fixture с exact PURE4; это не operational API-role.
+Следующие gates: Т1 доказывает narrow credential/source table-column/sequence и
+PURE4 privileges на финальной API-роли; ROOT владеет wiring. Source answer body,
+list projection, crash-recovery jobs и activation не входят в этот slice.
+
+Final bounded regression (new fetch + existing producer/decoder/contract/rollout/
+approval kernel): **272 passed, 1.07s, exit 0**. Scoped Ruff, compileall (external
+pycache), diff-check: exit 0. Critic pass отдельно проверил capture ordering и
+trickle buffer по causal RED→GREEN; проверка не подменяет ROOT independent review.
+Existing files вне пяти-file allowlist не менялись; preexisting untracked sandbox
+сохранён. Full backend suite/actual final API-role/production не запускались.
