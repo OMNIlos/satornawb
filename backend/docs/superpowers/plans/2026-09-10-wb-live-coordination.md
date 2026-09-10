@@ -318,6 +318,47 @@ split); full 0085 authority/runtime is still unaccepted. T2/T4 independently
 implement encrypted-account Avito Reviews metadata preview, without text/PII,
 drafting, sends, source-publication authority or automatic effects.
 
+### Superseding checkpoint (2026-09-10, HEAD 8a623f9)
+
+Avito Reviews metadata backend `2ea2e59` and client `a6fe0e1` are independently
+reviewed. ROOT pure67 passed in 0.78s; frontend55 passed in 419ms and TypeScript
+passed. Actual limited API-role test `b293c0b` passed 1 in 4.81s with cleanup,
+including foreign-account/revoked-permission denial and no service DML.
+Negative mathematical zero is normalized without float conversion, retaining
+decimal scale; rating/count nulls are not fabricated defaults. Content, buyer
+names, images and answer actions are deliberately absent from this preview.
+
+Own default-off config `2b640fc` and bootstrap `8a623f9` preserve empty exact-pair
+allowlists and all legacy paths. ROOT entrypoint TDD: 4 failed / 1 passed before
+implementation; combined config/source/three preview entrypoints: 100 passed in
+2.49s afterward. New bootstrap/tests Ruff and diff checks passed. This is not
+full Reviews parity: old UI depends on text, answer text, account-scoped state
+and correctly separated canonical action authority. T2 inspects the existing
+canonical adapter/publication contract for the next real read-parity slice;
+another unrelated metadata preview was not started.
+
+Independent review found two additional unaccepted T1 projection concerns:
+
+- Participant/domain exceptions escaped the closed error boundary. T1 is
+  applying and testing closed errors without retained exception contexts.
+- Capturing pre-state at membership INSERT cannot detect an earlier parent
+  UPDATE before history-run insertion. A staging-run predicate alone is not
+  sufficient. The genuine runtime must capture/lock a private baseline before
+  invoking its participant and validate it at the final fence. Standalone SQL
+  proof additionally requires a protected projection-writer boundary; T1 must
+  propose a dedicated role/helper without changing legacy writer authority.
+  No GUC assertion or transaction-ID heuristic substitutes for this proof.
+
+The 0085 decision gate remains unaccepted: syntax error was isolated and fixed;
+the subsequent genuine-service setup exposed missing fixture history SELECT
+rights. Only fixture reads were approved, not live/API privilege expansion.
+T1 reruns the same three cases, not an implicitly expanded suite.
+
+The generated Production snapshot is already lazy. T4's separate approved
+frontend optimization targets the whole parity-page module at the App route
+boundary; it may reduce non-parity route startup only. It must not be described
+as a Production-only or universal WB speedup, regenerate data, or change prints.
+
 ## Historical deferral (superseded where explicitly resumed above)
 
 Production/printing/KIZ/standalone matcher; new financial formulas/redesign; all 70 historical failures except an actual current-path blocker; broad fault matrix and backup-restore program. Package 2 waits for the real-data first-path acceptance rather than silently proceeding on fixtures.
