@@ -210,11 +210,19 @@ def test_changed_cancelled_observation_reconciles_without_rewriting_current(
     api_repo = repository.WbLiveRepository(
         sessionmaker(api_engine, expire_on_commit=False), d.keys
     )
+    request_key = "synthetic-changed-history-" + uuid4().hex
     source_job = api_repo.create_history_job(
-        d.actor, d.org, "synthetic-changed-history-" + uuid4().hex, date_from=date_from
+        d.actor, d.org, request_key, date_from=date_from
     )
     source_job_id = UUID(source_job["jobId"])
     with d.engine.begin() as connection:
+        request = connection.execute(
+            text("""SELECT job_id,date_from FROM wb_live_history_requests
+            WHERE organization_id=:org AND marketplace_account_id=:account
+              AND source='wb-statistics-supplier-orders' AND idempotency_key=:key"""),
+            dict(_scope(d), key=request_key),
+        ).one()
+        assert tuple(request) == (source_job_id, date_from)
         connection.execute(
             text("""UPDATE wb_live_sync_sources SET next_due_at=clock_timestamp()
             WHERE organization_id=:org AND marketplace_account_id=:account AND job_id=:job
