@@ -225,7 +225,7 @@ INSERT_CREDENTIAL = text(
 )
 
 
-def test_postgres_fixture_has_actual_owned_origin(disposable_postgres) -> None:
+def test_postgres_fixture_has_actual_owned_origin(disposable_postgres, tmp_path_factory) -> None:
     runtime_url = make_url(disposable_postgres["runtime"])
     assert runtime_url.database == disposable_postgres["database"]
     assert runtime_url.username == disposable_postgres["runtime_role"]
@@ -254,7 +254,7 @@ def test_postgres_fixture_has_actual_owned_origin(disposable_postgres) -> None:
         finally:
             engine.dispose()
     else:
-        assert disposable_postgres["root"].startswith(("/private/var/", "/tmp/"))
+        assert Path(disposable_postgres["root"]).resolve().parent == tmp_path_factory.getbasetemp().resolve()
         assert runtime_url.host == "127.0.0.1"
         assert disposable_postgres["port"] != "5432"
 

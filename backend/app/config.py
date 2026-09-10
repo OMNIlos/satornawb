@@ -265,11 +265,6 @@ def _parse_key_versions_env(name: str) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class Settings:
-    canonical_account_discovery_enabled: bool = False
-    wb_sku_overrides_enabled: bool = False
-    wb_sku_override_account_pairs: tuple[tuple[int, int], ...] = ()
-    canonical_notifications_enabled: bool = False
-    canonical_notification_accounts: tuple[tuple[int, int, str], ...] = ()
     app_name: str = "Vella WB Backend"
     environment: str = "local"
     api_prefix: str = "/api/v1"
@@ -395,6 +390,11 @@ class Settings:
     process_heartbeat_redis_connect_timeout_seconds: float | None = None
     process_heartbeat_redis_socket_timeout_seconds: float | None = None
     process_heartbeat_redis_retry_attempts: int | None = None
+    canonical_account_discovery_enabled: bool = False
+    wb_sku_overrides_enabled: bool = False
+    wb_sku_override_account_pairs: tuple[tuple[int, int], ...] = ()
+    canonical_notifications_enabled: bool = False
+    canonical_notification_accounts: tuple[tuple[int, int, str], ...] = ()
 
 
 def get_settings() -> Settings:

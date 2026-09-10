@@ -48,7 +48,8 @@ def test_final_api_role_lists_marks_dismisses_own_receipts_and_replaces_preferen
             "SELECT has_table_privilege(:r,'notification_in_app_events','INSERT'),"
             "has_table_privilege(:r,'review_draft_revisions','INSERT')"
         ), {"r": database.roles[0]}).one()
-        assert tuple(rights) == (False, False)
+        # Manual review drafts are allowed; notification publication remains producer-only.
+        assert tuple(rights) == (False, True)
         connection.execute(text(
             "UPDATE iam_memberships SET permissions='[\"reviews:read\",\"preferences:read\",\"preferences:write\"]' "
             "WHERE user_id IN (:actor,'local78')"

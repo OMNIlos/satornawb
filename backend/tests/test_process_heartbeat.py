@@ -741,7 +741,10 @@ def test_reader_maximum_inventory_is_one_64_key_mget():
 
 
 def test_new_settings_preserve_legacy_positional_app_name():
-    assert Settings("synthetic-app").app_name == "synthetic-app"
+    settings = Settings("synthetic-app", "test", "/synthetic")
+    assert (settings.app_name, settings.environment, settings.api_prefix) == (
+        "synthetic-app", "test", "/synthetic",
+    )
 
 
 def test_oversized_marker_is_rejected_before_json_parsing(monkeypatch):

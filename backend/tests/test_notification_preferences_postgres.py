@@ -94,13 +94,14 @@ def test_legacy_changes_advance_version_and_refuse_rewind(state):
 
 def test_used_schema_downgrade_refuses_to_erase_versions(state):
     with state.owner.begin() as c:
+        initial_revision = c.scalar(text("SELECT version_num FROM alembic_version"))
         c.execute(text("UPDATE lk_user_preferences SET notification_version=notification_version+1 WHERE user_id=:u"),
                   {"u": state.actor.user_id})
     result = candidate.migrate(state.db.url, "downgrade", "20260910_0080")
     assert result.returncode != 0
     assert "preferences_downgrade_would_lose_versions" in result.stderr
     with state.owner.connect() as c:
-        assert c.scalar(text("SELECT version_num FROM alembic_version")) == "20260910_0081"
+        assert c.scalar(text("SELECT version_num FROM alembic_version")) == initial_revision
     assert read_row(state).notification_version == 2
 
 
