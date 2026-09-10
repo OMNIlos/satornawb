@@ -247,7 +247,9 @@ def _positive_integer(raw: Any) -> int | None:
 
 
 def _money(raw: Any) -> int:
-    if raw in (None, "") or isinstance(raw, bool):
+    if isinstance(raw, bool):
+        raise FinanceNormalizationError("invalid money value")
+    if raw in (None, ""):
         return 0
     try:
         value = Decimal(str(raw).replace(",", ".")) * 100
@@ -268,8 +270,6 @@ def _first_money(row: dict[str, Any], *keys: str) -> int:
 def _optional_first_money(row: dict[str, Any], *keys: str) -> int | None:
     for key in keys:
         if key in row and row[key] not in (None, ""):
-            if isinstance(row[key], bool):
-                raise FinanceNormalizationError("invalid money value")
             return _money(row[key])
     return None
 
@@ -329,11 +329,12 @@ def normalize_operation(
     document_sign = -1 if doc_type == "возврат" else 1
     quantity = max(0, _integer(row.get("quantity") or row.get("saleQuantity")) or 0)
     units = document_sign * quantity if doc_type in {"продажа", "возврат"} else 0
-    revenue = (
-        document_sign * _first_money(row, "retailAmount", "retail_amount")
-        if doc_type in {"продажа", "возврат"}
-        else 0
-    )
+    revenue = 0
+    if doc_type in {"продажа", "возврат"}:
+        retail_amount = _optional_first_money(row, "retailAmount", "retail_amount")
+        if retail_amount is None:
+            raise FinanceNormalizationError("missing trade revenue")
+        revenue = document_sign * retail_amount
     commission = document_sign * _first_money(
         row,
         "ppvzSalesCommission",
