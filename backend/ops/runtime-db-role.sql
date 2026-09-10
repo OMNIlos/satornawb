@@ -634,4 +634,41 @@ GRANT EXECUTE ON FUNCTION public.wb_daily_integer(numeric,boolean), public.wb_da
 GRANT EXECUTE ON FUNCTION public.wb_current_uuid(uuid), public.wb_current_time(timestamptz),
  public.review_local_nonblank_utf8(bytea), public.review_strict_utf8(bytea) TO :"runtime_role";
 
+-- Known 0080/0082 WB objects: API creates intents/retries, never publications.
+-- Current-object override only. Broad future defaults remain a separate risk.
+SELECT set_config('wb_live.grant_api_role', :'runtime_role', true);
+DO $$ DECLARE t record; a record; target text:=current_setting('wb_live.grant_api_role'); BEGIN
+ IF to_regclass('public.wb_live_sync_jobs') IS NOT NULL THEN
+  IF EXISTS(SELECT 1 FROM unnest(ARRAY['wb_live_sync_jobs','wb_live_sync_sources','wb_live_sync_requests',
+   'wb_live_products','wb_live_product_sizes','wb_live_pages']) n
+   LEFT JOIN pg_class c ON c.oid=to_regclass('public.'||n)
+   WHERE c.oid IS NULL OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
+  THEN RAISE EXCEPTION 'wb_live_schema_invalid'; END IF;
+  IF to_regclass('public.wb_live_history_requests') IS NOT NULL AND EXISTS(
+   SELECT 1 FROM unnest(ARRAY['wb_live_history_requests','wb_live_history_pages','wb_live_history_rows']) n
+   LEFT JOIN pg_class c ON c.oid=to_regclass('public.'||n)
+   WHERE c.oid IS NULL OR NOT c.relrowsecurity OR NOT c.relforcerowsecurity)
+  THEN RAISE EXCEPTION 'wb_live_schema_invalid'; END IF;
+  FOR t IN SELECT oid,relname FROM pg_class WHERE relnamespace='public'::regnamespace
+   AND relname IN ('wb_live_sync_jobs','wb_live_sync_sources','wb_live_sync_requests','wb_live_products',
+    'wb_live_product_sizes','wb_live_pages','wb_live_history_requests','wb_live_history_pages','wb_live_history_rows') LOOP
+   EXECUTE format('REVOKE ALL ON public.%I FROM PUBLIC,%I',t.relname,target);
+   FOR a IN SELECT attname FROM pg_attribute WHERE attrelid=t.oid AND attnum>0 AND NOT attisdropped LOOP
+    EXECUTE format('REVOKE ALL (%I) ON public.%I FROM PUBLIC,%I',a.attname,t.relname,target);
+   END LOOP;
+  END LOOP;
+  EXECUTE format('GRANT SELECT ON wb_live_sync_jobs,wb_live_sync_sources,wb_live_sync_requests,wb_live_products,wb_live_product_sizes,wb_live_pages TO %I',target);
+  EXECUTE format('GRANT INSERT(organization_id,marketplace_account_id,job_id,credential_id,credential_generation,account_incarnation,external_account_id,credential_ref,user_id,membership_id,session_id,state,created_at,updated_at) ON wb_live_sync_jobs TO %I',target);
+  EXECUTE format('GRANT UPDATE(state,updated_at) ON wb_live_sync_jobs TO %I',target);
+  EXECUTE format('GRANT INSERT(organization_id,marketplace_account_id,job_id,source,run_id,state,checkpoint,processed,revision,attempt,lease_token,lease_expires_at,next_due_at,updated_at,error_code) ON wb_live_sync_sources TO %I',target);
+  EXECUTE format('GRANT UPDATE(state,attempt,error_code,lease_token,lease_expires_at,next_due_at,updated_at) ON wb_live_sync_sources TO %I',target);
+  EXECUTE format('GRANT INSERT(organization_id,marketplace_account_id,idempotency_key,job_id) ON wb_live_sync_requests TO %I',target);
+  EXECUTE format('REVOKE ALL ON FUNCTION public.wb_live_due_jobs(integer) FROM PUBLIC,%I',target);
+  IF to_regclass('public.wb_live_history_requests') IS NOT NULL THEN
+   EXECUTE format('GRANT SELECT ON wb_live_history_requests TO %I',target);
+   EXECUTE format('GRANT INSERT(organization_id,marketplace_account_id,idempotency_key,job_id,date_from) ON wb_live_history_requests TO %I',target);
+   EXECUTE format('REVOKE ALL ON FUNCTION public.wb_live_history_immutable() FROM PUBLIC,%I',target);
+  END IF;
+ END IF;
+END $$;
 COMMIT;
