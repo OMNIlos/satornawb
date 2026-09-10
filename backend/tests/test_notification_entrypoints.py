@@ -30,6 +30,17 @@ def test_notification_read_and_receipt_routes_share_explicit_rollout(monkeypatch
         "/api/v2/reviews/notifications/receipts",
     ):
         assert paths.count(path) == (1 if enabled else 0)
+    assert paths.count("/api/v2/notifications/preferences") == (2 if enabled else 0)
+
+
+@pytest.mark.parametrize("method", ["get", "put"])
+def test_enabled_preferences_require_login_before_database(monkeypatch, method):
+    app = configured(monkeypatch, True)
+    with TestClient(app) as client:
+        result = getattr(client, method)("/api/v2/notifications/preferences")
+    assert result.status_code == 401
+    assert result.json()["error"]["code"] == "PREFERENCES_AUTHENTICATION_REQUIRED"
+    assert result.headers["cache-control"] == "no-store"
 
 
 def test_enabled_inbox_requires_login_without_touching_database(monkeypatch):

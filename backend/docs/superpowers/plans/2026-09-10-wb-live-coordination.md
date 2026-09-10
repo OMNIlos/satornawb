@@ -65,14 +65,15 @@ Current delivery ledger:
 
 | Owner | Active bounded package | Acceptance / dependency |
 |---|---|---|
-| T1 | Explicit retry of failed source in partial WB job, then history staging/publication | Preserve replay, successful sibling and authority; sole DDL owner |
-| T2 | Bounded historical orders pipeline, then existing repricer runtime wiring | T1 EOF/staging contract; no blind retries or invented finance policy |
+| T1 | Notification preference runtime/0081, then history staging/publication and manual Review SQL amendment | Retry/import-path fixes integrated; sole DDL owner |
+| T2 | Price HTTP adapter and override factory delivered; remaining source/runtime composition | No blind retries or invented finance/authority policy; durable shared quota still required |
 | T3 | Complete Orders read/filter contract for UI, then Production commands/CAS | Preserve separate marketplace status rules and all legacy print/export behavior |
-| T4 | Existing Notifications UI to persistent list/read contracts | Existing server DTO only; missing preferences write contract must be handed to T1 |
-| ROOT | Shared entrypoints, native startup, assembled verification and merges | Heavy test slot held here; no simultaneous heavy owner runs |
+| T4 | Local Reviews drawer and first manual draft; Notifications UI integrated | Existing real source/policy required; no fake generation or provider send |
+| ROOT | Shared entrypoints, native startup, assembled verification and merges | Heavy slot free after T1 preference gate; allocate explicitly, no simultaneous runs |
 
 Imports: final native-cursor/URL fix `fba66f6` -> `d603aa7`; worker cursor
-regression `edf9cd` -> `8b9ddf8`. Explicit partial-source retry remains open.
+regression `edf9cd` -> `8b9ddf8`. Explicit partial-source retry and clean launcher
+import fixes are integrated through `a854ecc`, independently reviewed.
 T3 actual product bounds supersede the earlier paragraph: first **5** sizes;
 barcodes omitted with explicit null/empty/truncated semantics, not 100 x 100.
 
@@ -85,6 +86,35 @@ Existing authoritative business decisions are reused. Missing final-profit
 policy is a decision blocker: retain null rather than invent a formula.
 KIZ/standalone matcher and redesign remain excluded; no actual production,
 price changes, message sends, printing or exports are authorized by this restart.
+
+### Integration checkpoint (2026-09-10, HEAD 814a69d)
+
+Notification list/receipt client and UI are integrated (`8f88f7a`, `a926728`,
+`7f2dea7`); shared default-off API registration `3e911c0` has five focused
+entrypoint tests passing (2.24s, two dependency deprecation warnings).
+Schema0081 `5a4ee23` is imported, not applied to a persistent database. T1's
+preference service/config/legacy-writer fence package is still pending import;
+the preferences screen is therefore not an accepted end-to-end workflow yet.
+
+First manual Review backend `cb8496a` and local drawer `814a69d` are imported.
+Manual mode is initial draft only, requires an actual current policy/source,
+and remains dependent on T1's additive SQL encoder amendment. No database or
+full Reviews acceptance is claimed from pure tests. Helper owns only domain
+code; T1 remains sole DDL owner.
+
+History streaming source is integrated through `d48afb3`, independently reviewed.
+Its staged pages are provisional until guarded EOF; published source evidence
+is not the canonical Orders queue. Explicit dateFrom is mandatory. With no
+active job, history initialization may also create the normal content/prices
+sources and must disclose them; adding history to an active job leaves siblings
+unchanged. No inferred date window or implicit cursor reset.
+
+Dedicated local initdb remains blocked by host shared-memory allocation. The
+existing PostgreSQL alternative was rejected after read-only checks found
+generic trust authentication. No existing database/role, HBA, kernel setting,
+IPC segment or server was modified; no persistent service or live WB key is
+active. Disposable synthetic test databases are not approval to store real
+credentials on that shared server.
 
 ## Historical deferral (superseded where explicitly resumed above)
 
