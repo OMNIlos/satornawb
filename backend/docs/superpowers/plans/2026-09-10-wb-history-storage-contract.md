@@ -55,6 +55,15 @@ Retain the raw checksum separately; never rewrite checksums to force equality.
 
 ## Proposed repository protocol — confirm names before integration
 
+Accepted T1/root amendment: **only methods 1–3 are implemented in this package**.
+`begin_history_page` returns a string UUID. Method 3 atomically marks the staged
+page as published source evidence and advances source cursor; this is NOT
+canonical Orders queue publication. T3 owns the bounded canonical projector
+from committed pages. Methods 4–5 below describe that deferred projection concern,
+not calls T2 makes or prerequisites for the next provider page. No whole-page
+ORM upsert is authorized. History initialization requires an explicit validated
+account-owned `dateFrom`; no automatic now-minus90-days start policy.
+
 Use existing guarded `BatchLease` / `JobLocator` and `WbLiveError` safe codes.
 All calls are exact org/account/job/run/lease scoped; no UUID-only lookup.
 

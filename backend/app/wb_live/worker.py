@@ -33,7 +33,9 @@ def _next_due(source, attempt, retry_after, now):
     )
 
 
-def run_one_batch(repository, provider, locator: JobLocator, *, clock=None):
+def run_one_batch(
+    repository, provider, locator: JobLocator, *, clock=None, history_provider=None
+):
     clock = clock or (lambda: datetime.now(UTC))
     lease = repository.claim_batch(locator)
     if lease is None:
@@ -43,6 +45,12 @@ def run_one_batch(repository, provider, locator: JobLocator, *, clock=None):
         locator.account_id,
     ):
         raise WbLiveError("WB_BINDING_CHANGED")
+    if lease.source == "wb-statistics-supplier-orders":
+        from app.wb_live.history_worker import run_history_lease
+
+        if history_provider is None:
+            raise WbLiveError("WB_LIVE_UNAVAILABLE")
+        return run_history_lease(repository, history_provider, lease, clock=clock)
     try:
         credential = repository.resolve_for_fetch(lease)
         page = provider.fetch(

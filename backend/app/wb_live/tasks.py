@@ -3,6 +3,7 @@
 from celery import shared_task
 
 from app.wb_live.contracts import JobLocator, WbLiveError
+from app.wb_live.history_provider import ReadOnlyWbOrdersProvider
 from app.wb_live.provider import ReadOnlyWbProvider
 from app.wb_live.worker import dispatch_due, run_one_batch
 
@@ -29,7 +30,12 @@ def run_batch(organization_id: int, marketplace_account_id: int, job_id: str):
     locator = JobLocator(organization_id, marketplace_account_id, job_id)
     code = "WB_LIVE_UNAVAILABLE"
     try:
-        return run_one_batch(_repository(), ReadOnlyWbProvider(), locator)
+        return run_one_batch(
+            _repository(),
+            ReadOnlyWbProvider(),
+            locator,
+            history_provider=ReadOnlyWbOrdersProvider(),
+        )
     except WbLiveError as error:
         code = error.code
     except Exception:  # noqa: BLE001 -- redact DB/driver/config errors at the Celery log boundary.
