@@ -232,6 +232,27 @@ def test_changed_cancelled_observation_reconciles_without_rewriting_current(prep
     assert d.repo.commit_history_page(
         lease, page_id=page_id, end=events[-1], next_due_at=datetime.now(UTC)
     )
+    # Commit enforces the provider cooldown. Advance only this synthetic source's
+    # due time, as prepared does between pages; do not change runtime quota rules.
+    with d.engine.begin() as connection:
+        page_scope = dict(
+            _scope(d), job=UUID(lease.locator.job_id), run=UUID(lease.run_id)
+        )
+        assert connection.scalar(
+            text("""SELECT next_due_at>clock_timestamp()
+            FROM wb_live_sync_sources WHERE organization_id=:org AND marketplace_account_id=:account
+              AND job_id=:job AND run_id=:run AND source='wb-statistics-supplier-orders'
+              AND state='queued'"""),
+            page_scope,
+        )
+        due_run = connection.scalar(
+            text("""UPDATE wb_live_sync_sources SET next_due_at=clock_timestamp()
+            WHERE organization_id=:org AND marketplace_account_id=:account
+              AND job_id=:job AND run_id=:run AND source='wb-statistics-supplier-orders'
+              AND state='queued' RETURNING run_id"""),
+            page_scope,
+        )
+        assert due_run == UUID(lease.run_id)
     terminal_lease = d.repo.claim_batch(lease.locator)
     assert terminal_lease is not None and terminal_lease.run_id == lease.run_id
     terminal_page = capture.begin(d, terminal_lease)
