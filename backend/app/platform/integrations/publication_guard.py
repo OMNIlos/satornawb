@@ -133,7 +133,10 @@ def _contracts(principal, required_permissions, accounts, authorities):
     if (required_permissions & (PRODUCTION_PERMISSION_KEYS - PRODUCTION_READ_PERMISSIONS)
             and not PRODUCTION_READ_PERMISSIONS <= required_permissions):
         raise PublicationGuardError("publication_context_invalid")
-    if type(accounts) not in (tuple, list) or not accounts:
+    self_preferences = required_permissions in (
+        frozenset({"preferences:read"}), frozenset({"preferences:write"}))
+    if (type(accounts) not in (tuple, list)
+            or (not accounts and not (self_preferences and type(authorities) in (tuple, list) and not authorities))):
         raise PublicationGuardError("publication_binding_changed")
     account_map = {}
     for account in accounts:

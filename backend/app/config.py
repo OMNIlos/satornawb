@@ -56,6 +56,26 @@ _REVIEW_SHADOW_CONFIGURATION_INVALID = "review_shadow_configuration_invalid"
 _INT4_MAX = 2_147_483_647
 
 
+def _canonical_notification_settings() -> dict[str, object]:
+    invalid = "canonical_notifications_configuration_invalid"
+    enabled = os.getenv("VELLA_CANONICAL_NOTIFICATIONS_ENABLED", "false").strip().lower()
+    if enabled not in {"true", "false"}:
+        raise RuntimeError(invalid)
+    raw = os.getenv("VELLA_CANONICAL_NOTIFICATION_ACCOUNTS", "")
+    accounts: list[tuple[int, int, str]] = []
+    for entry in raw.split(",") if raw.strip() else ():
+        match = re.fullmatch(r"([1-9][0-9]{0,9}):([1-9][0-9]{0,9}):(wb|avito)", entry.strip())
+        if match is None:
+            raise RuntimeError(invalid)
+        org, account, provider = match.groups()
+        item = (int(org), int(account), provider)
+        if item[0] > _INT4_MAX or item[1] > _INT4_MAX or item in accounts:
+            raise RuntimeError(invalid)
+        accounts.append(item)
+    return {"canonical_notifications_enabled": enabled == "true",
+            "canonical_notification_accounts": tuple(accounts)}
+
+
 def _raise_review_shadow_configuration_invalid() -> None:
     raise RuntimeError(_REVIEW_SHADOW_CONFIGURATION_INVALID) from None
 
@@ -156,6 +176,8 @@ def _parse_key_versions_env(name: str) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class Settings:
+    canonical_notifications_enabled: bool = False
+    canonical_notification_accounts: tuple[tuple[int, int, str], ...] = ()
     app_name: str = "Vella WB Backend"
     environment: str = "local"
     api_prefix: str = "/api/v1"
@@ -283,6 +305,7 @@ def get_settings() -> Settings:
     auth_cookie_secure_raw = os.getenv("VELLA_AUTH_COOKIE_SECURE")
     return Settings(
         **_heartbeat_env_settings(),
+        **_canonical_notification_settings(),
         app_name=os.getenv("VELLA_APP_NAME", "Vella WB Backend"),
         environment=environment,
         api_prefix=os.getenv("VELLA_API_PREFIX", "/api/v1"),

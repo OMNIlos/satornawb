@@ -4,7 +4,7 @@ import re
 import secrets
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from hmac import compare_digest
 from typing import Any
 
@@ -2157,9 +2157,26 @@ def update_preferences(
     user_agent: str | None = None,
 ) -> UserPreferencesView:
     now = _utc_now()
+    canonical = get_settings().canonical_notifications_enabled
+    if canonical:
+        unavailable = False
+        try:
+            unavailable = get_engine().dialect.name != "postgresql"
+        except Exception:  # noqa: BLE001 - engine/configuration diagnostics are private.
+            unavailable = True
+        if unavailable:
+            raise HTTPException(503, detail={"code": "PREFERENCES_UNAVAILABLE"})
 
     def _db(session: Session) -> UserPreferencesView:
-        row = session.scalar(select(LkUserPreferenceRow).where(LkUserPreferenceRow.user_id == user_id))
+        statement = select(LkUserPreferenceRow).where(LkUserPreferenceRow.user_id == user_id)
+        if canonical:
+            statement = statement.with_for_update()
+        row = session.scalar(statement)
+        if canonical:
+            if row is None:
+                raise HTTPException(503, detail={"code": "PREFERENCES_UNAVAILABLE"})
+            if row.notification_settings != notification_settings:
+                raise HTTPException(409, detail={"code": "PREFERENCES_CANONICAL_REQUIRED"})
         if row is None:
             row = LkUserPreferenceRow(
                 user_id=user_id,
@@ -2174,6 +2191,12 @@ def update_preferences(
             row.export_settings = export_settings
             row.timezone = timezone_value
             row.updated_at = now
+        if canonical:
+            session.add(LkAuditEventRow(
+                organization_id=organization_id, actor_user_id=actor_user_id,
+                action="preferences.update", object_type="lk_preferences", object_id=user_id,
+                reason="preferences updated",
+            ))
         session.commit()
         session.refresh(row)
         return UserPreferencesView(
@@ -2181,10 +2204,15 @@ def update_preferences(
             notificationSettings=row.notification_settings,
             exportSettings=row.export_settings,
             timezone=row.timezone,
-            updatedAt=row.updated_at,
+            updatedAt=row.updated_at.astimezone(UTC) if canonical else row.updated_at,
         )
 
     result = _run_db(_db)
+    if canonical and result is None:
+        # _run_db's legacy outage fallback must never accept this activated writer.
+        raise HTTPException(503, detail={"code": "PREFERENCES_READBACK_REQUIRED"})
+    if canonical:
+        return result
     if result is not None:
         _append_audit_event(
             organization_id=organization_id,
