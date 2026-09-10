@@ -447,6 +447,41 @@ same-fixture replay/EOF checks. No schema or legacy-rule weakening is authorized
 An independent test-only helper prepares the final wb_live_api Avito writer gate;
 T1 retains exact grants ownership. These outstanding gates are not completion.
 
+### Saved history read checkpoint (2026-09-10, HEAD 6bf8676)
+
+The existing-empty-identity comparator fix `5aac361` and genuine history replay
+tests are integrated. ROOT reran the complete four-case history file on
+`a21b5ee`: 4 passed in 9.08s, exit 0. This proves a fresh projection-job replay,
+empty EOF, initial projection onto a pre-existing empty identity and changed
+cancellation reconciliation without overwriting current state. The changed-run
+fixture now uses the genuine manual initializer and exact source cooldown;
+production selection and authority rules were not weakened. An older test
+session's result was unavailable and is not counted as additional evidence.
+
+Final API Avito source grants `5c2f1d6` closed the diagnosed SQLSTATE 42501:
+ROOT's unchanged final API source-sync test passed (1 in 4.01s). No send, auth,
+observation-update, delete or additional sequence rights were added.
+
+Genuine history-to-saved-view test `6bf8676` passed independent read-only review
+and ROOT PostgreSQL (1 passed in 4.71s, exit 0). It calls the real history
+participant and guarded owner-side freeze, then discovers and reads the saved
+view through the final API role. Selected-account restriction, session revocation
+and denied snapshot writes are asserted. Both fresh fixture runs completed their
+owned database/role cleanup assertions. This does NOT prove a final snapshot
+publisher runtime identity, HTTP wiring, complete history coverage or UI parity.
+CI now includes both history test files and the final API Avito sync regression;
+the hosted workflow itself has not been run.
+
+ROOT also reran the existing `test_orders_job_publication.py` against the current
+migration head: 11 passed in 6.05s, exit 0 and owned cleanup assertions passed.
+This covers the bounded pre-existing publication path, not the entire backend
+suite. Scoped Ruff and `git diff --check` passed.
+
+T3 owns the next bounded read-only inventory of the existing snapshot publisher
+and explicit history-to-saved-queue wiring. API reads must not acquire publisher
+grants. No production, provider requests, real keys, operational provisioning,
+rollout, printing, exports or remote pushes occurred.
+
 ## Historical deferral (superseded where explicitly resumed above)
 
 Production/printing/KIZ/standalone matcher; new financial formulas/redesign; all 70 historical failures except an actual current-path blocker; broad fault matrix and backup-restore program. Package 2 waits for the real-data first-path acceptance rather than silently proceeding on fixtures.

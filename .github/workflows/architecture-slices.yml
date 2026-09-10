@@ -91,10 +91,13 @@ jobs:
             tests/test_review_local_api_role.py \
             tests/test_review_avito_shadow_postgres.py \
             tests/test_review_canonical_avito_sync_postgres.py \
+            tests/test_review_canonical_avito_sync_local_api_role.py \
             tests/test_wb_history_projection_migration.py \
             tests/test_wb_history_projection_role_grants.py \
             tests/test_wb_history_projection_authority.py \
             tests/test_orders_history_child_publication.py \
+            tests/test_orders_history_replay.py \
+            tests/test_orders_history_saved_view_local_api_role.py \
             tests/test_orders_history_used_downgrade.py \
             tests/test_sku_override_local_api_role.py \
             tests/test_account_avito_stats_local_api_role.py \
