@@ -4405,8 +4405,11 @@ def get_reports_latest_cache(
                     source=source,
                     report=payload,
                 )
-                job = _completed_report_job_from_cache(report_id, requested_from, requested_to, groupBy, cache, payload.get("reportJob") if isinstance(payload.get("reportJob"), dict) else {})
-                save_source_cache(actor.organization_id, _report_job_cache_key(report_id, requested_from, requested_to, groupBy), job)
+                job_key = _report_job_cache_key(report_id, requested_from, requested_to, groupBy, source)
+                job = get_source_cache(actor.organization_id, job_key, slim=False) or {}
+                if not _report_job_is_reusable(job):
+                    job = _completed_report_job_from_cache(report_id, requested_from, requested_to, groupBy, cache, job)
+                    save_source_cache(actor.organization_id, job_key, job)
                 payload["cache"] = _report_payload_cache_meta(cache, date_range, "derived")
                 payload["reportJob"] = job
                 return payload

@@ -137,6 +137,38 @@ def test_missing_source_read_preserves_refresh_and_does_not_allow_duplicate(runt
     assert runtime.refreshes == []
 
 
+@pytest.mark.parametrize("active", [False, True])
+def test_wow_derived_latest_cache_preserves_real_live_job(runtime, monkeypatch, active):
+    key, job = seed(runtime, "week-over-week", cached=False)
+    if not active:
+        runtime.cache.pop((1, key))
+    monkeypatch.setattr(
+        reports,
+        "_build_week_over_week_fallback_report",
+        lambda **kwargs: {
+            "rows": [{"sku": "SKU-1", "orders": {"units": 1}}],
+            "reportJob": {"state": "completed", "taskId": None, "percent": 100},
+        },
+    )
+    response = runtime.api.get(
+        "/api/wb/reports/week-over-week/latest-cache", params=PARAMS
+    )
+    assert response.status_code == 200
+    assert response.json()["rows"][0]["sku"] == "SKU-1"
+    assert response.json()["cache"]["status"] == "derived"
+    if active:
+        assert response.json()["reportJob"] == job
+        assert runtime.cache[1, key] == job
+        assert key not in runtime.writes
+    else:
+        assert response.json()["reportJob"]["state"] == "completed"
+        assert runtime.cache[1, key]["state"] == "completed"
+    payload_key = reports._report_cache_key(
+        "week-over-week", START, END, "sku", "operational"
+    )
+    assert runtime.cache[1, payload_key]["report"]["rows"]
+
+
 @pytest.mark.parametrize("state,stage", [("running", "pnl"), ("queued", "")])
 def test_missing_source_does_not_start_refresh_over_active_build(runtime, state, stage):
     key, job = seed(runtime, "pnl", cached=False, state=state, stage=stage)
