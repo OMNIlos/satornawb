@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { RouteErrorBoundary } from '@/components/RouteErrorBoundary'
 import { ThemeProvider } from '@/components/ThemeProvider'
@@ -7,7 +8,6 @@ import { TemplatesPage } from './features/wb-repricer/TemplatesPage'
 import { VellaFoundationWorkbench } from './components/vella/VellaFoundationWorkbench'
 import { VellaSystemCatalog } from './components/vella-system/VellaSystemCatalog'
 import { VellaStaticPage } from './features/vella-static/VellaStaticPage'
-import { VellaHtmlParityPage } from './features/vella-parity/VellaHtmlParityPage'
 import { VellaReactApp } from './features/vella-react/VellaReactApp'
 import { VellaHtmlRepricer } from './components/vella-system/html/VellaHtmlRepricer'
 import { WbRepricerPage } from './features/wb-repricer/WbRepricerPage'
@@ -26,6 +26,37 @@ import { AuthProvider } from './features/auth/AuthProvider'
 import { LoginPage } from './features/auth/LoginPage'
 import { RegisterPage } from './features/auth/RegisterPage'
 import { PublicOnlyAuth, RequireAuth } from './features/auth/AuthRoutes'
+
+const LazyVellaHtmlParityPage = lazy(() => import('./features/vella-parity/VellaHtmlParityPage')
+  .then(module => ({ default: module.VellaHtmlParityPage }))
+  .catch(() => ({ default: ParityChunkLoadError })))
+
+function ParityChunkLoadError() {
+  return (
+    <div role="alert" className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-slate-100">
+      <div className="rounded-2xl border border-white/10 bg-white/5 px-5 py-4 text-sm">
+        <h1 className="mb-2 text-lg">Раздел не загрузился</h1>
+        <p className="mb-4">Не удалось загрузить код раздела. Обновите страницу, чтобы повторить загрузку.</p>
+        <button type="button" className="rounded-lg border border-white/20 px-4 py-2" onClick={() => window.location.reload()}>
+          Обновить страницу
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function VellaHtmlParityPage() {
+  // Import failures have explicit document reload recovery; render errors still reach RouteErrorBoundary.
+  return (
+    <Suspense fallback={
+      <div role="status" className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-slate-100">
+        <div className="rounded-2xl border border-white/10 bg-white/5 px-5 py-4 text-sm">Загружаем раздел...</div>
+      </div>
+    }>
+      <LazyVellaHtmlParityPage />
+    </Suspense>
+  )
+}
 
 function RoutedApp() {
   const location = useLocation()
