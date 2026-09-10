@@ -61,6 +61,14 @@ def test_final_api_role_http_create_read_assign_replay_conflict_and_account_deni
         assert before.status_code == 200
         assert before.json()["item"]["version"] == "1"
         assert before.json()["item"]["catalogSkuId"] is None
+        recovery_path = (
+            f"{base}/by-order-item/{item.order_item_id}"
+            f"?expectedSourceItemVersion={item.version}"
+        )
+        recovered = client.get(recovery_path)
+        assert recovered.status_code == 200
+        assert recovered.headers["cache-control"] == "no-store"
+        assert recovered.json() == before.json()
         command = {"expectedVersion": "1", "catalogSkuId": skus[0],
             "idempotencyKey": "synthetic-http-assignment", "reason": "synthetic manual assignment"}
         assigned = client.post(f"{base}/{work}/assignments", json=command)
@@ -74,6 +82,9 @@ def test_final_api_role_http_create_read_assign_replay_conflict_and_account_deni
         assert current.json()["item"]["catalogSkuId"] == skus[0]
         assert current.json()["item"]["plannedQuantity"] == 0
         assert current.json()["item"]["remainingQuantity"] == current.json()["item"]["requiredQuantity"]
+        recovered_after_assignment = client.get(recovery_path)
+        assert recovered_after_assignment.status_code == 200
+        assert recovered_after_assignment.json() == current.json()
         replay = client.post(f"{base}/{work}/assignments", json=command)
         assert replay.status_code == 200
         assert replay.json() == {**saved, "replayed": True}
