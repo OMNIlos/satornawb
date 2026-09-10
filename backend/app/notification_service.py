@@ -66,7 +66,16 @@ class ReviewNotificationService:
         # This is a checked, exact visible set, not a reusable authority token.
         return self._execute(authenticated_actor, marketplace_account_id, marketplace, event_ids, capabilities=True)
 
-    def _execute(self, actor, account_id, marketplace, event_ids, *, action=None, capabilities=False):
+    def list_visible(self, *, authenticated_actor, marketplace_account_id, marketplace, limit, cursor, codec):
+        from app.notification_list import NotificationListCursorCodec
+
+        _require(type(limit) is int and 1 <= limit <= 100 and type(codec) is NotificationListCursorCodec,
+                 "NOTIFICATION_INVALID")
+        _require(cursor is None or type(cursor) is str and 0 < len(cursor) <= 4096, "NOTIFICATION_INVALID")
+        return self._execute(authenticated_actor, marketplace_account_id, marketplace, [],
+                             discovery=(limit, cursor, codec))
+
+    def _execute(self, actor, account_id, marketplace, event_ids, *, action=None, capabilities=False, discovery=None):
         _require(type(actor) is ActorContext and bool(actor.session_id), "NOTIFICATION_DENIED")
         _require(type(account_id) is int and 0 < account_id <= 2**31 - 1
                  and type(marketplace) is str and marketplace in {"wb", "avito"}, "NOTIFICATION_INVALID")
@@ -95,7 +104,13 @@ class ReviewNotificationService:
             set_marketplace_account_context(session, organization_id=actor.organization_id, marketplace_account_id=account_id)
             repository = NotificationRepository(session.connection(), ReviewBindingDescriptor(actor.organization_id,
                 account_id, marketplace, binding.external_account_id, binding.credential_ref))
-            if action is None:
+            if discovery is not None:
+                from app.notification_list import read_notification_page
+
+                limit, cursor, codec = discovery
+                result = read_notification_page(repository, actor=actor, member=member,
+                                                limit=limit, cursor=cursor, codec=codec)
+            elif action is None:
                 result = repository.read_visible(event_ids=ids, recipient_membership_id=member)
                 if capabilities:
                     result = {"organizationId": actor.organization_id, "marketplaceAccountId": account_id,
@@ -103,7 +118,9 @@ class ReviewNotificationService:
                               "canRead": True, "canMarkRead": True, "canDismiss": True}
             else:
                 result = repository.mark_visible(event_ids=ids, recipient_membership_id=member, action=action)
-            if capabilities:
+            if discovery is not None:
+                pass
+            elif capabilities:
                 result["schemaVersion"] = "review-notification-capabilities-v1"
             else:
                 result = {"schemaVersion": "review-notification-receipts-v1" if action else "review-notification-visible-v1",
