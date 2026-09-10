@@ -24,6 +24,7 @@ from app.wb_live.auth import require_live_actor, acquire_read_job_guard
 from app.wb_live.contracts import ACTIVE_STATES, ERROR_CODES, SOURCES, BatchLease, JobLocator, WbLiveError
 from app.wb_live.orm import WbLiveSyncJobRow as Job, WbLiveSyncSourceRow as Source
 from app.wb_live.orm import WbLiveProductRow as Product, WbLiveProductSizeRow as Size
+from app.wb_live import history_repository as history
 
 LEASE_SECONDS = 120
 MAX_ATTEMPTS = 8
@@ -34,7 +35,7 @@ def _safe(fn):
         try:
             return fn(*args, **kwargs)
         except WbLiveError as e:
-            if e.code == "WB_LEASE_LOST" and fn.__name__ in {"commit_batch", "defer_batch", "fail_batch"}:
+            if e.code == "WB_LEASE_LOST" and fn.__name__ in {"commit_batch", "defer_batch", "fail_batch", "stage_history_rows", "commit_history_page"}:
                 return False
             raise
         except PublicationGuardError as e:
@@ -74,6 +75,18 @@ def _parse_time(value):
 class WbLiveRepository:
     def __init__(self, session_factory, keyring_loader=_load_keyring):
         self._factory, self._keyring = session_factory, keyring_loader
+
+    @_safe
+    def begin_history_page(self, lease, *, request_checksum):
+        return history.begin_history_page(self, lease, request_checksum=request_checksum)
+
+    @_safe
+    def stage_history_rows(self, lease, *, page_id, first_ordinal, rows):
+        return history.stage_history_rows(self, lease, page_id=page_id, first_ordinal=first_ordinal, rows=rows)
+
+    @_safe
+    def commit_history_page(self, lease, *, page_id, end, next_due_at):
+        return history.commit_history_page(self, lease, page_id=page_id, end=end, next_due_at=next_due_at)
 
     @contextmanager
     def _session(self, locator=None):
@@ -135,9 +148,11 @@ class WbLiveRepository:
         old = {} if previous is None else {r.source: r for r in self._sources(s, previous)}
         s.add(job)
         s.flush()
-        for name in SOURCES:
+        names = SOURCES + ((history.HISTORY_SOURCE,) if history.HISTORY_SOURCE in old
+            and old[history.HISTORY_SOURCE].state == "completed" else ())
+        for name in names:
             checkpoint = {}
-            if name == "content" and name in old and old[name].state == "completed" and old[name].checkpoint:
+            if name in {"content", history.HISTORY_SOURCE} and name in old and old[name].state == "completed" and old[name].checkpoint:
                 checkpoint = dict(old[name].checkpoint)
             s.add(Source(organization_id=job.organization_id, marketplace_account_id=job.marketplace_account_id,
                 job_id=job.job_id, source=name, run_id=uuid4(), state="queued", checkpoint=checkpoint,
@@ -145,6 +160,67 @@ class WbLiveRepository:
                 updated_at=now))
         s.flush()
         return job
+
+    @_safe
+    def create_history_job(self, actor, account_id, idempotency_key, *, date_from):
+        history.validate_date_from(date_from)
+        if type(idempotency_key) is not str or not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", idempotency_key):
+            raise WbLiveError("WB_SYNC_CONFLICT")
+        with self._session() as s:
+            principal, a, guard = self._actor_guard(s, actor, account_id)
+            request = s.execute(text("SELECT job_id,date_from FROM wb_live_history_requests WHERE "
+                "organization_id=:o AND marketplace_account_id=:a AND idempotency_key=:k"),
+                {"o": actor.organization_id, "a": account_id, "k": idempotency_key}).mappings().first()
+            if request is not None:
+                if request["date_from"] != date_from:
+                    raise WbLiveError("WB_SYNC_CONFLICT")
+                return self._view(s, self._job(s, JobLocator(actor.organization_id, account_id, str(request["job_id"]))), account_id)
+            latest = s.scalar(select(Job).where(Job.organization_id == actor.organization_id, Job.marketplace_account_id == account_id)
+                .order_by(Job.created_at.desc(), Job.job_id.desc()).limit(1).with_for_update().execution_options(populate_existing=True))
+            metadata = _get_marketplace_credential_metadata_in_session(s,
+                MarketplaceAccountCredentialOwner(actor.organization_id, account_id, "wb"), "wb_api")
+            now = s.scalar(select(func.clock_timestamp()))
+            if metadata is None or metadata.revoked_at is not None or (metadata.expires_at is not None and metadata.expires_at <= now):
+                raise WbLiveError("WB_BINDING_CHANGED")
+            sources = [] if latest is None else self._sources(s, latest, lock=True)
+            prior = next((r for r in sources if r.source == history.HISTORY_SOURCE), None)
+            active = latest is not None and latest.state in ACTIVE_STATES
+            if active or prior is not None:
+                if (latest.credential_id != metadata.credential_id or latest.credential_generation != metadata.generation
+                        or latest.account_incarnation != a.ingestion_binding_version or latest.external_account_id != a.external_account_id
+                        or latest.credential_ref != a.credential_ref):
+                    raise WbLiveError("WB_BINDING_CHANGED")
+                if (latest.user_id, latest.membership_id) != (principal.user_id, principal.membership_id):
+                    raise WbLiveError("WB_ACCESS_DENIED")
+            if prior is not None:
+                if prior.error_code in {"WB_ACCESS_DENIED", "WB_BINDING_CHANGED"}:
+                    raise WbLiveError(prior.error_code)
+                if prior.checkpoint != {"dateFrom": date_from}:
+                    raise WbLiveError("WB_SYNC_CONFLICT")
+            # Account lock from the original live HTTP guard serializes all starts.
+            # Preserve the greatest reserved provider floor, even across job IDs.
+            floor = s.scalar(select(func.max(Source.next_due_at)).where(Source.organization_id == actor.organization_id,
+                Source.marketplace_account_id == account_id, Source.source == history.HISTORY_SOURCE))
+            job = latest if active else self._new_job(s, principal, a, metadata, previous=latest)
+            current = prior if active else next((r for r in self._sources(s, job) if r.source == history.HISTORY_SOURCE), None)
+            if current is None:
+                current = Source(organization_id=actor.organization_id, marketplace_account_id=account_id, job_id=job.job_id,
+                    source=history.HISTORY_SOURCE, run_id=uuid4(), state="queued", checkpoint={"dateFrom": date_from},
+                    processed=0, revision=0, attempt=0, next_due_at=max(now, floor) if floor is not None else now, updated_at=now)
+                s.add(current)
+                job.state, job.updated_at = "queued" if job.state == "completed" else job.state, now
+            elif current.state == "failed":
+                # Only an explicit fresh request of its original authority retries.
+                current.state, current.attempt, current.error_code = "queued", 0, None
+                current.lease_token = current.lease_expires_at = None
+                current.next_due_at, current.updated_at = max(now, current.next_due_at, floor or now), now
+                job.updated_at = now
+            s.flush()
+            s.execute(text("INSERT INTO wb_live_history_requests(organization_id,marketplace_account_id,idempotency_key,job_id,date_from) "
+                "VALUES(:o,:a,:k,:j,:date_from)"),
+                {"o": actor.organization_id, "a": account_id, "k": idempotency_key, "j": job.job_id, "date_from": date_from})
+            guard.revalidate_before_write()
+            return self._view(s, job, account_id)
 
     @_safe
     def create_job(self, actor, account_id, idempotency_key):
@@ -235,7 +311,7 @@ class WbLiveRepository:
                     return None
                 if r.state == "completed":
                     checkpoint = {}
-                    if r.source == "content" and r.checkpoint:
+                    if r.source in {"content", history.HISTORY_SOURCE} and r.checkpoint:
                         checkpoint = dict(r.checkpoint)
                     r.run_id, r.checkpoint, r.processed, r.attempt = uuid4(), checkpoint, 0, 0
                     r.revision += 1
@@ -247,7 +323,7 @@ class WbLiveRepository:
                 r.attempt += 1
                 r.lease_token, r.lease_expires_at = uuid4(), now + timedelta(seconds=LEASE_SECONDS)
                 # Reserve provider pacing before HTTP, including worker death.
-                r.next_due_at = now + timedelta(seconds=900 if r.source == "prices" else .6)
+                r.next_due_at = now + timedelta(seconds=history.HISTORY_INTERVAL if r.source == history.HISTORY_SOURCE else (900 if r.source == "prices" else .6))
                 r.state, r.updated_at, r.error_code = "running", now, None
                 job.state, job.updated_at = "running", now
                 return BatchLease(locator, r.source, str(r.lease_token), job.credential_id, job.credential_generation,
@@ -271,7 +347,18 @@ class WbLiveRepository:
 
     def _leased(self, s, lease):
         job = self._job(s, lease.locator)
-        self._guard(s, job)
+        guard = self._guard(s, job)
+        return self._lease_from_guard(s, lease, guard)
+
+    def _lease_from_guard(self, s, lease, guard):
+        # A transaction-bound witness, not an authorization-skipping boolean.
+        # Revalidation rejects detached, replaced, poisoned or expired contexts.
+        session_ref = getattr(guard, "_session_ref", None)
+        if (not callable(session_ref) or session_ref() is not s
+                or getattr(guard, "_job_id", None) != UUID(lease.locator.job_id)
+                or getattr(guard, "_binding", ())[:2] != (lease.locator.org_id, lease.locator.account_id)):
+            raise WbLiveError("WB_LEASE_LOST")
+        guard.revalidate_before_write()
         job = self._job(s, lease.locator, lock=True)
         r = s.scalar(select(Source).where(Source.organization_id == lease.locator.org_id,
             Source.marketplace_account_id == lease.locator.account_id, Source.job_id == UUID(lease.locator.job_id),
@@ -356,7 +443,8 @@ class WbLiveRepository:
             job, r, now = self._leased(s, lease)
             terminal = terminal or r.attempt >= MAX_ATTEMPTS
             r.state, r.error_code, r.updated_at = ("failed" if terminal else "queued"), code, now
-            r.next_due_at = max(_utc(next_due), now + timedelta(seconds=max(900 if lease.source == "prices" else .6, 2 ** min(r.attempt, 8))))
+            minimum = history.HISTORY_INTERVAL if lease.source == history.HISTORY_SOURCE else (900 if lease.source == "prices" else .6)
+            r.next_due_at = max(_utc(next_due), now + timedelta(seconds=max(minimum, 2 ** min(r.attempt, 8))))
             r.lease_token = r.lease_expires_at = None
             self._rollup(s, job, now)
             return True

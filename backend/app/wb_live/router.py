@@ -10,6 +10,7 @@ from app.routers.cabinet import _credential_status_view
 from app.wb_live.connection import WbAccountConnection
 from app.wb_live.contracts import WbLiveError
 from app.wb_live.repository import WbLiveRepository
+from app.wb_live.history_repository import validate_date_from
 
 router = APIRouter(tags=["wb-live"])
 
@@ -59,6 +60,21 @@ class SyncRequest(BaseModel):
             raise ValueError("WB_SYNC_PAYLOAD_INVALID")
         return value
 
+class HistoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    dateFrom: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def safe_shape(cls, value):
+        if type(value) is not dict or set(value) != {"dateFrom"}:
+            raise ValueError("WB_HISTORY_PAYLOAD_INVALID")
+        try:
+            validate_date_from(value["dateFrom"])
+        except WbLiveError:
+            raise ValueError("WB_HISTORY_PAYLOAD_INVALID") from None
+        return value
+
 @router.get("/api/v1/cabinet/marketplace-accounts")
 def accounts(provider: str = Query("wb", pattern="^wb$"), actor: ActorContext = Depends(get_marketplace_credential_actor),
              service=Depends(live_connection)):
@@ -88,5 +104,13 @@ def start(account_id: int, payload: SyncRequest, idempotency_key: str = Header(a
     try:
         # Scheduler polls this committed intent; no Redis dependency in acceptance.
         return {"data": repo.create_job(actor, account_id, idempotency_key)}
+    except Exception as e:
+        raise error(e) from None
+
+@router.post("/api/v2/wb/accounts/{account_id}/history")
+def start_history(account_id: int, payload: HistoryRequest, idempotency_key: str = Header(alias="Idempotency-Key"),
+                  actor: ActorContext = Depends(get_marketplace_credential_actor), repo=Depends(live_repository)):
+    try:
+        return {"data": repo.create_history_job(actor, account_id, idempotency_key, date_from=payload.dateFrom)}
     except Exception as e:
         raise error(e) from None
