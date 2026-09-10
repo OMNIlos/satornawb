@@ -17,6 +17,8 @@ from app.orders.contracts import (
     DeadlineEvidence,
     OrderReadRow,
 )
+from app.orders.history_publication import SOURCE_CONTRACT as HISTORY_SOURCE_CONTRACT
+from app.orders.history_publication import require_history_projection_receipt
 from app.orders.ingestion import _integer
 from app.orders.serialization import (
     deserialize_observation,
@@ -141,9 +143,24 @@ def freeze_orders_view(
                         raise OrderContractValidationError(
                             "Source run account binding missing or changed"
                         )
-                    if source_run in current_runs and (
-                        source_binding["state"] != "complete"
-                        or source_binding["manifest_state"] != "complete"
+                    history_receipt = (
+                        source_binding["source_contract_version"]
+                        == HISTORY_SOURCE_CONTRACT
+                    )
+                    if history_receipt:
+                        require_history_projection_receipt(
+                            session,
+                            organization_id=principal.organization_id,
+                            marketplace_account_id=account.marketplace_account_id,
+                            run=source_binding,
+                        )
+                    if (
+                        source_run in current_runs
+                        and not history_receipt
+                        and (
+                            source_binding["state"] != "complete"
+                            or source_binding["manifest_state"] != "complete"
+                        )
                     ):
                         raise OrderContractValidationError(
                             "Current source publication incomplete"
