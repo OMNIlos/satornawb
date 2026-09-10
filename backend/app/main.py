@@ -159,6 +159,10 @@ def create_app() -> FastAPI:
     app.include_router(avito_repricer_router)
     app.include_router(avito_reviews_router)
     app.include_router(avito_stats_router)
+    if getattr(settings, "canonical_avito_stats_enabled", False) is True:
+        from app.avito_stats_bootstrap import register_avito_stats_routes
+
+        register_avito_stats_routes(app)
     app.include_router(cabinet_router)
     if settings.canonical_account_discovery_enabled:
         from app.account_discovery_bootstrap import register_account_discovery_routes
