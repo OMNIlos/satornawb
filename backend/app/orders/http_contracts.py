@@ -48,3 +48,18 @@ class OrdersReadPageResponse(BaseModel):
     rows: tuple[OrdersReadRowResponse, ...]
     next_cursor: str | None
     account_coverage: tuple[AccountCoverage, ...]
+
+
+class OrdersSavedSnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    selection_kind: Literal["saved_snapshot"] = "saved_snapshot"
+    organization_id: int
+    marketplace_account_ids: tuple[int, ...]
+    snapshot_id: Annotated[str, Field(pattern=r"^[1-9][0-9]*$")]
+    query_checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    high_water_mark: str
+    published_at: datetime
+    coverage_state: Literal["complete", "partial", "missing"]
+    account_coverage: tuple[AccountCoverage, ...]
+    row_count: Annotated[str, Field(pattern=r"^(0|[1-9][0-9]*)$")]

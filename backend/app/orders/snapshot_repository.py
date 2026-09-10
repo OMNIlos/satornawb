@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.modules.orders import ExternalOrderIdentity, OrderContractValidationError
 from app.orders.contracts import AccountCoverage, OrderReadPage, OrderReadRow
 from app.orders.ingestion import _integer
+from app.orders.query import OrdersReadFilters
 from app.orders.serialization import (
     deserialize_observation,
     deserialize_read_row,
@@ -238,6 +239,7 @@ class OrdersSnapshotRepository:
         *,
         after_position: int = 0,
         limit: int = 100,
+        filters: OrdersReadFilters | None = None,
     ) -> SnapshotChunk:
         self._prepare(query_checksum)
         for value in (snapshot_id, limit):
@@ -271,16 +273,18 @@ class OrdersSnapshotRepository:
             )
         if after_position > header["row_count"]:
             raise OrderContractValidationError("Snapshot position outside bounds")
+        filter_sql, filter_parameters = (filters or OrdersReadFilters()).sql()
         records = (
             self.session.execute(
-                text("""SELECT position,row_version,marketplace_account_id,row_payload
+                text(f"""SELECT position,row_version,marketplace_account_id,row_payload
             FROM order_read_snapshot_rows WHERE organization_id=:org AND snapshot_id=:snapshot
-            AND position>:position ORDER BY position LIMIT :limit"""),
+            AND position>:position {filter_sql} ORDER BY position LIMIT :limit"""),
                 {
                     "org": self.org,
                     "snapshot": snapshot_id,
                     "position": after_position,
                     "limit": limit + 1,
+                    **filter_parameters,
                 },
             )
             .mappings()
