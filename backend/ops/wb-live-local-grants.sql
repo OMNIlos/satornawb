@@ -77,10 +77,45 @@ GRANT EXECUTE ON FUNCTION public.production_exact_text(text),
 -- Inbox discovery/list and recipient receipts only; no notification production.
 GRANT SELECT ON notification_in_app_events,notification_in_app_receipts,
  review_facts,review_observations,review_sync_runs_v2 TO wb_live_api;
+-- Canonical source ingestion for the account-bound API workflow.
+-- Existing source SELECT above is retained; mutation columns are explicit.
+-- run_sequence is GENERATED ALWAYS and deliberately omitted. No direct
+-- sequence, source DELETE, observation UPDATE or additional send authority.
+GRANT SELECT(organization_id,marketplace_account_id,marketplace,sync_run_id,
+ review_id,observation_id,content_checksum,ordinal,observed_at)
+ ON review_sync_run_items TO wb_live_api;
+GRANT INSERT(organization_id,marketplace_account_id,marketplace,sync_run_id,
+ source_run_id,source_run_id_utf8,request_checksum,status,completeness,started_at,
+ completed_at,observed_count,manifest_checksum,coverage,coverage_utf8,error_code,
+ account_binding_schema_version,account_binding_external_account_id,
+ account_binding_credential_ref,account_binding_payload,account_binding_checksum)
+ ON review_sync_runs_v2 TO wb_live_api;
+GRANT UPDATE(status,completeness,completed_at,observed_count,manifest_checksum,
+ coverage,coverage_utf8,error_code) ON review_sync_runs_v2 TO wb_live_api;
+GRANT INSERT(organization_id,marketplace_account_id,marketplace,review_id,
+ external_review_id,external_review_id_utf8,current_observation_id,version,
+ last_source_run_id,last_source_run_sequence,source_order_state,
+ ambiguous_observation_id,first_observed_at,last_observed_at)
+ ON review_facts TO wb_live_api;
+GRANT UPDATE(current_observation_id,source_order_state,ambiguous_observation_id,
+ version,last_source_run_id,last_source_run_sequence,last_observed_at)
+ ON review_facts TO wb_live_api;
+GRANT INSERT(organization_id,marketplace_account_id,marketplace,observation_id,
+ review_id,revision,source_run_id,external_product_id,external_product_id_utf8,
+ text,text_utf8,source_status,source_status_utf8,source_schema_version,
+ source_schema_version_utf8,normalization_version,normalization_version_utf8,
+ source_created_at,source_updated_at,rating,answered,can_answer,observed_at,content_checksum)
+ ON review_observations TO wb_live_api;
+GRANT INSERT(organization_id,marketplace_account_id,marketplace,sync_run_id,
+ review_id,observation_id,content_checksum,ordinal,observed_at)
+ ON review_sync_run_items TO wb_live_api;
+-- The other three source codecs are already granted explicitly below.
+GRANT EXECUTE ON FUNCTION public.review_coverage_json_object_utf8(bytea) TO wb_live_api;
 GRANT INSERT ON notification_in_app_receipts TO wb_live_api;
 GRANT UPDATE(read_at,dismissed_at) ON notification_in_app_receipts TO wb_live_api;
 -- Local Review context/manual draft/edit/approval/history only. Existing owner-
--- seeded policy/source are read, never created or published by this API role.
+-- seeded policy is read, never created by this API role. Canonical source
+-- ingestion has its own bounded grants above; draft/send rights are unchanged.
 GRANT SELECT ON review_policy_versions,review_policy_heads,review_draft_revisions,
  review_decisions,review_workflow_heads,review_local_audit,review_local_command_receipts TO wb_live_api;
 GRANT INSERT ON review_draft_revisions,review_decisions,review_workflow_heads,
