@@ -5,6 +5,45 @@ User scope: attachment 5b6a9f7b-0dde-4dd3-b7f4-83a288517901, read in full.
 Coordinator: current task 01a08045-7a78-72d2-ad9a-34a2bc76f519.
 Integration: codex/wb-live-integration, architecture-integration-filipp worktree.
 
+## Current execution override — one terminal
+
+The user stopped parallel execution. ROOT alone owns subsequent implementation,
+schema changes, tests, review and integration; historical owner assignments below
+describe provenance, not permission to resume other terminals. Preserve their
+worktrees. No subagents or terminal delegation unless the user re-enables them.
+
+The full-original-T1–T4 scope remains applicable. The smaller WB-live package is
+the first useful-path priority, not a replacement denominator for total progress.
+The requested 50% checkpoint must use traceable accepted requirements, not test
+counts, commit counts or the historical 77% estimate. The denominator/accepted
+requirement ledger is not yet complete, so no 50% claim is made.
+
+Next-path prioritization: dedicated persistent infrastructure and the existing
+WB products path precede new Orders snapshot-publisher contracts. Source inspection
+and the composed test below show that products do not depend on Orders snapshots.
+Do not start a new snapshot subsystem merely because that design is available.
+
+Single-terminal composed proof, base `2d127f4`: new
+`test_wb_live_first_products_path.py` passed actual PostgreSQL (1 in 4.09s), scoped
+Ruff. It migrates to current head, applies the real local API/worker/dispatcher
+grants and connects a new synthetic seller through the actual encrypted service.
+Actual dispatcher emits IDs only, actual worker uses a mocked HTTP boundary,
+and fresh API engine/repository instances recover the same intent and read two
+durable products in distinct signed pages. Pending prices stay null and readiness
+partial; account lock is released during HTTP. Owned resources were cleaned with
+fixture absence assertions. It does not prove browser/Bearer/Celery broker wiring,
+OS-process/DB restart, real provider access or persistent infrastructure. Earlier
+focused existing connection test passed (1 in 3.77s) on its historical 0080 fixture;
+that result is not a current-head whole-path claim. No production code changed.
+
+Persistent native startup remains blocked by demonstrated host `shmget(size56)`
+ENOMEM; mmap/low-memory alternatives were already tried unsuccessfully. Existing
+shared PostgreSQL trust authentication is not approved for real credentials.
+No currently verified native workaround or installed container CLI is available.
+Installing/provisioning an isolated runtime requires a separate explicit user
+decision. Do not repeat initdb probes, modify existing services/HBA/kernel/IPC,
+or run the launcher as a DB probe (it also creates keys and enables services).
+
 ## Ownership and delivery
 
 | Owner | Exclusive areas |

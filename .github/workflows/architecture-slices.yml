@@ -92,6 +92,7 @@ jobs:
             tests/test_review_avito_shadow_postgres.py \
             tests/test_review_canonical_avito_sync_postgres.py \
             tests/test_review_canonical_avito_sync_local_api_role.py \
+            tests/test_wb_live_first_products_path.py \
             tests/test_wb_history_projection_migration.py \
             tests/test_wb_history_projection_role_grants.py \
             tests/test_wb_history_projection_authority.py \
