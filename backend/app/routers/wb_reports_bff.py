@@ -3847,6 +3847,8 @@ def _completed_report_job_from_cache(
     cache: dict[str, Any],
     current_job: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if current_job and _report_job_is_reusable(current_job):
+        return dict(current_job)
     return {
         **(current_job or {}),
         "state": "completed",
@@ -3867,7 +3869,7 @@ def _completed_report_job_from_cache(
 
 def _report_job_is_reusable(job: dict[str, Any]) -> bool:
     state = job.get("state")
-    if state in {"waiting_1c", "waiting_baskets_detail", "waiting_daily_detail"}:
+    if state == "waiting_1c":
         return True
     if state not in {"queued", "running"}:
         return False
@@ -4671,7 +4673,7 @@ def get_reports_by_id(
             if not _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
                 return _empty_background_report(report_id, date_range, groupBy, _report_job_for_response(job))
             job = _report_job_for_response(job)
-            if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
+            if not _report_job_is_reusable(job):
                 job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
                 save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), job)
             payload = _apply_report_rules_to_payload(report, actor.organization_id)
@@ -4695,7 +4697,7 @@ def get_reports_by_id(
             if not _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
                 return _empty_background_report(report_id, date_range, groupBy, _report_job_for_response(job))
             job = _report_job_for_response(job)
-            if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
+            if not _report_job_is_reusable(job):
                 job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
                 save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), job)
             payload = _apply_report_rules_to_payload(report, actor.organization_id)
@@ -4714,6 +4716,8 @@ def get_reports_by_id(
         if not ready:
             job_key = _report_job_cache_key(report_id, date_from, date_to, groupBy)
             current_job = get_source_cache(actor.organization_id, job_key, slim=False) or {}
+            if _report_job_is_reusable(current_job):
+                return _empty_background_report(report_id, date_range, groupBy, current_job)
             job = _report_waiting_daily_detail_job(report_id, date_from, date_to, groupBy, missing_sources, current_job)
             save_source_cache(actor.organization_id, job_key, job)
             return _empty_background_report(report_id, date_range, groupBy, job)
@@ -4864,7 +4868,7 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
     cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=has_permission(actor, "finance:read"))
     cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
     current = get_source_cache(actor.organization_id, key, slim=False) or {}
-    if _report_job_is_active_refresh(current):
+    if _report_job_is_reusable(current):
         return {**current, "reused": True}
     if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
         payload = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, current)
@@ -4900,8 +4904,6 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
             }
             save_source_cache(actor.organization_id, key, payload)
             return {**payload, "reused": False}
-    if _report_job_is_reusable(current):
-        return {**current, "reused": True}
     cash_flow = None
     if report_id in {"pnl", "expenses"}:
         cash_flow = get_cash_flow_for_period(
@@ -4961,7 +4963,7 @@ def get_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pn
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
     key = _report_job_cache_key(report_id, date_from, date_to, groupBy, source)
     job = get_source_cache(actor.organization_id, key, slim=False) or {"state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy}
-    if _report_job_is_active_refresh(job):
+    if _report_job_is_reusable(job):
         return _report_job_for_response({**job, "reused": True})
     if _report_job_is_finished_refresh(job):
         return _report_job_for_response({**job, "reused": True})
