@@ -247,6 +247,7 @@ class WbPriceHttpAdapter:
         organization_id,
         marketplace_account_id,
         admit_request,
+        record_cooldown,
         max_response_bytes,
         transport=None,
         clock=None,
@@ -255,6 +256,7 @@ class WbPriceHttpAdapter:
         integer(marketplace_account_id)
         if (
             not callable(admit_request)
+            or not callable(record_cooldown)
             or type(max_response_bytes) is not int
             or not 1 <= max_response_bytes <= 4 * 1024 * 1024
         ):
@@ -266,6 +268,7 @@ class WbPriceHttpAdapter:
             transport,
         )
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._record_cooldown = record_cooldown
 
     def _request(self, *, method, path, credential, body=None, params=None):
         if type(credential) is not ResolvedCredentialForFetch or (
@@ -299,6 +302,20 @@ class WbPriceHttpAdapter:
                         "Content-Type": "application/json",
                     },
                 ) as response:
+                    header_time = timestamp(self._clock())
+                    delay = max(900, _retry_after(response.headers, header_time))
+                    # Persist the account category deadline on headers, before
+                    # streaming/parsing can fail. POST feedback cannot depend on
+                    # a worker return value (the outcome may be ambiguous).
+                    if (
+                        self._record_cooldown(
+                            self._org,
+                            self._account,
+                            header_time + timedelta(seconds=delay),
+                        )
+                        is not True
+                    ):
+                        raise PriceHttpError()
                     raw = bytearray()
                     for chunk in response.iter_bytes(chunk_size=16384):
                         if (
@@ -314,7 +331,7 @@ class WbPriceHttpAdapter:
                         bytes(raw),
                         response.status_code,
                         now,
-                        max(900, _retry_after(response.headers, now)),
+                        delay,
                     )
         except Exception:  # noqa: BLE001 -- do not retain transport request/headers or raw exception context.
             result = None

@@ -19,11 +19,14 @@ from tests.test_wb_live_history_worker import NOW, credential
 BODY = b'{"data":[{"discount":0,"nmID":123,"price":1300}]}'
 
 
-def adapter(handler, admit=lambda *args: True, budget=4096):
+def adapter(
+    handler, admit=lambda *args: True, budget=4096, cooldown=lambda *args: True
+):
     return WbPriceHttpAdapter(
         organization_id=1,
         marketplace_account_id=2,
         admit_request=admit,
+        record_cooldown=cooldown,
         max_response_bytes=budget,
         transport=httpx.MockTransport(handler),
         clock=lambda: NOW,
@@ -273,4 +276,56 @@ def test_read_429_preserves_safe_retry_deadline_no_loop():
             credential=credential(), expected_upload_id="999"
         )
     assert caught.value.next_not_before == NOW + timedelta(seconds=1800)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("mode", ["post_429", "broken_stream", "malformed_get"])
+def test_durable_throttle_feedback_precedes_body_and_survives_failure(mode):
+    events = []
+
+    class BrokenStream(httpx.SyncByteStream):
+        def __iter__(self):
+            events.append("read_body")
+            raise httpx.ReadError("synthetic truncated body")
+            yield b""  # pragma: no cover -- generator protocol
+
+    def handle(request):
+        events.append("request")
+        if mode == "broken_stream":
+            return httpx.Response(
+                200, headers={"Retry-After": "3600"}, stream=BrokenStream()
+            )
+        return httpx.Response(
+            429 if mode == "post_429" else 200,
+            headers={"Retry-After": "3600"},
+            content=b"invalid",
+        )
+
+    def cooldown(org, account, deadline):
+        events.append(("cooldown", org, account, deadline))
+        return True
+
+    http = adapter(handle, cooldown=cooldown)
+    if mode == "post_429":
+        assert (
+            http.post_price_once(body=BODY, credential=credential()).status_code == 429
+        )
+    else:
+        with pytest.raises(PriceHttpError):
+            http.read_history_once(credential=credential(), expected_upload_id="999")
+    assert events[:2] == ["request", ("cooldown", 1, 2, NOW + timedelta(seconds=3600))]
+    assert events.count("request") == 1
+
+
+def test_failed_cooldown_commit_fails_closed_without_second_post():
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200, content=b'{"data":{"id":999}}')
+
+    with pytest.raises(PriceHttpError):
+        adapter(handle, cooldown=lambda *args: False).post_price_once(
+            body=BODY, credential=credential()
+        )
     assert len(calls) == 1

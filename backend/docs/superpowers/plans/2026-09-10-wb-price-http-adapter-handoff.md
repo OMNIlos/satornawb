@@ -36,6 +36,15 @@ Constructor: positive internal organization_id/account_id, explicit
 `admit_request(org, account, method, path, minimum_interval_seconds) -> True`,
 response budget1..4MiB, optional injected httpx transport/clock.
 
+Required `record_cooldown(org, account, next_not_before) -> True` durably extends
+the same category deadline monotonically (MAX, never shorten). Called immediately
+on received headers, before reading/parsing the body for BOTH POST and GET. This
+preserves Retry-After even for POST429, broken body streams and malformed JSON.
+False or exception fails closed; it does not authorize another POST. Bootstrap
+must provide a real committed callback, never a permissive placeholder. A DB
+outage can still prevent persistence; operators must not interpret this explicit
+failure as successful cooldown recording. Existing dispatch stays uncertain.
+
 Admission MUST reserve an account-wide durable category budget before network
 I/O and coordinate with all price reads/writes. A permissive callback in tests
 is not a production limiter. No in-memory pacing, loops or sleep are installed.
