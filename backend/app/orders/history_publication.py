@@ -361,13 +361,64 @@ def persist_wb_history_chunk(
                         item.identity.external_item_id,
                     )
                     handle.revalidate_before_write()
-                    projections.set_item(
+                    item_id, _ = projections.set_item(
                         run_id,
                         record.observation_id,
                         item.identity.source_line_key,
                         resolution=resolution,
                         expected_version=None,
                     )
+                    child_params = dict(
+                        parameters,
+                        order=record.order_id,
+                        item=item_id,
+                        parent_observation=record.observation_id,
+                        parent_checksum=observation_checksum(record.observation),
+                        line=item.identity.source_line_key,
+                    )
+                    handle.revalidate_before_write()
+                    child_observation = session.execute(
+                        text("""INSERT INTO order_observations
+                        (organization_id,marketplace_account_id,sync_run_id,order_id,
+                         order_item_id,source_kind,adapter_version,source_event_id,
+                         source_revision,payload_checksum,evidence_schema_version,
+                         normalized_evidence,source_effective_at,observed_at)
+                        SELECT e.organization_id,e.marketplace_account_id,e.sync_run_id,e.order_id,
+                          i.order_item_id,e.source_kind,e.adapter_version,e.source_event_id,
+                          e.source_revision,e.payload_checksum,e.evidence_schema_version,
+                          e.normalized_evidence,e.source_effective_at,e.observed_at
+                        FROM order_observations e JOIN marketplace_order_items i ON
+                          (i.organization_id,i.marketplace_account_id,i.order_id)=
+                          (e.organization_id,e.marketplace_account_id,e.order_id)
+                        WHERE e.organization_id=:org AND e.marketplace_account_id=:account
+                          AND e.sync_run_id=:run AND e.order_id=:order
+                          AND e.observation_id=:parent_observation AND e.order_item_id IS NULL
+                          AND e.payload_checksum=:parent_checksum
+                          AND i.order_item_id=:item AND i.source_line_key COLLATE "C"=:line
+                          AND i.version=1
+                        RETURNING observation_id"""),
+                        child_params,
+                    ).scalar_one()
+                    child_params["child_observation"] = child_observation
+                    handle.revalidate_before_write()
+                    session.execute(
+                        text("""INSERT INTO order_sync_memberships
+                        (organization_id,marketplace_account_id,sync_run_id,order_id,
+                         order_item_id,observation_id,coverage_role,observed_at)
+                        SELECT m.organization_id,m.marketplace_account_id,m.sync_run_id,m.order_id,
+                          e.order_item_id,e.observation_id,'observed',m.observed_at
+                        FROM order_sync_memberships m JOIN order_observations e ON
+                          (e.organization_id,e.marketplace_account_id,e.sync_run_id,e.order_id)=
+                          (m.organization_id,m.marketplace_account_id,m.sync_run_id,m.order_id)
+                        WHERE m.organization_id=:org AND m.marketplace_account_id=:account
+                          AND m.sync_run_id=:run AND m.order_id=:order
+                          AND m.order_item_id IS NULL AND m.observation_id=:parent_observation
+                          AND m.coverage_role='observed'
+                          AND e.order_item_id=:item AND e.observation_id=:child_observation
+                          AND e.payload_checksum=:parent_checksum
+                        RETURNING observation_id"""),
+                        child_params,
+                    ).scalar_one()
                 continue
         if decision.comparison != "replay":
             handle.revalidate_before_write()
