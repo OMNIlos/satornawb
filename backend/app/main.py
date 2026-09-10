@@ -160,6 +160,10 @@ def create_app() -> FastAPI:
     app.include_router(avito_reviews_router)
     app.include_router(avito_stats_router)
     app.include_router(cabinet_router)
+    if getattr(settings, "canonical_notifications_enabled", False) is True:
+        from app.notification_bootstrap import register_notification_routes
+
+        register_notification_routes(app)
     if settings.wb_live_sync_enabled:
         from app.wb_live.products_router import router as wb_live_products_router
         from app.wb_live.router import router as wb_live_router
