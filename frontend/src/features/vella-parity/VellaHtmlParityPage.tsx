@@ -171,6 +171,7 @@ import { sharedStatusRequest } from '@/features/wb-repricer/sharedStatusRequest'
 
 const SHELL_ISLAND_STATUS = 'explicit-jsx'
 const ActiveParityTabContext = createContext<string | null>(null)
+const PnlReportModeContext = createContext<[PnlReportMode, (mode: PnlReportMode) => void] | null>(null)
 
 export function shouldMountParityTabIsland(
   activeTab: string | null | undefined,
@@ -6455,6 +6456,7 @@ function DigestBrandFilterIsland({ replacementKey }: { replacementKey: string })
 
 function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
   const { accessToken, cabinetMe } = useAuth()
+  const [pnlMode] = useContext(PnlReportModeContext)!
   const location = useLocation()
   const routeTab = resolveParityRouteTarget(location.pathname, location.search).tab
   const [activeTab, setActiveTab] = useState(routeTab)
@@ -6462,7 +6464,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
   const isLiveWbPeriod = usesLiveWbPeriodControl(activeTab)
   const activeReportPeriodKey = reportPeriodKeyForTab(activeTab)
   const canonicalPeriod = (activeTab === 'abc' || activeTab === 'pnl')
-    && resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId) !== null
+    && shouldUseCanonicalAbcPnl(resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId), activeTab, pnlMode)
   const readActivePeriod = () => activeReportPeriodKey ? readReportPeriodState(activeReportPeriodKey) : readProductsPeriodState()
   const [productsPeriod, setProductsPeriod] = useState(readActivePeriod)
   const [customFromIso, setCustomFromIso] = useState(() => readActivePeriod().fromIso)
@@ -12834,10 +12836,7 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
   const pnlReportActive = shouldLoadPeriodSurface(activeTab, 'pnl')
   const [publishedState, setPublishedState] = useState<ScopedReportState<PnlLiveState> | null>(null)
   const [periodState, setPeriodState] = useState(() => readReportPeriodState('pnl'))
-  // 1C is out of scope and disabled on the backend, so the operational P&L has
-  // no source of data and only ever renders its "ждём 1С" placeholder.  Open on
-  // the WB financial report instead; the toggle still exposes both.
-  const [pnlMode, setPnlMode] = useState<PnlReportMode>('financial')
+  const [pnlMode, setPnlMode] = useContext(PnlReportModeContext)!
   const [query, setQuery] = useState('')
   const [manager, setManager] = useState('all')
   const periodFromIso = periodState.fromIso
@@ -34895,6 +34894,8 @@ export function VellaHtmlParityPage() {
   const { accessToken, cabinetMe, logout, profile, sessions } = useAuth()
   const rootRef = useRef<HTMLDivElement>(null)
   const [sourceHtml, setSourceHtml] = useState<string | null>(null)
+  // 1C remains disabled; both the report loader and calendar start on WB finance.
+  const pnlModeState = useState<PnlReportMode>('financial')
   const shellSettingsSnapshotRef = useRef<SettingsShellSnapshot | null>(null)
   const shellSettingsLoadingRef = useRef(false)
   const [shellSettingsVersion, setShellSettingsVersion] = useState(0)
@@ -40260,6 +40261,7 @@ export function VellaHtmlParityPage() {
           .ads-cache-refresh span { display: none; }
         }
       `}</style>
+      <PnlReportModeContext.Provider value={pnlModeState}>
       <ActiveParityTabContext.Provider value={effectiveActiveParityTab}>
         <div
           className={rootClassName}
@@ -40273,6 +40275,7 @@ export function VellaHtmlParityPage() {
           <AdsCacheRefreshButton accessToken={accessToken} active={routeTarget.tab === 'ads'} />
         </div>
       </ActiveParityTabContext.Provider>
+      </PnlReportModeContext.Provider>
     </>
   )
 }

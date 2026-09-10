@@ -66,7 +66,7 @@ beforeAll(async () => {
 }, 60_000)
 
 async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false) {
-  const errors: string[] = [], unexpected: string[] = [], queries: string[] = []
+  const errors: string[] = [], unexpected: string[] = [], queries: string[] = [], coverageQueries: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   // The unchanged legacy shell emits React's empty image src warning.
   page.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('An empty string')) errors.push(message.text()) })
@@ -91,7 +91,14 @@ async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false) {
         meta: { dateRange: { from: '2026-09-01', to: '2026-09-07' }, sourceType: 'financial' },
         rows: ['blocked', 'partial', 'ready'].map(sourceStatus => ({ articleId: `STATUS-${sourceStatus}`, productName: sourceStatus, sourceStatus, confidence: sourceStatus === 'ready' ? 'high' : 'blocked' })),
       } })
-      if (url.pathname === '/api/v1/wb-repricer/cache/coverage') return route.fulfill({ json: { dateFrom: '2026-06-14', dateTo: '2026-09-11', sources: [], days: [], summary: { totalDays: 90, completeDays: 0, partialDays: 0, missingDays: 90 } } })
+      if (!legacy && url.pathname === '/api/wb/reports/pnl/latest-cache' && url.searchParams.get('source') === 'operational') return route.fulfill({ json: {
+        meta: { dateRange: { from: '2026-09-01', to: '2026-09-07' }, sourceType: 'operational' },
+        rows: [], cashFlow: null, reportJob: null,
+      } })
+      if (url.pathname === '/api/v1/wb-repricer/cache/coverage') {
+        coverageQueries.push(url.search)
+        return route.fulfill({ json: { dateFrom: '2026-06-14', dateTo: '2026-09-11', sources: [], days: [], summary: { totalDays: 90, completeDays: 0, partialDays: 0, missingDays: 90 } } })
+      }
     }
     if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
     if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
@@ -106,7 +113,7 @@ async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false) {
   })
   expect(page.url()).toContain(`/wb/reports/${tab}`)
   expect(await page.title()).toBeTruthy()
-  return { errors, unexpected, queries }
+  return { errors, unexpected, queries, coverageQueries }
 }
 
 it.each(['abc', 'pnl'] as const)('searches all loaded %s rows before pagination and preserves filters', async tab => {
@@ -191,6 +198,33 @@ it('labels blocked and partial legacy P&L rows without claiming readiness', asyn
     await page.getByRole('button', { name: 'Начало периода аналитики WB', exact: true }).click()
     // The rollout-disabled legacy report still uses its existing coverage gate.
     expect(await page.locator('.products-cache-calendar-day[aria-label^="2026-09-02:"]').getAttribute('aria-disabled')).toBe('true')
+    expect(evidence.errors).toEqual([])
+    expect(evidence.unexpected).toEqual([])
+  } finally { await browser.close() }
+}, 45_000)
+
+it('keeps operational P&L coverage gating inside a canonical rollout organization', async () => {
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1512, height: 982 } })
+    const evidence = await mount(page, 'pnl')
+    const openCalendar = page.getByRole('button', { name: 'Начало периода аналитики WB', exact: true })
+    const pastDate = page.locator('.products-cache-calendar-day[aria-label^="2026-09-02:"]')
+    await openCalendar.click()
+    await expect.poll(() => pastDate.getAttribute('aria-disabled')).toBe('false')
+    expect(evidence.coverageQueries).toHaveLength(0)
+    await page.keyboard.press('Escape')
+    await page.locator('#tab-pnl .chip').filter({ hasText: 'Операционный 1С' }).click()
+    await page.getByText('Ждём операционные расходы из 1С', { exact: true }).waitFor()
+    await openCalendar.click()
+    await expect.poll(() => evidence.coverageQueries.length).toBe(1)
+    await expect.poll(() => pastDate.getAttribute('aria-disabled')).toBe('true')
+    await page.keyboard.press('Escape')
+    await page.locator('#tab-pnl .chip').filter({ hasText: 'Финансовый WB' }).click()
+    await page.locator('#tab-pnl [data-report-row]').first().waitFor()
+    await openCalendar.click()
+    await expect.poll(() => pastDate.getAttribute('aria-disabled')).toBe('false')
+    expect(evidence.coverageQueries).toHaveLength(1)
     expect(evidence.errors).toEqual([])
     expect(evidence.unexpected).toEqual([])
   } finally { await browser.close() }
