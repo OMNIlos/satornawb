@@ -185,6 +185,77 @@ def test_partial_source_failure_preserves_healthy_refresh_and_read_only_status(l
     with pytest.raises(WbLiveError, match="WB_ACCESS_DENIED"):
         d.repo.status(d.actor, d.org + 1)
 
+def test_explicit_retry_rearms_failed_source_with_durable_authority_and_locking(live):
+    from concurrent.futures import ThreadPoolExecutor
+    from app.platform.integrations.credential_store import reencrypt_credential
+    d = live
+    locator = start(d)
+    commit(d, d.repo.claim_batch(locator))
+    prices = d.repo.claim_batch(locator)
+    commit(d, prices, complete=False)
+    with d.engine.begin() as c:
+        c.execute(update(Source).where(Source.organization_id == d.org, Source.source == "prices").values(
+            next_due_at=datetime.now(timezone.utc) - timedelta(seconds=1)))
+    prices = d.repo.claim_batch(locator)
+    with d.engine.begin() as c:
+        c.execute(update(Source).where(Source.organization_id == d.org, Source.source == "prices").values(attempt=8))
+    assert d.repo.fail_batch(prices, error_code="WB_RETRY_EXHAUSTED")
+    def persisted():
+        with d.engine.connect() as c:
+            return {r.source: dict(r._mapping) for r in c.execute(select(Source).where(
+                Source.organization_id == d.org).order_by(Source.source))}
+    before = persisted()
+    assert start(d) == locator  # old idempotency key is readback, never a retry
+    assert persisted() == before
+
+    # Another currently permitted administrator must not substitute its principal
+    # for the original durable read job, even though it can manage this account.
+    other_user, other_login = f"replacement-{d.org}", f"retry-other-{d.org}"
+    with Session(d.engine) as s, s.begin():
+        s.add(IamMembershipRow(membership_id=d.org + 400000, organization_id=d.org, user_id=other_user,
+            role="custom", permissions=["integrations:write"], scope_mode="all", allowed_account_ids=[], is_active=True))
+        s.add(LkSessionRow(session_id=other_login, user_id=other_user, issued_at=datetime.now(timezone.utc),
+            last_seen_at=datetime.now(timezone.utc), expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            refresh_token_hash=uuid4().hex))
+    other = replace(d.actor, actor_id=other_user, user_id=other_user, session_id=other_login)
+    with pytest.raises(WbLiveError, match="WB_ACCESS_DENIED"):
+        d.repo.create_job(other, d.org, "other-initiator-retry")
+    assert persisted() == before
+
+    assert start(d, "explicit-new-retry") == locator
+    after = persisted()
+    assert after["content"] == before["content"]
+    assert after["prices"]["state"] == "queued" and after["prices"]["attempt"] == 0
+    assert all(after["prices"][key] is None for key in ("error_code", "lease_token", "lease_expires_at"))
+    for field in ("checkpoint", "run_id", "processed", "revision", "next_due_at"):
+        assert after["prices"][field] == before["prices"][field]
+    # Two physical transactions both observe already rearmed work; neither
+    # resets its state/timestamp again. The account/job/source locks serialize them.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda key: start(d, key), ("concurrent-retry-one", "concurrent-retry-two")))
+    assert results == [locator, locator]
+    assert persisted() == after
+
+    with d.engine.begin() as c:
+        c.execute(update(Source).where(Source.organization_id == d.org, Source.source == "prices").values(
+            next_due_at=datetime.now(timezone.utc) - timedelta(seconds=1)))
+    running = d.repo.claim_batch(locator)
+    assert running.source == "prices" and running.attempt == 1
+    active = persisted()
+    assert start(d, "already-running-retry") == locator
+    assert persisted() == active
+    with d.engine.begin() as c:
+        c.execute(update(IamMembershipRow).where(IamMembershipRow.membership_id == d.org).values(permissions=[]))
+    with pytest.raises(WbLiveError, match="WB_ACCESS_DENIED"):
+        start(d, "revoked-membership-retry")
+    assert persisted() == active
+    with d.engine.begin() as c:
+        c.execute(update(IamMembershipRow).where(IamMembershipRow.membership_id == d.org).values(permissions=["integrations:write"]))
+    reencrypt_credential(d.credential.credential_id, d.credential.generation, 8, account_identity=d.owner)
+    with pytest.raises(WbLiveError, match="WB_BINDING_CHANGED"):
+        start(d, "stale-generation-retry")
+    assert persisted() == active
+
 def test_short_source_refresh_is_independent_and_whole_job_refresh_retains_replay(live):
     d = live
     locator = start(d)

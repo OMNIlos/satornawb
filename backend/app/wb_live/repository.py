@@ -110,9 +110,12 @@ class WbLiveRepository:
         set_marketplace_account_context(s, organization_id=actor.organization_id, marketplace_account_id=account_id)
         return principal, a, guard
 
-    def _sources(self, s, job):
-        return list(s.scalars(select(Source).where(Source.organization_id == job.organization_id,
-            Source.marketplace_account_id == job.marketplace_account_id, Source.job_id == job.job_id).order_by(Source.source)))
+    def _sources(self, s, job, *, lock=False):
+        query = select(Source).where(Source.organization_id == job.organization_id,
+            Source.marketplace_account_id == job.marketplace_account_id, Source.job_id == job.job_id).order_by(Source.source)
+        if lock:
+            query = query.with_for_update().execution_options(populate_existing=True)
+        return list(s.scalars(query))
 
     def _view(self, s, job, account_id):
         if job is None:
@@ -154,19 +157,30 @@ class WbLiveRepository:
             if old_id:
                 return self._view(s, self._job(s, JobLocator(actor.organization_id, account_id, str(old_id))), account_id)
             latest = s.scalar(select(Job).where(Job.organization_id == actor.organization_id, Job.marketplace_account_id == account_id)
-                .order_by(Job.created_at.desc(), Job.job_id.desc()).limit(1))
+                .order_by(Job.created_at.desc(), Job.job_id.desc()).limit(1).with_for_update().execution_options(populate_existing=True))
             metadata = _get_marketplace_credential_metadata_in_session(s,
                 MarketplaceAccountCredentialOwner(actor.organization_id, account_id, "wb"), "wb_api")
-            if metadata is None or metadata.revoked_at is not None:
+            now = s.scalar(select(func.clock_timestamp()))
+            if metadata is None or metadata.revoked_at is not None or (metadata.expires_at is not None and metadata.expires_at <= now):
                 raise WbLiveError("WB_BINDING_CHANGED")
             job = latest if latest is not None and latest.state in ACTIVE_STATES else None
-            if job is not None and (job.credential_id != metadata.credential_id or job.account_incarnation != a.ingestion_binding_version):
-                for source in self._sources(s, job):
-                    source.state, source.error_code = "failed", "WB_BINDING_CHANGED"
-                    source.lease_token = source.lease_expires_at = None
-                job.state = "failed"
-                s.flush()
-                job = None
+            if job is not None and (job.credential_id != metadata.credential_id or job.credential_generation != metadata.generation
+                    or job.account_incarnation != a.ingestion_binding_version or job.external_account_id != a.external_account_id
+                    or job.credential_ref != a.credential_ref):
+                raise WbLiveError("WB_BINDING_CHANGED")
+            if job is not None and job.state == "partial":
+                failed = [source for source in self._sources(s, job, lock=True) if source.state == "failed"]
+                if failed:
+                    # Preserve the installed live HTTP guard and the job's original
+                    # authority. A new login of its same user/membership may retry;
+                    # another principal cannot replace that durable authorization.
+                    if (job.user_id, job.membership_id) != (principal.user_id, principal.membership_id):
+                        raise WbLiveError("WB_ACCESS_DENIED")
+                    for source in failed:
+                        source.state, source.attempt, source.error_code = "queued", 0, None
+                        source.lease_token = source.lease_expires_at = None
+                        source.next_due_at, source.updated_at = max(source.next_due_at, now), now
+                    job.updated_at = now
             if job is None:
                 job = self._new_job(s, principal, a, metadata, previous=latest)
             s.execute(text("INSERT INTO wb_live_sync_requests(organization_id,marketplace_account_id,idempotency_key,job_id) VALUES(:o,:a,:k,:j)"),
