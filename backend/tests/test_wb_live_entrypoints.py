@@ -10,8 +10,9 @@ from app.infra import celery_app as worker
 
 @pytest.mark.parametrize("enabled", [False, True])
 def test_live_routes_only_mounted_in_explicit_mode(monkeypatch, enabled):
-    from app import main
     from fastapi.routing import iter_route_contexts
+
+    from app import main
 
     monkeypatch.setattr(main, "get_settings", lambda: replace(Settings(), wb_live_sync_enabled=enabled))
     application = main.create_app()

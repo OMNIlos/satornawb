@@ -105,7 +105,7 @@ import app.avito.returns_tasks  # noqa: F401, E402
 import app.canonical_shadow_tasks  # noqa: F401, E402
 
 if getattr(get_settings(), "wb_live_sync_enabled", False):
-    import app.wb_live.tasks  # noqa: F401, E402
+    import app.wb_live.tasks  # noqa: F401
 
 
 @celery_app.task(name="infra.ping")
