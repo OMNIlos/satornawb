@@ -1,5 +1,6 @@
 """Linux VM keeps native live flags but uses peer-auth DB and private Redis IPC."""
 
+import configparser
 import importlib.util
 from pathlib import Path
 
@@ -45,3 +46,29 @@ def test_unknown_role_is_rejected_before_environment_construction(kind):
 def test_environment_file_injection_is_rejected(secret):
     with pytest.raises(ValueError, match="WB_LOCAL_AUTH_INVALID"):
         launcher().service_environment("api", secret)
+
+
+@pytest.mark.parametrize("kind,role", [("api", "wb_live_api"), ("worker", "wb_live_worker"), ("beat", "wb_live_dispatch")])
+def test_service_units_use_restricted_identity_and_keep_state_outside_release(kind, role):
+    unit = configparser.ConfigParser(interpolation=None, strict=False)
+    unit.read_string(launcher().service_unit(kind, "/opt/satorna-releases/afcfdc5/backend"))
+    service = unit["Service"]
+    assert service["User"] == role
+    assert service["NoNewPrivileges"] == "true"
+    assert service["ProtectSystem"] == "strict"
+    assert service["EnvironmentFile"] == f"/etc/satorna-wb-live/{kind}.env"
+    assert service["StandardOutput"] == service["StandardError"] == "null"
+    assert service["StateDirectory"] == f"satorna-wb-{kind}"
+    command = service["ExecStart"]
+    if kind == "api":
+        assert "--host 127.0.0.1 --port 58000 --no-access-log" in command
+    elif kind == "worker":
+        assert "--queues=vella.wb-live --concurrency=1 --pool=solo" in command
+    else:
+        assert "--schedule /var/lib/satorna-wb-beat/schedule" in command
+
+
+@pytest.mark.parametrize("release", ["/tmp/backend", "/opt/satorna-releases/../backend", "/opt/satorna-releases/abc/backend\nUser=root", "/opt/satorna-releases/abc/backend bad"])
+def test_unit_rejects_unowned_or_injected_release_path(release):
+    with pytest.raises(ValueError, match="WB_LOCAL_RELEASE_INVALID"):
+        launcher().service_unit("api", release)

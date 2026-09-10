@@ -12,6 +12,33 @@ ROLES = {"api": "wb_live_api", "worker": "wb_live_worker", "beat": "wb_live_disp
 STATE = Path("/var/lib/satorna-wb-live")
 
 
+def service_unit(kind, release):
+    """Render only owned, loopback-only service units; never start anything."""
+    if type(kind) is not str or kind not in ROLES:
+        raise ValueError("WB_LOCAL_ROLE_INVALID")
+    if type(release) is not str or not re.fullmatch(r"/opt/satorna-releases/[a-f0-9]{7,40}/backend", release):
+        raise ValueError("WB_LOCAL_RELEASE_INVALID")
+    python = "/opt/satorna-migration-venv/bin/python"
+    commands = {
+        "api": f"{python} -m uvicorn app.main:app --host 127.0.0.1 --port 58000 --no-access-log",
+        "worker": f"{python} -m celery -A app.infra.celery_app:celery_app worker --queues=vella.wb-live --concurrency=1 --pool=solo --without-gossip --without-mingle --without-heartbeat",
+        "beat": f"{python} -m celery -A app.infra.celery_app:celery_app beat --schedule /var/lib/satorna-wb-beat/schedule --pidfile /var/lib/satorna-wb-beat/beat.pid",
+    }
+    return "\n".join([
+        "[Unit]", f"Description=Satorna isolated local {kind}",
+        "After=postgresql.service redis-server.service", "Requires=redis-server.service",
+        "[Service]", "Type=simple", f"User={ROLES[kind]}", f"Group={ROLES[kind]}",
+        f"WorkingDirectory={release}", f"EnvironmentFile=/etc/satorna-wb-live/{kind}.env",
+        f"ExecStart={commands[kind]}", f"StateDirectory=satorna-wb-{kind}",
+        "StateDirectoryMode=0700", "UMask=0077", "NoNewPrivileges=true",
+        "ProtectSystem=strict", "ProtectHome=true", "PrivateTmp=true",
+        "ProtectKernelTunables=true", "ProtectKernelModules=true", "ProtectControlGroups=true",
+        "RestrictSUIDSGID=true", "CapabilityBoundingSet=", "LimitCORE=0",
+        "Restart=on-failure", "RestartSec=5", "StandardOutput=null", "StandardError=null",
+        "[Install]", "WantedBy=multi-user.target", "",
+    ])
+
+
 def service_environment(kind, auth_secret):
     if type(kind) is not str or kind not in ROLES:
         raise ValueError("WB_LOCAL_ROLE_INVALID")
