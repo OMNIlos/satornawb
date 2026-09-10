@@ -1,5 +1,7 @@
 import { CalendarClock, Download, Printer, Send, Sheet } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { canonicalOrdersEnabled } from './canonicalOrdersClient'
+import { CanonicalOrdersPage } from './CanonicalOrdersPage'
 
 type PrintOrder = {
   id: string
@@ -69,6 +71,7 @@ const groupedOrders = ORDERS.reduce<Record<string, PrintOrder[]>>((acc, order) =
 const totalItems = ORDERS.reduce((sum, order) => sum + order.qty, 0)
 
 export function OrdersPrintListPage() {
+  if (canonicalOrdersEnabled) return <CanonicalOrdersPage />
   return (
     <main className="min-h-screen bg-background text-foreground">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 p-6">

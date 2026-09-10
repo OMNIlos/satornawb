@@ -21,6 +21,16 @@ function instantBefore(left: string, right: string): boolean {
 }
 const marketplace = z.enum(['wb', 'avito'])
 const state = z.enum(['complete', 'partial', 'missing'])
+export const orderStatuses = ['pending_confirmation', 'accepted', 'ready_for_fulfillment', 'in_delivery', 'delivered', 'closed', 'cancelled', 'returning', 'returned', 'disputed'] as const
+export const orderMappingStates = ['mapped', 'unmapped', 'ambiguous'] as const
+export const orderResolutionStates = ['resolved', 'unmapped', 'ambiguous', 'stale', 'manual_override'] as const
+const exactFilter = (max: number) => text.refine(value => value.length <= max && !value.includes('\0')
+  && !Array.from(value).some(char => { const point = char.codePointAt(0)!; return point >= 0xd800 && point <= 0xdfff }))
+const filtersSchema = z.object({ marketplace: marketplace.optional(), canonical_status: z.enum(orderStatuses).optional(),
+  mapping_state: z.enum(orderMappingStates).optional(), resolution_state: z.enum(orderResolutionStates).optional(),
+  external_order_id: exactFilter(4096).optional(), raw_status: exactFilter(2048).optional(),
+}).strict()
+export type CanonicalOrderFilters = z.infer<typeof filtersSchema>
 const scopeSchema = z.object({
   organizationId: id, accountIds: z.array(id).min(1).refine(values => new Set(values).size === values.length),
   snapshotId: version.optional(),
@@ -28,6 +38,7 @@ const scopeSchema = z.object({
 const requestSchema = scopeSchema.extend({
   queryChecksum: z.string().regex(/^[a-f0-9]{64}$/), cursor: text.optional(),
   limit: z.number().int().min(1).max(200).default(100),
+  filters: filtersSchema.optional(),
 }).refine(value => value.snapshotId === undefined || value.cursor === undefined)
 
 const identity = z.object({
@@ -98,7 +109,27 @@ export function buildCanonicalOrdersReadPath(input: CanonicalOrdersReadRequest):
   query.set('limit', String(request.limit))
   if (request.snapshotId !== undefined) query.set('snapshot_id', request.snapshotId)
   if (request.cursor !== undefined) query.set('cursor', request.cursor)
+  for (const [key, value] of Object.entries(request.filters ?? {})) if (value !== undefined) query.set(key, value)
   return `/api/v2/orders?${query}`
+}
+
+const savedSnapshotSchema = pageSchema.omit({ rows: true, next_cursor: true }).extend({
+  selection_kind: z.literal('saved_snapshot'), query_checksum: z.string().regex(/^[0-9a-f]{64}$/),
+  row_count: z.string().regex(/^(0|[1-9][0-9]*)$/).max(128),
+}).strict()
+export type CanonicalOrdersSavedSnapshot = z.infer<typeof savedSnapshotSchema>
+export function buildSavedOrdersSnapshotPath(scope: CanonicalOrdersScope) {
+  const checked = scopeSchema.parse(scope)
+  const query = new URLSearchParams()
+  for (const account of [...checked.accountIds].sort((a, b) => a - b)) query.append('account_id', String(account))
+  return `/api/v2/orders/snapshots/latest?${query}`
+}
+export function parseSavedOrdersSnapshot(value: unknown, scope: CanonicalOrdersScope) {
+  const result = savedSnapshotSchema.parse(value)
+  const { selection_kind: ignoredKind, query_checksum: ignoredQuery, row_count: ignoredCount, ...page } = result
+  void ignoredKind; void ignoredQuery; void ignoredCount
+  parseCanonicalOrdersPage({ ...page, rows: [], next_cursor: null }, scope)
+  return result
 }
 
 export function parseCanonicalOrdersPage(payload: unknown, expectedScope: CanonicalOrdersScope): CanonicalOrdersPage {

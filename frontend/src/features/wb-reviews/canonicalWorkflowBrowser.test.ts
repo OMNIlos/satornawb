@@ -3,6 +3,7 @@ import { chromium } from 'playwright'
 import { createServer } from 'vite'
 import { fileURLToPath } from 'node:url'
 import { mkdir } from 'node:fs/promises'
+import ordersFixture from '../orders/__fixtures__/canonicalOrdersBackendWire.json'
 
 // Synthetic component gate only. All HTTP data are fixtures; provider/API access is denied.
 const root = fileURLToPath(new URL('../../../', import.meta.url))
@@ -16,6 +17,7 @@ import {CanonicalNotificationsIsland,canonicalNotificationsEnabled} from '/src/f
 import {CanonicalNotificationPreferencesForm} from '/src/features/notifications/NotificationPreferencesForm.tsx';
 import {CanonicalReviewDrawer,canonicalReviewSelectionEvent} from '/src/features/wb-reviews/CanonicalReviewDrawer.tsx';
 import {canonicalReviewsEnabled} from '/src/features/wb-reviews/canonicalReviewDetail.ts';
+import {OrdersPrintListPage} from '/src/features/orders/OrdersPrintListPage.tsx';
 const h=React.createElement;
 function Fixture(){
  const [tab,setTab]=React.useState('notifications'),[session,setSession]=React.useState(1);
@@ -23,8 +25,10 @@ function Fixture(){
  return h(AuthContext.Provider,{value:auth},h('h1',null,'Synthetic canonical workflow gate'),
  h('button',{onClick:()=>setTab('notifications')},'Notifications fixture'),
  h('button',{onClick:()=>setTab('reviews')},'Reviews fixture'),
+ h('button',{onClick:()=>setTab('orders')},'Orders fixture'),
  h('button',{onClick:()=>setSession(x=>x+1)},'New synthetic session'),
  h('p',{'data-flags':String(canonicalNotificationsEnabled)+':'+String(canonicalReviewsEnabled)},'Default-off gates'),
+ tab==='orders'?h(OrdersPrintListPage):null,
  tab==='notifications'&&canonicalNotificationsEnabled?h(React.Fragment,null,h(CanonicalNotificationsIsland),h(CanonicalNotificationPreferencesForm)):null,
  tab==='reviews'&&canonicalReviewsEnabled?h(React.Fragment,null,h('button',{onClick:()=>{document.getElementById('reviewDrawer').classList.add('open');window.dispatchEvent(new CustomEvent(canonicalReviewSelectionEvent,{detail:'synthetic-review-a'}));}},'Open synthetic review'),h(CanonicalReviewDrawer)):null);
 }
@@ -39,7 +43,8 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
       const server = await createServer({ root, configFile: `${root}vite.config.ts`,
         cacheDir: `${screenshots}/vite-cache`,
         define: { 'import.meta.env.VITE_CANONICAL_NOTIFICATIONS_ENABLED': JSON.stringify(String(enabled)),
-          'import.meta.env.VITE_CANONICAL_REVIEWS_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('') },
+          'import.meta.env.VITE_CANONICAL_REVIEWS_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_CANONICAL_ORDERS_ENABLED': JSON.stringify(String(enabled)), 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('') },
+        // The real /orders component retains its original screen when this flag is off.
         server: { host: '127.0.0.1', port: 0, strictPort: true },
         plugins: [{ name: 'synthetic-canonical-browser-fixture',
           resolveId(id) { if (id === '/__synthetic.jsx') return '\0synthetic.jsx' },
@@ -57,6 +62,10 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
       const page = await browser.newPage({ viewport: { width: 1366, height: 900 }, serviceWorkers: 'block' })
       page.setDefaultTimeout(8_000)
       const errors: string[] = [], unexpected: string[] = [], writes: unknown[] = []
+      const ordersQueries: string[] = []
+      const orderPage = JSON.parse(JSON.stringify(ordersFixture).replaceAll('"organization_id":101', '"organization_id":1'))
+      orderPage.marketplace_account_ids = [1001, 1002]
+      orderPage.account_coverage.push({ marketplace_account_id: 1002, source_kind: 'wb-statistics-supplier-orders', source_version: 'v1', state: 'missing', source_snapshot: null, requested_from: null, requested_to: null })
       let read = false, markFailure = false, prefConflict = true, preferenceVersion = '1'
       let heldCommand: (() => Promise<void>) | null = null
       page.on('pageerror', error => errors.push(error.message))
@@ -70,6 +79,20 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
           const json = (value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) })
           if (url.origin !== origin) { unexpected.push(`${req.method()} ${url.origin}${url.pathname}`); return route.abort() }
           if (!url.pathname.startsWith('/api/')) return route.continue()
+          if (url.pathname === '/api/v2/cabinet/marketplace-accounts') return json({ data: [{ marketplaceAccountId: 1001, provider: 'avito', externalAccountId: 'synthetic-avito', displayName: 'Synthetic Avito', status: 'active' }, { marketplaceAccountId: 1002, provider: 'wb', externalAccountId: 'synthetic-wb', displayName: 'Synthetic WB', status: 'disconnected' }] })
+          if (url.pathname === '/api/v2/orders/snapshots/latest') {
+            expect(url.searchParams.getAll('account_id')).toEqual(['1001', '1002'])
+            const { rows: unusedRows, next_cursor: unusedCursor, ...metadata } = orderPage
+            void unusedRows; void unusedCursor
+            return json({ ...metadata, selection_kind: 'saved_snapshot', query_checksum: 'a'.repeat(64), row_count: '1' })
+          }
+          if (url.pathname === '/api/v2/orders') {
+            ordersQueries.push(url.search)
+            expect(url.searchParams.getAll('account_id')).toEqual(['1001', '1002'])
+            expect(url.searchParams.get('snapshot_id')).toBe(ordersFixture.snapshot_id)
+            expect(url.searchParams.get('query_checksum')).toBe('a'.repeat(64))
+            return json({ ...orderPage, rows: url.searchParams.has('external_order_id') ? [] : orderPage.rows })
+          }
           const account = Number(url.searchParams.get('marketplace_account_id')) || 11
           if (url.pathname === '/api/v1/cabinet/marketplace-accounts') return json({ data: [11, 12].map(id => ({ marketplaceAccountId: id, provider: 'wb', externalAccountId: `synthetic-seller-${id}`, displayName: `Synthetic WB ${id}`, status: 'active' })) })
           if (url.pathname === '/api/v2/notifications/preferences') {
@@ -107,6 +130,8 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
           await page.getByRole('button', { name: 'Reviews fixture', exact: true }).click()
           expect(await page.getByRole('button', { name: 'Open synthetic review' }).count()).toBe(0)
           expect(writes).toEqual([])
+          await page.getByRole('button', { name: 'Orders fixture', exact: true }).click()
+          await page.getByRole('heading', { name: 'Лист печати на сегодня', exact: true }).waitFor()
         } else {
           await page.getByRole('combobox', { name: 'Аккаунт Wildberries' }).selectOption('11')
           await page.getByRole('cell', { name: /Ответ на отзыв требует подтверждения/ }).click()
@@ -157,6 +182,22 @@ it('synthetic browser: gates, personal readback/preferences CAS, first manual dr
           await page.screenshot({ path: `${screenshots}/reviews.png`, fullPage: true })
           await page.setViewportSize({ width: 390, height: 844 })
           await page.screenshot({ path: `${screenshots}/reviews-mobile.png`, fullPage: true })
+          await page.setViewportSize({ width: 1366, height: 900 })
+          await page.getByRole('button', { name: 'Orders fixture', exact: true }).click()
+          await page.getByRole('checkbox', { name: /AVITO · Synthetic Avito/ }).check()
+          await page.getByRole('checkbox', { name: /WB · Synthetic WB/ }).check()
+          await page.getByRole('button', { name: 'Открыть сохранённое представление', exact: true }).click()
+          await page.getByRole('button', { name: 'synthetic-order', exact: true }).click()
+          await page.getByText('Сохранённая строка заказа', { exact: true }).waitFor()
+          expect(await page.getByText(/9007199254740993/).count()).toBeGreaterThan(0)
+          expect(await page.getByText(/Покрытие сохранённого источника: partial/).count()).toBe(1)
+          expect(await page.getByRole('cell', { name: 'Недоступны в этом контракте', exact: true }).count()).toBe(1)
+          await page.getByRole('textbox', { name: 'Внешний ID заказа — точное совпадение', exact: true }).fill('000123')
+          await page.getByRole('button', { name: 'Применить фильтры', exact: true }).click()
+          await page.getByText(/В сохранённом представлении нет строк по выбранным условиям/).waitFor()
+          expect(ordersQueries).toHaveLength(2)
+          expect(new URLSearchParams(ordersQueries[1]).get('external_order_id')).toBe('000123')
+          await page.screenshot({ path: `${screenshots}/orders.png`, fullPage: true })
         }
         // Chromium reports the two deliberately injected HTTP failures in console.
         // No exception, overlay, external request, or additional console error is accepted.
