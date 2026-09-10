@@ -21,6 +21,22 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
  iam_memberships,marketplace_accounts,marketplace_account_credentials TO wb_live_api;
 GRANT SELECT,INSERT,UPDATE ON wb_live_sync_jobs,wb_live_sync_sources,wb_live_sync_requests TO wb_live_api;
 GRANT SELECT ON wb_live_products,wb_live_product_sizes,wb_live_pages TO wb_live_api;
+-- Inbox discovery/list and recipient receipts only; no notification production.
+GRANT SELECT ON notification_in_app_events,notification_in_app_receipts,
+ review_facts,review_observations,review_sync_runs_v2 TO wb_live_api;
+GRANT INSERT ON notification_in_app_receipts TO wb_live_api;
+GRANT UPDATE(read_at,dismissed_at) ON notification_in_app_receipts TO wb_live_api;
+GRANT EXECUTE ON FUNCTION public.review_send_unicode_version(),public.review_send_uuid4(uuid),
+ public.review_send_external_id(bytea),
+ public.review_strict_utf8(bytea),public.review_local_integer_text(numeric,boolean),
+ public.review_local_timestamp_text(timestamp with time zone),
+ public.review_local_utf8_json_string(bytea),public.review_local_string(text,boolean),
+ public.review_local_uuid(uuid,boolean),public.review_local_number(numeric,boolean,boolean),
+ public.notification_in_app_identity_bytes(public.notification_in_app_events),
+ public.notification_in_app_event_bytes(public.notification_in_app_events),
+ public.notification_in_app_receipt_bytes(public.notification_in_app_receipts),
+ public.notification_in_app_visible_action_bytes(integer,integer,integer,uuid[],text)
+ TO wb_live_api;
 GRANT SELECT(user_id,organization_id,is_active,updated_at) ON lk_users TO wb_live_worker;
 GRANT SELECT ON iam_memberships,marketplace_accounts,marketplace_account_credentials TO wb_live_worker;
 -- PostgreSQL requires UPDATE on at least one column for SELECT FOR SHARE/UPDATE.
