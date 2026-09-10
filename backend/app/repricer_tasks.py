@@ -303,6 +303,7 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
         group_by,
         source,
         organization_id=organization_id,
+        finance_allowed=finance_allowed,
     )
     started_at = reports._utc_now_iso()
     def progress(stage: str, label: str, percent: int, state: str = "running") -> None:
@@ -1449,8 +1450,8 @@ def _materialize_report_snapshots_for_profile(organization_id: int, profile: WbS
                 wb_token=None,
             )
             pnl_report = reports._apply_report_rules_to_payload(reports._map_pnl_to_report_response(pnl_payload, date_range, cash_flow), organization_id)
-            pnl_cache = reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="pnl", date_from=date_from, date_to=date_to, group_by="sku", source="operational", report=pnl_report)
-            reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="pnl", date_from=date_from, date_to=date_to, group_by="sku", source="financial", report=pnl_report)
+            pnl_cache = reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="pnl", date_from=date_from, date_to=date_to, group_by="sku", source="operational", report=pnl_report, finance_allowed=True)
+            reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="pnl", date_from=date_from, date_to=date_to, group_by="sku", source="financial", report=pnl_report, finance_allowed=True)
             reports.save_source_cache(
                 organization_id,
                 reports._report_job_cache_key("pnl", date_from, date_to, "sku"),

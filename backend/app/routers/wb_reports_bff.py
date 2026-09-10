@@ -3362,7 +3362,7 @@ BACKGROUND_REPORT_QUEUED_STALE_AFTER = timedelta(seconds=30)
 DIGEST_CACHE_TTL = timedelta(hours=24)
 REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
 ABC_REPORT_PAYLOAD_VERSION = "v16"
-PNL_REPORT_PAYLOAD_VERSION = "v1"
+PNL_REPORT_PAYLOAD_VERSION = "v2"
 RNP_REPORT_PAYLOAD_VERSION = "v3"
 STOCK_REPORT_PAYLOAD_VERSION = "v5"
 WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v2"
@@ -3410,9 +3410,12 @@ def _report_cache_key(
     source: str,
     *,
     organization_id: int | None = None,
+    finance_allowed: bool = False,
 ) -> str:
     if report_id == "abc" and organization_id is not None:
         return f"reports_payload_abc_{ABC_REPORT_PAYLOAD_VERSION}_{_abc_economics_version(organization_id)}_org{organization_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}"
+    if report_id == "pnl":
+        return f"reports_payload_pnl_{PNL_REPORT_PAYLOAD_VERSION}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}_{'finance' if finance_allowed else 'nofinance'}"
     return f"reports_payload_{report_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}"
 
 
@@ -3563,6 +3566,7 @@ def _save_exact_report_payload_cache(
     group_by: str,
     source: str,
     report: dict[str, Any],
+    finance_allowed: bool = False,
 ) -> dict[str, Any]:
     report = _normalize_report_basket_fields(report)
     if report_id == "abc":
@@ -3575,7 +3579,7 @@ def _save_exact_report_payload_cache(
     }
     save_source_cache(
         organization_id,
-        _report_cache_key(report_id, date_from, date_to, group_by, source, organization_id=organization_id),
+        _report_cache_key(report_id, date_from, date_to, group_by, source, organization_id=organization_id, finance_allowed=finance_allowed),
         cache,
     )
     return cache
@@ -3661,6 +3665,11 @@ def _parse_report_payload_cache_key(source_key: str, report_id: str) -> tuple[da
     tail = source_key[len(prefix):]
     if report_id == "abc":
         tail = re.sub(rf"^{re.escape(ABC_REPORT_PAYLOAD_VERSION)}_[0-9a-f]+_org\d+_", "", tail)
+    if report_id == "pnl":
+        version = f"{PNL_REPORT_PAYLOAD_VERSION}_"
+        if not tail.startswith(version):
+            return None, None, None, None
+        tail = tail[len(version):]
     match = re.match(r"(?P<date_from>\d{4}-\d{2}-\d{2})_(?P<date_to>\d{4}-\d{2}-\d{2})_(?P<group_by>[^_]+)_(?P<source>.+)$", tail)
     if not match:
         return None, None, None, None
@@ -3683,6 +3692,7 @@ def _latest_report_payload_cache(
     source: str,
     date_from: date | None = None,
     date_to: date | None = None,
+    finance_allowed: bool = False,
 ) -> tuple[dict[str, Any], date, date] | None:
     requested_from = date_from
     requested_to = date_to
@@ -3696,16 +3706,18 @@ def _latest_report_payload_cache(
                 group_by,
                 source,
                 organization_id=organization_id,
+                finance_allowed=finance_allowed,
             ),
             slim=False,
         ) or {}
         if _report_payload_cache_is_usable(report_id, exact, organization_id=organization_id):
             return exact, requested_from, requested_to
         return None
+    scoped_source = f"{source}_{'finance' if finance_allowed else 'nofinance'}" if report_id == "pnl" else source
     for cache in list_source_cache_by_prefix(organization_id, f"reports_payload_{report_id}_", limit=50, slim=False):
         source_key = str(cache.get("sourceKey") or "")
         fallback_from, fallback_to, cached_group_by, cached_source = _parse_report_payload_cache_key(source_key, report_id)
-        if cached_group_by != group_by or cached_source != source:
+        if cached_group_by != group_by or cached_source != scoped_source:
             continue
         if not _report_payload_cache_is_usable(report_id, cache, organization_id=organization_id):
             continue
@@ -4367,6 +4379,7 @@ def get_reports_latest_cache(
         source=source,
         date_from=requested_from,
         date_to=requested_to,
+        finance_allowed=has_permission(actor, "finance:read"),
     )
     if latest is None:
         if report_id == "week-over-week" and requested_from is not None and requested_to is not None:
@@ -4672,7 +4685,7 @@ def get_reports_by_id(
         return _empty_background_report(report_id, date_range, groupBy, job)
 
     if report_id == "pnl":
-        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
+        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=finance_allowed)
         cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
         report = cached.get("report") if isinstance(cached.get("report"), dict) else None
         job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {
@@ -4848,7 +4861,7 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
     assert_permission_or_audit(actor=actor, permission="settings:read", action="reports.bff.job.start", object_type="wb_report", object_id=report_id, reason="actor cannot refresh report")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
     key = _report_job_cache_key(report_id, date_from, date_to, groupBy, source)
-    cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
+    cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=has_permission(actor, "finance:read"))
     cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
     current = get_source_cache(actor.organization_id, key, slim=False) or {}
     if _report_job_is_active_refresh(current):
@@ -4954,7 +4967,7 @@ def get_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pn
         return _report_job_for_response({**job, "reused": True})
     cached = get_source_cache(
         actor.organization_id,
-        _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id),
+        _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=has_permission(actor, "finance:read")),
         slim=False,
     ) or {}
     if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
