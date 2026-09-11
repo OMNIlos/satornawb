@@ -9717,7 +9717,7 @@ async function loadLatestReportCache<T>(
     if (latest) return latest
     if (attempt < 2) await backgroundReportPollDelay(options.signal)
   }
-  return null
+  throw new ApiError('Готовый отчёт за выбранный период ещё недоступен. Фоновая загрузка может продолжаться — попробуйте открыть отчёт позже.', 409)
 }
 
 function removeLegacyReportTableFallbacks(tabId: 'rnp' | 'pnl' | 'ads' | 'stock' | 'week') {

@@ -77,3 +77,71 @@ it.each(reports.flatMap(report => ['empty', 'failure'].map(outcome => ({ ...repo
     } finally { release(); await browser.close() }
   }, 60_000,
 )
+
+it('does not report an empty P&L when polling expires without a ready cache', async () => {
+  const root = fileURLToPath(new URL('../../../', import.meta.url))
+  const result = await build({
+    configFile: false, envFile: false, root, logLevel: 'silent', plugins: [react()],
+    define: { 'process.env.NODE_ENV': JSON.stringify('test'), 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('') },
+    resolve: { alias: { '@': path.join(root, 'src') } },
+    build: { write: false, minify: false, lib: {
+      entry: fileURLToPath(new URL('./__fixtures__/reportLoadingBrowser.tsx', import.meta.url)), formats: ['iife'], name: 'ReportPollingTest',
+    } },
+  })
+  const outputs = Array.isArray(result) ? result : [result]
+  const bundle = outputs.flatMap(output => 'output' in output ? output.output : [])
+    .find(output => output.type === 'chunk' && output.isEntry)
+  if (!bundle || bundle.type !== 'chunk') throw new Error('Missing report polling fixture bundle')
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
+    // Only accelerate the real loader's two-second waits; keep its poll budget unchanged.
+    await page.addInitScript(() => {
+      const schedule = window.setTimeout.bind(window)
+      window.setTimeout = (handler, timeout, ...args) => schedule(handler, timeout === 2000 ? 0 : timeout, ...args)
+    })
+    let starts = 0, polls = 0, cacheReads = 0, readyEmpty = false
+    const unexpected: string[] = [], errors: string[] = []
+    page.on('pageerror', error => errors.push(error.message))
+    await page.route('**/*', route => {
+      const request = route.request(), url = new URL(request.url())
+      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/wb/reports/pnl') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
+      if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
+      if (url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/pnl/latest-cache' && request.method() === 'GET') {
+        cacheReads += 1
+        return readyEmpty
+          ? route.fulfill({ contentType: 'application/json', body: JSON.stringify({ rows: [], kpis: [], cashFlow: null, reportJob: { state: 'completed' } }) })
+          : route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":{"code":"HTTP_404","message":"REPORT_LATEST_CACHE_MISSING"}}' })
+      }
+      if (url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/pnl/jobs' && ['GET', 'POST'].includes(request.method())) {
+        if (request.method() === 'POST') starts += 1
+        else polls += 1
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+          state: request.method() === 'POST' ? 'queued' : 'running', stage: 'refreshing_sources', kind: 'report_source_refresh',
+          taskId: 'synthetic-pending-report', reportId: 'pnl', dateFrom: url.searchParams.get('from'), dateTo: url.searchParams.get('to'),
+          groupBy: 'sku', source: 'financial', percent: 13, label: 'Получаем данные WB',
+        }) })
+      }
+      unexpected.push(`${request.method()} ${url.pathname}`)
+      return route.abort()
+    })
+    await page.goto('http://satorna.test/wb/reports/pnl')
+    await page.addScriptTag({ content: bundle.code })
+    const surface = page.locator('#tab-pnl')
+    await expect.poll(() => cacheReads, { timeout: 20_000 }).toBe(4)
+    await surface.getByText(/^(Не удалось загрузить P&L|За выбранный период нет данных)$/).waitFor()
+    expect([starts, polls]).toEqual([1, 150])
+    expect(await surface.innerText()).toContain('Не удалось загрузить P&L')
+    expect(await surface.innerText()).not.toContain('За выбранный период нет данных')
+    expect(await surface.locator('[data-report-row]').count()).toBe(0)
+
+    readyEmpty = true
+    await page.reload()
+    await page.addScriptTag({ content: bundle.code })
+    await surface.getByText('За выбранный период нет данных', { exact: true }).waitFor()
+    expect([starts, polls]).toEqual([1, 150])
+    expect(unexpected).toEqual([])
+    expect(errors).toEqual([])
+  } finally { await browser.close() }
+}, 60_000)
