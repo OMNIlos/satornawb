@@ -177,3 +177,67 @@ def test_fake_finance_does_not_sleep_or_change_real_provider_pacing(monkeypatch)
     assert result["rowsCount"] == 1
     assert len(client.requests) == 2
     assert repricer_bff._finance_report_last_request_at == 1_000.0
+
+
+@pytest.mark.parametrize("document", ["Продажа", "Возврат"])
+@pytest.mark.parametrize("nm_id", [101, 0])
+@pytest.mark.parametrize(
+    "revenue",
+    [
+        {},
+        {"retailAmount": None},
+        {"retailAmount": ""},
+        {"retailAmount": True},
+        {"retailAmount": False},
+        {"retailAmount": "bad"},
+        {"retailAmount": "NaN"},
+        {"retailAmount": "Infinity"},
+        {"retailAmount": "1e308"},
+        {"retail_amount": False},
+    ],
+)
+def test_invalid_trade_revenue_never_publishes_partial_finance(
+    monkeypatch, document, nm_id, revenue
+):
+    invalid = row(2, docTypeName=document, nmId=nm_id, saleDt="2026-08-17")
+    invalid.pop("retailAmount")
+    invalid.update(revenue)
+    with pytest.raises(HTTPException) as error:
+        fetch(monkeypatch, [(200, [row()]), (200, [invalid]), (204, None)])
+    assert error.value.status_code == 502
+    assert error.value.detail == "WB_FINANCE_INVALID_TRADE_REVENUE"
+
+
+@pytest.mark.parametrize("field", ["retailAmount", "retail_amount"])
+@pytest.mark.parametrize("document,sign", [("Продажа", 1), ("Возврат", -1)])
+@pytest.mark.parametrize(
+    "amount,kopecks", [(0, 0), ("0", 0), ("12,34", 1234), (-2.34, -234)]
+)
+def test_valid_trade_revenue_preserves_period_and_daily_amounts(
+    monkeypatch, field, document, sign, amount, kopecks
+):
+    trade = row(docTypeName=document, saleDt="2026-08-17")
+    trade.pop("retailAmount")
+    trade[field] = amount
+    result, cursors = fetch(monkeypatch, [(200, [trade]), (204, None)])
+    for aggregate in (
+        result["aggregates"]["101"],
+        result["dailyAggregates"]["2026-08-17"]["101"],
+    ):
+        assert aggregate["revenueGrossKopecks"] == sign * kopecks
+        assert aggregate["sellerRevenueMissingRows"] == 0
+    assert cursors == [0, 1]
+
+
+def test_fee_only_row_does_not_require_trade_revenue(monkeypatch):
+    fee = row(docTypeName="", saleDt="2026-08-17", paidStorage="12.34")
+    fee.pop("retailAmount")
+    result, cursors = fetch(monkeypatch, [(200, [fee]), (204, None)])
+    for aggregate in (
+        result["aggregates"]["101"],
+        result["dailyAggregates"]["2026-08-17"]["101"],
+    ):
+        assert aggregate["revenueGrossKopecks"] == 0
+        assert aggregate["storageKopecks"] == 1234
+        assert aggregate["sellerRevenueMissingRows"] == 0
+    assert cursors == [0, 1]

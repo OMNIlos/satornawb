@@ -8,7 +8,7 @@ import time
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
-from math import ceil, floor
+from math import ceil, floor, isfinite
 from typing import Any, Callable, Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -3534,6 +3534,11 @@ def fetch_finance_report_aggregates(
                 continue
             if item_rrd_id <= rrd_id:
                 raise HTTPException(status_code=502, detail="WB_FINANCE_CURSOR_STALLED")
+            doc_type = str(item.get("docTypeName") or item.get("doc_type_name") or "").strip().lower()
+            if doc_type in {"продажа", "возврат"}:
+                revenue = _number_or_none(_finance_raw_first(item, "retailAmount", "retail_amount"))
+                if revenue is None or not isfinite(revenue * 100):
+                    raise HTTPException(status_code=502, detail="WB_FINANCE_INVALID_TRADE_REVENUE")
             seen_rrd_ids[item_rrd_id] = item
             rows.append(item)
         pages_loaded += 1
