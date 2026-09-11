@@ -12,13 +12,10 @@
 # 53 FAIL, zero errors/skips; all four repaired BFF cache fixtures explicit PASS.
 # Shrunk 53 to 52 from complete 12a46c7 JUnit on 2026-09-11: 7712 PASS,
 # 52 FAIL, zero errors/skips; repaired stock/WoW fixture explicit PASS.
+# Shrunk 52 to 46 from complete a7c6899 JUnit on 2026-09-11: 7761 PASS,
+# 46 FAIL, zero errors/skips; all six repaired scheduler controls explicit PASS.
 tests/test_app.py::test_sprint_d_reports_are_served_through_backend_app
 tests/test_avito_repricer_worker.py::test_avito_scheduler_execute_creates_pending_approval_when_real_apply_disabled
-tests/test_repricer_tasks.py::test_nightly_wb_sync_skips_recent_reconciliation
-tests/test_repricer_tasks.py::test_scheduler_execute_loads_full_cached_goods_list
-tests/test_repricer_tasks.py::test_scheduler_wb_sync_replaces_stale_status_before_running_profiles
-tests/test_repricer_tasks.py::test_scheduler_wb_sync_respects_recent_manual_sync
-tests/test_repricer_tasks.py::test_scheduler_wb_sync_runs_due_periodic_windows
 tests/test_sprint_b_workflow.py::test_apply_failure_has_retry_and_retry_can_recover
 tests/test_sprint_b_workflow.py::test_draft_approval_and_apply_flow_reaches_accepted_with_feature_flag_enabled
 tests/test_sprint_b_workflow.py::test_draft_blocks_when_required_inputs_are_missing
@@ -63,4 +60,3 @@ tests/test_wb_repricer_bff.py::test_wb_sync_can_opt_into_daily_baskets_detail
 tests/test_wb_repricer_bff.py::test_wb_sync_runs_four_independent_sources_in_parallel_and_waits_for_goods
 tests/test_wb_repricer_bff.py::test_worker_status_returns_next_run_and_recent_scheduler_logs
 tests/test_wb_repricer_bff.py::test_worker_status_without_runs_uses_stable_interval_boundary
-tests/test_wb_sync_plan.py::test_periodic_profiles_use_short_refresh_windows
