@@ -97,8 +97,9 @@ it('does not report an empty P&L when polling expires without a ready cache', as
     const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
     // Only accelerate the real loader's two-second waits; keep its poll budget unchanged.
     await page.addInitScript(() => {
-      const schedule = window.setTimeout.bind(window)
-      window.setTimeout = (handler, timeout, ...args) => schedule(handler, timeout === 2000 ? 0 : timeout, ...args)
+      const browserWindow: Window = window
+      const schedule = browserWindow.setTimeout.bind(browserWindow)
+      browserWindow.setTimeout = (handler, timeout, ...args) => schedule(handler, timeout === 2000 ? 0 : timeout, ...args)
     })
     let starts = 0, polls = 0, cacheReads = 0, readyEmpty = false
     const unexpected: string[] = [], errors: string[] = []
