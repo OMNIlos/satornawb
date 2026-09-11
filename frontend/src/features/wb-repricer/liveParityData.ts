@@ -358,7 +358,7 @@ export type LiveRepricerStatsSummary = {
   impressions?: number
   clicks?: number
   adCtrPct?: number | null
-  baskets?: number
+  baskets?: number | null
   orders?: number
   cartToOrderCrPct?: number | null
   adSpendKopecks?: number

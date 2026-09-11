@@ -2108,6 +2108,7 @@ function repricerStatsRubFromKopecks(value: unknown) {
 }
 
 function repricerStatsPct(value: unknown) {
+  if (value === null || value === undefined || value === '') return '—'
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return '—'
   return `${parsed.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`
