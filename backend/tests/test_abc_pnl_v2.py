@@ -152,14 +152,17 @@ def api() -> TestClient:
                     organization_id=1,
                     code="FBBT_1133",
                 ),
-                MarketplaceProductRow(
-                    marketplace_product_id=1011,
-                    organization_id=1,
-                    marketplace_account_id=31,
-                    external_product_id="453200669",
-                    seller_article="FBBT_1133",
-                ),
             ]
+        )
+        session.flush()
+        session.add(
+            MarketplaceProductRow(
+                marketplace_product_id=1011,
+                organization_id=1,
+                marketplace_account_id=31,
+                external_product_id="453200669",
+                seller_article="FBBT_1133",
+            )
         )
         session.flush()
         session.add(
