@@ -4,6 +4,8 @@
 # No new failure IDs accepted. See architecture-foundation-delivery report.
 # Shrunk 70 to 69 from complete 54716c2 JUnit on 2026-09-11: 7567 PASS,
 # 69 FAIL, zero errors/skips; fixed campaign-only attribution is explicit PASS.
+# Shrunk 69 to 65 from complete 722fa25 JUnit on 2026-09-11: 7572 PASS,
+# 65 FAIL, zero errors/skips; all four repaired weekly cache tests explicit PASS.
 tests/test_app.py::test_sprint_d_reports_are_served_through_backend_app
 tests/test_avito_repricer_worker.py::test_avito_scheduler_execute_creates_pending_approval_when_real_apply_disabled
 tests/test_one_c_cash_flow.py::test_cash_flow_job_queue_roundtrip_and_pnl_attachment
@@ -38,10 +40,6 @@ tests/test_wb_reports_bff.py::test_digest_endpoint_reports_missing_cache_without
 tests/test_wb_reports_bff.py::test_digest_read_uses_cached_result_without_calling_wb
 tests/test_wb_reports_bff.py::test_latest_report_payload_cache_respects_requested_range
 tests/test_wb_reports_bff.py::test_starting_pnl_job_immediately_exposes_cash_flow_job_to_1c
-tests/test_wb_reports_bff.py::test_week_over_week_get_returns_cached_payload_while_job_is_running
-tests/test_wb_reports_bff.py::test_week_over_week_get_returns_completed_cached_job_payload
-tests/test_wb_reports_bff.py::test_week_over_week_get_returns_missing_background_report_without_cache
-tests/test_wb_reports_bff.py::test_week_over_week_job_endpoint_reuses_completed_cached_report
 tests/test_wb_repricer_bff.py::test_ads_spend_aggregates_reports_progress_by_campaign_batches
 tests/test_wb_repricer_bff.py::test_baskets_detail_job_merges_exact_cache_and_cache_hit_avoids_duplicate
 tests/test_wb_repricer_bff.py::test_baskets_detail_start_marks_stale_active_run_failed_and_starts_new
