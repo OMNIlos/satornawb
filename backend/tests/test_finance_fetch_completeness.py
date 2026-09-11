@@ -159,6 +159,35 @@ def test_fake_finance_provider_models_cursor_pages_and_204():
     assert client.fixtures[path]["data"] == [row(), row(2)]
 
 
+def test_manual_finance_save_publishes_valid_batch_without_clock_name_error(monkeypatch):
+    from app.routers import wb_repricer_bff as router
+
+    provider = FakeWbApiClient({
+        "/api/finance/v1/sales-reports/detailed": {"data": [row(retailAmount="12.34")]},
+    })
+    monkeypatch.setattr(repricer_bff, "build_wb_finance_client", lambda *a, **kw: provider)
+    monkeypatch.setattr(router, "list_cached_goods", lambda _organization_id: [{"nmID": 101}])
+    saved = []
+
+    def save(organization_id, key, payload):
+        saved.append((organization_id, key, payload))
+        return payload
+
+    monkeypatch.setattr(router, "save_source_cache", save)
+    payload, cached, goods_count, matched_count = router._save_finance_source_cache(
+        1, scenario="complete", wb_token=None,
+        range_start=datetime(2026, 8, 17, tzinfo=timezone.utc),
+        range_end=datetime(2026, 8, 23, tzinfo=timezone.utc),
+        resolved_period_days=7, period_suffix="2026-08-17_2026-08-23",
+    )
+    assert payload["aggregates"]["101"]["revenueGrossKopecks"] == 1234
+    assert (goods_count, matched_count) == (1, 1)
+    assert cached["canonicalSnapshot"] == {"state": "disabled"}
+    assert len(saved) == 1
+    assert saved[0][:2] == (1, "finance_2026-08-17_2026-08-23")
+    assert saved[0][2]["aggregates"]["101"]["revenueGrossKopecks"] == 1234
+
+
 def test_fake_finance_does_not_sleep_or_change_real_provider_pacing(monkeypatch):
     path = "/api/finance/v1/sales-reports/detailed"
     client = FakeWbApiClient({path: {"data": [row()]}})

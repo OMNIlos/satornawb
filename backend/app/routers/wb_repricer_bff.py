@@ -1466,7 +1466,7 @@ def _save_finance_source_cache(
     canonical_snapshot = shadow_ingest_legacy_finance_payload(
         organization_id,
         payload,
-        observed_at=_utc_now(),
+        observed_at=datetime.now(timezone.utc),
     )
     finance_aggregates = payload.get("aggregates") if isinstance(payload.get("aggregates"), dict) else {}
     cached_goods_nm_ids = {str(nm_id) for nm_id in _nm_ids_from_goods(list_cached_goods(organization_id))}
