@@ -3657,26 +3657,26 @@ def _ensure_repricer_stats_period_caches(
     baskets_cache = get_source_cache(organization_id, stats_baskets_key, slim=True) or {}
     if baskets_cache and not _cache_matches_range(baskets_cache, range_start, range_end):
         baskets_cache = {}
-    if not baskets_cache:
-        baskets_payload = _period_source_cache(organization_id, "baskets", period_suffix, resolved_period_days, range_start, range_end, slim=False, require_full_sync_coverage=False)
-        baskets_aggregates = baskets_payload.get("aggregates") if isinstance(baskets_payload.get("aggregates"), dict) else {}
-        if baskets_payload and baskets_payload.get("fetchedAt"):
-            save_source_cache(
-                organization_id,
-                stats_baskets_key,
-                {
-                    **baskets_payload,
-                    "periodDays": resolved_period_days,
-                    "dateFrom": range_start.date().isoformat(),
-                    "dateTo": range_end.date().isoformat(),
-                    "source": "repricer_stats_cache_materialized",
-                },
-            )
-            fetched_sources.append("baskets")
-            if not baskets_aggregates:
-                missing_sources.append("baskets")
-        else:
-            missing_sources.append("baskets")
+    baskets_payload = _period_source_cache(organization_id, "baskets", period_suffix, resolved_period_days, range_start, range_end, slim=False, require_full_sync_coverage=False)
+    cached_observed_at = _parse_utc_datetime(baskets_cache.get("fetchedAt"))
+    source_observed_at = _parse_utc_datetime(baskets_payload.get("fetchedAt"))
+    if source_observed_at is not None and (
+        not baskets_cache
+        or cached_observed_at is None
+        or source_observed_at > cached_observed_at
+    ):
+        baskets_cache = {
+            **baskets_payload,
+            "periodDays": resolved_period_days,
+            "dateFrom": range_start.date().isoformat(),
+            "dateTo": range_end.date().isoformat(),
+            "source": "repricer_stats_cache_materialized",
+        }
+        save_source_cache(organization_id, stats_baskets_key, baskets_cache)
+        fetched_sources.append("baskets")
+    baskets_aggregates = baskets_cache.get("aggregates") if isinstance(baskets_cache.get("aggregates"), dict) else {}
+    if not baskets_aggregates:
+        missing_sources.append("baskets")
 
     return {
         "onDemandFetchedSources": fetched_sources,

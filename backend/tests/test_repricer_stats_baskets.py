@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import replace
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
@@ -57,12 +58,14 @@ def _fail(message: str):
 def stats_runtime(monkeypatch):
     goods = [_good(1)]
     storage: dict[tuple[int, str], dict] = {}
+    save_calls: list[tuple[int, str]] = []
     settings = replace(repricer_bff_module.get_settings(), wb_api_mode="real")
 
     def get_cache(organization_id: int, key: str, **_kwargs):
         return deepcopy(storage.get((organization_id, key)))
 
     def save_cache(organization_id: int, key: str, payload: dict):
+        save_calls.append((organization_id, key))
         storage[organization_id, key] = deepcopy(payload)
         return deepcopy(payload)
 
@@ -133,6 +136,7 @@ def stats_runtime(monkeypatch):
         assert response.status_code == 200, response.text
         return response.json()
 
+    request.save_calls = save_calls
     return goods, storage, request
 
 
@@ -234,6 +238,90 @@ def test_fetched_empty_baskets_cache_retains_coverage_metadata(stats_runtime):
     assert payload["cache"]["basketsFetchedAt"] == FETCHED_AT
     assert payload["cache"]["basketsRequestedNmIds"] == 1
     assert payload["cache"]["basketsMatchedNmIds"] == 0
+
+
+@pytest.mark.parametrize(
+    "cart_count,order_count,want_conversion",
+    [(7, 3, 42.9), (0, 0, None)],
+)
+def test_fetched_empty_baskets_cache_recovers_from_newer_observation_without_deletion(
+    stats_runtime, cart_count, order_count, want_conversion
+):
+    goods, storage, request = stats_runtime
+    source_key = f"baskets_{SUFFIX}"
+    stats_key = f"repricer_stats_baskets_{SUFFIX}"
+    empty = _source_payload(
+        {},
+        fetchedAt="2026-07-08T01:00:00+00:00",
+        requestedNmIds=1,
+        matchedNmIds=0,
+    )
+
+    first = request(baskets=empty)
+    assert first["items"][0]["metrics"]["baskets"] is None
+    assert first["cache"]["basketsFetchedAt"] == "2026-07-08T01:00:00+00:00"
+    assert first["cache"]["basketsRequestedNmIds"] == 1
+    assert first["cache"]["basketsMatchedNmIds"] == 0
+    assert storage[1, stats_key]["aggregates"] == {}
+
+    range_start, range_end, period_days, period_suffix = wb_repricer_bff_router._repricer_period_context(
+        7,
+        date.fromisoformat(DATE_FROM),
+        date.fromisoformat(DATE_TO),
+    )
+    saves_before_repeat = len(request.save_calls)
+    repeated = wb_repricer_bff_router._ensure_repricer_stats_period_caches(
+        1,
+        "complete",
+        wb_token=None,
+        resolved_period_days=period_days,
+        period_suffix=period_suffix,
+        range_start=range_start,
+        range_end=range_end,
+    )
+    assert "baskets" in repeated["missingSources"]
+    assert len(request.save_calls) == saves_before_repeat
+    assert storage[1, stats_key]["fetchedAt"] == "2026-07-08T01:00:00+00:00"
+
+    storage[1, source_key] = _source_payload(
+        {"10001": {"cartCount": cart_count, "orderCount": order_count}},
+        fetchedAt="2026-07-09T01:00:00+00:00",
+        requestedNmIds=1,
+        matchedNmIds=1,
+    )
+    recovered = request(baskets=None)
+    recovered_item = recovered["items"][0]
+    assert recovered_item["metrics"]["baskets"] == cart_count
+    assert recovered_item["metrics"]["cartToOrderCrPct"] == want_conversion
+    assert recovered_item["sources"]["states"]["baskets"] == "ok"
+    assert recovered["summary"]["baskets"] == cart_count
+    assert recovered["summary"]["cartToOrderCrPct"] == want_conversion
+    assert recovered["cache"]["basketsFetchedAt"] == "2026-07-09T01:00:00+00:00"
+    assert recovered["cache"]["basketsRequestedNmIds"] == 1
+    assert recovered["cache"]["basketsMatchedNmIds"] == 1
+    assert storage[1, stats_key]["dateFrom"] == DATE_FROM
+    assert storage[1, stats_key]["dateTo"] == DATE_TO
+    assert storage[1, stats_key]["aggregates"]["10001"]["cartCount"] == cart_count
+
+    del storage[1, source_key]
+    unavailable = request(baskets=None)
+    assert unavailable["items"][0]["metrics"]["baskets"] == cart_count
+    assert unavailable["cache"]["basketsFetchedAt"] == "2026-07-09T01:00:00+00:00"
+
+    goods.append(_good(2))
+    storage[1, source_key] = _source_payload(
+        {"10001": {"cartCount": 99, "orderCount": 99}},
+        fetchedAt="2026-07-08T02:00:00+00:00",
+        requestedNmIds=2,
+        matchedNmIds=1,
+    )
+    older = request(baskets=None)
+    by_article = {item["articleId"]: item for item in older["items"]}
+    assert by_article["STATS_01"]["metrics"]["baskets"] == cart_count
+    assert by_article["STATS_02"]["metrics"]["baskets"] is None
+    assert by_article["STATS_02"]["sources"]["states"]["baskets"] == "no_data"
+    assert older["summary"]["baskets"] is None
+    assert older["cache"]["basketsFetchedAt"] == "2026-07-09T01:00:00+00:00"
 
 
 def test_summary_is_unknown_when_missing_sku_is_outside_page(stats_runtime):
