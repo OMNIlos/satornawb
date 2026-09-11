@@ -3869,9 +3869,7 @@ def _completed_report_job_from_cache(
 
 def _report_job_is_reusable(job: dict[str, Any]) -> bool:
     state = job.get("state")
-    if state == "waiting_1c":
-        return True
-    if state not in {"queued", "running"}:
+    if state not in {"queued", "running", "waiting_1c"}:
         return False
     heartbeat = (
         _parse_report_job_timestamp(job.get("updatedAt"))
@@ -3905,7 +3903,9 @@ def _report_job_for_response(job: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(job, dict) or not job:
         return job
     state = job.get("state")
-    if state not in {"queued", "running"} or _report_job_is_reusable(job):
+    if state == "waiting_1c" and not job.get("taskId"):
+        return job  # The expenses view can wait for 1C without a background worker.
+    if state not in {"queued", "running", "waiting_1c"} or _report_job_is_reusable(job):
         return job
     return {
         **job,

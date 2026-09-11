@@ -243,6 +243,63 @@ def test_external_data_wait_is_not_a_live_worker(waiting):
     )
 
 
+@pytest.mark.parametrize("heartbeat", ["expired", "missing"])
+def test_abandoned_1c_wait_is_stale_and_can_restart_once(runtime, heartbeat):
+    key, job = seed(runtime, "pnl", cached=False, state="waiting_1c", stage="waiting_1c")
+    if heartbeat == "expired":
+        job["updatedAt"] = (
+            datetime.now(timezone.utc) - reports.BACKGROUND_REPORT_JOB_STALE_AFTER
+            - timedelta(seconds=1)
+        ).isoformat()
+    else:
+        job.pop("updatedAt")
+    runtime.cache[1, key] = deepcopy(job)
+    runtime.ready = True
+    for suffix in ("", "/jobs"):
+        response = runtime.api.get(f"/api/wb/reports/pnl{suffix}", params=PARAMS)
+        assert response.status_code == 200
+        status = response.json() if suffix else response.json()["reportJob"]
+        assert status["state"] == "stale"
+        assert status["previousState"] == "waiting_1c"
+    assert runtime.cache[1, key] == job
+    assert runtime.writes == runtime.builds == runtime.refreshes == []
+    for reused in (False, True):
+        response = runtime.api.post("/api/wb/reports/pnl/jobs", params=PARAMS)
+        assert response.status_code == 200
+        assert response.json()["state"] == "queued"
+        assert response.json()["reused"] is reused
+    assert len(runtime.builds) == 1
+    assert runtime.refreshes == []
+
+
+def test_explicit_refresh_can_replace_abandoned_1c_wait_once(runtime):
+    key, job = seed(runtime, "pnl", cached=False, state="waiting_1c", stage="waiting_1c")
+    job["kind"] = "report_source_refresh"
+    job["updatedAt"] = (
+        datetime.now(timezone.utc) - reports.BACKGROUND_REPORT_JOB_STALE_AFTER
+        - timedelta(seconds=1)
+    ).isoformat()
+    runtime.cache[1, key] = job
+    for reused in (False, True):
+        response = runtime.api.post("/api/wb/reports/pnl/refresh-sources-job", params=PARAMS)
+        assert response.status_code == 200
+        assert response.json()["state"] == "queued"
+        assert response.json()["reused"] is reused
+    assert len(runtime.refreshes) == 1
+    assert runtime.builds == []
+
+
+def test_expenses_pending_source_without_worker_is_not_a_stale_task(runtime, monkeypatch):
+    monkeypatch.setattr(
+        reports, "get_cash_flow_for_period", lambda **kw: {"status": "pending"}
+    )
+    response = runtime.api.get("/api/wb/reports/expenses", params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()["reportJob"]["state"] == "waiting_1c"
+    assert not response.json()["reportJob"].get("taskId")
+    assert runtime.writes == runtime.builds == runtime.refreshes == []
+
+
 def test_stale_worker_can_be_completed_from_valid_cache(runtime):
     key, job = seed(runtime, "pnl")
     job["updatedAt"] = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
