@@ -324,6 +324,40 @@ def test_fetched_empty_baskets_cache_recovers_from_newer_observation_without_del
     assert older["cache"]["basketsFetchedAt"] == "2026-07-09T01:00:00+00:00"
 
 
+@pytest.mark.parametrize(
+    "aggregates",
+    [None, [], False, "broken", {"10001": []}, {"10001": ["broken"]}, {"10001": None}],
+    ids=["null", "list", "boolean", "string", "empty-row-list", "row-list", "null-row"],
+)
+def test_newer_malformed_baskets_preserves_last_good_cache(stats_runtime, aggregates):
+    _goods, storage, request = stats_runtime
+    good = _source_payload(
+        {"10001": {"cartCount": 7, "orderCount": 3}},
+        requestedNmIds=1,
+        matchedNmIds=1,
+    )
+    first = request(baskets=good)
+    assert first["summary"]["baskets"] == 7
+    cache_key = (1, f"repricer_stats_baskets_{SUFFIX}")
+    saved = deepcopy(storage[cache_key])
+    saves_before = list(request.save_calls)
+
+    payload = request(baskets={
+        **good,
+        "fetchedAt": "2026-07-09T01:00:00+00:00",
+        "aggregates": aggregates,
+        "matchedNmIds": 0,
+    })
+
+    assert payload["items"][0]["metrics"]["baskets"] == 7
+    assert payload["summary"]["baskets"] == 7
+    assert payload["summary"]["cartToOrderCrPct"] == 42.9
+    assert payload["cache"]["basketsFetchedAt"] == FETCHED_AT
+    assert payload["cache"]["basketsMatchedNmIds"] == 1
+    assert storage[cache_key] == saved
+    assert request.save_calls == saves_before
+
+
 def test_summary_is_unknown_when_missing_sku_is_outside_page(stats_runtime):
     goods, _storage, request = stats_runtime
     goods[:] = [_good(index) for index in range(1, 27)]

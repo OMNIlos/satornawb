@@ -3660,10 +3660,16 @@ def _ensure_repricer_stats_period_caches(
     baskets_payload = _period_source_cache(organization_id, "baskets", period_suffix, resolved_period_days, range_start, range_end, slim=False, require_full_sync_coverage=False)
     cached_observed_at = _parse_utc_datetime(baskets_cache.get("fetchedAt"))
     source_observed_at = _parse_utc_datetime(baskets_payload.get("fetchedAt"))
-    if source_observed_at is not None and (
-        not baskets_cache
-        or cached_observed_at is None
-        or source_observed_at > cached_observed_at
+    source_aggregates = baskets_payload.get("aggregates")
+    if (
+        isinstance(source_aggregates, dict)
+        and all(isinstance(row, dict) for row in source_aggregates.values())
+        and source_observed_at is not None
+        and (
+            not baskets_cache
+            or cached_observed_at is None
+            or source_observed_at > cached_observed_at
+        )
     ):
         baskets_cache = {
             **baskets_payload,
