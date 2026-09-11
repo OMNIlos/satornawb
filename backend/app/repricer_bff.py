@@ -4989,9 +4989,14 @@ def _build_sku_row(
     else:
         wb_stock_units = None
     has_period_data = bool(period_aggregate)
-    has_baskets_data = baskets_cache_loaded and nm_id is not None
-    if has_baskets_data:
+    has_baskets_cache = baskets_cache_loaded and nm_id is not None
+    # ponytail: legacy schedulers require non-null meta; migrate those callers before making it nullable.
+    if has_baskets_cache:
         meta["basketsLast7d"] = int((baskets_aggregate or {}).get("cartCount") or 0)
+    has_baskets_data = (
+        has_baskets_cache
+        and (baskets_aggregate or {}).get("cartCount") is not None
+    )
     strategy = _frontend_strategy_payload(
         article_id,
         current_status=current_status,

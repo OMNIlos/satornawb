@@ -74,7 +74,7 @@ def test_period_reader_rejects_previous_withdrawal_semantics(monkeypatch, path, 
 
 
 @pytest.mark.parametrize("chunked", [False, True])
-@pytest.mark.parametrize("previous_version", [6, 7])
+@pytest.mark.parametrize("previous_version", [6, 7, 8])
 def test_sku_snapshot_reader_rejects_previous_monetary_payload(monkeypatch, chunked, previous_version):
     options = dict(period_suffix="2026-08-26_2026-09-01", include_promotions=False, include_content=False)
     key = wb_repricer_bff._repricer_sku_snapshot_key("complete", **options)

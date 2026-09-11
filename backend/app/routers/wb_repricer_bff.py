@@ -2062,7 +2062,7 @@ def _list_repricer_skus_from_cached_sources(
     )
 
 
-SKU_LIST_SNAPSHOT_VERSION = 8
+SKU_LIST_SNAPSHOT_VERSION = 9
 SKU_LIST_SNAPSHOT_CHUNK_SIZE = 150
 
 
@@ -2965,7 +2965,7 @@ def _repricer_stats_metrics(row: dict[str, Any]) -> dict[str, Any]:
     impressions = _int_or_zero(analytics.get("adImpressions") or analytics.get("impressions") or analytics.get("views"))
     clicks = _int_or_zero(analytics.get("adClicks") or analytics.get("clicks"))
     baskets_raw = analytics.get("baskets")
-    baskets = _int_or_zero(baskets_raw if baskets_raw is not None else meta.get("basketsLast7d"))
+    baskets = _int_or_zero(baskets_raw) if baskets_raw is not None else None
     orders = _int_or_zero(analytics.get("ordersUnits") or analytics.get("funnelOrderCount"))
     revenue_kopecks = _int_or_zero(analytics.get("revenueKopecks") or analytics.get("sellerRevenueKopecks"))
     ad_spend_kopecks = _int_or_zero(analytics.get("adSpendKopecks"))
@@ -3015,7 +3015,7 @@ def _repricer_stats_flags(row: dict[str, Any], metrics: dict[str, Any], sources:
     if margin_pct is not None and float(margin_pct) < 10:
         flags.append("margin_risk")
     basket_norm = _int_or_zero(meta.get("basketNorm"))
-    if basket_norm > 0 and _int_or_zero(metrics.get("baskets")) < basket_norm:
+    if basket_norm > 0 and metrics.get("baskets") is not None and _int_or_zero(metrics["baskets"]) < basket_norm:
         flags.append("below_basket_norm")
     return flags
 
@@ -3084,7 +3084,11 @@ def _repricer_stats_item(row: dict[str, Any]) -> dict[str, Any]:
 def _repricer_stats_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
     impressions = sum(_int_or_zero((item.get("metrics") or {}).get("impressions")) for item in items)
     clicks = sum(_int_or_zero((item.get("metrics") or {}).get("clicks")) for item in items)
-    baskets = sum(_int_or_zero((item.get("metrics") or {}).get("baskets")) for item in items)
+    baskets = (
+        sum(_int_or_zero((item.get("metrics") or {}).get("baskets")) for item in items)
+        if all((item.get("metrics") or {}).get("baskets") is not None for item in items)
+        else None
+    )
     orders = sum(_int_or_zero((item.get("metrics") or {}).get("orders")) for item in items)
     ad_spend_kopecks = sum(_int_or_zero((item.get("metrics") or {}).get("adSpendKopecks")) for item in items)
     revenue_kopecks = sum(_int_or_zero((item.get("metrics") or {}).get("revenueKopecks")) for item in items)
@@ -3656,7 +3660,7 @@ def _ensure_repricer_stats_period_caches(
     if not baskets_cache:
         baskets_payload = _period_source_cache(organization_id, "baskets", period_suffix, resolved_period_days, range_start, range_end, slim=False, require_full_sync_coverage=False)
         baskets_aggregates = baskets_payload.get("aggregates") if isinstance(baskets_payload.get("aggregates"), dict) else {}
-        if baskets_aggregates:
+        if baskets_payload and baskets_payload.get("fetchedAt"):
             save_source_cache(
                 organization_id,
                 stats_baskets_key,
@@ -3669,6 +3673,8 @@ def _ensure_repricer_stats_period_caches(
                 },
             )
             fetched_sources.append("baskets")
+            if not baskets_aggregates:
+                missing_sources.append("baskets")
         else:
             missing_sources.append("baskets")
 
@@ -3679,23 +3685,28 @@ def _ensure_repricer_stats_period_caches(
     }
 
 
-def _repricer_stats_cache_aggregates(
+def _repricer_stats_caches(
     organization_id: int,
     period_suffix: str,
-) -> dict[str, dict[str, dict[str, Any]]]:
+    *,
+    range_start: datetime,
+    range_end: datetime,
+) -> dict[str, dict[str, Any]]:
     keys = {
         "period_stats": f"repricer_stats_period_stats_{period_suffix}",
         "finance": f"repricer_stats_finance_{period_suffix}",
         "ads": f"repricer_stats_ads_{period_suffix}",
         "baskets": f"repricer_stats_baskets_{period_suffix}",
     }
-    result: dict[str, dict[str, dict[str, Any]]] = {}
+    result: dict[str, dict[str, Any]] = {}
     for source, key in keys.items():
         cache = get_source_cache(organization_id, key, slim=True) or {}
         if source == "finance":
             cache = _compatible_period_source_cache(source, cache)
+        if cache and not _cache_matches_range(cache, range_start, range_end):
+            cache = {}
         aggregates = cache.get("aggregates") if isinstance(cache.get("aggregates"), dict) else {}
-        result[source] = aggregates
+        result[source] = {**cache, "aggregates": dict(aggregates)} if cache else {}
     return result
 
 
@@ -3853,7 +3864,12 @@ def get_repricer_stats(
         or (brand and brand != "all")
         or (manager and manager != "all")
     )
-    stats_aggregates = _repricer_stats_cache_aggregates(organization_id, _period_suffix)
+    stats_caches = _repricer_stats_caches(
+        organization_id,
+        _period_suffix,
+        range_start=_range_start,
+        range_end=_range_end,
+    )
     goods = list_cached_goods(organization_id)
     content_cache = get_source_cache(organization_id, "content_cards", slim=True) or {}
     promotions_cache = get_source_cache(organization_id, "promotions", slim=True) or {}
@@ -3874,11 +3890,11 @@ def get_repricer_stats(
         cached_promotions=cached_promotions,
         cached_stock_aggregates=stocks_cache.get("aggregates") if isinstance(stocks_cache.get("aggregates"), dict) else {},
         stocks_cache_loaded=bool(stocks_cache.get("fetchedAt")),
-        cached_period_stats=stats_aggregates["period_stats"],
-        cached_finance_aggregates=stats_aggregates["finance"],
-        cached_ads_aggregates=stats_aggregates["ads"],
-        cached_baskets_aggregates=stats_aggregates["baskets"],
-        baskets_cache_loaded=True,
+        cached_period_stats=stats_caches["period_stats"].get("aggregates", {}),
+        cached_finance_aggregates=stats_caches["finance"].get("aggregates", {}),
+        cached_ads_aggregates=stats_caches["ads"].get("aggregates", {}),
+        cached_baskets_aggregates=stats_caches["baskets"].get("aggregates", {}),
+        baskets_cache_loaded=bool(stats_caches["baskets"].get("fetchedAt")),
         period_days=resolved_period_days,
         sort_by_demand=top_mode,
         allow_commission_tariff_fetch=False,
@@ -3899,14 +3915,11 @@ def get_repricer_stats(
         date_to=_range_end.date(),
         require_full_sync_coverage=False,
     )
-    period_meta = get_source_cache(organization_id, f"repricer_stats_period_stats_{_period_suffix}", slim=True) or {}
-    finance_meta = _compatible_period_source_cache(
-        "finance",
-        get_source_cache(organization_id, f"repricer_stats_finance_{_period_suffix}", slim=True) or {},
-    )
-    ads_meta = get_source_cache(organization_id, f"repricer_stats_ads_{_period_suffix}", slim=True) or {}
+    period_meta = stats_caches["period_stats"]
+    finance_meta = stats_caches["finance"]
+    ads_meta = stats_caches["ads"]
     ads_totals = _ads_cache_totals(ads_meta)
-    baskets_meta = get_source_cache(organization_id, f"repricer_stats_baskets_{_period_suffix}", slim=True) or {}
+    baskets_meta = stats_caches["baskets"]
     cache["periodStatsFetchedAt"] = period_meta.get("fetchedAt")
     cache["financeFetchedAt"] = finance_meta.get("fetchedAt")
     cache["financeCachedGoodsNmIds"] = finance_meta.get("cachedGoodsNmIds")
@@ -3932,6 +3945,11 @@ def get_repricer_stats(
     rows_page = filtered_rows[start : start + page_size]
     summary_items = [_repricer_stats_item(row) for row in filtered_rows]
     items = [_repricer_stats_item(row) for row in rows_page]
+    summary = _repricer_stats_summary(summary_items)
+    if stats_fetch_meta["missingSources"] or summary["sourceBlocked"]:
+        stats_cache_context["statsSourceStatus"] = "missing"
+    elif summary["sourcePartial"]:
+        stats_cache_context["statsSourceStatus"] = "partial"
     cache["statsItemsLimit"] = page_size
     cache["statsPage"] = page
     cache["statsTotalFiltered"] = total_filtered
@@ -3951,7 +3969,7 @@ def get_repricer_stats(
         "periodDays": resolved_period_days,
         "dateFrom": _range_start.date().isoformat(),
         "dateTo": _range_end.date().isoformat(),
-        "summary": _repricer_stats_summary(summary_items),
+        "summary": summary,
         "cache": cache,
     }
 
