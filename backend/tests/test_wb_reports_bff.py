@@ -2003,14 +2003,30 @@ def test_bff_export_supports_async_job_flow_and_compat_get():
 
 def test_starting_pnl_job_immediately_exposes_cash_flow_job_to_1c(tmp_path, monkeypatch):
     from app import repricer_tasks
+    from app.routers import one_c_cash_flow
 
     captured_args = {}
     monkeypatch.setattr("app.routers.one_c_cash_flow.JOBS_PATH", tmp_path / "1c_jobs.json")
+    monkeypatch.setattr(
+        "app.routers.wb_reports_bff._report_daily_sources_ready",
+        lambda *_args, **_kwargs: (False, ["finance"]),
+    )
+
     def fake_delay(*args, **kwargs):
+        jobs = one_c_cash_flow._read_jobs_state()["jobs"]
+        assert len(jobs) == 1, "1C request must exist before WB refresh dispatch"
+        assert jobs[0]["organizationId"] == 1
+        assert jobs[0]["periodFrom"] == "2026-05-01"
+        assert jobs[0]["periodTo"] == "2026-05-31"
+        assert jobs[0]["status"] == "pending"
         captured_args["args"] = args
         captured_args["kwargs"] = kwargs
         return type("Task", (), {"id": "pnl-task-1"})()
-    monkeypatch.setattr(repricer_tasks.build_report_for_org, "delay", fake_delay)
+    monkeypatch.setattr(repricer_tasks.refresh_report_sources_for_org, "delay", fake_delay)
+    monkeypatch.setattr(
+        repricer_tasks.build_report_for_org, "delay",
+        lambda *_args, **_kwargs: pytest.fail("missing WB sources must refresh before building"),
+    )
 
     api = client()
     response = api.post(
@@ -2021,6 +2037,8 @@ def test_starting_pnl_job_immediately_exposes_cash_flow_job_to_1c(tmp_path, monk
 
     assert response.status_code == 200
     assert captured_args["args"][-1] is None
+    assert response.json()["kind"] == "report_source_refresh"
+    assert response.json()["cashFlow"]["status"] == "pending"
     next_job = api.get("/api/1c/jobs/next", headers={"Authorization": "Bearer change-me"})
     assert next_job.status_code == 200
     assert next_job.json()["has_job"] is True

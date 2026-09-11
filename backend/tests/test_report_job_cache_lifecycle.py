@@ -140,7 +140,11 @@ def test_missing_source_read_preserves_refresh_and_does_not_allow_duplicate(runt
 @pytest.mark.parametrize(
     "state,stage", [("running", "pnl"), ("waiting_1c", "waiting_1c")]
 )
-def test_source_refresh_reuses_its_replacement_builder(runtime, state, stage):
+def test_source_refresh_reuses_its_replacement_builder(runtime, monkeypatch, state, stage):
+    monkeypatch.setattr(
+        reports, "get_cash_flow_for_period",
+        lambda **kw: pytest.fail("reused job must not request 1C again"),
+    )
     key, job = seed(runtime, "pnl", cached=False, state=state, stage=stage)
     job["kind"] = "report_source_refresh"
     runtime.cache[1, key] = job
@@ -186,7 +190,13 @@ def test_wow_derived_latest_cache_preserves_real_live_job(runtime, monkeypatch, 
 
 
 @pytest.mark.parametrize("state,stage", [("running", "pnl"), ("queued", "")])
-def test_missing_source_does_not_start_refresh_over_active_build(runtime, state, stage):
+def test_missing_source_does_not_start_refresh_over_active_build(
+    runtime, monkeypatch, state, stage
+):
+    monkeypatch.setattr(
+        reports, "get_cash_flow_for_period",
+        lambda **kw: pytest.fail("reused job must not request 1C again"),
+    )
     key, job = seed(runtime, "pnl", cached=False, state=state, stage=stage)
     response = runtime.api.post("/api/wb/reports/pnl/jobs", params=PARAMS)
     assert response.status_code == 200
@@ -308,3 +318,70 @@ def test_stale_worker_can_be_completed_from_valid_cache(runtime):
     assert response.status_code == 200
     assert response.json()["reportJob"]["state"] == "completed"
     assert runtime.cache[1, key]["state"] == "completed"
+
+
+@pytest.mark.parametrize("endpoint", ["jobs", "refresh-sources-job"])
+@pytest.mark.parametrize("ready", [False, True])
+@pytest.mark.parametrize("finance_allowed", [False, True])
+def test_pnl_prepares_1c_before_either_dispatch(
+    runtime, monkeypatch, endpoint, ready, finance_allowed
+):
+    runtime.ready = ready
+    requested = []
+    dispatched = []
+    cash_flow = {
+        "status": "ready",
+        "data": {"totals": {"operationalExpenseKopecks": 164_000}},
+    }
+
+    def prepare(**kwargs):
+        requested.append(kwargs)
+        return cash_flow
+
+    def enqueue(kind, args):
+        assert len(requested) == 1, "1C must be prepared before any Celery dispatch"
+        assert requested[0]["organization_id"] == 1
+        assert requested[0]["period_from"] == START
+        assert requested[0]["period_to"] == END
+        assert requested[0]["requested_by"] == args[1]
+        dispatched.append((kind, args))
+        return SimpleNamespace(id="synthetic-task")
+
+    monkeypatch.setattr(reports, "get_cash_flow_for_period", prepare)
+    monkeypatch.setattr(
+        repricer_tasks.build_report_for_org, "delay",
+        lambda *args: enqueue("build", args),
+    )
+    monkeypatch.setattr(
+        repricer_tasks.refresh_report_sources_for_org, "delay",
+        lambda *args: enqueue("refresh", args),
+    )
+    headers = auth_headers(runtime.api, "finance_viewer" if finance_allowed else "viewer")
+    key = reports._report_job_cache_key("pnl", START, END, "sku", "operational")
+    for reused in (False, True):
+        response = runtime.api.post(
+            f"/api/wb/reports/pnl/{endpoint}", params=PARAMS, headers=headers
+        )
+        assert response.status_code == 200
+        assert response.json()["state"] == "queued"
+        assert response.json()["reused"] is reused
+        if not reused and endpoint == "jobs":
+            assert response.json()["cashFlow"] == (cash_flow if finance_allowed else None)
+        else:
+            assert "cashFlow" not in response.json()
+        assert "cashFlow" not in runtime.cache[1, key]
+    assert len(requested) == len(dispatched) == 1
+    assert dispatched[0][0] == ("build" if ready and endpoint == "jobs" else "refresh")
+    assert dispatched[0][1][-2:] == (finance_allowed, None)
+
+
+def test_pnl_completed_cache_does_not_request_1c(runtime, monkeypatch):
+    key, _ = seed(runtime, "pnl", state="completed", stage="completed")
+    monkeypatch.setattr(
+        reports, "get_cash_flow_for_period",
+        lambda **kw: pytest.fail("usable cache needs no 1C request"),
+    )
+    response = runtime.api.post("/api/wb/reports/pnl/jobs", params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()["state"] == runtime.cache[1, key]["state"] == "completed"
+    assert runtime.builds == runtime.refreshes == []

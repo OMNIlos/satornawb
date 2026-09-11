@@ -4877,6 +4877,15 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
         payload = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, current)
         save_source_cache(actor.organization_id, key, payload)
         return payload
+    cash_flow = None
+    if report_id in {"pnl", "expenses"}:
+        cash_flow = get_cash_flow_for_period(
+            organization_id=actor.organization_id,
+            period_from=date_from,
+            period_to=date_to,
+            requested_by=actor.user_id,
+        )
+    cash_flow_response = {"cashFlow": cash_flow if has_permission(actor, "finance:read") else None} if cash_flow is not None else {}
     daily_sources = REPORT_DAILY_SOURCES_BY_ID.get(report_id, ())
     if daily_sources:
         ready, missing_sources = _report_daily_sources_ready(actor.organization_id, daily_sources, date_from=date_from, date_to=date_to)
@@ -4906,20 +4915,12 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
                 "updatedAt": _utc_now_iso(),
             }
             save_source_cache(actor.organization_id, key, payload)
-            return {**payload, "reused": False}
-    cash_flow = None
-    if report_id in {"pnl", "expenses"}:
-        cash_flow = get_cash_flow_for_period(
-            organization_id=actor.organization_id,
-            period_from=date_from,
-            period_to=date_to,
-            requested_by=actor.user_id,
-        )
+            return {**payload, "reused": False, **cash_flow_response}
     from app.repricer_tasks import build_report_for_org
     task = build_report_for_org.delay(actor.organization_id, actor.user_id, report_id, date_from.isoformat(), date_to.isoformat(), groupBy, source, has_permission(actor, "finance:read"), None)
     payload = {"state": "queued", "taskId": task.id, "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy, "source": source, "queuedAt": _utc_now_iso()}
     save_source_cache(actor.organization_id, key, payload)
-    return {**payload, "reused": False, **({"cashFlow": cash_flow if has_permission(actor, "finance:read") else None} if cash_flow is not None else {})}
+    return {**payload, "reused": False, **cash_flow_response}
 
 
 @router.post("/api/wb/reports/{report_id}/refresh-sources-job")
@@ -4939,6 +4940,13 @@ def start_report_source_refresh_job(
     current = get_source_cache(actor.organization_id, key, slim=False) or {}
     if _report_job_is_active_refresh(current):
         return {**current, "reused": True}
+    if report_id == "pnl":
+        get_cash_flow_for_period(
+            organization_id=actor.organization_id,
+            period_from=date_from,
+            period_to=date_to,
+            requested_by=actor.user_id,
+        )
     from app.repricer_tasks import refresh_report_sources_for_org
     task = refresh_report_sources_for_org.delay(actor.organization_id, actor.user_id, report_id, date_from.isoformat(), date_to.isoformat(), groupBy, source, has_permission(actor, "finance:read"), None)
     payload = {
