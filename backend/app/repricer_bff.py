@@ -1479,7 +1479,7 @@ def _frontend_strategy_payload(
 
 
 def _demo_repricer_data_enabled(wb_token: str | None) -> bool:
-    return wb_token is None
+    return wb_token is None and get_settings().wb_api_mode == "fake"
 
 
 def _stable_int(value: str, minimum: int, maximum: int) -> int:
@@ -2493,7 +2493,7 @@ def _enrich_goods_page_spp_fields(
     goods: list[dict[str, Any]],
 ) -> None:
     """One batched WB-06 fetch per catalog page (used only on goods refresh, not on list reads)."""
-    if not goods or _demo_repricer_data_enabled(wb_token):
+    if not goods or wb_token is None:
         return
     if not any(_good_missing_spp_fields(good) for good in goods):
         return

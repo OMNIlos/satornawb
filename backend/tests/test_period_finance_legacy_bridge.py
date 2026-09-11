@@ -74,11 +74,12 @@ def test_period_reader_rejects_previous_withdrawal_semantics(monkeypatch, path, 
 
 
 @pytest.mark.parametrize("chunked", [False, True])
-def test_sku_snapshot_reader_rejects_previous_monetary_payload(monkeypatch, chunked):
+@pytest.mark.parametrize("previous_version", [6, 7])
+def test_sku_snapshot_reader_rejects_previous_monetary_payload(monkeypatch, chunked, previous_version):
     options = dict(period_suffix="2026-08-26_2026-09-01", include_promotions=False, include_content=False)
     key = wb_repricer_bff._repricer_sku_snapshot_key("complete", **options)
-    old_key = wb_repricer_bff._repricer_sku_snapshot_key("complete", version=6, **options)
-    old = {"version": 6, "items": [{"analytics": {"netProfitKopecks": 987654321}}],
+    old_key = wb_repricer_bff._repricer_sku_snapshot_key("complete", version=previous_version, **options)
+    old = {"version": previous_version, "items": [{"analytics": {"netProfitKopecks": 987654321}}],
            "summary": {"marginKopecks": 987654321}}
     if chunked:
         old.update(storage="chunked", chunkSize=150)

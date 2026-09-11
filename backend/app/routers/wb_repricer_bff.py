@@ -2062,7 +2062,7 @@ def _list_repricer_skus_from_cached_sources(
     )
 
 
-SKU_LIST_SNAPSHOT_VERSION = 7
+SKU_LIST_SNAPSHOT_VERSION = 8
 SKU_LIST_SNAPSHOT_CHUNK_SIZE = 150
 
 
