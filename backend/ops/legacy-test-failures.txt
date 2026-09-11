@@ -8,6 +8,8 @@
 # 65 FAIL, zero errors/skips; all four repaired weekly cache tests explicit PASS.
 # Shrunk 65 to 57 from complete e4ad096 JUnit on 2026-09-11: 7609 PASS,
 # 57 FAIL, zero errors/skips; seven worker fixtures and immediate P&L/1C explicit PASS.
+# Shrunk 57 to 53 from complete 7969186 JUnit on 2026-09-11: 7692 PASS,
+# 53 FAIL, zero errors/skips; all four repaired BFF cache fixtures explicit PASS.
 tests/test_app.py::test_sprint_d_reports_are_served_through_backend_app
 tests/test_avito_repricer_worker.py::test_avito_scheduler_execute_creates_pending_approval_when_real_apply_disabled
 tests/test_repricer_tasks.py::test_nightly_wb_sync_skips_recent_reconciliation
@@ -29,11 +31,7 @@ tests/test_sprint_d_reports.py::test_ads_bff_refreshes_and_reuses_cached_report_
 tests/test_sprint_d_reports.py::test_bff_abc_returns_sku_rows_not_summary_only
 tests/test_sprint_d_reports.py::test_bff_abc_uses_repricer_rows_when_report_cache_is_empty
 tests/test_wb_adapter_probes.py::test_read_prices_probe_keeps_wb06_blocked_without_spp_or_buyer_price_fields
-tests/test_wb_reports_bff.py::test_bff_digest_degrades_when_ads_token_is_missing
 tests/test_wb_reports_bff.py::test_bff_stock_and_week_over_week_endpoints_return_rows
-tests/test_wb_reports_bff.py::test_digest_endpoint_reports_missing_cache_without_calling_wb
-tests/test_wb_reports_bff.py::test_digest_read_uses_cached_result_without_calling_wb
-tests/test_wb_reports_bff.py::test_latest_report_payload_cache_respects_requested_range
 tests/test_wb_repricer_bff.py::test_ads_spend_aggregates_reports_progress_by_campaign_batches
 tests/test_wb_repricer_bff.py::test_baskets_detail_job_merges_exact_cache_and_cache_hit_avoids_duplicate
 tests/test_wb_repricer_bff.py::test_baskets_detail_start_marks_stale_active_run_failed_and_starts_new
