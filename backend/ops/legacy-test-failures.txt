@@ -2,6 +2,8 @@
 # Shrunk only from 105 to 70 using complete c4d1b9a pytest JUnit on 2026-09-09:
 # 35 explicit PASS, 70 FAIL, no missing/error/skipped baseline cases.
 # No new failure IDs accepted. See architecture-foundation-delivery report.
+# Shrunk 70 to 69 from complete 54716c2 JUnit on 2026-09-11: 7567 PASS,
+# 69 FAIL, zero errors/skips; fixed campaign-only attribution is explicit PASS.
 tests/test_app.py::test_sprint_d_reports_are_served_through_backend_app
 tests/test_avito_repricer_worker.py::test_avito_scheduler_execute_creates_pending_approval_when_real_apply_disabled
 tests/test_one_c_cash_flow.py::test_cash_flow_job_queue_roundtrip_and_pnl_attachment
@@ -26,7 +28,6 @@ tests/test_sprint_d_reports.py::test_abc_report_prefers_sales_funnel_orders_and_
 tests/test_sprint_d_reports.py::test_abc_report_without_cache_returns_empty_backend_state_not_static_summary
 tests/test_sprint_d_reports.py::test_ads_bff_exposes_confirmed_budget_balance_upd_and_daily_sources
 tests/test_sprint_d_reports.py::test_ads_bff_refreshes_and_reuses_cached_report_payload
-tests/test_sprint_d_reports.py::test_ads_weak_attribution_stays_campaign_level_and_not_sku_level
 tests/test_sprint_d_reports.py::test_bff_abc_returns_sku_rows_not_summary_only
 tests/test_sprint_d_reports.py::test_bff_abc_uses_repricer_rows_when_report_cache_is_empty
 tests/test_stock_report_cache_persistence.py::test_background_report_job_fails_when_payload_is_not_persisted
