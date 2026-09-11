@@ -426,3 +426,69 @@ def test_scheduled_abc_snapshot_is_saved_in_finance_scope(abc_cache, monkeypatch
     key = reports._report_cache_key("abc", START, END, "sku", "operational", organization_id=1, finance_allowed=True)
     assert abc_cache[1, key]["report"]["rows"][0]["commissionKopecks"] == 12_345
     assert (1, reports._report_cache_key("abc", START, END, "sku", "operational", organization_id=1)) not in abc_cache
+
+
+@pytest.mark.parametrize("report_id", ["abc", "pnl"])
+@pytest.mark.parametrize("build_order", [(True, False), (False, True), (True,)])
+def test_rules_preview_uses_only_the_callers_finance_cache(abc_cache, report_id, build_order):
+    version = reports.ABC_REPORT_PAYLOAD_VERSION if report_id == "abc" else reports.PNL_REPORT_PAYLOAD_VERSION
+    for allowed in build_order:
+        reports._save_exact_report_payload_cache(
+            organization_id=1, report_id=report_id, date_from=START, date_to=END,
+            group_by="sku", source="operational", finance_allowed=allowed,
+            report={"meta": {"id": report_id}, "cacheVersion": version,
+                    "rows": [{"sku": "SYNTHETIC-PREVIEW", "ctrPct": 9,
+                              "marginPct": 12.345 if allowed else None}]},
+        )
+    reports._save_exact_report_payload_cache(
+        organization_id=1, report_id="stock", date_from=START, date_to=END,
+        group_by="sku", source="operational",
+        report={"meta": {"id": "stock"}, "rows": [{"sku": "PUBLIC-STOCK", "ctrPct": 9}]},
+    )
+    api = TestClient(create_app())
+    for profile, allowed in (("settings_editor", False), ("admin", True)):
+        headers = auth_headers(api, profile)
+        rules = api.get("/api/wb/reports/rules", headers=headers).json()["profile"]
+        config = deepcopy(rules["config"])
+        config["qualityBands"]["ctrPct"] = {"goodMin": 7, "averageMin": 6}
+        config["qualityBands"]["marginPct"] = {"goodMin": 30, "thinMin": 20, "lossBelow": 15}
+        response = api.post(
+            "/api/wb/reports/rules/preview", headers=headers,
+            json={"expectedVersion": rules["version"], "name": "Synthetic preview",
+                  "preset": "custom", "config": config},
+        )
+        assert response.status_code == 200
+        assert ("12.345" in response.text) is allowed
+        payload = response.json()
+        expected_count = 2 if allowed in build_order else 1
+        assert payload["affectedSkuCount"] == expected_count
+        assert len(payload["sampleRows"]) == expected_count
+        assert any(row["sku"] == "PUBLIC-STOCK" for row in payload["sampleRows"])
+        assert payload["availableReports"] == ([report_id, "stock"] if allowed in build_order else ["stock"])
+        assert payload["previewToken"]
+
+
+@pytest.mark.parametrize("report_id,version", [("abc", "v16_cafef00d_org1"), ("pnl", "v2")])
+def test_rules_preview_rejects_legacy_unscoped_finance_cache(abc_cache, report_id, version):
+    key = f"reports_payload_{report_id}_{version}_{START}_{END}_sku_operational_nofinance"
+    abc_cache[1, key] = {
+        "completedAt": reports._utc_now_iso(),
+        "report": {"meta": {"id": report_id}, "cacheVersion": version.split("_")[0],
+                   "economicsVersion": "cafef00d",
+                   "rows": [{"sku": "PRIVATE-LEGACY", "marginPct": 12.345}]},
+    }
+    api = TestClient(create_app())
+    headers = auth_headers(api, "settings_editor")
+    rules = api.get("/api/wb/reports/rules", headers=headers).json()["profile"]
+    config = deepcopy(rules["config"])
+    config["qualityBands"]["marginPct"] = {"goodMin": 30, "thinMin": 20, "lossBelow": 15}
+    response = api.post(
+        "/api/wb/reports/rules/preview", headers=headers,
+        json={"expectedVersion": rules["version"], "name": "Synthetic preview",
+              "preset": "custom", "config": config},
+    )
+    assert response.status_code == 200
+    assert response.json()["sampleRows"] == []
+    assert response.json()["affectedSkuCount"] == 0
+    assert response.json()["availableReports"] == []
+    assert "12.345" not in response.text and "PRIVATE-LEGACY" not in response.text

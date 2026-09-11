@@ -85,10 +85,18 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _report_rules_preview_rows(organization_id: int) -> tuple[list[dict[str, Any]], list[str]]:
+def _report_rules_preview_rows(organization_id: int, *, finance_allowed: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
     rows: list[dict[str, Any]] = []
     reports: set[str] = set()
     for cached in list_source_cache_by_prefix(organization_id, "reports_payload_", limit=50, slim=False):
+        source_key = str(cached.get("sourceKey") or "")
+        source_report_id = source_key.removeprefix("reports_payload_").split("_", 1)[0]
+        if source_report_id in {"abc", "pnl"}:
+            _, _, _, cached_source = _parse_report_payload_cache_key(source_key, source_report_id)
+            if not cached_source or not cached_source.endswith(f"_{'finance' if finance_allowed else 'nofinance'}"):
+                continue
+            if not _report_payload_cache_is_usable(source_report_id, cached, organization_id=organization_id):
+                continue
         report = cached.get("report") if isinstance(cached.get("report"), dict) else {}
         report_rows = report.get("rows") if isinstance(report.get("rows"), list) else []
         report_id = str((report.get("meta") or {}).get("id") or cached.get("sourceKey") or "report")
@@ -4176,7 +4184,7 @@ def preview_report_rules(request: Request, draft: RulesDraftRequest = Body(...))
         normalized = normalize_config(draft.config)
     except ReportRulesValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from exc
-    rows, available_reports = _report_rules_preview_rows(actor.organization_id)
+    rows, available_reports = _report_rules_preview_rows(actor.organization_id, finance_allowed=has_permission(actor, "finance:read"))
     preview = create_preview(rows, active, normalized)
     return {
         **preview,
