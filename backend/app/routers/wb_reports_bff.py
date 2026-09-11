@@ -5037,6 +5037,15 @@ def refresh_ads_report_cache(
         wb_token=None,
         refresh=True,
     )
+    _save_exact_report_payload_cache(
+        organization_id=actor.organization_id,
+        report_id="ads",
+        date_from=date_from,
+        date_to=date_to,
+        group_by="campaign",
+        source="operational",
+        report=_apply_report_rules_to_payload(payload, actor.organization_id),
+    )
     record_audit_event(
         actor=actor,
         action="reports.bff.ads.refresh",

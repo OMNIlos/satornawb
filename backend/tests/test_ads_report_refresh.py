@@ -17,6 +17,8 @@ def runtime(monkeypatch):
     state = SimpleNamespace(source={}, outer={}, actor=SimpleNamespace(organization_id=77, user_id="synthetic"))
     state.args = dict(actor=state.actor, date_from=day, date_to=day,
                       date_range={"preset": "custom", "from": "2026-07-01", "to": "2026-07-01"}, wb_token=None)
+    state.outer_args = dict(organization_id=77, report_id="ads", date_from=day,
+                            date_to=day, group_by="campaign", source="operational")
     monkeypatch.setattr(store, "_run_db", lambda fn: None)
     monkeypatch.setattr(store, "_MEMORY_REPORT_CACHE", {})
     monkeypatch.setattr(reports, "_period_cache", lambda *a, **kw: deepcopy(state.source))
@@ -52,7 +54,8 @@ def invoke_refresh(kind):
 @pytest.mark.parametrize("spend", [200, 0])
 def test_ads_refresh_replaces_old_report_from_current_cached_sources(runtime, monkeypatch, kind, spend):
     set_source(runtime, 100)
-    reports._build_ads_report_payload(**runtime.args, refresh=True)
+    old_report = reports._build_ads_report_payload(**runtime.args, refresh=True)
+    reports._save_exact_report_payload_cache(**runtime.outer_args, report=old_report)
     set_source(runtime, spend)
     result = invoke_refresh(kind)
     if kind == "manual":
@@ -64,6 +67,10 @@ def test_ads_refresh_replaces_old_report_from_current_cached_sources(runtime, mo
     assert cached["rows"][0]["nmId"] == 101
     # The read path must keep the freshly materialized report, without rebuilding.
     monkeypatch.setattr(reports, "build_cached_ads_attribution_snapshot", lambda **kw: pytest.fail("cached read rebuilt ads"))
+    latest = reports._latest_report_payload_cache(**runtime.outer_args)
+    assert latest is not None
+    assert latest[0]["report"]["rows"][0]["adSpendKopecks"] == spend
+    assert latest[0]["report"]["rows"][0]["nmId"] == 101
     reused = reports._build_ads_report_payload(**runtime.args)
     assert reused["rows"][0]["adSpendKopecks"] == spend
     assert reused["cache"]["status"] == "hit"
@@ -72,8 +79,10 @@ def test_ads_refresh_replaces_old_report_from_current_cached_sources(runtime, mo
 @pytest.mark.parametrize("kind", ["manual", "worker", "profile"])
 def test_ads_refresh_preserves_last_good_report_when_source_is_blocked(runtime, kind):
     set_source(runtime, 100)
-    reports._build_ads_report_payload(**runtime.args, refresh=True)
+    old_report = reports._build_ads_report_payload(**runtime.args, refresh=True)
+    reports._save_exact_report_payload_cache(**runtime.outer_args, report=old_report)
     before = deepcopy(store._MEMORY_REPORT_CACHE)
+    before_outer = deepcopy(reports._latest_report_payload_cache(**runtime.outer_args))
     runtime.source = {}
     if kind == "profile":
         assert invoke_refresh(kind)["state"] == "failed"
@@ -83,3 +92,4 @@ def test_ads_refresh_preserves_last_good_report_when_source_is_blocked(runtime, 
         assert failure.value.status_code == 409
         assert failure.value.detail == "WB_ADS_CACHE_EMPTY"
     assert store._MEMORY_REPORT_CACHE == before
+    assert reports._latest_report_payload_cache(**runtime.outer_args) == before_outer
