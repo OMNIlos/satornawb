@@ -755,16 +755,25 @@ def test_week_over_week_job_endpoint_reuses_completed_cached_report(monkeypatch)
     from app.routers import wb_reports_bff
 
     delay_calls: list[tuple] = []
+    saved: dict[str, dict] = {}
+    cached = {
+        "completedAt": datetime.now(timezone.utc).isoformat(),
+        "report": {
+            "meta": {"id": "week-over-week"},
+            "cacheVersion": wb_reports_bff.WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION,
+            "rows": [{"sku": "CACHED", "orders": {"units": 1}}],
+        },
+    }
 
     def fake_cache(_organization_id, key, slim=False):
         if key.startswith("reports_payload_week-over-week"):
-            return {"report": {"meta": {"id": "week-over-week"}, "rows": [{"sku": "CACHED"}]}}
+            return cached
         if key.startswith("reports_job_week-over-week"):
             return {"state": "completed", "taskId": "done-task", "reportId": "week-over-week"}
         return {}
 
     monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", fake_cache)
-    monkeypatch.setattr("app.routers.wb_reports_bff.save_source_cache", lambda *_args, **_kwargs: pytest.fail("cached report should not enqueue a new job"))
+    monkeypatch.setattr(wb_reports_bff, "save_source_cache", lambda _org, key, payload: saved.__setitem__(key, payload))
     monkeypatch.setattr(
         repricer_tasks.build_report_for_org,
         "delay",
@@ -787,7 +796,9 @@ def test_week_over_week_job_endpoint_reuses_completed_cached_report(monkeypatch)
 
     assert result["state"] == "completed"
     assert result["reused"] is True
+    assert result["taskId"] == "done-task"
     assert delay_calls == []
+    assert saved == {"reports_job_week-over-week_2026-07-07_2026-07-13_sku": result}
 
 
 def test_week_over_week_latest_cache_builds_from_source_cache_for_inner_period(monkeypatch):
@@ -872,8 +883,13 @@ def test_week_over_week_get_returns_cached_payload_while_job_is_running(monkeypa
     from app.routers import wb_reports_bff
 
     actor = SimpleNamespace(organization_id=1, user_id="viewer")
-    stale_cached_report = {"meta": {"id": "week-over-week"}, "rows": [{"sku": "STALE"}]}
+    stale_cached_report = {
+        "meta": {"id": "week-over-week"},
+        "cacheVersion": wb_reports_bff.WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION,
+        "rows": [{"sku": "STALE", "orders": {"units": 1}}],
+    }
     fresh_updated_at = datetime.now(timezone.utc).isoformat()
+    active_job = {"state": "running", "reportId": "week-over-week", "updatedAt": fresh_updated_at}
     monkeypatch.setattr(wb_reports_bff, "actor_from_request", lambda _request: actor)
     monkeypatch.setattr(wb_reports_bff, "assert_permission_or_audit", lambda **_kwargs: None)
     monkeypatch.setattr(wb_reports_bff, "has_permission", lambda *_args, **_kwargs: False)
@@ -881,14 +897,15 @@ def test_week_over_week_get_returns_cached_payload_while_job_is_running(monkeypa
         wb_reports_bff,
         "get_source_cache",
         lambda _organization_id, key, slim=False: (
-            {"report": stale_cached_report}
+            {"report": stale_cached_report, "completedAt": fresh_updated_at}
             if key.startswith("reports_payload_week-over-week")
-            else {"state": "running", "reportId": "week-over-week", "updatedAt": fresh_updated_at}
+            else active_job
         ),
     )
+    monkeypatch.setattr(wb_reports_bff, "save_source_cache", lambda *_args, **_kwargs: pytest.fail("cached GET must preserve active job"))
     monkeypatch.setattr(
         wb_reports_bff,
-        "build_wb_reports_sources_snapshot",
+        "build_cached_wb_reports_sources_snapshot",
         lambda **_kwargs: pytest.fail("WoW GET must not build source snapshots directly"),
     )
     monkeypatch.setattr(wb_reports_bff, "build_abc_report", lambda **_kwargs: pytest.fail("WoW GET must not use ABC fallback"))
@@ -905,8 +922,10 @@ def test_week_over_week_get_returns_cached_payload_while_job_is_running(monkeypa
     )
 
     assert payload["cache"]["status"] == "stale"
-    assert payload["reportJob"]["state"] == "running"
-    assert payload["rows"] == stale_cached_report["rows"]
+    assert payload["reportJob"] == active_job
+    assert len(payload["rows"]) == 1
+    original_row = stale_cached_report["rows"][0]
+    assert {key: payload["rows"][0][key] for key in original_row} == original_row
 
 
 def test_week_over_week_get_returns_completed_cached_job_payload(monkeypatch):
@@ -915,6 +934,7 @@ def test_week_over_week_get_returns_completed_cached_job_payload(monkeypatch):
     actor = SimpleNamespace(organization_id=1, user_id="viewer")
     cached_report = {
         "meta": {"id": "week-over-week"},
+        "cacheVersion": wb_reports_bff.WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION,
         "rows": [{"sku": "JOB-1", "orders": {"units": 7}}],
     }
     completed_job = {
@@ -923,7 +943,10 @@ def test_week_over_week_get_returns_completed_cached_job_payload(monkeypatch):
         "dateFrom": "2026-07-01",
         "dateTo": "2026-07-14",
         "groupBy": "sku",
+        "taskId": "done-task",
     }
+    saved: dict[str, dict] = {}
+    completed_at = datetime.now(timezone.utc).isoformat()
 
     monkeypatch.setattr(wb_reports_bff, "actor_from_request", lambda _request: actor)
     monkeypatch.setattr(wb_reports_bff, "assert_permission_or_audit", lambda **_kwargs: None)
@@ -932,13 +955,14 @@ def test_week_over_week_get_returns_completed_cached_job_payload(monkeypatch):
         wb_reports_bff,
         "get_source_cache",
         lambda _organization_id, key, **_kwargs: (
-            {"report": cached_report}
+            {"report": cached_report, "completedAt": completed_at}
             if key.startswith("reports_payload_week-over-week")
             else completed_job
             if key.startswith("reports_job_week-over-week")
             else {}
         ),
     )
+    monkeypatch.setattr(wb_reports_bff, "save_source_cache", lambda _org, key, payload: saved.__setitem__(key, payload))
     monkeypatch.setattr(wb_reports_bff, "build_abc_report", lambda **_kwargs: pytest.fail("completed WoW job payload should be returned from cache"))
     monkeypatch.setattr(wb_reports_bff, "_repricer_rows_for_abc_report", lambda **_kwargs: pytest.fail("completed WoW job payload should be returned from cache"))
 
@@ -952,9 +976,14 @@ def test_week_over_week_get_returns_completed_cached_job_payload(monkeypatch):
         source="operational",
     )
 
-    assert payload["rows"] == cached_report["rows"]
+    assert len(payload["rows"]) == 1
+    original_row = cached_report["rows"][0]
+    assert {key: payload["rows"][0][key] for key in original_row} == original_row
     assert payload["cache"]["status"] == "exact"
-    assert payload["reportJob"] == completed_job
+    assert {key: payload["reportJob"][key] for key in completed_job} == completed_job
+    assert payload["reportJob"]["stage"] == "cache"
+    assert payload["reportJob"]["reused"] is True
+    assert saved == {"reports_job_week-over-week_2026-07-01_2026-07-14_sku": payload["reportJob"]}
 
 
 def test_week_over_week_get_returns_missing_background_report_without_cache(monkeypatch):
@@ -967,7 +996,7 @@ def test_week_over_week_get_returns_missing_background_report_without_cache(monk
     monkeypatch.setattr(wb_reports_bff, "get_source_cache", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
         wb_reports_bff,
-        "build_wb_reports_sources_snapshot",
+        "build_cached_wb_reports_sources_snapshot",
         lambda **_kwargs: pytest.fail("WoW GET must not build source snapshots directly"),
     )
     monkeypatch.setattr(wb_reports_bff, "build_abc_report", lambda **_kwargs: pytest.fail("WoW GET must not use ABC fallback"))
