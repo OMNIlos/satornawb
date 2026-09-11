@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 from app.routers.wb_reports_bff import (
     DIGEST_REPORT_PAYLOAD_VERSION,
+    RNP_REPORT_PAYLOAD_VERSION,
     STOCK_REPORT_PAYLOAD_VERSION,
     _apply_digest_plan,
     _build_digest_payload,
@@ -216,16 +217,25 @@ def test_bff_digest_endpoint_returns_frontend_shape():
 def test_digest_read_uses_cached_result_without_calling_wb(monkeypatch):
     cached = {
         "completedAt": datetime.now(timezone.utc).isoformat(),
-        "digest": {"cacheVersion": DIGEST_REPORT_PAYLOAD_VERSION, "meta": {"id": "digest"}, "kpis": [], "planFactRows": [], "freshness": [], "alerts": [], "charts": [], "quickLinks": []},
+        "digest": {"cacheVersion": DIGEST_REPORT_PAYLOAD_VERSION, "meta": {"id": "digest", "freshnessState": "fresh"}, "kpis": [{"id": "orders_qty", "value": "7"}], "planFactRows": [], "freshness": [], "alerts": [], "charts": [], "quickLinks": []},
     }
-    monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", lambda *_args, **_kwargs: cached)
+    cache_key = f"reports_digest_{DIGEST_REPORT_PAYLOAD_VERSION}_2026-07-10_2026-07-16"
+
+    def read_cache(organization_id, key, **_kwargs):
+        assert organization_id == 1
+        return cached if key == cache_key else {}
+
+    monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", read_cache)
     monkeypatch.setattr("app.routers.wb_reports_bff.save_source_cache", lambda *_args, **_kwargs: {})
     monkeypatch.setattr("app.routers.wb_reports_bff.record_audit_event", lambda **_kwargs: None)
-    monkeypatch.setattr("app.routers.wb_reports_bff.build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("digest GET must not call WB"))
+    monkeypatch.setattr(reports_runtime, "build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("digest GET must not call WB"))
+    monkeypatch.setattr("app.routers.wb_reports_bff.build_cached_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("digest GET must not rebuild the cached report"))
     api = client()
-    response = api.get("/api/wb/reports/digest", headers=auth_headers(api, "viewer"))
+    response = api.get("/api/wb/reports/digest?preset=custom&from=2026-07-10&to=2026-07-16", headers=auth_headers(api, "viewer"))
     assert response.status_code == 200
     assert response.json()["cache"]["status"] == "exact"
+    assert response.json()["cache"]["fresh"] is True
+    assert response.json()["kpis"] == cached["digest"]["kpis"]
 
 
 def test_digest_payload_uses_wb_funnel_totals_and_daily_points():
@@ -1399,18 +1409,27 @@ def test_statistics_report_requests_wait_for_wb_shared_limit(monkeypatch):
 
 def test_digest_endpoint_reports_missing_cache_without_calling_wb(monkeypatch):
     monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr("app.routers.wb_reports_bff.build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("must not call WB"))
+    monkeypatch.setattr(reports_runtime, "build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("must not call WB"))
+    monkeypatch.setattr("app.routers.wb_reports_bff.build_cached_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("missing digest GET must not start a build"))
     api = client()
     response = api.get("/api/wb/reports/digest?preset=custom&from=2026-06-01&to=2026-07-09", headers=auth_headers(api, "viewer"))
     assert response.status_code == 200
     assert response.json()["cache"]["status"] == "missing"
+    assert response.json()["kpis"] == []
+    assert response.json()["digestJob"]["state"] == "idle"
 
 
 def test_bff_digest_degrades_when_ads_token_is_missing(monkeypatch):
+    from app.config import get_settings
+
+    monkeypatch.delenv("VELLA_WB_ADS_API_TOKEN", raising=False)
+    assert get_settings().wb_ads_api_token is None
+    monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
-        "app.routers.wb_reports_bff.build_ads_attribution_snapshot",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("WB_TOKEN_REQUIRED")),
+        "app.wb_api.ads_runtime.build_ads_attribution_snapshot",
+        lambda **_kwargs: pytest.fail("digest GET must not require a live ads token"),
     )
+    monkeypatch.setattr("app.routers.wb_reports_bff._build_digest_ads_snapshot", lambda **_kwargs: pytest.fail("digest GET must not rebuild ads"))
 
     api = client()
     response = api.get("/api/wb/reports/digest", headers=auth_headers(api, "viewer"))
@@ -1418,7 +1437,8 @@ def test_bff_digest_degrades_when_ads_token_is_missing(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["meta"]["id"] == "digest"
-    assert payload["cache"]["status"] in {"missing", "fallback", "exact"}
+    assert payload["cache"]["status"] == "missing"
+    assert payload["kpis"] == []
 
 
 def test_bff_stock_and_week_over_week_endpoints_return_rows(monkeypatch):
@@ -1663,21 +1683,29 @@ def test_latest_report_payload_cache_respects_requested_range(monkeypatch):
     caches = [
         {
             "sourceKey": "reports_payload_rnp_2026-06-08_2026-06-14_sku_operational",
-            "report": {"rows": [{"sku": "WRONG"}]},
+            "report": {"cacheVersion": RNP_REPORT_PAYLOAD_VERSION, "rows": [{"sku": "WRONG", "orderCount": 1}]},
             "fetchedAt": datetime.now(timezone.utc).isoformat(),
             "dateFrom": "2026-06-08",
             "dateTo": "2026-06-14",
         },
         {
             "sourceKey": "reports_payload_rnp_2026-06-01_2026-06-07_sku_operational",
-            "report": {"rows": [{"sku": "RIGHT"}]},
+            "report": {"cacheVersion": RNP_REPORT_PAYLOAD_VERSION, "rows": [{"sku": "RIGHT", "orderCount": 1}]},
             "fetchedAt": datetime.now(timezone.utc).isoformat(),
             "dateFrom": "2026-06-01",
             "dateTo": "2026-06-07",
         },
     ]
 
-    monkeypatch.setattr("app.routers.wb_reports_bff.list_source_cache_by_prefix", lambda *_args, **_kwargs: caches)
+    calls = []
+    by_key = {cache["sourceKey"]: cache for cache in caches}
+
+    def read_cache(organization_id, key, **_kwargs):
+        calls.append((organization_id, key))
+        return by_key.get(key)
+
+    monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", read_cache)
+    monkeypatch.setattr("app.routers.wb_reports_bff.list_source_cache_by_prefix", lambda *_args, **_kwargs: pytest.fail("exact range must not scan unrelated caches"))
 
     latest = _latest_report_payload_cache(
         organization_id=1,
@@ -1693,6 +1721,7 @@ def test_latest_report_payload_cache_respects_requested_range(monkeypatch):
     assert cache["report"]["rows"][0]["sku"] == "RIGHT"
     assert matched_from == date(2026, 6, 1)
     assert matched_to == date(2026, 6, 7)
+    assert calls == [(1, "reports_payload_rnp_2026-06-01_2026-06-07_sku_operational")]
 
 
 def test_rnp_ads_only_cache_is_not_usable_without_wb_funnel_rows():
