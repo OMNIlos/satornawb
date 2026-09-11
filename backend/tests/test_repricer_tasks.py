@@ -807,6 +807,8 @@ def test_pnl_report_task_waits_for_1c_before_building(monkeypatch):
     from app.routers import wb_reports_bff as reports
 
     saved_states: list[dict] = []
+    monkeypatch.setattr(repricer_tasks, "_report_snapshot_sources_ready", lambda *_args, **_kwargs: (True, []))
+    monkeypatch.setattr(repricer_tasks, "refresh_wb_data_sources", lambda **_kwargs: pytest.fail("P&L cache build must not refresh WB"))
     monkeypatch.setattr(reports, "get_cash_flow_for_period", lambda **_kwargs: {"status": "pending", "job_id": "cf_waiting"})
     monkeypatch.setattr(reports, "save_source_cache", lambda _organization_id, _key, payload: saved_states.append(payload))
     monkeypatch.setattr(reports, "build_pnl_report", lambda **_kwargs: pytest.fail("P&L must not build before 1C is ready"))
@@ -830,14 +832,20 @@ def test_pnl_report_task_waits_for_1c_before_building(monkeypatch):
 def test_stock_report_task_presyncs_exact_range_before_building(monkeypatch):
     from app.routers import wb_reports_bff as reports
 
-    calls: list[dict[str, object]] = []
+    # Legacy ID retained: the worker now builds from ready cache without presync.
+    snapshot_calls: list[dict[str, object]] = []
+    report_calls: list[tuple[dict[str, str], object, dict[str, object]]] = []
     saved: dict[str, dict] = {}
     snapshot = SimpleNamespace(source_status="cached", orders=[], sales=[], stocks=[])
 
-    monkeypatch.setattr("app.repricer_tasks.refresh_wb_data_sources", lambda **kwargs: calls.append(kwargs) or {"state": "completed", "steps": []})
-    monkeypatch.setattr(reports, "build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("stock report task must use cached WB snapshot"))
-    monkeypatch.setattr(reports, "build_cached_wb_reports_sources_snapshot", lambda **_kwargs: snapshot)
-    monkeypatch.setattr(reports, "_build_stock_report_payload", lambda *_args, **_kwargs: {"rows": []})
+    monkeypatch.setattr(repricer_tasks, "_report_snapshot_sources_ready", lambda *_args, **_kwargs: (True, []))
+    monkeypatch.setattr(repricer_tasks, "refresh_wb_data_sources", lambda **_kwargs: pytest.fail("stock cache build must not refresh WB"))
+    monkeypatch.setattr(reports, "build_cached_wb_reports_sources_snapshot", lambda **kwargs: snapshot_calls.append(kwargs) or snapshot)
+    monkeypatch.setattr(
+        reports,
+        "_build_stock_report_payload",
+        lambda date_range, source_snapshot, **kwargs: report_calls.append((date_range, source_snapshot, kwargs)) or {"rows": [{"sku": "NM_1"}]},
+    )
     monkeypatch.setattr(reports, "_apply_report_rules_to_payload", lambda report, _organization_id: report)
     monkeypatch.setattr(reports, "save_source_cache", lambda _organization_id, key, payload: saved.__setitem__(key, payload))
     monkeypatch.setattr(reports, "get_source_cache", lambda _organization_id, key, **_kwargs: saved.get(key))
@@ -855,22 +863,27 @@ def test_stock_report_task_presyncs_exact_range_before_building(monkeypatch):
     )
 
     assert result["state"] == "completed"
-    assert calls[0]["trigger"] == "reports-stock"
-    assert calls[0]["date_from"].isoformat() == "2026-07-10"
-    assert calls[0]["date_to"].isoformat() == "2026-07-16"
-    assert calls[0]["sources"] == ("stocks", "period-stats")
-    assert calls[0]["execute_lock"] is False
-    assert calls[0]["baskets_include_daily_detail"] is False
+    assert snapshot_calls == [{"organization_id": 1, "date_from": date(2026, 7, 10), "date_to": date(2026, 7, 16)}]
+    assert report_calls == [
+        (
+            {"preset": "custom", "from": "2026-07-10", "to": "2026-07-16"},
+            snapshot,
+            {"organization_id": 1, "wb_token": None},
+        )
+    ]
+    assert saved["reports_payload_stock_2026-07-10_2026-07-16_warehouse_operational"]["report"] == {"rows": [{"sku": "NM_1"}]}
 
 
 def test_ads_report_task_presyncs_exact_range_before_building(monkeypatch):
     from app.routers import wb_reports_bff as reports
 
-    calls: list[dict[str, object]] = []
+    # Legacy ID retained: the worker now builds from ready cache without presync.
+    report_calls: list[dict[str, object]] = []
     saved: dict[str, dict] = {}
 
-    monkeypatch.setattr("app.repricer_tasks.refresh_wb_data_sources", lambda **kwargs: calls.append(kwargs) or {"state": "completed", "steps": []})
-    monkeypatch.setattr(reports, "_build_ads_report_payload", lambda **_kwargs: {"rows": []})
+    monkeypatch.setattr(repricer_tasks, "_report_snapshot_sources_ready", lambda *_args, **_kwargs: (True, []))
+    monkeypatch.setattr(repricer_tasks, "refresh_wb_data_sources", lambda **_kwargs: pytest.fail("ads cache build must not refresh WB"))
+    monkeypatch.setattr(reports, "_build_ads_report_payload", lambda **kwargs: report_calls.append(kwargs) or {"rows": [{"campaignId": "42"}]})
     monkeypatch.setattr(reports, "_apply_report_rules_to_payload", lambda report, _organization_id: report)
     monkeypatch.setattr(reports, "save_source_cache", lambda _organization_id, key, payload: saved.__setitem__(key, payload))
     monkeypatch.setattr(reports, "get_source_cache", lambda _organization_id, key, **_kwargs: saved.get(key))
@@ -888,9 +901,17 @@ def test_ads_report_task_presyncs_exact_range_before_building(monkeypatch):
     )
 
     assert result["state"] == "completed"
-    assert calls[0]["trigger"] == "reports-ads"
-    assert calls[0]["sources"] == ("ads",)
-    assert calls[0]["execute_lock"] is False
+    assert len(report_calls) == 1
+    assert report_calls[0]["actor"].organization_id == 1
+    assert report_calls[0]["actor"].user_id == "viewer"
+    assert {key: value for key, value in report_calls[0].items() if key != "actor"} == {
+        "date_from": date(2026, 7, 10),
+        "date_to": date(2026, 7, 16),
+        "date_range": {"preset": "custom", "from": "2026-07-10", "to": "2026-07-16"},
+        "wb_token": None,
+        "refresh": False,
+    }
+    assert saved["reports_payload_ads_2026-07-10_2026-07-16_campaign_operational"]["report"] == {"rows": [{"campaignId": "42"}]}
 
 
 def test_report_source_refresh_task_refreshes_sources_then_builds_report(monkeypatch):
@@ -1018,12 +1039,14 @@ def test_report_source_refresh_plan_for_stock_includes_stock_and_finance_sources
 def test_rnp_report_task_presyncs_funnel_sources_before_building(monkeypatch):
     from app.routers import wb_reports_bff as reports
 
-    calls: list[dict[str, object]] = []
+    # Legacy ID retained: the worker now builds from ready cache without presync.
+    report_calls: list[dict[str, object]] = []
     saved: dict[str, dict] = {}
 
-    monkeypatch.setattr("app.repricer_tasks.refresh_wb_data_sources", lambda **kwargs: calls.append(kwargs) or {"state": "completed", "steps": []})
-    monkeypatch.setattr(reports, "build_rnp_report", lambda **_kwargs: SimpleNamespace(rows=[]))
-    monkeypatch.setattr(reports, "_map_rnp_to_report_response", lambda *_args, **_kwargs: {"rows": []})
+    monkeypatch.setattr(repricer_tasks, "_report_snapshot_sources_ready", lambda *_args, **_kwargs: (True, []))
+    monkeypatch.setattr(repricer_tasks, "refresh_wb_data_sources", lambda **_kwargs: pytest.fail("RNP cache build must not refresh WB"))
+    monkeypatch.setattr(reports, "build_rnp_report", lambda **kwargs: report_calls.append(kwargs) or SimpleNamespace(rows=[]))
+    monkeypatch.setattr(reports, "_map_rnp_to_report_response", lambda *_args, **_kwargs: {"rows": [{"sku": "NM_1"}]})
     monkeypatch.setattr(reports, "_apply_report_rules_to_payload", lambda report, _organization_id: report)
     monkeypatch.setattr(reports, "save_source_cache", lambda _organization_id, key, payload: saved.__setitem__(key, payload))
     monkeypatch.setattr(reports, "get_source_cache", lambda _organization_id, key, **_kwargs: saved.get(key))
@@ -1041,27 +1064,39 @@ def test_rnp_report_task_presyncs_funnel_sources_before_building(monkeypatch):
     )
 
     assert result["state"] == "completed"
-    assert calls[0]["trigger"] == "reports-rnp"
-    assert calls[0]["sources"] == ("period-stats", "ads", "baskets")
-    assert calls[0]["baskets_include_daily_detail"] is False
+    assert len(report_calls) == 1
+    assert callable(report_calls[0].pop("progress_callback"))
+    assert report_calls == [{
+        "date_from": date(2026, 7, 10),
+        "date_to": date(2026, 7, 16),
+        "group_by": "sku",
+        "finance_allowed": False,
+        "organization_id": 1,
+        "wb_token": None,
+        "force_refresh": False,
+    }]
+    assert saved["reports_payload_rnp_2026-07-10_2026-07-16_sku_operational"]["report"] == {"rows": [{"sku": "NM_1"}]}
 
 
 def test_digest_task_presyncs_report_sources_before_building(monkeypatch):
     from app.routers import wb_reports_bff as reports
 
-    calls: list[dict[str, object]] = []
+    # Legacy ID retained: the worker now builds from ready cache without presync.
+    snapshot_calls: list[dict[str, object]] = []
+    ads_calls: list[dict[str, object]] = []
+    funnel_calls: list[dict[str, object]] = []
     saved: dict[str, dict] = {}
     snapshot = SimpleNamespace(source_status="cached", orders=[], sales=[], stocks=[])
     ads = SimpleNamespace(rows=[])
 
-    monkeypatch.setattr("app.repricer_tasks.refresh_wb_data_sources", lambda **kwargs: calls.append(kwargs) or {"state": "completed", "steps": []})
-    monkeypatch.setattr(reports, "build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("digest task must use cached WB snapshot"))
-    monkeypatch.setattr(reports, "build_cached_wb_reports_sources_snapshot", lambda **_kwargs: snapshot)
-    monkeypatch.setattr(reports, "_build_digest_ads_snapshot", lambda **_kwargs: ads)
-    monkeypatch.setattr(reports, "_build_digest_funnel_snapshot", lambda **_kwargs: {})
+    monkeypatch.setattr(repricer_tasks, "refresh_wb_data_sources", lambda **_kwargs: pytest.fail("digest cache build must not refresh WB"))
+    monkeypatch.setattr(reports, "build_cached_wb_reports_sources_snapshot", lambda **kwargs: snapshot_calls.append(kwargs) or snapshot)
+    monkeypatch.setattr(reports, "_build_digest_ads_snapshot", lambda **kwargs: ads_calls.append(kwargs) or ads)
+    monkeypatch.setattr(reports, "_build_digest_funnel_snapshot", lambda **kwargs: funnel_calls.append(kwargs) or {})
     monkeypatch.setattr(reports, "build_plan_fact_report", lambda **_kwargs: SimpleNamespace(rows=[]))
-    monkeypatch.setattr(reports, "_build_digest_payload", lambda *_args, **_kwargs: {"rows": []})
+    monkeypatch.setattr(reports, "_build_digest_payload", lambda *_args, **_kwargs: {"rows": [{"sku": "NM_1"}]})
     monkeypatch.setattr(reports, "_apply_digest_plan", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repricer_tasks, "_digest_report_summary", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(reports, "save_source_cache", lambda _organization_id, key, payload: saved.__setitem__(key, payload))
     monkeypatch.setattr(reports, "get_source_cache", lambda _organization_id, key, **_kwargs: saved.get(key))
 
@@ -1074,7 +1109,9 @@ def test_digest_task_presyncs_report_sources_before_building(monkeypatch):
     )
 
     assert result["state"] == "completed"
-    assert calls[0]["trigger"] == "reports-digest"
-    assert calls[0]["sources"] == ("stocks", "period-stats", "finance", "ads", "baskets")
-    assert calls[0]["execute_lock"] is False
-    assert calls[0]["baskets_include_daily_detail"] is False
+    expected_range = {"organization_id": 1, "date_from": date(2026, 7, 10), "date_to": date(2026, 7, 16)}
+    assert snapshot_calls == [expected_range]
+    assert ads_calls == [{**expected_range, "wb_token": None}]
+    assert callable(funnel_calls[0].pop("progress_callback"))
+    assert funnel_calls == [{**expected_range, "wb_token": None}]
+    assert saved["reports_digest_v12_2026-07-10_2026-07-16"]["digest"] == {"rows": [{"sku": "NM_1"}]}
