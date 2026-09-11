@@ -51,9 +51,11 @@ beforeAll(async () => {
     plugins: [{ name: 'canonical-auth-fixture', enforce: 'pre', transform(source, id) {
       if (!id.endsWith('/__fixtures__/reportLoadingBrowser.tsx')) return
       return source.replace('cabinetMe: null', `cabinetMe: window.location.hash === '#legacy' ? null : ({ organization: { organizationId: 7 }, user: { userId: 1, permissions: [] } } as AuthContextValue['cabinetMe'])`)
+        .replace('const [accessToken, setAccessToken]', 'const [organizationId, setOrganizationId] = useState(7)\n  const [accessToken, setAccessToken]')
+        .replace('<AuthContext.Provider value={{ ...auth, accessToken,', `<button style={{ position: 'fixed', zIndex: 999999, top: 22, right: 0 }} onClick={() => setOrganizationId(8)}>Change synthetic account</button><button style={{ position: 'fixed', zIndex: 999999, top: 44, right: 0 }} onClick={() => setAccessToken('synthetic-replaced')}>Replace synthetic token</button><AuthContext.Provider value={{ ...auth, cabinetMe: auth.cabinetMe ? { ...auth.cabinetMe, organization: { ...auth.cabinetMe.organization, organizationId } } : null, accessToken,`)
     } }, react()],
     define: { 'process.env.NODE_ENV': '"test"', 'import.meta.env.VITE_API_BASE_URL': '""',
-      'import.meta.env.VITE_CANONICAL_WB_ABC_PNL_ROLLOUT': '"7:31"' },
+      'import.meta.env.VITE_CANONICAL_WB_ABC_PNL_ROLLOUT': '"7:31,8:32"' },
     resolve: { alias: { '@': path.join(root, 'src') } },
     build: { write: false, minify: false, lib: {
       entry: fileURLToPath(new URL('./__fixtures__/reportLoadingBrowser.tsx', import.meta.url)), formats: ['iife'], name: 'AbcPnlReliability',
@@ -83,7 +85,7 @@ async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false) {
         const dateFrom = url.searchParams.get('dateFrom') ?? '2026-09-01', dateTo = url.searchParams.get('dateTo') ?? '2026-09-07'
         const start = new Date(`${dateFrom}T00:00:00+03:00`), end = new Date(`${dateTo}T00:00:00+03:00`)
         const days = (end.getTime() - start.getTime()) / 86400000 + 1
-        return route.fulfill({ json: { ...payload, meta: { ...payload.meta, period: { ...payload.meta.period,
+        return route.fulfill({ json: { ...payload, meta: { ...payload.meta, marketplaceAccountId: Number(url.searchParams.get('marketplaceAccountId')), period: { ...payload.meta.period,
           dateFrom, dateTo, days, startAt: start.toISOString(), endExclusiveAt: new Date(end.getTime() + 86400000).toISOString(),
         } } } })
       }
@@ -160,6 +162,104 @@ it.each(['abc', 'pnl'] as const)('searches all loaded %s rows before pagination 
       await surface.locator('.report-table-wrap').evaluate(element => { element.scrollLeft = 0 })
       await page.screenshot({ path: `/tmp/report-ui-${tab}-search.png` })
     }
+    expect(evidence.errors).toEqual([])
+    expect(evidence.unexpected).toEqual([])
+  } finally { await browser.close() }
+}, 45_000)
+
+it('preserves expanded ABC rows across unchanged renderer replays and in-place cell updates', async () => {
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1512, height: 982 } })
+    const evidence = await mount(page, 'abc')
+    await page.clock.runFor(1000) // Run the existing 250/750 ms manager retries before the controlled replay.
+    const rows = page.locator('#tab-abc [data-report-row]:visible')
+    await page.locator('#tab-abc').getByRole('button', { name: /^Показать ещё/ }).click()
+    await expect.poll(() => rows.count()).toBe(60)
+    await page.evaluate(() => window.eval('renderAbcDemoRows()'))
+    await page.clock.runFor(1000)
+    await expect.poll(() => rows.count()).toBe(60)
+    // Publications must still rerender cells even when source rows are mutated in place.
+    await page.evaluate(() => {
+      window.__vellaAbcLiveRows![0].price = '12345'
+      window.__vellaPublishAbcRowsSnapshot?.()
+    })
+    await expect.poll(() => rows.first().innerText()).toContain('12345')
+    expect(await rows.count()).toBe(60)
+    expect(await page.evaluate(() => window.__vellaAbcRowsSnapshot?.().rows.length)).toBe(60)
+    if (process.env.SATORNA_REPORT_UI_SCREENSHOTS) {
+      await page.locator('#tab-abc .report-table-wrap').evaluate(element => { element.scrollLeft = 0 })
+      await page.locator('#tab-abc').evaluate(element => element.scrollIntoView({ block: 'start' }))
+      await page.screenshot({ path: '/tmp/abc-pagination-desktop.png' })
+      await page.setViewportSize({ width: 390, height: 844 })
+      await page.screenshot({ path: '/tmp/abc-pagination-mobile.png' })
+      expect(await rows.count()).toBe(60)
+    }
+    expect(evidence.queries).toHaveLength(1)
+    expect(evidence.errors).toEqual([])
+    expect(evidence.unexpected).toEqual([])
+  } finally { await browser.close() }
+}, 45_000)
+
+it('resets expanded ABC rows for same-size filters, sorting and source changes', async () => {
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1512, height: 982 } })
+    const evidence = await mount(page, 'abc')
+    await page.clock.runFor(1000)
+    await page.evaluate(() => { window.__vellaAbcLiveRows!.forEach(row => { row.filters = ['Все товары', 'Новинки'] }) })
+    const surface = page.locator('#tab-abc'), rows = surface.locator('[data-report-row]:visible')
+    const changes = [
+      () => surface.locator('.search input').fill('SKU-'),
+      () => surface.locator('.chips .chip').filter({ hasText: /^Новинки$/ }).click(),
+      () => page.evaluate(() => { window.eval("reportFilterState.abc.manager = 'unassigned'"); window.__vellaPublishAbcRowsSnapshot?.() }),
+      // Equal prices keep exactly the same ordered rows; changing the sort still resets the view.
+      () => page.evaluate(() => { window.eval("setReportSortStack('abc', [{ key: 'price', dir: 'asc' }])"); window.__vellaPublishAbcRowsSnapshot?.() }),
+      () => page.evaluate(() => { window.__vellaAbcLiveRows!.reverse(); window.__vellaPublishAbcRowsSnapshot?.() }),
+      () => page.evaluate(() => { window.__vellaAbcLiveRows = [...window.__vellaAbcLiveRows!]; window.__vellaPublishAbcRowsSnapshot?.() }),
+      () => page.evaluate(() => { window.__vellaAbcLiveRows![0] = { ...window.__vellaAbcLiveRows![0] }; window.__vellaPublishAbcRowsSnapshot?.() }),
+    ]
+    for (const change of changes) {
+      await surface.getByRole('button', { name: /^Показать ещё/ }).click()
+      await expect.poll(() => rows.count()).toBe(60)
+      await change()
+      await expect.poll(() => rows.count()).toBe(50)
+      expect(await page.evaluate(() => window.__vellaAbcRowsSnapshot?.().rows.length)).toBe(60)
+    }
+    expect(evidence.errors).toEqual([])
+    expect(evidence.unexpected).toEqual([])
+  } finally { await browser.close() }
+}, 45_000)
+
+it('resets expanded ABC rows on real period, token and organization/account changes', async () => {
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1512, height: 982 } })
+    const evidence = await mount(page, 'abc')
+    await page.clock.runFor(1000)
+    const surface = page.locator('#tab-abc'), rows = surface.locator('[data-report-row]:visible')
+    const changes = [
+      async () => {
+        await page.getByRole('button', { name: 'Начало периода аналитики WB', exact: true }).click()
+        await page.locator('.products-cache-calendar-day[aria-label^="2026-09-02:"]').click()
+        await page.locator('.products-cache-calendar-day[aria-label^="2026-09-06:"]').click()
+        await page.getByRole('button', { name: 'Применить', exact: true }).click()
+      },
+      () => page.getByRole('button', { name: 'Replace synthetic token', exact: true }).click(),
+      () => page.getByRole('button', { name: 'Change synthetic account', exact: true }).click(),
+    ]
+    for (const [index, change] of changes.entries()) {
+      await surface.getByRole('button', { name: /^Показать ещё/ }).click()
+      await expect.poll(() => rows.count()).toBe(60)
+      await change()
+      await expect.poll(() => evidence.queries.length).toBe(index + 2)
+      await expect.poll(() => rows.count()).toBe(50)
+      expect(await page.evaluate(() => window.__vellaAbcRowsSnapshot?.().rows.length)).toBe(60)
+    }
+    expect(evidence.queries[1]).toContain('dateFrom=2026-09-02&dateTo=2026-09-06')
+    expect(evidence.queries[3]).toContain('marketplaceAccountId=32')
+    await page.getByRole('button', { name: 'Clear synthetic report session', exact: true }).click()
+    await expect.poll(() => rows.count()).toBe(0)
     expect(evidence.errors).toEqual([])
     expect(evidence.unexpected).toEqual([])
   } finally { await browser.close() }

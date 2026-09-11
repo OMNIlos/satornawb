@@ -14063,8 +14063,21 @@ function useAbcRowsSnapshot() {
 
 function AbcTableBodyIsland({ replacementKey }: { replacementKey: string }) {
   const snapshot = useAbcRowsSnapshot()
-  const [renderLimit, setRenderLimit] = useState(REPORT_TABLE_RENDER_BATCH)
-  useEffect(() => setRenderLimit(REPORT_TABLE_RENDER_BATCH), [snapshot])
+  const auth = useContext(AuthContext)
+  const period = readReportPeriodState('abc')
+  const view = JSON.stringify([
+    currentScopedAbcLiveState().scope, auth?.accessToken, auth?.isAuthenticated,
+    auth?.cabinetMe?.organization.organizationId, auth?.cabinetMe?.user.userId,
+    period.fromIso, period.toIso, snapshot.filter, snapshot.sort,
+  ])
+  const sourceRows = window.__vellaAbcLiveRows
+  const [pagination, setPagination] = useState(() => ({ view, sourceRows, rows: snapshot.rows, limit: REPORT_TABLE_RENDER_BATCH }))
+  const changed = pagination.view !== view || pagination.sourceRows !== sourceRows
+    || pagination.rows.length !== snapshot.rows.length
+    || snapshot.rows.some((item, index) => item.row !== pagination.rows[index]?.row || item.originalIndex !== pagination.rows[index]?.originalIndex)
+  // Reset only the display window, not publications: mutable cells and summaries must still refresh.
+  const renderLimit = changed ? REPORT_TABLE_RENDER_BATCH : pagination.limit
+  if (changed) setPagination({ view, sourceRows, rows: snapshot.rows, limit: REPORT_TABLE_RENDER_BATCH })
   const visibleRows = snapshot.rows.slice(0, renderLimit)
   const showStatusRow = snapshot.rows.length === 0
 
@@ -14095,7 +14108,7 @@ function AbcTableBodyIsland({ replacementKey }: { replacementKey: string }) {
       {!showStatusRow && visibleRows.length < snapshot.rows.length ? (
         <tr data-vella-island="abc-table-more-row" data-vella-island-status="explicit-jsx">
           <td colSpan={ABC_TABLE_COLUMNS.length} style={{ padding: 14, textAlign: 'center' }}>
-            <button className="btn btn-default btn-sm" onClick={() => setRenderLimit((limit) => limit + REPORT_TABLE_RENDER_BATCH)}>
+            <button className="btn btn-default btn-sm" onClick={() => setPagination((current) => ({ ...current, limit: current.limit + REPORT_TABLE_RENDER_BATCH }))}>
               Показать ещё {Math.min(REPORT_TABLE_RENDER_BATCH, snapshot.rows.length - visibleRows.length)} · {visibleRows.length} из {snapshot.rows.length}
             </button>
           </td>
