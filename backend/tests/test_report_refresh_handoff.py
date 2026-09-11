@@ -71,7 +71,7 @@ def runtime(monkeypatch):
         "rows": [{"sku": "SKU-1"}],
     }
     monkeypatch.setattr(
-        reports, "_map_pnl_to_report_response", lambda *args: deepcopy(payload)
+        reports, "_map_pnl_to_report_response", lambda *args, **kwargs: deepcopy(payload)
     )
     monkeypatch.setattr(
         reports, "_build_ads_report_payload", lambda **kw: deepcopy(payload)

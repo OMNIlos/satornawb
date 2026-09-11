@@ -378,7 +378,7 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
             progress("pnl", "Собираем P&L с расходами 1С", 35)
             payload = reports.build_pnl_report(date_from=date_from, date_to=date_to, group_by=group_by, requested_state="final" if source == "financial" else "preliminary", finance_allowed=finance_allowed, organization_id=organization_id, wb_token=None, progress_callback=progress)
             progress("pnl-map", "Готовим таблицу P&L", 97)
-            report = reports._map_pnl_to_report_response(payload, date_range, cash_flow)
+            report = reports._map_pnl_to_report_response(payload, date_range, cash_flow, finance_allowed=finance_allowed)
         elif report_id == "expenses":
             cash_flow = reports.get_cash_flow_for_period(organization_id=organization_id, period_from=date_from, period_to=date_to, requested_by=user_id)
             if cash_flow.get("status") in {"pending", "processing"}:
@@ -1455,7 +1455,7 @@ def _materialize_report_snapshots_for_profile(organization_id: int, profile: WbS
                 organization_id=organization_id,
                 wb_token=None,
             )
-            pnl_report = reports._apply_report_rules_to_payload(reports._map_pnl_to_report_response(pnl_payload, date_range, cash_flow), organization_id)
+            pnl_report = reports._apply_report_rules_to_payload(reports._map_pnl_to_report_response(pnl_payload, date_range, cash_flow, finance_allowed=True), organization_id)
             pnl_cache = reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="pnl", date_from=date_from, date_to=date_to, group_by="sku", source="operational", report=pnl_report, finance_allowed=True)
             reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="pnl", date_from=date_from, date_to=date_to, group_by="sku", source="financial", report=pnl_report, finance_allowed=True)
             reports.save_source_cache(

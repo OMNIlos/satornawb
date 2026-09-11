@@ -14,6 +14,21 @@ from tests.auth_helpers import auth_headers
 
 START, END = date(2026, 8, 17), date(2026, 8, 23)
 PARAMS = {"preset": "custom", "from": START.isoformat(), "to": END.isoformat()}
+PRIVATE_CASH_FLOW = {
+    "status": "ready",
+    "data": {
+        "rows": [
+            {
+                "article": "synthetic-private-rent",
+                "type": "expense",
+                "operationalExpense": True,
+                "amountKopecks": 164_000,
+            }
+        ],
+        "totals": {"operationalExpenseKopecks": 164_000},
+        "balances": {"closingBalanceKopecks": 130_000},
+    },
+}
 
 
 @pytest.fixture
@@ -42,7 +57,7 @@ def cache(monkeypatch):
         repricer_tasks, "_report_snapshot_sources_ready", lambda *args, **kw: (True, [])
     )
     monkeypatch.setattr(
-        reports, "get_cash_flow_for_period", lambda **kw: {"status": "ready"}
+        reports, "get_cash_flow_for_period", lambda **kw: deepcopy(PRIVATE_CASH_FLOW)
     )
 
     def build_report(**kwargs):
@@ -99,6 +114,9 @@ def test_worker_and_readers_keep_both_permission_variants(
         response = api.get(endpoint, params=params, headers=auth_headers(api, profile))
         assert response.status_code == 200
         assert response.json()["rows"][0]["overheadKopecks"] == expected
+        assert response.json()["cashFlow"] == (
+            PRIVATE_CASH_FLOW if expected is not None else None
+        )
     assert (
         len([key for org, key in cache if key.startswith("reports_payload_pnl_")]) == 2
     )
@@ -112,19 +130,28 @@ def test_worker_and_readers_keep_both_permission_variants(
         ("/api/wb/reports/pnl/latest-cache", PARAMS, 404),
     ],
 )
-@pytest.mark.parametrize("legacy_suffix", ["", "_nofinance"])
+@pytest.mark.parametrize(
+    "legacy_prefix,legacy_suffix,version",
+    [("", "", "v1"), ("", "_nofinance", "v1"), ("v2_", "_nofinance", "v2")],
+)
 def test_reader_does_not_reuse_old_unscoped_financial_payload(
-    cache, endpoint, params, status, legacy_suffix
+    cache, endpoint, params, status, legacy_prefix, legacy_suffix, version
 ):
     # Older endpoints accepted arbitrary source strings; a suffix alone is not provenance.
-    key = f"reports_payload_pnl_{START}_{END}_sku_operational{legacy_suffix}"
+    key = f"reports_payload_pnl_{legacy_prefix}{START}_{END}_sku_operational{legacy_suffix}"
     cache[1, key] = {
         "completedAt": reports._utc_now_iso(),
         "dateFrom": str(START),
         "dateTo": str(END),
         "report": {
-            "cacheVersion": "v1",
-            "rows": [{"label": "PRIVATE", "overheadKopecks": 12_345}],
+            "cacheVersion": version,
+            "rows": [
+                {
+                    "label": "PRIVATE",
+                    "overheadKopecks": None if version == "v2" else 12_345,
+                }
+            ],
+            "cashFlow": deepcopy(PRIVATE_CASH_FLOW),
         },
     }
     api = TestClient(create_app())
@@ -198,5 +225,59 @@ def test_job_endpoints_select_the_callers_permission_cache(
     started = api.post("/api/wb/reports/pnl/jobs", params=PARAMS, headers=headers)
     assert started.status_code == 200
     assert started.json()["state"] == "queued"
+    assert started.json()["cashFlow"] == (
+        PRIVATE_CASH_FLOW if finance_allowed else None
+    )
     assert len(enqueued) == 1
     assert enqueued[0][-2:] == (finance_allowed, None)
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("GET", "/reports/cash-flow"),
+        ("GET", "/api/wb/reports/cash-flow"),
+        ("GET", "/api/wb/reports/expenses"),
+        ("GET", "/api/wb/reports/expenses/latest-cache"),
+        ("GET", "/api/wb/reports/expenses/jobs"),
+        ("POST", "/api/wb/reports/expenses/jobs"),
+    ],
+)
+@pytest.mark.parametrize("profile", ["viewer", "finance_viewer"])
+def test_cash_flow_and_expenses_require_finance_access(
+    cache, monkeypatch, method, path, profile
+):
+    reports._save_exact_report_payload_cache(
+        organization_id=1,
+        report_id="expenses",
+        date_from=START,
+        date_to=END,
+        group_by="sku",
+        source="operational",
+        report={
+            "rows": [{"amountKopecks": 164_000}],
+            "cashFlow": deepcopy(PRIVATE_CASH_FLOW),
+        },
+    )
+    reads = []
+
+    def read_cash_flow(**kwargs):
+        reads.append(kwargs)
+        return deepcopy(PRIVATE_CASH_FLOW)
+
+    monkeypatch.setattr(reports, "get_cash_flow_for_period", read_cash_flow)
+    api = TestClient(create_app())
+    response = api.request(
+        method, path, params=PARAMS, headers=auth_headers(api, profile)
+    )
+    assert response.status_code == (403 if profile == "viewer" else 200)
+    if profile == "viewer":
+        assert "finance:read" in response.text
+        assert (
+            "164000" not in response.text
+            and "synthetic-private-rent" not in response.text
+        )
+        assert reads == []
+    elif not path.endswith("/jobs"):
+        actual = response.json() if "cash-flow" in path else response.json()["cashFlow"]
+        assert actual == PRIVATE_CASH_FLOW

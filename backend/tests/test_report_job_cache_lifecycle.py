@@ -293,7 +293,7 @@ def test_expenses_pending_source_without_worker_is_not_a_stale_task(runtime, mon
     monkeypatch.setattr(
         reports, "get_cash_flow_for_period", lambda **kw: {"status": "pending"}
     )
-    response = runtime.api.get("/api/wb/reports/expenses", params=PARAMS)
+    response = runtime.api.get("/api/wb/reports/expenses", params=PARAMS, headers=auth_headers(runtime.api, "finance_viewer"))
     assert response.status_code == 200
     assert response.json()["reportJob"]["state"] == "waiting_1c"
     assert not response.json()["reportJob"].get("taskId")

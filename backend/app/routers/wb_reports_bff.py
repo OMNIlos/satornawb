@@ -2851,7 +2851,7 @@ def _map_abc_to_report_response(payload: Any, date_range: dict[str, str]) -> dic
     }
 
 
-def _map_pnl_to_report_response(payload: Any, date_range: dict[str, str], cash_flow: dict[str, Any] | None = None) -> dict[str, Any]:
+def _map_pnl_to_report_response(payload: Any, date_range: dict[str, str], cash_flow: dict[str, Any] | None = None, *, finance_allowed: bool = False) -> dict[str, Any]:
     financial_confirmation_status = "confirmed" if "WB-03" not in payload.blockerIds else "pending"
     return {
         "cacheVersion": PNL_REPORT_PAYLOAD_VERSION,
@@ -2883,7 +2883,7 @@ def _map_pnl_to_report_response(payload: Any, date_range: dict[str, str], cash_f
             {"key": "marginPct", "label": "Маржа"},
         ],
         "rows": [row.model_dump(mode="json") for row in payload.rows],
-        "cashFlow": cash_flow,
+        "cashFlow": cash_flow if finance_allowed else None,
     }
 
 
@@ -3362,7 +3362,7 @@ BACKGROUND_REPORT_QUEUED_STALE_AFTER = timedelta(seconds=30)
 DIGEST_CACHE_TTL = timedelta(hours=24)
 REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
 ABC_REPORT_PAYLOAD_VERSION = "v16"
-PNL_REPORT_PAYLOAD_VERSION = "v2"
+PNL_REPORT_PAYLOAD_VERSION = "v3"
 RNP_REPORT_PAYLOAD_VERSION = "v3"
 STOCK_REPORT_PAYLOAD_VERSION = "v5"
 WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v2"
@@ -4312,7 +4312,7 @@ def get_reports_latest_cache(
     actor = actor_from_request(request)
     assert_permission_or_audit(
         actor=actor,
-        permission="settings:read",
+        permission="finance:read" if report_id == "expenses" else "settings:read",
         action="reports.bff.latest_cache.get",
         object_type="wb_report",
         object_id=report_id,
@@ -4475,7 +4475,7 @@ def get_reports_export(
     actor = actor_from_request(request)
     assert_permission_or_audit(
         actor=actor,
-        permission="settings:read",
+        permission="finance:read" if report_id == "expenses" else "settings:read",
         action="reports.bff.export.get",
         object_type="wb_export",
         object_id=f"export:{report_id}",
@@ -4592,7 +4592,7 @@ def get_cash_flow_report(
     actor = actor_from_request(request)
     assert_permission_or_audit(
         actor=actor,
-        permission="settings:read",
+        permission="finance:read",
         action="reports.cash_flow.get",
         object_type="cash_flow",
         object_id=f"{from_}:{to}",
@@ -4621,7 +4621,7 @@ def get_reports_by_id(
     actor = actor_from_request(request)
     assert_permission_or_audit(
         actor=actor,
-        permission="settings:read",
+        permission="finance:read" if report_id == "expenses" else "settings:read",
         action="reports.bff.get",
         object_type="wb_report",
         object_id=report_id,
@@ -4849,7 +4849,7 @@ def get_reports_by_id(
             organization_id=actor.organization_id,
             wb_token=None,
         )
-        return _apply_report_rules_to_payload(_map_pnl_to_report_response(pnl_payload, date_range, cash_flow), actor.organization_id)
+        return _apply_report_rules_to_payload(_map_pnl_to_report_response(pnl_payload, date_range, cash_flow, finance_allowed=finance_allowed), actor.organization_id)
 
     return {
         "meta": _meta(report_id, report_id, "unknown report"),
@@ -4865,7 +4865,7 @@ def get_reports_by_id(
 @router.post("/api/wb/reports/{report_id}/jobs")
 def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pnl", "expenses", "stock", "week-over-week"], preset: str = Query(default="7d"), from_: str | None = Query(default=None, alias="from"), to: str | None = Query(default=None), groupBy: ReportGroupBy = Query(default="sku"), source: str = Query(default="operational")) -> dict[str, Any]:
     actor = actor_from_request(request)
-    assert_permission_or_audit(actor=actor, permission="settings:read", action="reports.bff.job.start", object_type="wb_report", object_id=report_id, reason="actor cannot refresh report")
+    assert_permission_or_audit(actor=actor, permission="finance:read" if report_id == "expenses" else "settings:read", action="reports.bff.job.start", object_type="wb_report", object_id=report_id, reason="actor cannot refresh report")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
     key = _report_job_cache_key(report_id, date_from, date_to, groupBy, source)
     cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=has_permission(actor, "finance:read"))
@@ -4919,7 +4919,7 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
     task = build_report_for_org.delay(actor.organization_id, actor.user_id, report_id, date_from.isoformat(), date_to.isoformat(), groupBy, source, has_permission(actor, "finance:read"), None)
     payload = {"state": "queued", "taskId": task.id, "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy, "source": source, "queuedAt": _utc_now_iso()}
     save_source_cache(actor.organization_id, key, payload)
-    return {**payload, "reused": False, **({"cashFlow": cash_flow} if cash_flow is not None else {})}
+    return {**payload, "reused": False, **({"cashFlow": cash_flow if has_permission(actor, "finance:read") else None} if cash_flow is not None else {})}
 
 
 @router.post("/api/wb/reports/{report_id}/refresh-sources-job")
@@ -4962,7 +4962,7 @@ def start_report_source_refresh_job(
 @router.get("/api/wb/reports/{report_id}/jobs")
 def get_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pnl", "expenses", "stock", "week-over-week"], preset: str = Query(default="7d"), from_: str | None = Query(default=None, alias="from"), to: str | None = Query(default=None, alias="to"), groupBy: ReportGroupBy = Query(default="sku"), source: str = Query(default="operational")) -> dict[str, Any]:
     actor = actor_from_request(request)
-    assert_permission_or_audit(actor=actor, permission="settings:read", action="reports.bff.job.status", object_type="wb_report", object_id=report_id, reason="actor cannot read report job")
+    assert_permission_or_audit(actor=actor, permission="finance:read" if report_id == "expenses" else "settings:read", action="reports.bff.job.status", object_type="wb_report", object_id=report_id, reason="actor cannot read report job")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
     key = _report_job_cache_key(report_id, date_from, date_to, groupBy, source)
     job = get_source_cache(actor.organization_id, key, slim=False) or {"state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy}
