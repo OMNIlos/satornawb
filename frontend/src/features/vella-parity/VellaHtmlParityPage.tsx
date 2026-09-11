@@ -10445,19 +10445,27 @@ function ReportProgressPanelIsland({
   )
 }
 
-function PnlLiveWorkbenchIsland({ replacementKey, state }: { replacementKey: string; state: PnlLiveState }) {
+function PnlLiveWorkbenchIsland({ replacementKey, state, rows }: { replacementKey: string; state: PnlLiveState; rows: PnlBackendRow[] }) {
   const report = state.status === 'ready' ? state.report : {}
-  const rows = getPnlRows(report)
   const isCanonical = !!report.canonical
-  const revenue = isCanonical
-    ? formatPnlKopecks(report.canonicalSummary?.revenueKopecks)
-    : getPnlKpiValue(report, 'revenue') ?? formatPnlKopecks(sumPnlRows(rows, 'revenueKopecks'))
-  const displayedProfit = isCanonical
-    ? formatPnlKopecks(report.canonicalSummary?.profitAfterLoyaltyKopecks)
-    : getPnlKpiValue(report, 'net_profit') ?? formatPnlKopecks(sumPnlRows(rows, 'netProfitKopecks'))
+  const total = (...fields: Array<keyof PnlBackendRow>) => {
+    let sum = 0
+    for (const row of rows) {
+      for (const field of fields) {
+        const value = asPnlNumber(row[field])
+        if (value === null) return null
+        sum += value
+      }
+    }
+    return sum
+  }
+  const revenueKopecks = total('revenueKopecks')
+  const profitKopecks = total(isCanonical ? 'profitAfterLoyaltyKopecks' : 'netProfitKopecks')
+  const revenue = formatPnlKopecks(revenueKopecks)
+  const displayedProfit = formatPnlKopecks(profitKopecks)
   const margin = isCanonical
     ? 'нет данных'
-    : getPnlKpiValue(report, 'margin_pct') ?? formatPnlPercent(rows.length ? sumPnlRows(rows, 'netProfitKopecks') / Math.max(sumPnlRows(rows, 'revenueKopecks'), 1) * 100 : null)
+    : formatPnlPercent(profitKopecks !== null && revenueKopecks !== null && revenueKopecks !== 0 ? profitKopecks / revenueKopecks * 100 : null)
   const profitLabel = isCanonical ? 'Прибыль после лояльности' : 'Прибыль / маржа'
   const profitTip = isCanonical
     ? 'Предварительная прибыль после рекламы и компонентов лояльности. Это не финальная чистая прибыль: итоговая P&L-классификация заблокирована до подтверждения себестоимости и экономик.'
@@ -10473,10 +10481,10 @@ function PnlLiveWorkbenchIsland({ replacementKey, state }: { replacementKey: str
       ]
     : [
         ['Выручка', state.status === 'loading' ? 'загрузка' : revenue, 'pnl-flow-item', 'Выкупили на сумму за выбранный период. Это база для расчета прибыли.'],
-        ['Себестоимость', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(isCanonical ? report.canonicalSummary?.cogsKopecks : sumPnlRows(rows, 'cogsKopecks')), 'pnl-flow-item cost', 'Закупка, печать, упаковка или другая себестоимость SKU из настроек.'],
-        ['Комиссия', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(isCanonical ? report.canonicalSummary?.commissionKopecks : sumPnlRows(rows, 'commissionKopecks')), 'pnl-flow-item cost', 'Комиссия WB по категории товара. Вычитается из выручки.'],
-        ['Логистика', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(isCanonical ? report.canonicalSummary?.logisticsKopecks : sumPnlRows(rows, 'logisticsKopecks')), 'pnl-flow-item cost', 'Логистика WB: доставка, возвраты и связанные логистические удержания, если источник их отдал.'],
-        ['Хранение/штрафы', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(isCanonical ? (report.canonicalSummary?.storageKopecks == null ? null : report.canonicalSummary.storageKopecks + report.canonicalSummary.penaltyKopecks + report.canonicalSummary.deductionKopecks) : sumPnlRows(rows, 'storageKopecks') + sumPnlRows(rows, 'returnsPenaltyKopecks')), 'pnl-flow-item cost', 'Хранение WB и штрафы/удержания, которые уменьшают прибыль.'],
+        ['Себестоимость', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(total('cogsKopecks')), 'pnl-flow-item cost', 'Закупка, печать, упаковка или другая себестоимость SKU из настроек.'],
+        ['Комиссия', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(total('commissionKopecks')), 'pnl-flow-item cost', 'Комиссия WB по категории товара. Вычитается из выручки.'],
+        ['Логистика', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(total('logisticsKopecks')), 'pnl-flow-item cost', 'Логистика WB: доставка, возвраты и связанные логистические удержания, если источник их отдал.'],
+        ['Хранение/штрафы', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(total('storageKopecks', 'returnsPenaltyKopecks')), 'pnl-flow-item cost', 'Хранение WB и штрафы/удержания, которые уменьшают прибыль.'],
         [profitLabel, state.status === 'loading' ? 'загрузка' : isCanonical ? displayedProfit : `${displayedProfit} · ${margin}`, 'pnl-flow-item profit', profitTip],
       ]
   return (
@@ -10486,6 +10494,7 @@ function PnlLiveWorkbenchIsland({ replacementKey, state }: { replacementKey: str
       data-vella-island="pnl-live-workbench"
       data-vella-island-status="explicit-jsx"
     >
+      <div>Итоги по строкам таблицы · позиций: {rows.length}</div>
       <div className="pnl-flow" aria-label="Разложение прибыли">
         {flowItems.map(([label, value, className, tip]) => (
           <div className={className} key={label}>
@@ -10493,6 +10502,14 @@ function PnlLiveWorkbenchIsland({ replacementKey, state }: { replacementKey: str
             <b>{value}</b>
           </div>
         ))}
+      </div>
+      <div className="pnl-source" data-vella-island="pnl-account-summary">
+        <b>Весь аккаунт · без фильтров</b>
+        <span>
+          Выручка: {isCanonical ? formatPnlKopecks(report.canonicalSummary?.revenueKopecks) : getPnlKpiValue(report, 'revenue')}
+          {' · '}{isCanonical ? 'Прибыль после лояльности' : 'Прибыль'}: {isCanonical ? formatPnlKopecks(report.canonicalSummary?.profitAfterLoyaltyKopecks) : getPnlKpiValue(report, 'net_profit')}
+          {isCanonical ? <> · Нераспределённая реклама: {formatPnlKopecks(report.canonicalSummary?.unattributedAdvertisingSpendKopecks)} (не распределяется по строкам)</> : null}
+        </span>
       </div>
     </div>
   )
@@ -12324,9 +12341,8 @@ function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as 
   )
 }
 
-function PnlLiveTableShellIsland({ replacementKey, state, query, manager, mode = 'financial' }: { replacementKey: string; state: PnlLiveState; query: string; manager: string; mode?: PnlReportMode }) {
+function PnlLiveTableShellIsland({ replacementKey, state, rows, mode = 'financial' }: { replacementKey: string; state: PnlLiveState; rows: PnlBackendRow[]; mode?: PnlReportMode }) {
   const allRows = state.status === 'ready' ? getPnlRows(state.report) : []
-  const rows = filterPnlTableRows(allRows, query, manager)
   const renderWindow = useReportTableRenderLimit(rows.length)
   const visibleRows = rows.slice(0, renderWindow.limit)
   const showOneCColumns = mode === 'operational'
@@ -12926,6 +12942,8 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
     canonicalPnlEnabled, periodFromIso, periodToIso, pnlSource,
   ])
   const state = selectScopedReportState<PnlLiveState>(requestScope, publishedState, { status: 'loading' })
+  const pnlRows = state.status === 'ready' ? getPnlRows(state.report) : []
+  const selectedRows = useMemo(() => filterPnlTableRows(pnlRows, query, manager), [pnlRows, query, manager])
   const pnlExport = useContext(PnlTableExportContext)
   useLayoutEffect(() => {
     if (!pnlExport) return
@@ -12936,17 +12954,16 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
         reportKind: 'pnl', marketplaceAccountId: canonicalRollout.marketplaceAccountId, dateFrom: period.fromIso, dateTo: period.toIso,
         source: reportTableSource(state.report.canonical, canonicalRollout.marketplaceAccountId, period, JSON.stringify({ query, manager })),
         headers: PNL_TABLE_EXPORT_HEADERS,
-        rows: buildPnlTableRows(filterPnlTableRows(getPnlRows(state.report), query, manager)),
+        rows: buildPnlTableRows(selectedRows),
       }
     }
     pnlExport.current = select
     return () => { if (pnlExport.current === select) pnlExport.current = null }
-  }, [accessToken, activeTab, canonicalPnlEnabled, canonicalRollout, manager, pnlExport, query, state])
+  }, [accessToken, activeTab, canonicalPnlEnabled, canonicalRollout, manager, pnlExport, query, selectedRows, state])
   const operationalCashFlowReady = isOperationalPnl && state.status === 'ready' && state.report.cashFlow?.status === 'ready'
   const operationalWaitingJob = state.status === 'ready'
     ? describePnlReportJob(state.report.reportJob ?? { state: operationalCashFlowReady ? 'completed' : 'waiting_1c', stage: operationalCashFlowReady ? 'completed' : 'waiting_1c', label: operationalCashFlowReady ? '1С ДДС готова' : 'Ждём 1С ДДС', percent: operationalCashFlowReady ? 100 : 20 })
     : state.job
-  const pnlRows = state.status === 'ready' ? getPnlRows(state.report) : []
   const pnlHasRows = state.status === 'ready' && pnlRows.length > 0
   const canonicalState = state.status === 'ready' ? state.report.canonical?.state : null
   const accessDenied = state.status === 'error' && state.message.startsWith('Нет доступа')
@@ -13310,8 +13327,8 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       ) : (
         pnlHasRows ? (
           <>
-            <PnlLiveWorkbenchIsland replacementKey={`${replacementKey}-workbench`} state={state} />
-            <PnlLiveTableShellIsland replacementKey={`${replacementKey}-table`} state={state} query={query} manager={manager} mode="financial" />
+            <PnlLiveWorkbenchIsland replacementKey={`${replacementKey}-workbench`} state={state} rows={selectedRows} />
+            <PnlLiveTableShellIsland replacementKey={`${replacementKey}-table`} state={state} rows={selectedRows} mode="financial" />
           </>
         ) : (
           <ReportDataStateIsland

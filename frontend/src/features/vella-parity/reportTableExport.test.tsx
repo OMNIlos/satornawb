@@ -8,7 +8,7 @@ import react from '@vitejs/plugin-react'
 import { beforeAll, expect, it } from 'vitest'
 import type { CanonicalAbcPnlPage } from '../wb-finance/canonicalAbcPnl'
 
-const row = {
+const row: CanonicalAbcPnlPage['items'][number] = {
   nmId: 1, sellerArticle: 'SKU-0', catalogSkuId: null, operationCount: 1,
   revenueKopecks: -123, salesRevenueKopecks: 0, returnsRevenueKopecks: 123, mainRevenueKopecks: -123,
   redemptionsRevenueKopecks: 0, lateCorrectionRevenueKopecks: 0, unknownRevenueKopecks: 0,
@@ -22,8 +22,8 @@ const row = {
   cashbackDiscountKopecks: 0, cashbackCommissionChangeKopecks: 0, loyaltyNetCostKopecks: 0,
   profitAfterLoyaltyKopecks: 0, salesClass: 'A', profitClass: null, abcCode: null,
   netProfitKopecks: null, blockerIds: ['WB_PNL_COST_MISSING'],
-} satisfies CanonicalAbcPnlPage['items'][number]
-const payload = {
+}
+const payload: CanonicalAbcPnlPage = {
   items: Array.from({ length: 65 }, (_, i) => ({ ...row, nmId: 500000000 + i, sellerArticle: `SKU-${i}`, revenueKopecks: i === 64 ? 0 : -123 })),
   total: 65, limit: 500, offset: 0,
   summary: { ...row, skuCount: 65, unattributedAdvertisingSpendKopecks: null },
@@ -59,7 +59,7 @@ beforeAll(async () => {
   bundleCode = chunk.code
 }, 60_000)
 
-async function mount(page: Page, tab: 'abc' | 'pnl', responseMode: 'xlsx' | '403' | 'json' | 'delayed' = 'xlsx') {
+async function mount(page: Page, tab: 'abc' | 'pnl', responseMode: 'xlsx' | '403' | 'json' | 'delayed' = 'xlsx', report = payload) {
   const errors: string[] = [], unexpected: string[] = [], network: string[] = [], requests: Array<{ headers: string[]; rows: unknown[][]; source: Record<string, unknown> }> = []
   page.on('response', response => { if (response.url().endsWith('table.xlsx')) network.push(`response ${response.status()}`) })
   page.on('requestfinished', request => { if (request.url().endsWith('table.xlsx')) network.push('finished') })
@@ -79,7 +79,7 @@ async function mount(page: Page, tab: 'abc' | 'pnl', responseMode: 'xlsx' | '403
         if (process.env.SATORNA_EXPORT_RENDERER) body = execFileSync(process.env.SATORNA_EXPORT_PYTHON!, [process.env.SATORNA_EXPORT_RENDERER], { input: JSON.stringify(data), env: process.env })
         return route.fulfill({ status: responseMode === '403' ? 403 : 200, contentType: responseMode === 'json' || responseMode === '403' ? 'application/json' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', body }).then(() => { network.push('fulfilled') }).catch(error => { network.push(String(error)) })
       }
-      if (url.pathname === '/api/v2/wb/reports/abc-pnl') return route.fulfill({ json: { ...payload, meta: { ...payload.meta, marketplaceAccountId: Number(url.searchParams.get('marketplaceAccountId')), period: { ...payload.meta.period, dateFrom: url.searchParams.get('dateFrom'), dateTo: url.searchParams.get('dateTo') } } } })
+      if (url.pathname === '/api/v2/wb/reports/abc-pnl') return route.fulfill({ json: { ...report, meta: { ...report.meta, marketplaceAccountId: Number(url.searchParams.get('marketplaceAccountId')), period: { ...report.meta.period, dateFrom: url.searchParams.get('dateFrom'), dateTo: url.searchParams.get('dateTo') } } } })
       if (url.pathname === '/api/v1/cabinet/team/users') return route.fulfill({ json: { data: [] } })
       if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: { data: { userId: '1', hasToken: false, tokenMasked: null, updatedAt: null } } })
       if (url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: { data: { userId: '1', hasCredentials: false, clientIdMasked: null, clientSecretMasked: null, accessTokenExpiresAt: null, updatedAt: null } } })
@@ -127,6 +127,10 @@ it.each(['abc', 'pnl'] as const)('downloads every filtered %s row and zero-row r
       const request = evidence.requests.at(-1)!
       if (process.env.SATORNA_EXPORT_SCREENSHOTS) await download.saveAs(`${process.env.SATORNA_EXPORT_SCREENSHOTS}/${tab}-${count}.xlsx`)
       expect(request.rows).toHaveLength(count)
+      if (tab === 'pnl') {
+        expect(await page.locator('#tab-pnl .pnl-flow-item b').allTextContents())
+          .toEqual([query ? '0 ₽' : '-79 ₽', count ? 'нет данных' : '0 ₽', '0 ₽', '0 ₽', '0 ₽', '0 ₽'])
+      }
       expect(request.headers).toHaveLength(tab === 'abc' ? 24 : 13)
       expect(request.headers).toEqual(await page.locator(`#tab-${tab} thead th`).evaluateAll(cells => cells.map(cell => cell.childNodes[0].textContent?.trim())))
       expect(request.headers).toContain('Прибыль после лояльности')
@@ -149,6 +153,90 @@ it.each(['abc', 'pnl'] as const)('downloads every filtered %s row and zero-row r
     await page.locator('#ddExport > button').click()
     await page.locator('#ddExport').getByText('История выгрузок', { exact: true }).click()
     await page.getByText('История выгрузок пока недоступна', { exact: true }).waitFor()
+    expect(await page.locator('vite-error-overlay').count()).toBe(0)
+    expect(evidence.errors).toEqual([]); expect(evidence.unexpected).toEqual([])
+  } finally { await browser.close() }
+}, 45_000)
+
+it.each(['allocated', 'missing-cost', 'unattributed'] as const)('ties P&L selected totals to exported rows without inventing %s amounts', async source => {
+  const first: CanonicalAbcPnlPage['items'][number] = {
+    ...row, nmId: 500000001, sellerArticle: 'Exact-A', revenueKopecks: 10050,
+    salesRevenueKopecks: 10050, returnsRevenueKopecks: 0, mainRevenueKopecks: 10050,
+    salesUnits: 1, returnsUnits: 0, netUnits: 1, commissionKopecks: 120, logisticsKopecks: 220,
+    storageKopecks: 30, penaltyKopecks: 40, deductionKopecks: 50, financeExpensesKopecks: 460,
+    costValueState: 'configured', costEvidenceStatus: 'dated', cogsKopecks: 1000, settlementProfitKopecks: 8590,
+    economicsValueState: 'configured', economicsEvidenceStatus: 'dated', taxKopecks: 0, otherExpensesKopecks: 0,
+    profitBeforeAdsAndLoyaltyKopecks: 8590, advertisingSpendKopecks: 100,
+    profitBeforeLoyaltyKopecks: 8490, profitAfterLoyaltyKopecks: 8490, blockerIds: [],
+  }
+  const second: CanonicalAbcPnlPage['items'][number] = {
+    ...first, nmId: 500000002, sellerArticle: 'Exact-B', revenueKopecks: -125,
+    salesRevenueKopecks: 0, returnsRevenueKopecks: 125, mainRevenueKopecks: -125,
+    salesUnits: 0, returnsUnits: 1, netUnits: -1, commissionKopecks: 0, logisticsKopecks: 0,
+    storageKopecks: 0, penaltyKopecks: 0, deductionKopecks: 0, financeExpensesKopecks: 0,
+    cogsKopecks: 0, settlementProfitKopecks: -125, profitBeforeAdsAndLoyaltyKopecks: -125,
+    advertisingSpendKopecks: 0, profitBeforeLoyaltyKopecks: -125, profitAfterLoyaltyKopecks: -125,
+  }
+  const blockerIds = source === 'allocated' ? [] : [source === 'unattributed' ? 'WB_PNL_ADVERTISING_UNATTRIBUTED' : 'WB_PNL_COST_MISSING']
+  if (source === 'missing-cost') Object.assign(second, { costValueState: 'missing', costEvidenceStatus: null, cogsKopecks: null, settlementProfitKopecks: null, profitBeforeAdsAndLoyaltyKopecks: null, profitBeforeLoyaltyKopecks: null, profitAfterLoyaltyKopecks: null, blockerIds })
+  // The real backend keeps account profit but leaves every SKU's advertising/profit unknown when spend is unattributed.
+  if (source === 'unattributed') for (const item of [first, second]) Object.assign(item, { advertisingSpendKopecks: null, profitBeforeLoyaltyKopecks: null, profitAfterLoyaltyKopecks: null, blockerIds })
+  const report: CanonicalAbcPnlPage = {
+    ...payload, items: [first, second], total: 2,
+    summary: { ...payload.summary, operationCount: 2, skuCount: 2, revenueKopecks: 9925,
+      salesRevenueKopecks: 10050, returnsRevenueKopecks: 125, salesUnits: 1, returnsUnits: 1, netUnits: 0,
+      commissionKopecks: 120, logisticsKopecks: 220, storageKopecks: 30, penaltyKopecks: 40, deductionKopecks: 50, financeExpensesKopecks: 460,
+      cogsKopecks: source === 'missing-cost' ? null : 1000, settlementProfitKopecks: source === 'missing-cost' ? null : 8465,
+      taxKopecks: 0, otherExpensesKopecks: 0, profitBeforeAdsAndLoyaltyKopecks: source === 'missing-cost' ? null : 8465,
+      advertisingSpendKopecks: source === 'unattributed' ? 800 : 100, unattributedAdvertisingSpendKopecks: source === 'unattributed' ? 700 : 0,
+      profitBeforeLoyaltyKopecks: source === 'missing-cost' ? null : source === 'unattributed' ? 7665 : 8365,
+      profitAfterLoyaltyKopecks: source === 'missing-cost' ? null : source === 'unattributed' ? 7665 : 8365,
+    },
+    meta: { ...payload.meta, state: source === 'allocated' ? 'ready' : 'partial', blockerIds,
+      advertisingSource: 'finance_promotion', advertisingEvidenceStatus: 'raw', advertisingSnapshotChecksum: 'synthetic-ads-checksum',
+      snapshot: { ...payload.meta.snapshot!, operationCount: 2 },
+    },
+  }
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1512, height: 982 } })
+    const evidence = await mount(page, 'pnl', 'xlsx', report)
+    const surface = page.locator('#tab-pnl'), search = surface.locator('.search input')
+    const totals = surface.locator('.pnl-flow-item b')
+    for (const [query, selected, expected] of [
+      ['Exact-A', [first], ['101 ₽', '10 ₽', '1 ₽', '2 ₽', '1 ₽', source === 'unattributed' ? 'нет данных' : '85 ₽']],
+      ['Exact-B', [second], ['-1 ₽', source === 'missing-cost' ? 'нет данных' : '0 ₽', '0 ₽', '0 ₽', '0 ₽', source === 'allocated' ? '-1 ₽' : 'нет данных']],
+      ['absent', [], Array(6).fill('0 ₽')],
+      ['', [first, second], ['99 ₽', source === 'missing-cost' ? 'нет данных' : '10 ₽', '1 ₽', '2 ₽', '1 ₽', source === 'allocated' ? '84 ₽' : 'нет данных']],
+    ] as const) {
+      await search.fill(query)
+      await expect.poll(() => surface.locator('[data-report-row="pnl"]').count()).toBe(selected.length)
+      if (process.env.SATORNA_PNL_TOTALS_SCREENSHOTS && query === 'Exact-A') {
+        await page.screenshot({ path: `${process.env.SATORNA_PNL_TOTALS_SCREENSHOTS}/pnl-${source}-desktop.png` })
+        await page.setViewportSize({ width: 390, height: 844 })
+        await page.screenshot({ path: `${process.env.SATORNA_PNL_TOTALS_SCREENSHOTS}/pnl-${source}-mobile.png` })
+        await page.setViewportSize({ width: 1512, height: 982 })
+      }
+      expect(await totals.allTextContents()).toEqual(expected)
+      expect(await surface.getByText(`Итоги по строкам таблицы · позиций: ${selected.length}`, { exact: true }).isVisible()).toBe(true)
+      const account = surface.locator('[data-vella-island="pnl-account-summary"]')
+      expect(await account.innerText()).toContain('Весь аккаунт · без фильтров')
+      expect(await account.innerText()).toContain(`Прибыль после лояльности: ${source === 'missing-cost' ? 'нет данных' : source === 'unattributed' ? '77 ₽' : '84 ₽'}`)
+      expect(await account.innerText()).toContain(`Нераспределённая реклама: ${source === 'unattributed' ? '7 ₽' : '0 ₽'}`)
+      const download = page.waitForEvent('download')
+      await exportTable(page); await download
+      const request = evidence.requests.at(-1)!
+      expect(request.rows.map(cells => cells.slice(2, 10))).toEqual(selected.map(item => [item.revenueKopecks / 100, item.cogsKopecks == null ? null : item.cogsKopecks / 100, item.commissionKopecks / 100, item.logisticsKopecks / 100, item.storageKopecks / 100, item.advertisingSpendKopecks == null ? null : item.advertisingSpendKopecks / 100, 0, item.profitAfterLoyaltyKopecks == null ? null : item.profitAfterLoyaltyKopecks / 100]))
+      expect(request.rows.every(cells => cells[10] === null)).toBe(true)
+      expect(request.source.blockerIds).toEqual(blockerIds)
+    }
+    await surface.locator('select.adv-select').selectOption('mine')
+    await expect.poll(() => totals.allTextContents()).toEqual(Array(6).fill('0 ₽'))
+    await surface.locator('select.adv-select').selectOption('unassigned')
+    await expect.poll(() => surface.locator('[data-report-row="pnl"]').count()).toBe(2)
+    expect((await totals.allTextContents())[0]).toBe('99 ₽')
+    expect(page.url()).toBe('http://satorna.test/wb/reports/pnl')
+    expect(await page.title()).toBe('Satorna — Отчёты WB')
     expect(await page.locator('vite-error-overlay').count()).toBe(0)
     expect(evidence.errors).toEqual([]); expect(evidence.unexpected).toEqual([])
   } finally { await browser.close() }

@@ -91,7 +91,13 @@ async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false) {
       }
       if (legacy && url.pathname === '/api/wb/reports/pnl/latest-cache') return route.fulfill({ json: {
         meta: { dateRange: { from: '2026-09-01', to: '2026-09-07' }, sourceType: 'financial' },
-        rows: ['blocked', 'partial', 'ready'].map(sourceStatus => ({ articleId: `STATUS-${sourceStatus}`, productName: sourceStatus, sourceStatus, confidence: sourceStatus === 'ready' ? 'high' : 'blocked' })),
+        kpis: [{ id: 'revenue', value: 6000 }, { id: 'net_profit', value: null }],
+        rows: ['blocked', 'partial', 'ready'].map((sourceStatus, index) => ({
+          articleId: `STATUS-${sourceStatus}`, productName: sourceStatus, sourceStatus, confidence: sourceStatus === 'ready' ? 'high' : 'blocked',
+          revenueKopecks: (index + 1) * 1000, cogsKopecks: sourceStatus === 'ready' ? 1000 : null,
+          commissionKopecks: 0, logisticsKopecks: 0, storageKopecks: 0, returnsPenaltyKopecks: 0,
+          netProfitKopecks: sourceStatus === 'ready' ? 2000 : null,
+        })),
       } })
       if (!legacy && url.pathname === '/api/wb/reports/pnl/latest-cache' && url.searchParams.get('source') === 'operational') return route.fulfill({ json: {
         meta: { dateRange: { from: '2026-09-01', to: '2026-09-07' }, sourceType: 'operational' },
@@ -295,6 +301,15 @@ it('labels blocked and partial legacy P&L rows without claiming readiness', asyn
       if (status === 'ready') expect(await row.innerText()).toContain('готово')
       else expect(await row.innerText()).not.toContain('готово')
     }
+    const search = page.locator('#tab-pnl .search input'), totals = page.locator('#tab-pnl .pnl-flow-item b')
+    await search.fill('STATUS-ready')
+    await expect.poll(() => totals.allTextContents()).toEqual(['30 ₽', '10 ₽', '0 ₽', '0 ₽', '0 ₽', '20 ₽ · 66,7%'])
+    await search.fill('STATUS-partial')
+    await expect.poll(() => totals.allTextContents()).toEqual(['20 ₽', 'нет данных', '0 ₽', '0 ₽', '0 ₽', 'нет данных · нет данных'])
+    await search.fill('absent')
+    await expect.poll(() => totals.allTextContents()).toEqual(['0 ₽', '0 ₽', '0 ₽', '0 ₽', '0 ₽', '0 ₽ · нет данных'])
+    await search.fill('')
+    await expect.poll(() => totals.allTextContents()).toEqual(['60 ₽', 'нет данных', '0 ₽', '0 ₽', '0 ₽', 'нет данных · нет данных'])
     await page.getByRole('button', { name: 'Начало периода аналитики WB', exact: true }).click()
     // The rollout-disabled legacy report still uses its existing coverage gate.
     expect(await page.locator('.products-cache-calendar-day[aria-label^="2026-09-02:"]').getAttribute('aria-disabled')).toBe('true')
