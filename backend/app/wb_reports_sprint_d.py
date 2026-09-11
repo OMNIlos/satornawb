@@ -49,7 +49,7 @@ PlanFactDimension = Literal["company", "manager", "brand"]
 
 DEFAULT_FROM = date(2026, 5, 1)
 DEFAULT_TO = date(2026, 5, 28)
-PNL_REPORT_CACHE_VERSION = "v3"
+PNL_REPORT_CACHE_VERSION = "v4"
 PNL_REPORT_CACHE_TTL = timedelta(hours=24)
 PNL_REPORT_STALE_TTL = timedelta(hours=24)
 
@@ -959,7 +959,7 @@ def _build_cached_pnl_report(
             + max(0, deduction_signed)
             + _nonnegative_int(finance.get("loyaltyCostKopecks"))
         )
-        finance_credits = _nonnegative_int(finance.get("additionalPaymentKopecks")) + max(0, -penalty_signed) + max(0, -deduction_signed)
+        finance_credits = _int_or_zero(finance.get("additionalPaymentKopecks")) + max(0, -penalty_signed) + max(0, -deduction_signed)
         acquiring = _nonnegative_int(finance.get("acquiringKopecks"))
         ads_row = ads_aggregates.get(str(nm_id)) if isinstance(ads_aggregates.get(str(nm_id)), dict) else {}
         ads = _nonnegative_int(

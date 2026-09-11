@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
 from app.routers.wb_reports_bff import (
     DIGEST_REPORT_PAYLOAD_VERSION,
     RNP_REPORT_PAYLOAD_VERSION,
@@ -461,7 +462,7 @@ def test_week_over_week_rows_preserve_sales_funnel_cart_order_buyout_metrics():
     assert row["sales"]["units"] == 315
     assert row["sales"]["kopecks"] == 21_942_800
     assert row["baskets"]["deltaPct"] == 10.02
-    assert payload["cacheVersion"] == "v2"
+    assert payload["cacheVersion"] == WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION
     assert _report_payload_cache_is_usable(
         "week-over-week",
         {"completedAt": datetime.now(timezone.utc).isoformat(), "report": payload},
@@ -1885,7 +1886,7 @@ def test_report_daily_sources_ready_rejects_aggregate_only_covering_cache(monkey
             {
                 "sourceKey": "finance_2026-06-25_2026-07-24",
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "dateFrom": "2026-06-25",
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "deferred",
@@ -1914,7 +1915,7 @@ def test_report_daily_sources_ready_accepts_covering_daily_detail(monkeypatch):
             {
                 "sourceKey": "finance_2026-06-25_2026-07-24",
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "dateFrom": "2026-06-25",
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "fetched",

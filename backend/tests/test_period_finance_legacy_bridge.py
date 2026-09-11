@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
+from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
 from app.routers import wb_repricer_bff
 
 
@@ -11,7 +14,7 @@ def test_numeric_preset_uses_covering_date_range_cache(monkeypatch) -> None:
         "dateTo": "2026-09-01",
         "periodDays": 7,
         "revenueBasis": "retailAmount",
-        "financeSchemaVersion": "v3",
+        "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
         "dailyAggregates": {
             "2026-08-26": {"123": {"buyerRevenueKopecks": 100}},
             "2026-09-01": {"123": {"buyerRevenueKopecks": 200}},
@@ -39,3 +42,56 @@ def test_numeric_preset_uses_covering_date_range_cache(monkeypatch) -> None:
 
     assert result["aggregates"]["123"]["buyerRevenueKopecks"] == 300
     assert result["coveredByCache"]["dateFrom"] == "2026-08-26"
+
+
+@pytest.mark.parametrize("path", ["exact", "covering", "daily_union"])
+@pytest.mark.parametrize("previous", [True, False])
+@pytest.mark.parametrize("prefix", ["finance", "ads"])
+def test_period_reader_rejects_previous_withdrawal_semantics(monkeypatch, path, previous, prefix):
+    schema = "v3" if previous else FINANCE_SCHEMA_VERSION
+    row = {"sellerRevenueKopecks": 10000, "paymentScheduleKopecks": 1000,
+           "additionalPaymentKopecks": 1000 if previous else -1000}
+    cache = {"dateFrom": "2026-08-26", "dateTo": "2026-09-01",
+             "revenueBasis": "retailAmount", "financeSchemaVersion": schema,
+             "aggregates": {"123": row}, "dailyAggregates": {"2026-08-26": {"123": row}}}
+    key = f"{prefix}_2026-08-26_2026-09-01"
+    if path == "daily_union":
+        key = f"{prefix}_2026-08-26_2026-08-26"
+        cache["dateTo"] = "2026-08-26"
+    monkeypatch.setattr(wb_repricer_bff, "get_source_cache", lambda org, requested, **kw: cache if requested == key and path != "covering" else None)
+    monkeypatch.setattr(wb_repricer_bff, "get_covering_source_cache", lambda *a, **kw: cache if path == "covering" else None)
+    monkeypatch.setattr(wb_repricer_bff, "get_wb_sync_status", lambda org: {})
+    monkeypatch.setattr(wb_repricer_bff, "list_source_cache_ranges_by_prefix", lambda *a, **kw: [{**cache, "sourceKey": key}] if path == "daily_union" else [])
+    result = wb_repricer_bff._period_source_cache(
+        2, prefix, "2026-08-26_2026-09-01", 7,
+        datetime(2026, 8, 26, tzinfo=timezone.utc), datetime(2026, 9, 1, tzinfo=timezone.utc),
+        require_full_sync_coverage=False,
+    )
+    if previous and prefix == "finance":
+        assert result == {}
+    else:
+        assert result["aggregates"]["123"]["additionalPaymentKopecks"] == row["additionalPaymentKopecks"]
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+def test_sku_snapshot_reader_rejects_previous_monetary_payload(monkeypatch, chunked):
+    options = dict(period_suffix="2026-08-26_2026-09-01", include_promotions=False, include_content=False)
+    key = wb_repricer_bff._repricer_sku_snapshot_key("complete", **options)
+    old_key = wb_repricer_bff._repricer_sku_snapshot_key("complete", version=6, **options)
+    old = {"version": 6, "items": [{"analytics": {"netProfitKopecks": 987654321}}],
+           "summary": {"marginKopecks": 987654321}}
+    if chunked:
+        old.update(storage="chunked", chunkSize=150)
+    entries = {(2, old_key): old, (2, key): old}
+    monkeypatch.setattr(wb_repricer_bff, "get_source_cache", lambda org, requested, **kw: entries.get((org, requested)))
+    assert wb_repricer_bff._load_repricer_sku_snapshot_page(2, "complete", page=1, page_size=10, **options) is None
+    current = {"version": wb_repricer_bff.SKU_LIST_SNAPSHOT_VERSION,
+               "items": [{"analytics": {"netProfitKopecks": 9000}}], "summary": {"marginKopecks": 9000}}
+    if chunked:
+        current.update(storage="chunked", chunkSize=150)
+        entries[2, wb_repricer_bff._repricer_sku_snapshot_chunk_key(key, 0)] = {"items": current["items"]}
+    entries[2, key] = current
+    loaded = wb_repricer_bff._load_repricer_sku_snapshot_page(2, "complete", page=1, page_size=10, **options)
+    assert loaded[0]["summary"]["marginKopecks"] == loaded[1][0]["analytics"]["netProfitKopecks"] == 9000
+    assert wb_repricer_bff._load_repricer_sku_snapshot(3, "complete", **options) is None
+    assert wb_repricer_bff._load_repricer_sku_snapshot(2, "complete", **{**options, "period_suffix": "2026-09-02_2026-09-08"}) is None

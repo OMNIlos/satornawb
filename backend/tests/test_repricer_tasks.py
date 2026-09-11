@@ -5,6 +5,7 @@ import pytest
 from celery.exceptions import Ignore, Retry
 
 from app import repricer_tasks
+from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
 
 
 def _mock_working_onboarding_ready(monkeypatch):
@@ -17,7 +18,7 @@ def _mock_working_onboarding_ready(monkeypatch):
             "dailyAggregatesDays": 365,
         }
         if prefix == "finance_":
-            cache.update(revenueBasis="retailAmount", financeSchemaVersion="v3")
+            cache.update(revenueBasis="retailAmount", financeSchemaVersion=FINANCE_SCHEMA_VERSION)
         if prefix == "baskets_":
             cache.update(dailyDetailStatus="fetched")
         return [cache]
@@ -77,7 +78,7 @@ def test_rnp_daily_baskets_ready_accepts_covering_daily_detail(monkeypatch):
 def test_onboarding_readiness_requires_daily_baskets_detail(monkeypatch):
     caches_by_prefix = {
         "period_stats_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28"}],
-        "finance_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28", "revenueBasis": "retailAmount", "financeSchemaVersion": "v3"}],
+        "finance_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28", "revenueBasis": "retailAmount", "financeSchemaVersion": FINANCE_SCHEMA_VERSION}],
         "ads_": [{"dateFrom": "2026-06-29", "dateTo": "2026-07-28"}],
         "baskets_": [
             {
@@ -151,7 +152,7 @@ def test_report_snapshot_source_ready_rejects_aggregate_only_covering_cache(monk
             {
                 "sourceKey": "finance_2026-06-25_2026-07-24",
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "dateFrom": "2026-06-25",
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "deferred",
@@ -177,7 +178,7 @@ def test_report_snapshot_source_ready_accepts_covering_daily_detail(monkeypatch)
             {
                 "sourceKey": "finance_2026-06-25_2026-07-24",
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "dateFrom": "2026-06-25",
                 "dateTo": "2026-07-24",
                 "dailyDetailStatus": "fetched",
@@ -235,7 +236,7 @@ def test_scheduler_execute_loads_full_cached_goods_list(monkeypatch):
             "aggregates": {"123456": {"commissionKopecks": 1000}},
             "fetchedAt": "2026-06-24T09:00:00+00:00",
             "revenueBasis": "retailAmount",
-            "financeSchemaVersion": "v3",
+            "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
         },
         "ads_2026-05-26_2026-06-24": {"aggregates": {"123456": {"adSpendKopecks": 500}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
         "stocks": {"aggregates": {"123456": {"wbStockUnits": 15}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
@@ -1142,4 +1143,4 @@ def test_digest_task_presyncs_report_sources_before_building(monkeypatch):
     assert ads_calls == [{**expected_range, "wb_token": None}]
     assert callable(funnel_calls[0].pop("progress_callback"))
     assert funnel_calls == [{**expected_range, "wb_token": None}]
-    assert saved["reports_digest_v12_2026-07-10_2026-07-16"]["digest"] == {"rows": [{"sku": "NM_1"}]}
+    assert saved[f"reports_digest_{reports.DIGEST_REPORT_PAYLOAD_VERSION}_2026-07-10_2026-07-16"]["digest"] == {"rows": [{"sku": "NM_1"}]}

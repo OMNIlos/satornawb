@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
 from app.config import get_settings
+from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
 from app.wb_api.client import (
     FakeWbApiClient,
     RateLimitedWbApiClient,
@@ -3949,7 +3950,7 @@ def fetch_finance_report_aggregates(
         "pagesLoaded": pages_loaded,
         "requestedFields": fields,
         "revenueBasis": "retailAmount",
-        "financeSchemaVersion": "v3",
+        "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
         "dateFrom": date_from.date().isoformat(),
         "dateTo": date_to.date().isoformat(),
     }

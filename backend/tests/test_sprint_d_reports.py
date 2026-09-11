@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta, timezone
+from hashlib import sha1
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app import wb_reports_sprint_d
 from app.main import create_app
+from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
 from app.wb_reports_sprint_d import build_abc_report, build_pnl_report
 from tests.auth_helpers import auth_headers
 
@@ -18,7 +22,7 @@ def _isolate_pnl_source_cache(monkeypatch):
     def cached_source(_organization_id, source_key, **_kwargs):
         if source_key == "finance_2026-05-01_2026-05-28":
             return {
-                "revenueBasis": "retailAmount", "financeSchemaVersion": "v3",
+                "revenueBasis": "retailAmount", "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "aggregates": {"101": {
                     "salesUnits": 1, "sellerRevenueKopecks": 100_000,
                     "commissionKopecks": 10_000, "reportedCommissionRows": 1,
@@ -47,6 +51,81 @@ def test_pnl_finance_viewer_gets_financial_fields_and_preliminary_state(monkeypa
     assert payload["totals"]["revenueKopecks"] is not None
     assert payload["totals"]["netProfitKopecks"] is not None
     assert "WB-11" not in payload["blockerIds"]
+
+
+def _signed_pnl_source(monkeypatch, credit):
+    _isolate_pnl_source_cache(monkeypatch)
+    read = wb_reports_sprint_d.get_source_cache
+
+    def cached(org, key, **kwargs):
+        value = read(org, key, **kwargs)
+        if value and key.startswith("finance_"):
+            value["aggregates"] = {"101": {"salesUnits": 1, "sellerRevenueKopecks": 10000,
+                                          "additionalPaymentKopecks": credit}}
+        if value and key.startswith("ads_"):
+            value["aggregates"] = {"101": {"adSpendKopecks": 0}}
+        return value
+
+    monkeypatch.setattr(wb_reports_sprint_d, "get_source_cache", cached)
+    monkeypatch.setattr(wb_reports_sprint_d, "load_runtime_state", lambda org: {
+        "skuSettingsOverrides": {"TEST": {"cogsKopecks": 0}}})
+    monkeypatch.setattr(wb_reports_sprint_d, "load_algorithm_settings", lambda org: {
+        "taxPct": 0, "otherExpensePricePct": 0, "otherExpensePerSaleRub": 0})
+
+
+@pytest.mark.parametrize("credit,expected", [(-1000, 9000), (1000, 11000), (0, 10000)])
+def test_pnl_preserves_signed_withdrawal_adjustment(monkeypatch, credit, expected):
+    _signed_pnl_source(monkeypatch, credit)
+    result = build_pnl_report(date(2026, 5, 1), date(2026, 5, 28), "sku", "preliminary", True, 77)
+    assert result.rows[0].netProfitKopecks == expected
+    assert result.totals.netProfitKopecks == expected
+
+
+@pytest.mark.parametrize("credit,expected", [(-1000, 9000), (1000, 11000), (0, 10000)])
+def test_pnl_http_preserves_signed_withdrawal_adjustment(monkeypatch, credit, expected):
+    _signed_pnl_source(monkeypatch, credit)
+    api = client()
+    response = api.get("/api/v1/wb-reports/pnl", headers=auth_headers(api, "finance_viewer"))
+    assert response.status_code == 200
+    assert response.json()["rows"][0]["netProfitKopecks"] == expected
+    assert response.json()["totals"]["netProfitKopecks"] == expected
+
+
+def test_pnl_rejects_previous_internal_cache_and_reuses_corrected_report(monkeypatch):
+    _signed_pnl_source(monkeypatch, -1000)
+    args = (date(2026, 5, 1), date(2026, 5, 28), "sku", "preliminary", True, 77)
+    stale = build_pnl_report(*args).model_dump(mode="json")
+    stale["rows"][0]["netProfitKopecks"] = 11000
+    stale["totals"]["netProfitKopecks"] = 11000
+    old_key = "pnl_report_" + sha1(b"v3|2026-05-01|2026-05-28|sku|preliminary|finance").hexdigest()[:16]
+    entries = {(77, old_key): {"report": stale, "fetchedAt": datetime.now(timezone.utc).isoformat()}}
+    source = wb_reports_sprint_d.get_source_cache
+    monkeypatch.setattr(wb_reports_sprint_d, "get_source_cache", lambda org, key, **kw: entries.get((org, key)) or source(org, key, **kw))
+    monkeypatch.setattr(wb_reports_sprint_d, "save_source_cache", lambda org, key, value: entries.__setitem__((org, key), {**value, "fetchedAt": datetime.now(timezone.utc).isoformat()}))
+    corrected = build_pnl_report(*args)
+    assert corrected.rows[0].netProfitKopecks == corrected.totals.netProfitKopecks == 9000
+    monkeypatch.setattr(wb_reports_sprint_d, "get_source_cache", lambda org, key, **kw: entries.get((org, key)))
+    assert build_pnl_report(*args) == corrected
+    assert build_pnl_report(*args[:-1], 78).rows == []
+    assert build_pnl_report(*args[:4], False, 77).rows == []
+
+
+@pytest.mark.parametrize("path", ["exact", "covering"])
+def test_pnl_rejects_previous_finance_schema(monkeypatch, path):
+    _signed_pnl_source(monkeypatch, 1000)
+    source = wb_reports_sprint_d.get_source_cache
+    old = source(77, "finance_2026-05-01_2026-05-28")
+    old.update(financeSchemaVersion="v3", dateFrom="2026-05-01", dateTo="2026-05-28")
+    old["aggregates"]["101"]["paymentScheduleKopecks"] = 1000
+    old["dailyAggregates"] = {"2026-05-01": old["aggregates"]}
+    key = "finance_2026-05-01_2026-05-28" if path == "exact" else "finance_2026-04-01_2026-05-31"
+    if path == "covering":
+        old.update(dateFrom="2026-04-01", dateTo="2026-05-31")
+    monkeypatch.setattr(wb_reports_sprint_d, "get_source_cache", lambda org, requested, **kw: old if requested == key else None)
+    monkeypatch.setattr(wb_reports_sprint_d, "list_source_cache_ranges_by_prefix", lambda *a, **kw: [{**old, "sourceKey": key}])
+    result = build_pnl_report(date(2026, 5, 1), date(2026, 5, 28), "sku", "preliminary", True, 77)
+    assert result.rows == []
+    assert result.sourceStatus == "blocked"
 
 
 def test_pnl_supports_operative_and_final_states(monkeypatch):
@@ -204,7 +283,7 @@ def test_pnl_uses_repricer_finance_cache_before_legacy_runtime(monkeypatch):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "dateFrom": "2026-06-01",
                 "dateTo": "2026-06-30",
@@ -287,7 +366,7 @@ def test_pnl_finance_cache_does_not_require_live_ads_token(monkeypatch):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "aggregates": {
                     "123456": {
@@ -337,7 +416,7 @@ def test_pnl_uses_repricing_period_cache_when_exact_range_cache_is_missing(monke
         if source_key == "finance_30":
             return {
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "aggregates": {
                     "123456": {
@@ -378,7 +457,7 @@ def test_pnl_finance_cache_normalizes_negative_revenue_rows(monkeypatch):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "aggregates": {
                     "123456": {
@@ -432,7 +511,7 @@ def test_pnl_report_response_is_cached_for_two_hours(monkeypatch):
             finance_reads["count"] += 1
             return {
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "aggregates": {
                     "123456": {
@@ -516,7 +595,7 @@ def test_abc_report_uses_repricer_period_cache_without_own_report_cache(monkeypa
             finance_reads["count"] += 1
             return {
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "fetchedAt": "2026-06-30T08:00:00+00:00",
                 "dateFrom": "2026-06-01",
                 "dateTo": "2026-06-30",
@@ -711,7 +790,7 @@ def test_abc_report_net_profit_uses_full_finance_formula(monkeypatch):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "aggregates": {
                     "111": {
                         "salesUnits": 2,
@@ -862,7 +941,7 @@ def test_abc_report_uses_covering_repricer_daily_cache(monkeypatch):
         if source_key == "finance_2026-06-01_2026-07-08":
             return {
                 "revenueBasis": "retailAmount",
-                "financeSchemaVersion": "v3",
+                "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "fetchedAt": "2026-07-08T08:00:00+00:00",
                 "dateFrom": "2026-06-01",
                 "dateTo": "2026-07-08",

@@ -1051,7 +1051,9 @@ def _stitched_period_cache_from_days(
     for _overlap, source_key in sorted(candidates, key=lambda item: item[0], reverse=True):
         if not wanted - seen:
             break
-        cache = get_source_cache(organization_id, source_key, slim=False) or {}
+        cache = _compatible_period_source_cache(
+            prefix, get_source_cache(organization_id, source_key, slim=False) or {}
+        )
         raw_daily = cache.get("dailyAggregates")
         if not isinstance(raw_daily, dict):
             continue
@@ -2060,7 +2062,7 @@ def _list_repricer_skus_from_cached_sources(
     )
 
 
-SKU_LIST_SNAPSHOT_VERSION = 6
+SKU_LIST_SNAPSHOT_VERSION = 7
 SKU_LIST_SNAPSHOT_CHUNK_SIZE = 150
 
 

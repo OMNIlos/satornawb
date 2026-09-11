@@ -70,7 +70,7 @@ from app.wb_sync_plan import historical_sync_as_of
 
 router = APIRouter(tags=["wb-reports-bff"])
 
-DIGEST_REPORT_PAYLOAD_VERSION = "v12"
+DIGEST_REPORT_PAYLOAD_VERSION = "v13"
 
 ReportId = Literal["digest", "abc", "rnp", "pnl", "expenses", "ads", "stock", "week-over-week"]
 ReportGroupBy = Literal["sku", "manager", "brand", "category", "status", "warehouse", "campaign"]
@@ -3369,11 +3369,11 @@ BACKGROUND_REPORT_JOB_STALE_AFTER = timedelta(minutes=15)
 BACKGROUND_REPORT_QUEUED_STALE_AFTER = timedelta(seconds=30)
 DIGEST_CACHE_TTL = timedelta(hours=24)
 REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
-ABC_REPORT_PAYLOAD_VERSION = "v17"
-PNL_REPORT_PAYLOAD_VERSION = "v3"
+ABC_REPORT_PAYLOAD_VERSION = "v18"
+PNL_REPORT_PAYLOAD_VERSION = "v4"
 RNP_REPORT_PAYLOAD_VERSION = "v3"
 STOCK_REPORT_PAYLOAD_VERSION = "v5"
-WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v2"
+WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v3"
 
 
 def _abc_economics_version(organization_id: int) -> str:

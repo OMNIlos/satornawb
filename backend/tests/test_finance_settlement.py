@@ -8,6 +8,20 @@ from app.platform.period import Period
 from tests.test_finance_pnl_rollup import NOW, PERIOD, session, settlement_rows
 
 
+@pytest.mark.parametrize("fee,credit", [("10", -1000), ("-10", 1000), ("0", 0)])
+def test_legacy_producer_marks_signed_withdrawal_schema(monkeypatch, fee, credit):
+    from app.repricer_cache.store import FINANCE_SCHEMA_VERSION, finance_cache_uses_current_revenue_basis
+    from tests.test_finance_fetch_completeness import fetch, row
+
+    result, cursors = fetch(monkeypatch, [(200, [row(retailAmount="100", paymentSchedule=fee, saleDt="2026-08-17")]), (204, None)])
+    assert FINANCE_SCHEMA_VERSION == "v4"
+    assert result["financeSchemaVersion"] == FINANCE_SCHEMA_VERSION
+    assert finance_cache_uses_current_revenue_basis(result)
+    assert result["aggregates"]["101"]["additionalPaymentKopecks"] == credit
+    assert result["dailyAggregates"]["2026-08-17"]["101"]["additionalPaymentKopecks"] == credit
+    assert cursors == [0, 1]
+
+
 @pytest.mark.parametrize("document,sign", [("Продажа", 1), ("Возврат", -1)])
 def test_payable_is_preserved_with_document_direction(document, sign):
     raw = settlement_rows()[0] | {"docTypeName": document, "forPay": "863.00"}

@@ -105,6 +105,52 @@ def seed(
     return key, job
 
 
+@pytest.mark.parametrize("report_id,previous", [("abc", "v17"), ("pnl", "v3"), ("week-over-week", "v2")])
+@pytest.mark.parametrize("suffix", ["", "/latest-cache"])
+def test_monetary_report_readers_reject_previous_payloads(runtime, report_id, previous, suffix):
+    seed(runtime, report_id)
+    key = reports._report_cache_key(report_id, START, END, "sku", "operational", organization_id=1)
+    current = deepcopy(runtime.cache[1, key])
+    current["report"]["rows"][0]["netProfitKopecks"] = 9000
+    old = deepcopy(current)
+    old["report"]["cacheVersion"] = previous
+    old["report"]["rows"][0]["netProfitKopecks"] = 987654321
+    # Seed both the previous physical key and old metadata at the current key.
+    old_key = key.replace(current["report"]["cacheVersion"], previous, 1)
+    runtime.cache[1, old_key] = old
+    runtime.cache[1, key] = old
+    response = runtime.api.get(f"/api/wb/reports/{report_id}{suffix}", params=PARAMS)
+    assert response.status_code == (404 if suffix else 200)
+    assert "987654321" not in response.text
+    runtime.cache[1, key] = current
+    response = runtime.api.get(f"/api/wb/reports/{report_id}{suffix}", params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()["rows"][0]["netProfitKopecks"] == 9000
+
+
+@pytest.mark.parametrize("location", ["exact", "latest"])
+def test_digest_reader_rejects_previous_monetary_payload(runtime, location):
+    key = reports._digest_cache_key(START, END) if location == "exact" else "reports_digest_latest"
+    old_key = f"reports_digest_v12_{START}_{END}" if location == "exact" else key
+    old = {"completedAt": reports._utc_now_iso(), "digest": {
+        "meta": {"freshnessState": "cached"},
+        "cacheVersion": "v12", "kpis": [{"id": "margin_profit", "value": "987654321"}],
+    }}
+    runtime.cache[1, old_key] = old
+    runtime.cache[1, key] = old
+    response = runtime.api.get("/api/wb/reports/digest", params=PARAMS)
+    assert response.status_code == 200
+    assert "987654321" not in response.text
+    runtime.cache[1, key] = {"completedAt": reports._utc_now_iso(), "digest": {
+        "meta": {"freshnessState": "cached"},
+        "cacheVersion": reports.DIGEST_REPORT_PAYLOAD_VERSION,
+        "kpis": [{"id": "margin_profit", "value": "9000"}],
+    }}
+    response = runtime.api.get("/api/wb/reports/digest", params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()["kpis"][0]["value"] == "9000"
+
+
 @pytest.mark.parametrize("report_id", ["abc", "pnl", "week-over-week"])
 @pytest.mark.parametrize(
     "suffix,params", [("", PARAMS), ("/latest-cache", {}), ("/latest-cache", PARAMS)]
