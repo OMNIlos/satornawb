@@ -140,7 +140,7 @@ def _digest_report_summary(organization_id: int, date_from: date, date_to: date)
 
 
 @celery_app.task(name="reports.build_digest_for_org", bind=True, max_retries=0)
-def build_digest_for_org(self, organization_id: int, date_from_iso: str, date_to_iso: str, finance_allowed: bool, wb_token: str | None) -> dict[str, Any]:
+def build_digest_for_org(self, organization_id: int, date_from_iso: str, date_to_iso: str, finance_allowed: bool, wb_token: str | None, *, source_refresh: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build one exact digest range outside the request/response lifecycle."""
     from datetime import date as date_type
     from app.routers import wb_reports_bff as reports
@@ -149,9 +149,10 @@ def build_digest_for_org(self, organization_id: int, date_from_iso: str, date_to
     date_to = date_type.fromisoformat(date_to_iso)
     date_range = {"preset": "custom", "from": date_from_iso, "to": date_to_iso}
     job_key = reports._digest_job_cache_key(date_from, date_to)
+    refresh_context = {"kind": "report_source_refresh", "sync": source_refresh} if source_refresh is not None else {}
     started_at = reports._utc_now_iso()
     def update_progress(stage: str, label: str, percent: int) -> None:
-        reports.save_source_cache(organization_id, job_key, {"state": "running", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "startedAt": started_at, "stage": stage, "label": label, "percent": percent, "updatedAt": reports._utc_now_iso()})
+        reports.save_source_cache(organization_id, job_key, {**refresh_context, "state": "running", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "startedAt": started_at, "stage": stage, "label": label, "percent": percent, "updatedAt": reports._utc_now_iso()})
     update_progress("queued", "Задача принята, ждём worker", 0)
     try:
         wb_token = None
@@ -187,11 +188,11 @@ def build_digest_for_org(self, organization_id: int, date_from_iso: str, date_to
         cached = {"digest": digest, "dateFrom": date_from_iso, "dateTo": date_to_iso, "completedAt": reports._utc_now_iso()}
         reports.save_source_cache(organization_id, reports._digest_cache_key(date_from, date_to), cached)
         reports.save_source_cache(organization_id, "reports_digest_latest", cached)
-        result = {"state": "completed", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "stage": "completed", "label": "Воронка продаж готова", "percent": 100, "finishedAt": reports._utc_now_iso()}
+        result = {**refresh_context, "state": "completed", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "stage": "completed", "label": "Воронка продаж готова", "percent": 100, "finishedAt": reports._utc_now_iso()}
         reports.save_source_cache(organization_id, job_key, result)
         return result
     except Exception as exc:
-        result = {"state": "failed", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "finishedAt": reports._utc_now_iso(), "error": str(exc)[:500]}
+        result = {**refresh_context, "state": "failed", "stage": "failed", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "finishedAt": reports._utc_now_iso(), "error": str(exc)[:500]}
         reports.save_source_cache(organization_id, job_key, result)
         raise
 
@@ -276,13 +277,14 @@ def refresh_report_sources_for_org(self, organization_id: int, user_id: str, rep
             save_job("building_report", "Собираем отчет", 78, sync=refresh_result)
 
         if report_id == "digest":
-            result = build_digest_for_org.run(organization_id, date_from_iso, date_to_iso, finance_allowed, None)
-        else:
-            return self.replace(build_report_for_org.s(
-                organization_id, user_id, report_id, date_from_iso, date_to_iso,
-                group_by, source, finance_allowed, None, source_refresh=refresh_result,
+            return self.replace(build_digest_for_org.s(
+                organization_id, date_from_iso, date_to_iso, finance_allowed, None,
+                source_refresh=refresh_result,
             ))
-        return save_job("completed", "Отчет обновлен", 100, "completed", sync=refresh_result, result=result, finishedAt=reports._utc_now_iso())
+        return self.replace(build_report_for_org.s(
+            organization_id, user_id, report_id, date_from_iso, date_to_iso,
+            group_by, source, finance_allowed, None, source_refresh=refresh_result,
+        ))
     except Ignore:
         raise
     except Exception as exc:

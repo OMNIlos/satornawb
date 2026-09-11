@@ -352,7 +352,7 @@ def test_digest_funnel_snapshot_uses_baskets_cache_without_live_wb(monkeypatch):
 
 
 def test_digest_refresh_reuses_existing_running_job(monkeypatch):
-    monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", lambda *_args, **_kwargs: {"state": "running", "taskId": "digest-task-1"})
+    monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", lambda *_args, **_kwargs: {"state": "running", "taskId": "digest-task-1", "updatedAt": datetime.now(timezone.utc).isoformat()})
     api = client()
     response = api.post("/api/wb/reports/digest/refresh", headers=auth_headers(api, "viewer"))
     assert response.status_code == 200

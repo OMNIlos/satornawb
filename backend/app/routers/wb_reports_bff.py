@@ -4034,7 +4034,7 @@ def get_reports_digest(
         and cache_age_seconds is not None
         and cache_age_seconds <= int(DIGEST_CACHE_TTL.total_seconds())
     )
-    if cache_status == "exact" and cache_fresh:
+    if cache_status == "exact" and cache_fresh and not (_report_job_is_reusable(job) or _report_job_is_finished_refresh(job)):
         job = {
             **job,
             "state": "completed",
@@ -4059,7 +4059,7 @@ def get_reports_digest(
         "completedAt": selected_cache.get("completedAt"),
         "fetchedAt": selected_cache.get("fetchedAt"),
     }
-    payload["digestJob"] = job
+    payload["digestJob"] = _report_job_for_response(job)
     record_audit_event(
         actor=actor,
         action="reports.bff.digest.get",
@@ -4263,6 +4263,8 @@ def refresh_reports_digest(request: Request, preset: str = Query(default="7d"), 
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
     key = _digest_job_cache_key(date_from, date_to)
     current = get_source_cache(actor.organization_id, key, slim=False) or {}
+    if _report_job_is_reusable(current):
+        return {**current, "reused": True}
     exact = get_source_cache(actor.organization_id, _digest_cache_key(date_from, date_to), slim=False) or {}
     exact_age_seconds = _digest_cache_age_seconds(exact)
     if _digest_cache_is_fresh(exact):
@@ -4282,8 +4284,6 @@ def refresh_reports_digest(request: Request, preset: str = Query(default="7d"), 
         }
         save_source_cache(actor.organization_id, key, payload)
         return payload
-    if current.get("state") in {"queued", "running"}:
-        return {**current, "reused": True}
     from app.repricer_tasks import build_digest_for_org
     task = build_digest_for_org.delay(actor.organization_id, date_from.isoformat(), date_to.isoformat(), has_permission(actor, "finance:read"), None)
     payload = {"state": "queued", "taskId": task.id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "queuedAt": _utc_now_iso()}
@@ -4296,7 +4296,8 @@ def get_reports_digest_status(request: Request, preset: str = Query(default="7d"
     actor = actor_from_request(request)
     assert_permission_or_audit(actor=actor, permission="settings:read", action="reports.bff.digest.status", object_type="wb_report", object_id="digest", reason="actor cannot read digest job")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
-    return get_source_cache(actor.organization_id, _digest_job_cache_key(date_from, date_to), slim=False) or {"state": "idle", "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat()}
+    job = get_source_cache(actor.organization_id, _digest_job_cache_key(date_from, date_to), slim=False) or {"state": "idle", "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat()}
+    return _report_job_for_response(job)
 
 
 @router.get("/api/wb/reports/{report_id}/latest-cache")
@@ -4353,7 +4354,8 @@ def get_reports_latest_cache(
                 "completedAt": cache.get("completedAt"),
                 "fetchedAt": cache.get("fetchedAt"),
             }
-            payload["digestJob"] = {
+            job = get_source_cache(actor.organization_id, _digest_job_cache_key(date_from, date_to), slim=False) or {}
+            payload["digestJob"] = _report_job_for_response(job) if job else {
                 "state": "completed",
                 "stage": "cache",
                 "label": "Воронка продаж взята из последнего свежего кэша",

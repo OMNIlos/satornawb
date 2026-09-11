@@ -56,6 +56,10 @@ def runtime(monkeypatch):
         lambda *args: enqueue(state.builds, args),
     )
     monkeypatch.setattr(
+        repricer_tasks.build_digest_for_org, "delay",
+        lambda *args: enqueue(state.builds, args),
+    )
+    monkeypatch.setattr(
         repricer_tasks.refresh_report_sources_for_org,
         "delay",
         lambda *args: enqueue(state.refreshes, args),
@@ -384,4 +388,161 @@ def test_pnl_completed_cache_does_not_request_1c(runtime, monkeypatch):
     response = runtime.api.post("/api/wb/reports/pnl/jobs", params=PARAMS)
     assert response.status_code == 200
     assert response.json()["state"] == runtime.cache[1, key]["state"] == "completed"
+    assert runtime.builds == runtime.refreshes == []
+
+
+def seed_digest(runtime, *, cached=True, state="running", stage="funnel"):
+    job = {
+        "state": state, "stage": stage, "taskId": "digest-task",
+        "dateFrom": str(START), "dateTo": str(END),
+        "updatedAt": reports._utc_now_iso(), "percent": 82,
+        "kind": "report_source_refresh", "sync": {"state": "completed"},
+    }
+    key = reports._digest_job_cache_key(START, END)
+    runtime.cache[1, key] = deepcopy(job)
+    if cached:
+        runtime.cache[1, reports._digest_cache_key(START, END)] = {
+            "dateFrom": str(START), "dateTo": str(END),
+            "completedAt": reports._utc_now_iso(),
+            "digest": {
+                "cacheVersion": reports.DIGEST_REPORT_PAYLOAD_VERSION,
+                "meta": {"freshnessState": "cached"}, "rows": [{"sku": "SKU-1"}],
+            },
+        }
+    return key, job
+
+
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("state,stage", [("queued", "queued"), ("running", "funnel")])
+@pytest.mark.parametrize("endpoint", ["", "/refresh", "/refresh-sources-job"])
+def test_digest_read_and_refresh_preserve_live_job(runtime, cached, state, stage, endpoint):
+    key, job = seed_digest(runtime, cached=cached, state=state, stage=stage)
+    method = runtime.api.post if endpoint else runtime.api.get
+    response = method(f"/api/wb/reports/digest{endpoint}", params=PARAMS)
+    assert response.status_code == 200
+    if endpoint:
+        assert response.json() == {**job, "reused": True}
+    else:
+        assert response.json()["digestJob"] == job
+    assert runtime.cache[1, key] == job
+    assert runtime.writes == runtime.builds == runtime.refreshes == []
+
+
+@pytest.mark.parametrize("params", [{}, PARAMS])
+@pytest.mark.parametrize("state,stage", [("running", "funnel"), ("failed", "failed")])
+def test_digest_latest_reads_selected_period_job(runtime, params, state, stage):
+    key, job = seed_digest(runtime, state=state, stage=stage)
+    # Another period must not supply the status for the selected cached payload.
+    runtime.cache[1, reports._digest_job_cache_key(END, END)] = {"state": "completed"}
+    response = runtime.api.get("/api/wb/reports/digest/latest-cache", params=params)
+    assert response.status_code == 200
+    assert response.json()["rows"] == [{"sku": "SKU-1"}]
+    assert response.json()["digestJob"] == job
+    assert runtime.cache[1, key] == job
+    assert runtime.writes == []
+
+
+@pytest.mark.parametrize("suffix", ["", "/status"])
+def test_digest_failed_refresh_remains_visible_with_fresh_cache(runtime, suffix):
+    key, job = seed_digest(runtime, state="failed", stage="failed")
+    response = runtime.api.get(f"/api/wb/reports/digest{suffix}", params=PARAMS)
+    assert response.status_code == 200
+    assert (response.json() if suffix else response.json()["digestJob"]) == job
+    assert runtime.cache[1, key] == job
+    assert runtime.writes == []
+
+
+@pytest.mark.parametrize("state", ["queued", "running"])
+@pytest.mark.parametrize("heartbeat", ["missing", "expired"])
+@pytest.mark.parametrize("suffix", ["", "/status", "/refresh"])
+def test_digest_abandoned_job_is_stale_and_restarts_once(runtime, state, heartbeat, suffix):
+    key, job = seed_digest(runtime, cached=False, state=state)
+    if heartbeat == "missing":
+        job.pop("updatedAt")
+    else:
+        limit = (reports.BACKGROUND_REPORT_QUEUED_STALE_AFTER if state == "queued"
+                 else reports.BACKGROUND_REPORT_JOB_STALE_AFTER)
+        job["updatedAt"] = (datetime.now(timezone.utc) - limit - timedelta(seconds=1)).isoformat()
+    runtime.cache[1, key] = deepcopy(job)
+    if suffix != "/refresh":
+        response = runtime.api.get(f"/api/wb/reports/digest{suffix}", params=PARAMS)
+        assert response.status_code == 200
+        actual = response.json() if suffix else response.json()["digestJob"]
+        assert actual["state"] == "stale"
+        assert actual["previousState"] == state
+        assert actual["taskId"] == "digest-task"
+    assert runtime.cache[1, key] == job
+    assert runtime.writes == []
+    for reused in (False, True):
+        response = runtime.api.post("/api/wb/reports/digest/refresh", params=PARAMS)
+        assert response.status_code == 200
+        assert response.json()["state"] == "queued"
+        assert response.json()["reused"] is reused
+    assert runtime.builds == [(1, str(START), str(END), False, None)]
+    assert runtime.refreshes == []
+
+
+def test_digest_latest_exposes_stale_job_with_fresh_cache(runtime):
+    key, job = seed_digest(runtime)
+    job.pop("updatedAt")
+    runtime.cache[1, key] = deepcopy(job)
+    response = runtime.api.get("/api/wb/reports/digest/latest-cache")
+    assert response.status_code == 200
+    assert response.json()["digestJob"]["state"] == "stale"
+    assert response.json()["digestJob"]["taskId"] == "digest-task"
+    assert runtime.cache[1, key] == job
+    assert runtime.writes == []
+
+
+@pytest.mark.parametrize("state", ["missing", "completed", "stale", "failed"])
+def test_digest_refresh_keeps_fresh_cache_fast_path(runtime, state):
+    key, job = seed_digest(runtime, state=state, stage=state)
+    if state == "missing":
+        runtime.cache.pop((1, key))
+    response = runtime.api.post("/api/wb/reports/digest/refresh", params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()["state"] == "completed"
+    assert response.json()["cacheFresh"] is True
+    assert runtime.cache[1, key]["state"] == "completed"
+    assert runtime.builds == runtime.refreshes == []
+
+
+def test_digest_latest_without_job_keeps_completed_cache_response(runtime):
+    key, _ = seed_digest(runtime)
+    runtime.cache.pop((1, key))
+    response = runtime.api.get("/api/wb/reports/digest/latest-cache")
+    assert response.status_code == 200
+    assert response.json()["digestJob"]["state"] == "completed"
+    assert response.json()["digestJob"]["dateFrom"] == str(START)
+    assert runtime.writes == []
+
+
+@pytest.mark.parametrize("endpoint", ["", "/refresh"])
+def test_digest_cache_preserves_standalone_builder_without_refresh_kind(runtime, endpoint):
+    key, job = seed_digest(runtime)
+    job.pop("kind")
+    job.pop("sync")
+    runtime.cache[1, key] = deepcopy(job)
+    method = runtime.api.post if endpoint else runtime.api.get
+    response = method(f"/api/wb/reports/digest{endpoint}", params=PARAMS)
+    assert response.status_code == 200
+    actual = response.json() if endpoint else response.json()["digestJob"]
+    assert actual["state"] == "running" and actual["taskId"] == "digest-task"
+    assert runtime.cache[1, key] == job
+    assert runtime.writes == runtime.builds == runtime.refreshes == []
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_digest_read_can_complete_abandoned_job_from_fresh_cache(runtime, missing):
+    key, job = seed_digest(runtime)
+    job.pop("updatedAt")
+    if missing:
+        runtime.cache.pop((1, key))
+    else:
+        runtime.cache[1, key] = job
+    response = runtime.api.get("/api/wb/reports/digest", params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()["digestJob"]["state"] == "completed"
+    assert response.json()["rows"] == [{"sku": "SKU-1"}]
+    assert runtime.cache[1, key]["state"] == "completed"
     assert runtime.builds == runtime.refreshes == []
