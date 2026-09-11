@@ -938,7 +938,7 @@ def test_ads_report_task_presyncs_exact_range_before_building(monkeypatch):
         "date_to": date(2026, 7, 16),
         "date_range": {"preset": "custom", "from": "2026-07-10", "to": "2026-07-16"},
         "wb_token": None,
-        "refresh": False,
+        "refresh": True,
     }
     assert saved["reports_payload_ads_2026-07-10_2026-07-16_campaign_operational"]["report"] == {"rows": [{"campaignId": "42"}]}
 

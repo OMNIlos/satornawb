@@ -3192,6 +3192,8 @@ def _build_ads_report_payload(
         date_to=date_to,
         group_by=group_by,
     )
+    if refresh and ads_snapshot.source_status == "blocked":
+        raise HTTPException(status_code=409, detail="WB_ADS_CACHE_EMPTY")
     payload = _map_ads_to_report_response(date_range, ads_snapshot)
     stored = save_ads_report_cache(
         organization_id=actor.organization_id,
@@ -5033,7 +5035,7 @@ def refresh_ads_report_cache(
         date_to=date_to,
         date_range=date_range,
         wb_token=None,
-        refresh=False,
+        refresh=True,
     )
     record_audit_event(
         actor=actor,

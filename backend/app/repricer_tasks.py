@@ -345,7 +345,7 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
             report = reports._build_stock_report_payload(date_range, snapshot, organization_id=organization_id, wb_token=wb_token)
         elif report_id == "ads":
             progress("ads", "Собираем рекламу из WB sync cache", 20)
-            report = reports._build_ads_report_payload(actor=SimpleNamespace(organization_id=organization_id, user_id=user_id), date_from=date_from, date_to=date_to, date_range=date_range, wb_token=None, refresh=False)
+            report = reports._build_ads_report_payload(actor=SimpleNamespace(organization_id=organization_id, user_id=user_id), date_from=date_from, date_to=date_to, date_range=date_range, wb_token=None, refresh=True)
         elif report_id == "rnp":
             progress("rnp", "Собираем РНП из WB sync cache", 20)
             payload = reports.build_rnp_report(date_from=date_from, date_to=date_to, group_by=group_by, finance_allowed=finance_allowed, organization_id=organization_id, wb_token=None, force_refresh=False, progress_callback=progress)
@@ -1439,7 +1439,7 @@ def _materialize_report_snapshots_for_profile(organization_id: int, profile: WbS
         if "ads" in profile.sources or profile.window_kind == "onboarding":
             progress("Снапшоты отчетов: собираем рекламу", max(1, len(saved)))
             if sources_ready("ads", ("ads",)):
-                ads_report = reports._apply_report_rules_to_payload(reports._build_ads_report_payload(actor=actor, date_from=date_from, date_to=date_to, date_range=date_range, wb_token=None, refresh=False), organization_id)
+                ads_report = reports._apply_report_rules_to_payload(reports._build_ads_report_payload(actor=actor, date_from=date_from, date_to=date_to, date_range=date_range, wb_token=None, refresh=True), organization_id)
                 reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="ads", date_from=date_from, date_to=date_to, group_by="campaign", source="operational", report=ads_report)
                 saved.append("ads")
                 progress("Снапшоты отчетов: реклама готова", 6)
