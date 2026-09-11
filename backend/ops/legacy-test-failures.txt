@@ -14,6 +14,8 @@
 # 52 FAIL, zero errors/skips; repaired stock/WoW fixture explicit PASS.
 # Shrunk 52 to 46 from complete a7c6899 JUnit on 2026-09-11: 7761 PASS,
 # 46 FAIL, zero errors/skips; all six repaired scheduler controls explicit PASS.
+# Shrunk 46 to 42 from complete a94c821 JUnit on 2026-09-11: 7840 PASS,
+# 42 FAIL, zero errors/skips; four repaired basket lifecycle controls explicit PASS.
 tests/test_app.py::test_sprint_d_reports_are_served_through_backend_app
 tests/test_avito_repricer_worker.py::test_avito_scheduler_execute_creates_pending_approval_when_real_apply_disabled
 tests/test_sprint_b_workflow.py::test_apply_failure_has_retry_and_retry_can_recover
@@ -31,10 +33,6 @@ tests/test_sprint_d_reports.py::test_bff_abc_returns_sku_rows_not_summary_only
 tests/test_sprint_d_reports.py::test_bff_abc_uses_repricer_rows_when_report_cache_is_empty
 tests/test_wb_adapter_probes.py::test_read_prices_probe_keeps_wb06_blocked_without_spp_or_buyer_price_fields
 tests/test_wb_repricer_bff.py::test_ads_spend_aggregates_reports_progress_by_campaign_batches
-tests/test_wb_repricer_bff.py::test_baskets_detail_job_merges_exact_cache_and_cache_hit_avoids_duplicate
-tests/test_wb_repricer_bff.py::test_baskets_detail_start_marks_stale_active_run_failed_and_starts_new
-tests/test_wb_repricer_bff.py::test_baskets_detail_start_rejects_second_active_run_for_same_org
-tests/test_wb_repricer_bff.py::test_baskets_detail_start_reuses_same_range_active_run
 tests/test_wb_repricer_bff.py::test_build_sku_row_can_account_spp_plus_configured_wallet
 tests/test_wb_repricer_bff.py::test_build_sku_row_margin_uses_planned_indeepa_formula_and_tariff_commission
 tests/test_wb_repricer_bff.py::test_build_sku_row_uses_orders_spp_when_live_buyer_price_is_missing
