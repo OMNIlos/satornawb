@@ -11,6 +11,7 @@ from app.routers.wb_reports_bff import (
     DIGEST_REPORT_PAYLOAD_VERSION,
     RNP_REPORT_PAYLOAD_VERSION,
     STOCK_REPORT_PAYLOAD_VERSION,
+    WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION,
     _apply_digest_plan,
     _build_digest_payload,
     _build_digest_problem_rows,
@@ -1442,71 +1443,146 @@ def test_bff_digest_degrades_when_ads_token_is_missing(monkeypatch):
 
 
 def test_bff_stock_and_week_over_week_endpoints_return_rows(monkeypatch):
-    def fake_abc_report(*, date_from, **_kwargs):
-        units = 6 if date_from == date(2026, 7, 8) else 3
-        return SimpleNamespace(
-            rows=[
+    from app.routers import wb_reports_bff
+
+    date_from = date(2026, 7, 14)
+    date_to = date(2026, 7, 20)
+    params = {"preset": "custom", "from": str(date_from), "to": str(date_to)}
+    wow_cache_key = "reports_payload_week-over-week_2026-07-14_2026-07-20_sku_operational"
+    wow_cache = {
+        "completedAt": datetime.now(timezone.utc).isoformat(),
+        "dateFrom": str(date_from),
+        "dateTo": str(date_to),
+        "report": {
+            "meta": {"id": "week-over-week"},
+            "cacheVersion": WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION,
+            "filters": {"dateRange": params, "groupBy": "sku"},
+            "rows": [
                 {
-                    "sku": "ABC-ENDPOINT",
-                    "nmId": 404,
-                    "ordersComposite": {"units": units, "kopecks": units * 100_000},
-                    "salesComposite": {"units": units, "kopecks": units * 90_000},
-                    "netTotalKopecks": 80_000,
-                    "marginPct": 12,
-                    "wbStockUnits": 5,
+                    "sku": "WOW-CACHE-505",
+                    "nmId": 505,
+                    "orders": {"units": 5, "kopecks": 750_000, "deltaPct": 25},
+                    "sales": {"units": 4, "kopecks": 600_000, "deltaPct": 33.3},
+                    "stockAvailability7d": [True, False, True, True, False, True, True],
+                    "historySource": "captured",
                 }
             ],
-            sourceStatus="fresh",
-            confidence="high",
-            filteredSummary=SimpleNamespace(model_dump=lambda mode="json": {}),
-            sourceEvidence=[],
-        )
-
-    stock_cached_payload = {
-        "meta": {"id": "stock"},
-        "cacheVersion": "v3",
-        "rows": [
-            {
-                "sku": "STOCK-1",
-                "availableUnits": 9,
-                "historyCoverageDays": 7,
-                "historySource": "captured",
-            }
-        ],
+        },
     }
+    cached_snapshot = SimpleNamespace(
+        source_status="cached",
+        orders=[{"nmId": 404, "_cachedUnits": 14, "finishedPrice": 1500}],
+        sales=[{"nmId": 404, "_cachedUnits": 7, "finishedPrice": 1600}],
+        stocks=[
+            WbStockRow(
+                nm_id=404,
+                chrt_id=4,
+                warehouse_id=77,
+                warehouse_name="WB Test Warehouse",
+                region_name="Test Region",
+                quantity=7,
+                in_way_to_client=1,
+                in_way_from_client=2,
+                available_units=9,
+                was_out_of_stock=False,
+            )
+        ],
+        financial_rows=[],
+        logistics_cost_by_nm_kopecks={404: 21_000},
+    )
+    cache_reads: list[str] = []
+    snapshot_calls: list[dict] = []
 
-    def fake_source_cache(_organization_id, key, slim=False):
-        if key.startswith("reports_payload_stock"):
-            return {"report": stock_cached_payload}
-        if key.startswith("reports_job_stock"):
-            return {"state": "completed", "reportId": "stock"}
-        return {}
+    def fake_source_cache(organization_id, key, **_kwargs):
+        assert organization_id == 1
+        cache_reads.append(key)
+        return wow_cache if key == wow_cache_key else {}
 
-    monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", fake_source_cache)
-    monkeypatch.setattr("app.routers.wb_reports_bff.build_abc_report", fake_abc_report)
+    def save_source_cache(organization_id, key, payload):
+        assert organization_id == 1
+        return payload
+
+    def daily_sources_ready(organization_id, sources, *, date_from: date, date_to: date):
+        assert (organization_id, sources, date_from, date_to) == (
+            1,
+            ("period-stats", "finance"),
+            date(2026, 7, 14),
+            date(2026, 7, 20),
+        )
+        return True, []
+
+    def cached_sources_snapshot(**kwargs):
+        snapshot_calls.append(kwargs)
+        return cached_snapshot
+
+    monkeypatch.setattr(wb_reports_bff, "get_source_cache", fake_source_cache)
+    monkeypatch.setattr(wb_reports_bff, "save_source_cache", save_source_cache)
+    monkeypatch.setattr(wb_reports_bff, "_report_daily_sources_ready", daily_sources_ready)
+    monkeypatch.setattr(wb_reports_bff, "build_cached_wb_reports_sources_snapshot", cached_sources_snapshot)
+    monkeypatch.setattr(wb_reports_bff, "get_settings", lambda: SimpleNamespace(wb_api_mode="real"))
+    monkeypatch.setattr(wb_reports_bff, "list_cached_goods", lambda organization_id: [{"nmID": 404, "vendorCode": "STOCK-SOURCE-404"}] if organization_id == 1 else pytest.fail("wrong stock organization"))
+    monkeypatch.setattr(wb_reports_bff, "_request_source_with_cache", lambda **_kwargs: pytest.fail("stock GET must not call a live WB provider"))
+    monkeypatch.setattr(wb_reports_bff, "build_abc_report", lambda **_kwargs: pytest.fail("stock/WoW GET must not use the obsolete ABC builder"))
     api = client()
     headers = auth_headers(api, "viewer")
 
-    stock = api.get("/api/wb/reports/stock", headers=headers)
+    stock = api.get("/api/wb/reports/stock", params=params, headers=headers)
     assert stock.status_code == 200
     stock_payload = stock.json()
     assert stock_payload["meta"]["id"] == "stock"
     assert isinstance(stock_payload["rows"], list)
     assert stock_payload["rows"]
-    assert "availableUnits" in stock_payload["rows"][0]
+    assert stock_payload["rows"][0]["sku"] == "STOCK-SOURCE-404"
+    assert stock_payload["rows"][0]["availableUnits"] == 9
     assert stock_payload["rows"][0]["historyCoverageDays"] == 7
     assert stock_payload["rows"][0]["historySource"] in {"captured", "backfilled"}
     assert stock_payload["cacheVersion"] == STOCK_REPORT_PAYLOAD_VERSION
+    assert snapshot_calls == [{"organization_id": 1, "date_from": date_from, "date_to": date_to}]
 
-    wow = api.get("/api/wb/reports/week-over-week", headers=headers)
+    wow = api.get("/api/wb/reports/week-over-week", params=params, headers=headers)
     assert wow.status_code == 200
     wow_payload = wow.json()
     assert wow_payload["meta"]["id"] == "week-over-week"
     assert isinstance(wow_payload["rows"], list)
-    if wow_payload["rows"]:
-        assert "stockAvailability7d" in wow_payload["rows"][0]
-        assert len(wow_payload["rows"][0]["stockAvailability7d"]) == 7
-        assert wow_payload["rows"][0]["historySource"] in {"captured", "backfilled", "abc_cache"}
+    assert wow_payload["rows"]
+    assert wow_payload["rows"][0]["sku"] == "WOW-CACHE-505"
+    assert len(wow_payload["rows"][0]["stockAvailability7d"]) == 7
+    assert wow_payload["rows"][0]["historySource"] == "captured"
+    assert wow_payload["cacheVersion"] == WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION
+    assert wow_cache_key in cache_reads
+
+
+def test_stock_get_does_not_build_cached_snapshot_without_daily_sources(monkeypatch):
+    from app.routers import wb_reports_bff
+
+    saved: dict[str, dict] = {}
+
+    def readiness(organization_id, sources, *, date_from, date_to):
+        assert (organization_id, sources, date_from, date_to) == (
+            1,
+            ("period-stats", "finance"),
+            date(2026, 7, 14),
+            date(2026, 7, 20),
+        )
+        return False, ["finance"]
+
+    monkeypatch.setattr(wb_reports_bff, "_report_daily_sources_ready", readiness)
+    monkeypatch.setattr(wb_reports_bff, "get_source_cache", lambda organization_id, _key, **_kwargs: {} if organization_id == 1 else pytest.fail("wrong stock organization"))
+    monkeypatch.setattr(wb_reports_bff, "save_source_cache", lambda organization_id, key, payload: saved.setdefault(key, payload) if organization_id == 1 else pytest.fail("wrong stock organization"))
+    monkeypatch.setattr(wb_reports_bff, "build_cached_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("missing readiness must not build cached stock sources"))
+
+    api = client()
+    response = api.get(
+        "/api/wb/reports/stock",
+        params={"preset": "custom", "from": "2026-07-14", "to": "2026-07-20"},
+        headers=auth_headers(api, "viewer"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["rows"] == []
+    assert response.json()["reportJob"]["state"] == "waiting_daily_detail"
+    assert response.json()["reportJob"]["missingSources"] == ["finance"]
+    assert list(saved) == ["reports_job_stock_2026-07-14_2026-07-20_sku"]
 
 
 def test_stock_report_payload_cache_requires_current_version():
