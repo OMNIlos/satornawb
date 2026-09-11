@@ -8,11 +8,23 @@ from app import repricer_tasks
 
 
 def _mock_working_onboarding_ready(monkeypatch):
+    monkeypatch.setattr("app.repricer_tasks.cached_goods_meta", lambda _organization_id: {"totalCached": 3200})
+
+    def cache_ranges(_organization_id, prefix, **_kwargs):
+        cache = {
+            "dateFrom": "2026-01-01",
+            "dateTo": "2026-12-31",
+            "dailyAggregatesDays": 365,
+        }
+        if prefix == "finance_":
+            cache.update(revenueBasis="retailAmount", financeSchemaVersion="v3")
+        if prefix == "baskets_":
+            cache.update(dailyDetailStatus="fetched")
+        return [cache]
+
     monkeypatch.setattr(
         "app.repricer_tasks.list_source_cache_ranges_by_prefix",
-        lambda _organization_id, _prefix, **_kwargs: [
-            {"dateFrom": "2026-01-01", "dateTo": "2026-12-31", "dailyAggregatesDays": 365}
-        ],
+        cache_ranges,
     )
 
 
@@ -219,7 +231,12 @@ def test_scheduler_execute_loads_full_cached_goods_list(monkeypatch):
     monkeypatch.setattr("app.repricer_tasks.get_source_cache", lambda _organization_id, source_key, **_kwargs: {
         "period_stats_2026-05-26_2026-06-24": {"aggregates": {"123456": {"ordersUnits": 130}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
         "baskets_2026-05-26_2026-06-24": {"aggregates": {"123456": {"cartCount": 0}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
-        "finance_2026-05-26_2026-06-24": {"aggregates": {"123456": {"commissionKopecks": 1000}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
+        "finance_2026-05-26_2026-06-24": {
+            "aggregates": {"123456": {"commissionKopecks": 1000}},
+            "fetchedAt": "2026-06-24T09:00:00+00:00",
+            "revenueBasis": "retailAmount",
+            "financeSchemaVersion": "v3",
+        },
         "ads_2026-05-26_2026-06-24": {"aggregates": {"123456": {"adSpendKopecks": 500}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
         "stocks": {"aggregates": {"123456": {"wbStockUnits": 15}}, "fetchedAt": "2026-06-24T09:00:00+00:00"},
     }.get(source_key))
@@ -424,6 +441,7 @@ def test_scheduler_wb_sync_respects_recent_manual_sync(monkeypatch):
         "finishedAt": "2026-06-24T09:10:00+00:00",
         "periodDays": 30,
     })
+    _mock_working_onboarding_ready(monkeypatch)
     monkeypatch.setattr(
         "app.repricer_tasks.list_wb_sync_history",
         lambda *_args, **_kwargs: [
@@ -476,6 +494,7 @@ def test_scheduler_wb_sync_replaces_stale_status_before_running_profiles(monkeyp
     calls: list[dict[str, object]] = []
     history_events: list[dict[str, object]] = []
     abandoned: list[dict[str, object]] = []
+    sequence: list[str] = []
 
     monkeypatch.setattr(
         "app.repricer_tasks.get_settings",
@@ -510,13 +529,17 @@ def test_scheduler_wb_sync_replaces_stale_status_before_running_profiles(monkeyp
     })
     _mock_working_onboarding_ready(monkeypatch)
     monkeypatch.setattr("app.repricer_tasks.list_wb_sync_history", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(
-        "app.repricer_tasks.abandon_stale_wb_sync",
-        lambda _organization_id, **kwargs: abandoned.append(kwargs) or {"state": "failed", "running": False},
-    )
+
+    def abandon_stub(_organization_id, **kwargs):
+        abandoned.append(kwargs)
+        sequence.append("abandon")
+        return {"state": "failed", "running": False}
+
+    monkeypatch.setattr("app.repricer_tasks.abandon_stale_wb_sync", abandon_stub)
 
     def refresh_stub(**kwargs):
         calls.append(kwargs)
+        sequence.append(str(kwargs.get("sync_profile")))
         return {"runId": f"sync_{kwargs.get('sync_profile')}", "state": "completed", "steps": []}
 
     monkeypatch.setattr("app.repricer_tasks.refresh_wb_data_sources", refresh_stub)
@@ -531,6 +554,13 @@ def test_scheduler_wb_sync_replaces_stale_status_before_running_profiles(monkeyp
     assert abandoned[0]["reason"] == "scheduler_replaced_stale"
     assert result["state"] == "completed"
     assert [call["sync_profile"] for call in calls] == [
+        "hourly-operational",
+        "sales-funnel-incremental",
+        "stock-ads-incremental",
+        "finance-recent",
+    ]
+    assert sequence == [
+        "abandon",
         "hourly-operational",
         "sales-funnel-incremental",
         "stock-ads-incremental",
@@ -584,7 +614,6 @@ def test_scheduler_wb_sync_runs_due_periodic_windows(monkeypatch):
     monkeypatch.setattr("app.repricer_tasks.flush_repricer_bff_state", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("app.repricer_tasks.get_wb_sync_status", lambda _organization_id: {"state": "idle", "running": False})
     monkeypatch.setattr("app.repricer_tasks.list_wb_sync_history", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr("app.repricer_tasks.cached_goods_meta", lambda _organization_id: {"totalCached": 3200})
     monkeypatch.setattr("app.repricer_tasks.NIGHTLY_BASKETS_DETAIL_PAUSE_SECONDS", 0)
     monkeypatch.setattr("app.repricer_tasks._materialize_report_snapshots_for_profile", lambda *_args, **_kwargs: {"skipped": True})
     monkeypatch.setattr("app.repricer_tasks._persist_report_snapshots_sync_step", lambda *_args, **_kwargs: None)
@@ -615,7 +644,7 @@ def test_scheduler_wb_sync_runs_due_periodic_windows(monkeypatch):
         "finance-recent",
     ]
     assert calls[0]["period_days"] == 2
-    assert calls[0]["sources"] == ("period-stats",)
+    assert calls[0]["sources"] == ("goods", "period-stats")
     assert calls[0]["sync_profile"] == "hourly-operational"
     assert calls[0]["sync_profile_label"] == "Оперативные заказы и продажи"
     assert calls[0]["window_kind"] == "incremental"
@@ -675,7 +704,6 @@ def test_nightly_wb_sync_runs_month_reconciliation_once_per_day(monkeypatch):
     monkeypatch.setattr("app.repricer_tasks.flush_repricer_bff_state", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("app.repricer_tasks.get_wb_sync_status", lambda _organization_id: {"state": "idle", "running": False})
     monkeypatch.setattr("app.repricer_tasks.list_wb_sync_history", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr("app.repricer_tasks.cached_goods_meta", lambda _organization_id: {"totalCached": 3200})
     monkeypatch.setattr("app.repricer_tasks.NIGHTLY_BASKETS_DETAIL_PAUSE_SECONDS", 0)
     monkeypatch.setattr("app.repricer_tasks._materialize_report_snapshots_for_profile", lambda *_args, **_kwargs: {"skipped": True})
     monkeypatch.setattr("app.repricer_tasks._persist_report_snapshots_sync_step", lambda *_args, **_kwargs: None)
