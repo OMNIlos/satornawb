@@ -3846,8 +3846,13 @@ def _completed_report_job_from_cache(
     group_by: str,
     cache: dict[str, Any],
     current_job: dict[str, Any] | None = None,
+    *,
+    preserve_finished_refresh: bool = True,
 ) -> dict[str, Any]:
-    if current_job and _report_job_is_reusable(current_job):
+    if current_job and (
+        _report_job_is_reusable(current_job)
+        or (preserve_finished_refresh and _report_job_is_finished_refresh(current_job))
+    ):
         return dict(current_job)
     return {
         **(current_job or {}),
@@ -4409,11 +4414,11 @@ def get_reports_latest_cache(
                 )
                 job_key = _report_job_cache_key(report_id, requested_from, requested_to, groupBy, source)
                 job = get_source_cache(actor.organization_id, job_key, slim=False) or {}
-                if not _report_job_is_reusable(job):
-                    job = _completed_report_job_from_cache(report_id, requested_from, requested_to, groupBy, cache, job)
-                    save_source_cache(actor.organization_id, job_key, job)
+                response_job = _completed_report_job_from_cache(report_id, requested_from, requested_to, groupBy, cache, job)
+                if response_job != job:
+                    save_source_cache(actor.organization_id, job_key, response_job)
                 payload["cache"] = _report_payload_cache_meta(cache, date_range, "derived")
-                payload["reportJob"] = job
+                payload["reportJob"] = response_job
                 return payload
         raise HTTPException(status_code=404, detail="REPORT_LATEST_CACHE_MISSING")
     cache, date_from, date_to = latest
@@ -4678,9 +4683,10 @@ def get_reports_by_id(
             if not _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
                 return _empty_background_report(report_id, date_range, groupBy, _report_job_for_response(job))
             job = _report_job_for_response(job)
-            if not _report_job_is_reusable(job):
-                job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
-                save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), job)
+            response_job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
+            if response_job != job:
+                save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), response_job)
+            job = response_job
             payload = _apply_report_rules_to_payload(report, actor.organization_id)
             payload["cache"] = _report_payload_cache_meta(
                 cached,
@@ -4702,9 +4708,10 @@ def get_reports_by_id(
             if not _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
                 return _empty_background_report(report_id, date_range, groupBy, _report_job_for_response(job))
             job = _report_job_for_response(job)
-            if not _report_job_is_reusable(job):
-                job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
-                save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), job)
+            response_job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
+            if response_job != job:
+                save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), response_job)
+            job = response_job
             payload = _apply_report_rules_to_payload(report, actor.organization_id)
             payload["cache"] = _report_payload_cache_meta(
                 cached,
@@ -4876,7 +4883,10 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
     if _report_job_is_reusable(current):
         return {**current, "reused": True}
     if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
-        payload = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, current)
+        payload = _completed_report_job_from_cache(
+            report_id, date_from, date_to, groupBy, cached, current,
+            preserve_finished_refresh=False,
+        )
         save_source_cache(actor.organization_id, key, payload)
         return payload
     cash_flow = None

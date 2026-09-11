@@ -125,6 +125,62 @@ def test_cached_report_reads_preserve_active_job_without_writes(
     assert runtime.builds == runtime.refreshes == []
 
 
+@pytest.mark.parametrize("report_id", ["abc", "pnl", "week-over-week"])
+@pytest.mark.parametrize("state", ["completed", "failed"])
+@pytest.mark.parametrize(
+    "suffix,params",
+    [("", PARAMS), ("/jobs", PARAMS), ("/latest-cache", {}), ("/latest-cache", PARAMS)],
+)
+def test_cached_reads_preserve_finished_source_refresh(
+    runtime, report_id, state, suffix, params
+):
+    key, job = seed(runtime, report_id, state=state, stage=state)
+    job.update(kind="report_source_refresh", sync={"state": "completed"})
+    if state == "failed":
+        job["error"] = "synthetic build failure"
+    runtime.cache[1, key] = deepcopy(job)
+    response = runtime.api.get(f"/api/wb/reports/{report_id}{suffix}", params=params)
+    assert response.status_code == 200
+    if suffix == "/jobs":
+        assert response.json() == {**job, "reused": True}
+    else:
+        assert response.json()["rows"][0]["sku"] == "SKU-1"
+        assert response.json()["reportJob"] == job
+    assert runtime.cache[1, key] == job
+    assert runtime.writes == runtime.builds == runtime.refreshes == []
+
+
+@pytest.mark.parametrize("report_id", ["abc", "pnl", "week-over-week"])
+@pytest.mark.parametrize("state", ["completed", "failed"])
+def test_normal_start_can_use_cache_after_finished_source_refresh(runtime, report_id, state):
+    key, job = seed(runtime, report_id, state=state, stage=state)
+    job.update(kind="report_source_refresh", sync={"state": "completed"})
+    runtime.cache[1, key] = deepcopy(job)
+    response = runtime.api.post(f"/api/wb/reports/{report_id}/jobs", params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()["state"] == "completed"
+    assert response.json()["stage"] == "cache"
+    assert response.json()["cacheFresh"] is True
+    assert runtime.cache[1, key] == response.json()
+    assert runtime.builds == runtime.refreshes == []
+
+
+@pytest.mark.parametrize("report_id", ["abc", "pnl", "week-over-week"])
+def test_explicit_refresh_retries_failed_job_once_even_with_cache(runtime, report_id):
+    key, job = seed(runtime, report_id, state="failed", stage="failed")
+    job["kind"] = "report_source_refresh"
+    runtime.cache[1, key] = deepcopy(job)
+    for reused in (False, True):
+        response = runtime.api.post(
+            f"/api/wb/reports/{report_id}/refresh-sources-job", params=PARAMS
+        )
+        assert response.status_code == 200
+        assert response.json()["state"] == "queued"
+        assert response.json()["reused"] is reused
+    assert len(runtime.refreshes) == 1
+    assert runtime.builds == []
+
+
 def test_missing_source_read_preserves_refresh_and_does_not_allow_duplicate(runtime):
     key, job = seed(runtime, "ads", cached=False)
     response = runtime.api.get("/api/wb/reports/ads", params=PARAMS)
@@ -191,6 +247,26 @@ def test_wow_derived_latest_cache_preserves_real_live_job(runtime, monkeypatch, 
         "week-over-week", START, END, "sku", "operational"
     )
     assert runtime.cache[1, payload_key]["report"]["rows"]
+
+
+@pytest.mark.parametrize("state", ["completed", "failed"])
+def test_wow_derived_cache_preserves_finished_refresh(runtime, monkeypatch, state):
+    key, job = seed(runtime, "week-over-week", cached=False, state=state, stage=state)
+    job.update(kind="report_source_refresh", sync={"state": "completed"})
+    runtime.cache[1, key] = deepcopy(job)
+    monkeypatch.setattr(
+        reports, "_build_week_over_week_fallback_report",
+        lambda **kw: {"rows": [{"sku": "SKU-1", "orders": {"units": 1}}]},
+    )
+    response = runtime.api.get("/api/wb/reports/week-over-week/latest-cache", params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()["rows"][0]["sku"] == "SKU-1"
+    assert response.json()["cache"]["status"] == "derived"
+    assert response.json()["reportJob"] == job
+    assert runtime.cache[1, key] == job
+    payload_key = reports._report_cache_key("week-over-week", START, END, "sku", "operational")
+    assert runtime.writes == [payload_key]
+    assert runtime.builds == runtime.refreshes == []
 
 
 @pytest.mark.parametrize("state,stage", [("running", "pnl"), ("queued", "")])
