@@ -2597,6 +2597,15 @@ def test_baskets_daily_detail_skips_existing_days_when_chunks_empty(monkeypatch)
 
 
 def test_baskets_detail_job_merges_exact_cache_and_cache_hit_avoids_duplicate(monkeypatch):
+    monkeypatch.setattr(
+        wb_repricer_bff_router,
+        "get_wb_sync_status",
+        lambda _organization_id: {
+            "state": "completed",
+            "dateFrom": "2026-06-01",
+            "dateTo": "2026-06-03",
+        },
+    )
     source_state = {
         "baskets_2026-06-01_2026-06-03": {
             "aggregates": {"101": {"cartCount": 9}},
@@ -2714,6 +2723,15 @@ def test_baskets_detail_start_combines_split_nightly_caches(monkeypatch):
 
 
 def test_baskets_detail_start_rejects_second_active_run_for_same_org(monkeypatch):
+    monkeypatch.setattr(
+        wb_repricer_bff_router,
+        "get_wb_sync_status",
+        lambda _organization_id: {
+            "state": "completed",
+            "dateFrom": "2026-06-01",
+            "dateTo": "2026-06-03",
+        },
+    )
     monkeypatch.setattr("app.routers.wb_repricer_bff._request_actor_and_wb_token", lambda _request: (SimpleNamespace(organization_id=7), "token"))
     monkeypatch.setattr(
         "app.routers.wb_repricer_bff.get_source_cache",
@@ -2728,6 +2746,15 @@ def test_baskets_detail_start_rejects_second_active_run_for_same_org(monkeypatch
 
 
 def test_baskets_detail_start_reuses_same_range_active_run(monkeypatch):
+    monkeypatch.setattr(
+        wb_repricer_bff_router,
+        "get_wb_sync_status",
+        lambda _organization_id: {
+            "state": "completed",
+            "dateFrom": "2026-06-01",
+            "dateTo": "2026-06-03",
+        },
+    )
     active = {"runId": "active-run", "state": "running", "dateFrom": "2026-06-01", "dateTo": "2026-06-03", "progressPercent": 40}
     monkeypatch.setattr("app.routers.wb_repricer_bff._request_actor_and_wb_token", lambda _request: (SimpleNamespace(organization_id=7), "token"))
     monkeypatch.setattr("app.routers.wb_repricer_bff.get_source_cache", lambda organization_id, key, **_kwargs: active if organization_id == 7 and key == "baskets_detail_active" else {})
@@ -2741,6 +2768,15 @@ def test_baskets_detail_start_reuses_same_range_active_run(monkeypatch):
 
 
 def test_baskets_detail_start_marks_stale_active_run_failed_and_starts_new(monkeypatch):
+    monkeypatch.setattr(
+        wb_repricer_bff_router,
+        "get_wb_sync_status",
+        lambda _organization_id: {
+            "state": "completed",
+            "dateFrom": "2026-06-01",
+            "dateTo": "2026-06-03",
+        },
+    )
     active = {
         "runId": "stale-run",
         "state": "running",
@@ -2750,21 +2786,17 @@ def test_baskets_detail_start_marks_stale_active_run_failed_and_starts_new(monke
         "requestsCompleted": 57,
         "requestsTotal": 124,
         "progressPercent": 46,
-        "updatedAt": "2026-07-21T12:00:00+00:00",
+        "updatedAt": (
+            datetime.now(timezone.utc)
+            - wb_repricer_bff_router.BASKETS_DETAIL_HEARTBEAT_TIMEOUT
+            - timedelta(seconds=1)
+        ).isoformat(),
     }
     source_state = {"7:baskets_detail_active": active}
     saved: list[tuple[str, dict]] = []
 
     monkeypatch.setattr("app.routers.wb_repricer_bff._request_actor_and_wb_token", lambda _request: (SimpleNamespace(organization_id=7), "token"))
     monkeypatch.setattr("app.routers.wb_repricer_bff.list_cached_goods", lambda organization_id: [{"nmID": 101}] if organization_id == 7 else [])
-    monkeypatch.setattr(
-        "app.routers.wb_repricer_bff.datetime",
-        SimpleNamespace(
-            now=lambda _tz=None: datetime(2026, 7, 21, 13, 0, tzinfo=timezone.utc),
-            fromisoformat=datetime.fromisoformat,
-        ),
-    )
-
     def get_cache(organization_id, key, **_kwargs):
         return deepcopy(source_state.get(f"{organization_id}:{key}") or {})
 
