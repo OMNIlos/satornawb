@@ -506,6 +506,7 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
                 group_by,
                 source,
                 organization_id=organization_id,
+                finance_allowed=finance_allowed,
             )
         cached_report = {"report": report, "completedAt": reports._utc_now_iso()}
         reports.save_source_cache(organization_id, cache_key, cached_report)
@@ -1418,7 +1419,7 @@ def _materialize_report_snapshots_for_profile(organization_id: int, profile: WbS
                     progress_callback=abc_progress,
                 )
                 abc_report = reports._apply_report_rules_to_payload(reports._map_abc_to_report_response(abc_payload, date_range), organization_id)
-                reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="abc", date_from=date_from, date_to=date_to, group_by="sku", source="operational", report=abc_report)
+                reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="abc", date_from=date_from, date_to=date_to, group_by="sku", source="operational", report=abc_report, finance_allowed=True)
                 saved.append("abc")
                 progress("Снапшоты отчетов: ABC готов", 4)
             else:

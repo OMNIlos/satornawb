@@ -3361,7 +3361,7 @@ BACKGROUND_REPORT_JOB_STALE_AFTER = timedelta(minutes=15)
 BACKGROUND_REPORT_QUEUED_STALE_AFTER = timedelta(seconds=30)
 DIGEST_CACHE_TTL = timedelta(hours=24)
 REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
-ABC_REPORT_PAYLOAD_VERSION = "v16"
+ABC_REPORT_PAYLOAD_VERSION = "v17"
 PNL_REPORT_PAYLOAD_VERSION = "v3"
 RNP_REPORT_PAYLOAD_VERSION = "v3"
 STOCK_REPORT_PAYLOAD_VERSION = "v5"
@@ -3413,7 +3413,7 @@ def _report_cache_key(
     finance_allowed: bool = False,
 ) -> str:
     if report_id == "abc" and organization_id is not None:
-        return f"reports_payload_abc_{ABC_REPORT_PAYLOAD_VERSION}_{_abc_economics_version(organization_id)}_org{organization_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}"
+        return f"reports_payload_abc_{ABC_REPORT_PAYLOAD_VERSION}_{_abc_economics_version(organization_id)}_org{organization_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}_{'finance' if finance_allowed else 'nofinance'}"
     if report_id == "pnl":
         return f"reports_payload_pnl_{PNL_REPORT_PAYLOAD_VERSION}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}_{'finance' if finance_allowed else 'nofinance'}"
     return f"reports_payload_{report_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}"
@@ -3713,7 +3713,7 @@ def _latest_report_payload_cache(
         if _report_payload_cache_is_usable(report_id, exact, organization_id=organization_id):
             return exact, requested_from, requested_to
         return None
-    scoped_source = f"{source}_{'finance' if finance_allowed else 'nofinance'}" if report_id == "pnl" else source
+    scoped_source = f"{source}_{'finance' if finance_allowed else 'nofinance'}" if report_id in {"abc", "pnl"} else source
     for cache in list_source_cache_by_prefix(organization_id, f"reports_payload_{report_id}_", limit=50, slim=False):
         source_key = str(cache.get("sourceKey") or "")
         fallback_from, fallback_to, cached_group_by, cached_source = _parse_report_payload_cache_key(source_key, report_id)
@@ -4658,7 +4658,7 @@ def get_reports_by_id(
         return _map_cash_flow_to_expenses_response(cash_flow, date_range, groupBy, job)
 
     if report_id == "abc":
-        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
+        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=finance_allowed)
         cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
         report = cached.get("report") if isinstance(cached.get("report"), dict) else None
         if report is not None and _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
@@ -4839,7 +4839,7 @@ def get_reports_by_id(
             "sourceEvidence": [item.model_dump(mode="json") for item in abc_payload.sourceEvidence],
             "filteredSummary": filtered_summary,
         }, actor.organization_id, compact_abc=True)
-        _save_exact_report_payload_cache(organization_id=actor.organization_id, report_id=report_id, date_from=date_from, date_to=date_to, group_by=groupBy, source=source, report=payload)
+        _save_exact_report_payload_cache(organization_id=actor.organization_id, report_id=report_id, date_from=date_from, date_to=date_to, group_by=groupBy, source=source, report=payload, finance_allowed=finance_allowed)
         return payload
     if report_id == "pnl":
         source_mode = "final" if source == "financial" else "preliminary"

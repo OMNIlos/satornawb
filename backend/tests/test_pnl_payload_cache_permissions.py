@@ -1,4 +1,4 @@
-"""P&L payload caches must preserve the builder's finance permission scope."""
+"""Report payload caches must preserve the builder's finance permission scope."""
 
 from copy import deepcopy
 from datetime import date
@@ -281,3 +281,148 @@ def test_cash_flow_and_expenses_require_finance_access(
     elif not path.endswith("/jobs"):
         actual = response.json() if "cash-flow" in path else response.json()["cashFlow"]
         assert actual == PRIVATE_CASH_FLOW
+
+
+@pytest.fixture
+def abc_cache(cache, monkeypatch):
+    monkeypatch.setattr(reports, "_abc_economics_version", lambda org: "cafef00d")
+
+    def build_abc(**kwargs):
+        assert (kwargs["organization_id"], kwargs["date_from"], kwargs["date_to"]) == (1, START, END)
+        allowed = kwargs["finance_allowed"]
+        return SimpleNamespace(
+            groupBy="sku", sourceStatus="fresh" if allowed else "partial", confidence="high",
+            blockerIds=[] if allowed else ["WB_ABC_FINANCE_FORBIDDEN"], sourceEvidence=[],
+            rows=[{
+                "sku": "SYNTHETIC-ABC", "nmId": 101,
+                "ordersComposite": {"units": 1, "kopecks": 90_000},
+                "commissionKopecks": 12_345 if allowed else None,
+                "netTotalKopecks": 45_678 if allowed else None,
+            }],
+            filteredSummary=SimpleNamespace(model_dump=lambda **kw: {
+                "skuCount": 1, "ordersCount": 1, "ordersKopecks": 90_000,
+                "profitKopecks": 45_678 if allowed else None,
+            }),
+        )
+
+    monkeypatch.setattr(reports, "build_abc_report", build_abc)
+    return cache
+
+
+@pytest.mark.parametrize("build_order", [(True, False), (False, True)])
+@pytest.mark.parametrize("suffix,params", [("", PARAMS), ("/latest-cache", PARAMS), ("/latest-cache", {})])
+def test_abc_worker_and_readers_keep_both_permission_variants(abc_cache, build_order, suffix, params):
+    for allowed in build_order:
+        result = repricer_tasks.build_report_for_org.run(
+            1, "synthetic-user", "abc", str(START), str(END), "sku", "operational", allowed, None
+        )
+        assert result["state"] == "completed"
+    api = TestClient(create_app())
+    for profile, expected in (("viewer", None), ("finance_viewer", 12_345)):
+        response = api.get(f"/api/wb/reports/abc{suffix}", params=params, headers=auth_headers(api, profile))
+        assert response.status_code == 200
+        assert response.json()["rows"][0]["sku"] == "SYNTHETIC-ABC"
+        assert response.json()["rows"][0].get("commissionKopecks") == expected
+        assert ("WB_ABC_FINANCE_FORBIDDEN" in response.json()["blockerIds"]) == (expected is None)
+    assert len([key for org, key in abc_cache if key.startswith("reports_payload_abc_")]) == 2
+
+
+@pytest.mark.parametrize("build_order", [(True, False), (False, True)])
+def test_abc_http_writers_keep_both_permission_variants(abc_cache, monkeypatch, build_order):
+    monkeypatch.setattr(reports, "_report_daily_sources_ready", lambda *args, **kw: (True, []))
+    api = TestClient(create_app())
+    for allowed in build_order:
+        response = api.get(
+            "/api/wb/reports/abc", params=PARAMS,
+            headers=auth_headers(api, "finance_viewer" if allowed else "viewer"),
+        )
+        assert response.status_code == 200
+        assert response.json()["rows"][0].get("commissionKopecks") == (12_345 if allowed else None)
+    assert len([key for org, key in abc_cache if key.startswith("reports_payload_abc_")]) == 2
+
+
+def test_abc_exact_writer_and_latest_lookup_keep_finance_scope(abc_cache):
+    for allowed in (True, False):
+        reports._save_exact_report_payload_cache(
+            organization_id=1, report_id="abc", date_from=START, date_to=END,
+            group_by="sku", source="operational", finance_allowed=allowed,
+            report={"cacheVersion": reports.ABC_REPORT_PAYLOAD_VERSION,
+                    "rows": [{"commissionKopecks": 12_345 if allowed else None}]},
+        )
+    assert len(abc_cache) == 2
+    for allowed in (True, False):
+        latest = reports._latest_report_payload_cache(
+            organization_id=1, report_id="abc", group_by="sku", source="operational", finance_allowed=allowed
+        )
+        assert latest is not None
+        assert latest[0]["report"]["rows"][0]["commissionKopecks"] == (12_345 if allowed else None)
+
+
+@pytest.mark.parametrize("legacy_suffix", ["", "_nofinance"])
+@pytest.mark.parametrize("suffix,params,status", [("", PARAMS, 200), ("/latest-cache", PARAMS, 404), ("/latest-cache", {}, 404)])
+def test_abc_readers_reject_old_unscoped_finance_cache(abc_cache, monkeypatch, legacy_suffix, suffix, params, status):
+    # An arbitrary old source ending in _nofinance is not permission provenance.
+    key = f"reports_payload_abc_v16_cafef00d_org1_{START}_{END}_sku_operational{legacy_suffix}"
+    abc_cache[1, key] = {
+        "completedAt": reports._utc_now_iso(), "dateFrom": str(START), "dateTo": str(END),
+        "report": {"cacheVersion": "v16", "economicsVersion": "cafef00d",
+                   "rows": [{"sku": "PRIVATE-OLD", "commissionKopecks": 12_345}]},
+    }
+    monkeypatch.setattr(reports, "_report_daily_sources_ready", lambda *args, **kw: (False, ["finance"]))
+    api = TestClient(create_app())
+    response = api.get(f"/api/wb/reports/abc{suffix}", params=params, headers=auth_headers(api, "viewer"))
+    assert response.status_code == status
+    assert not response.json().get("rows")
+    assert "PRIVATE-OLD" not in response.text
+
+
+@pytest.mark.parametrize("allowed", [True, False])
+def test_abc_job_endpoints_select_the_callers_permission_cache(abc_cache, monkeypatch, allowed):
+    repricer_tasks.build_report_for_org.run(
+        1, "synthetic-user", "abc", str(START), str(END), "sku", "operational", not allowed, None
+    )
+    abc_cache.pop((1, reports._report_job_cache_key("abc", START, END, "sku", "operational")))
+    monkeypatch.setattr(reports, "_report_daily_sources_ready", lambda *args, **kw: (True, []))
+    enqueued = []
+
+    def enqueue(*args):
+        enqueued.append(args)
+        return SimpleNamespace(id="synthetic-task")
+
+    monkeypatch.setattr(repricer_tasks.build_report_for_org, "delay", enqueue)
+    api = TestClient(create_app())
+    headers = auth_headers(api, "finance_viewer" if allowed else "viewer")
+    status = api.get("/api/wb/reports/abc/jobs", params=PARAMS, headers=headers)
+    assert status.status_code == 200
+    assert status.json()["state"] == "idle"
+    started = api.post("/api/wb/reports/abc/jobs", params=PARAMS, headers=headers)
+    assert started.status_code == 200
+    assert started.json()["state"] == "queued"
+    assert len(enqueued) == 1 and enqueued[0][-2:] == (allowed, None)
+
+
+def test_scheduled_abc_snapshot_is_saved_in_finance_scope(abc_cache, monkeypatch):
+    monkeypatch.setattr("app.routers.wb_repricer_bff._build_repricer_sku_snapshot", lambda *args, **kw: {})
+    monkeypatch.setattr(
+        repricer_tasks, "_report_snapshot_sources_ready",
+        lambda org, sources, *args: (sources == ("period-stats", "finance", "ads", "baskets"), []),
+    )
+    for name in ("build_cached_wb_reports_sources_snapshot", "_build_digest_ads_snapshot", "_build_digest_funnel_snapshot", "build_plan_fact_report"):
+        monkeypatch.setattr(reports, name, lambda *args, **kw: None)
+    monkeypatch.setattr(reports, "_build_digest_payload", lambda *args: {})
+    monkeypatch.setattr(repricer_tasks, "_digest_report_summary", lambda *args: {})
+    save_exact = reports._save_exact_report_payload_cache
+
+    def save(**kwargs):
+        if kwargs["report_id"] == "abc":
+            assert kwargs.get("finance_allowed") is True
+        return save_exact(**kwargs)
+
+    monkeypatch.setattr(reports, "_save_exact_report_payload_cache", save)
+    profile = SimpleNamespace(period_days=7, date_from=START, date_to=END, sources=("period-stats",), window_kind="periodic")
+    result = repricer_tasks._materialize_report_snapshots_for_profile(1, profile, persist_progress=False)
+    assert result["state"] == "completed", result
+    assert "abc" in result["reports"]
+    key = reports._report_cache_key("abc", START, END, "sku", "operational", organization_id=1, finance_allowed=True)
+    assert abc_cache[1, key]["report"]["rows"][0]["commissionKopecks"] == 12_345
+    assert (1, reports._report_cache_key("abc", START, END, "sku", "operational", organization_id=1)) not in abc_cache
