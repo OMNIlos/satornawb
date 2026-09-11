@@ -27,9 +27,12 @@ PAYABLE_TABLES = (
 )
 
 
-def test_payable_migration_preserves_legacy_unknown_and_refuses_evidence_loss(database):
+@pytest.mark.parametrize("initial_revision", ["20260905_0060", "20260910_0085"])
+def test_payable_migration_preserves_legacy_unknown_and_refuses_evidence_loss(
+    database, initial_revision
+):
     config, engine = database
-    command.upgrade(config, "20260910_0085")
+    command.upgrade(config, initial_revision)
     operation = normalize_operation(settlement_rows()[0], 1, 31, PERIOD)
     legacy = operation_values(operation)
     legacy.pop("payable_kopecks", None)
@@ -38,8 +41,8 @@ def test_payable_migration_preserves_legacy_unknown_and_refuses_evidence_loss(da
             LkOrganizationRow(organization_id=1, slug="finance", name="Finance")
         )
         session.flush()
-        session.add(
-            MarketplaceAccountRow(
+        session.execute(
+            insert(MarketplaceAccountRow.__table__).values(
                 organization_id=1,
                 marketplace_account_id=31,
                 marketplace="wb",
@@ -49,9 +52,15 @@ def test_payable_migration_preserves_legacy_unknown_and_refuses_evidence_loss(da
         )
         session.flush()
         session.execute(insert(WbFinanceOperationRow.__table__).values(**legacy))
+        before = session.execute(
+            text("SELECT to_jsonb(operation) FROM wb_finance_operations operation")
+        ).scalar_one()
 
     command.upgrade(config, "20260911_0086")
     with engine.begin() as connection:
+        assert connection.execute(
+            text("SELECT to_jsonb(operation) FROM wb_finance_operations operation")
+        ).scalar_one() == {**before, "payable_kopecks": None}
         row = connection.execute(
             text(
                 "SELECT payable_kopecks, commission_kopecks, payload_checksum FROM wb_finance_operations"
