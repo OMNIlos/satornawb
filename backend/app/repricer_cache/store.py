@@ -630,9 +630,8 @@ def get_covering_source_cache(
             .where(
                 WbRepricerSourceCacheRow.organization_id == organization_id,
                 WbRepricerSourceCacheRow.source_key.like(f"{source_key_prefix}%"),
-                text("(payload::jsonb ? 'dailyAggregates')"),
-                text("jsonb_typeof((payload::jsonb)->'dailyAggregates') = 'object'"),
-                text("(payload::jsonb)->'dailyAggregates' <> '{}'::jsonb"),
+                text("json_typeof(payload->'dailyAggregates') = 'object'"),
+                text("(payload->'dailyAggregates')::jsonb <> '{}'::jsonb"),
                 text("(payload->>'dateFrom') <= :date_from"),
                 text("(payload->>'dateTo') >= :date_to"),
             )

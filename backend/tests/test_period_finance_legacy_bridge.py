@@ -1,11 +1,52 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
 from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
 from app.routers import wb_repricer_bff
+
+
+@pytest.mark.parametrize("known_dates", [True, None, []])
+def test_daily_stitch_skips_only_known_duplicate_days(monkeypatch, known_dates):
+    first, last = "2026-09-01", "2026-09-02"
+    days = [first] * 50 + [last]
+    payloads = {
+        f"finance_synthetic_{index}": {
+            "revenueBasis": "retailAmount", "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
+            "dailyAggregates": {day: {"123": {"additionalPaymentKopecks": -100}}},
+        }
+        for index, day in enumerate(days)
+    }
+    metadata = [
+        {"sourceKey": key, "dateFrom": first, "dateTo": last,
+         "dailyAggregateDates": list(payload["dailyAggregates"]) if known_dates else known_dates}
+        for key, payload in payloads.items()
+    ]
+    reads = []
+
+    def read(organization_id, source_key, *, slim):
+        assert organization_id == 2 and slim is False
+        reads.append(source_key)
+        return payloads[source_key]
+
+    def list_ranges(organization_id, prefix, *, limit):
+        assert (organization_id, prefix, limit) == (2, "finance_", 100)
+        return metadata
+
+    monkeypatch.setattr(wb_repricer_bff, "get_source_cache", read)
+    monkeypatch.setattr(wb_repricer_bff, "list_source_cache_ranges_by_prefix", list_ranges)
+    result = wb_repricer_bff._stitched_period_cache_from_days(
+        2, "finance", date.fromisoformat(first), date.fromisoformat(last),
+    )
+
+    assert result == {
+        "aggregates": {"123": {"additionalPaymentKopecks": -200}},
+        "dailyAggregates": {day: {"123": {"additionalPaymentKopecks": -100}} for day in (first, last)},
+        "count": 1,
+    }
+    assert reads == (["finance_synthetic_0", "finance_synthetic_50"] if known_dates else list(payloads))
 
 
 def test_numeric_preset_uses_covering_date_range_cache(monkeypatch) -> None:

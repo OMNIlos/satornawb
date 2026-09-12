@@ -1031,7 +1031,7 @@ def _stitched_period_cache_from_days(
     seen: set[str] = set()
     totals: dict[str, dict[str, Any]] = {}
     daily: dict[str, Any] = {}
-    candidates: list[tuple[int, str]] = []
+    candidates: list[tuple[int, str, set[str]]] = []
     for meta in list_source_cache_ranges_by_prefix(organization_id, f"{prefix}_", limit=100):
         if not isinstance(meta, dict):
             continue
@@ -1046,11 +1046,14 @@ def _stitched_period_cache_from_days(
             overlap = (min(meta_to, date_to) - max(meta_from, date_from)).days + 1
         else:
             overlap = 0
-        candidates.append((overlap, source_key))
+        known_days = set(meta.get("dailyAggregateDates") or ()) & wanted
+        candidates.append((overlap, source_key, known_days))
 
-    for _overlap, source_key in sorted(candidates, key=lambda item: item[0], reverse=True):
+    for _overlap, source_key, known_days in sorted(candidates, key=lambda item: item[0], reverse=True):
         if not wanted - seen:
             break
+        if known_days and known_days <= seen:
+            continue
         cache = _compatible_period_source_cache(
             prefix, get_source_cache(organization_id, source_key, slim=False) or {}
         )

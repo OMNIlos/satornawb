@@ -1,5 +1,5 @@
 from copy import deepcopy
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from app.repricer_cache.store import (
@@ -10,7 +10,12 @@ from app.repricer_cache.store import (
     slim_source_cache_payload,
 )
 from app.repricer_cache.orm import WbRepricerSourceCacheRow
+from app.cabinet.orm import LkOrganizationRow
+from app.repricer_cache import store
+from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+from tests.test_empty_database_migrations import cluster, database  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
@@ -20,6 +25,58 @@ def isolated_cache_boundaries(monkeypatch):
     monkeypatch.setattr("app.repricer_cache.store._redis_get_json", lambda *a, **kw: None)
     monkeypatch.setattr("app.repricer_cache.store._redis_set_json", lambda *a, **kw: None)
     monkeypatch.setattr("app.repricer_cache.store._redis_delete", lambda *a, **kw: None)
+
+
+def test_covering_cache_keeps_payload_selection_without_whole_jsonb_cast(database, monkeypatch):
+    _, engine = database
+    LkOrganizationRow.__table__.create(engine)
+    WbRepricerSourceCacheRow.__table__.create(engine)
+    first, last = "2026-09-01", "2026-09-02"
+    now = datetime(2026, 9, 3, tzinfo=timezone.utc)
+    payload = {"dateFrom": first, "dateTo": last, "dailyAggregates": {first: {}, "not-a-date": {}},
+               "aggregates": {"123": {"cartCount": 2}}}
+    with Session(engine) as session:
+        session.add_all([LkOrganizationRow(organization_id=value, slug=f"synthetic-{value}", name="Synthetic")
+                         for value in (1, 2)])
+        session.commit()
+        rows = [
+            WbRepricerSourceCacheRow(organization_id=1, source_key="baskets_older_typed", payload=payload,
+                                    range_date_from=date.fromisoformat(first), range_date_to=date.fromisoformat(last),
+                                    daily_aggregate_dates=[first], fetched_at=now - timedelta(seconds=1)),
+            WbRepricerSourceCacheRow(organization_id=1, source_key="baskets_newest_legacy", payload=payload, fetched_at=now),
+        ]
+        invalid = [None, {}, {**payload, "dateFrom": None}, {**payload, "dateFrom": last},
+                   {**payload, "dateTo": first},
+                   *[{**payload, "dailyAggregates": value} for value in (None, {}, [], [{}], 0, False, "daily")]]
+        rows.extend(WbRepricerSourceCacheRow(organization_id=1, source_key=f"baskets_invalid_{index}",
+                                           payload=value, fetched_at=now + timedelta(seconds=index + 1))
+                    for index, value in enumerate(invalid))
+        rows.extend([
+            WbRepricerSourceCacheRow(organization_id=2, source_key="baskets_other_tenant", payload=payload,
+                                    fetched_at=now + timedelta(days=1)),
+            WbRepricerSourceCacheRow(organization_id=1, source_key="ads_other_source", payload=payload,
+                                    fetched_at=now + timedelta(days=1)),
+        ])
+        session.add_all(rows)
+        session.commit()
+        statements = []
+
+        def capture(_connection, _cursor, statement, _parameters, _context, _many):
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", capture)
+        monkeypatch.setattr(store, "_run_db", lambda fn: fn(session))
+        try:
+            result = store.get_covering_source_cache(
+                1, "baskets_", date_from=date.fromisoformat(first), date_to=date.fromisoformat(last),
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", capture)
+
+    assert datetime.fromisoformat(result.pop("fetchedAt")) == now
+    assert result == {**payload, "sourceKey": "baskets_newest_legacy"}
+    assert len(statements) == 1
+    assert "payload::jsonb" not in statements[0]
 
 
 def test_source_cache_metadata_is_derived_without_mutating_payload():
