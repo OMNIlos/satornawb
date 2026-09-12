@@ -52,9 +52,10 @@ function skuPayload(account: Account) {
 }
 
 it.each([
-  { label: 'cached products', holdAccountARefresh: false },
-  { label: 'late account A refresh', holdAccountARefresh: true },
-])('isolates account B products from $label after logout', async ({ holdAccountARefresh }) => {
+  { label: 'cached products', holdAccountARefresh: false, expireLogout: false },
+  { label: 'late account A refresh', holdAccountARefresh: true, expireLogout: false },
+  { label: 'expired logout', holdAccountARefresh: false, expireLogout: true },
+])('isolates account B products from $label after logout', async ({ holdAccountARefresh, expireLogout }) => {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const result = await build({
     configFile: false,
@@ -90,13 +91,21 @@ it.each([
   try {
     const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
     const errors: string[] = []
+    const expectedUnauthorizedErrors: string[] = []
     const skuRequests: Account[] = []
     const refreshRequests: Account[] = []
+    const logoutEvents: string[] = []
+    let accountASessionActive = true
     const accountBResponse = new Promise<void>((resolve) => { releaseAccountB = resolve })
     const accountARefreshResponse = new Promise<void>((resolve) => { releaseAccountARefresh = resolve })
     page.on('pageerror', error => errors.push(error.message))
     page.on('console', message => {
-      if (message.type() === 'error' && !message.text().startsWith('An empty string')) errors.push(message.text())
+      if (message.type() !== 'error' || message.text().startsWith('An empty string')) return
+      if (expireLogout && message.text() === 'Failed to load resource: the server responded with a status of 401 (Unauthorized)') {
+        expectedUnauthorizedErrors.push(message.text())
+        return
+      }
+      errors.push(message.text())
     })
     await page.route('**/*', async (route: Route) => {
       const request = route.request()
@@ -111,9 +120,30 @@ it.each([
       if (!url.pathname.startsWith('/api/')) return route.abort()
 
       const account: Account = request.headers().authorization === 'Bearer account-b-token' ? 'B' : 'A'
-      if (url.pathname === '/api/v1/auth/logout') return route.fulfill({ json: envelope({ status: 'ok' }) })
+      if (url.pathname === '/api/v1/auth/logout') {
+        if (expireLogout && request.headers().authorization === 'Bearer account-a-token') {
+          expect(accountASessionActive).toBe(true)
+          logoutEvents.push('expired')
+          return route.fulfill({ status: 401, json: { detail: 'INVALID_AUTH_TOKEN:TOKEN_EXPIRED' } })
+        }
+        if (expireLogout) {
+          expect(request.headers().authorization).toBe('Bearer account-a-refreshed-token')
+          expect(account).toBe('A')
+          expect(accountASessionActive).toBe(true)
+          logoutEvents.push('revoked')
+          accountASessionActive = false
+        }
+        return route.fulfill({ json: envelope({ status: 'ok' }) })
+      }
       if (url.pathname === '/api/v1/auth/login') return route.fulfill({ json: envelope({ accessToken: 'account-b-token', expiresIn: 3600, tokenType: 'bearer' }) })
-      if (url.pathname === '/api/v1/auth/refresh') return route.fulfill({ status: 401, json: { error: { code: 'AUTH_REQUIRED', message: 'No synthetic refresh session' } } })
+      if (url.pathname === '/api/v1/auth/refresh') {
+        if (expireLogout && logoutEvents.at(-1) === 'expired') {
+          expect(accountASessionActive).toBe(true)
+          logoutEvents.push('refresh')
+          return route.fulfill({ json: envelope({ accessToken: 'account-a-refreshed-token', expiresIn: 3600, tokenType: 'bearer' }) })
+        }
+        return route.fulfill({ status: 401, json: { error: { code: 'AUTH_REQUIRED', message: 'No synthetic refresh session' } } })
+      }
       if (url.pathname === '/api/v1/cabinet/me') return route.fulfill({ json: envelope(cabinetMe(account)) })
       if (url.pathname === '/api/v1/cabinet/sessions') return route.fulfill({ json: envelope([]) })
       if (request.method() === 'POST' && url.pathname === '/api/v1/wb-repricer/sku/refresh') {
@@ -154,6 +184,12 @@ it.each([
     await page.locator('.user-chip').click()
     await page.getByRole('button', { name: /Выйти/ }).click()
     await page.waitForURL('**/auth/login')
+    if (expireLogout) {
+      expect(logoutEvents).toEqual(['expired', 'refresh', 'revoked'])
+      expect(await page.evaluate(() => localStorage.getItem('ogni.auth.access-token'))).toBeNull()
+      expect(await page.evaluate(async () => (await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' })).status)).toBe(401)
+      expect(expectedUnauthorizedErrors).toHaveLength(2)
+    }
     await page.getByLabel('Email').fill('b@test.local')
     await page.getByLabel('Пароль').fill('password')
     await page.getByRole('button', { name: 'Войти' }).click()
@@ -183,7 +219,7 @@ it.each([
     expect(refreshRequests.filter(account => account === 'B')).toHaveLength(accountBRefreshCountBefore + 1)
     expect(skuRequests.filter(account => account === 'B')).toHaveLength(accountBGetCountBeforeRefresh + 1)
     expect(await products.locator('#totalCount').innerText()).toBe('7')
-    expect(await products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-B-1'))
+    await expect.poll(() => products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-B-1'))
     expect(await products.locator('[data-sku]:visible').allInnerTexts()).not.toContainEqual(expect.stringContaining('SKU-A-1'))
     expect(errors).toEqual([])
   } finally {

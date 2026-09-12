@@ -114,10 +114,11 @@ async function parseResponse<T>(response: Response) {
   return payload
 }
 
-function isAuthEndpoint(path: string) {
+function skipsAccessTokenRefresh(path: string) {
   const url = buildApiUrl(path)
   try {
-    return new URL(url, window.location.origin).pathname.startsWith('/api/v1/auth/')
+    const pathname = new URL(url, 'http://localhost').pathname
+    return pathname.startsWith('/api/v1/auth/') && pathname !== '/api/v1/auth/logout'
   } catch {
     return path.includes('/api/v1/auth/')
   }
@@ -153,7 +154,7 @@ function extractAuthErrorCodes(payload: unknown) {
 
 export async function shouldTryAccessTokenRefresh(path: string, response: Response, headers: Headers) {
   if (response.status !== 401) return false
-  if (isAuthEndpoint(path)) return false
+  if (skipsAccessTokenRefresh(path)) return false
   if (!headers.has('Authorization') && !readStoredAccessToken()) return false
   try {
     const isJson = response.headers.get('content-type')?.includes('application/json')
