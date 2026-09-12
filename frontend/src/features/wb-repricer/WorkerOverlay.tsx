@@ -643,7 +643,7 @@ export function WorkerOverlay() {
         setFinanceDiagnostics(payload)
         setFinanceError(null)
         if (refresh) {
-          resetLiveRepricerParityCache()
+          resetLiveRepricerParityCache(accessToken)
           const productsRuntime = window as typeof window & {
             __vellaLoadLiveRepricerProducts?: () => void | Promise<unknown>
           }
@@ -659,7 +659,7 @@ export function WorkerOverlay() {
     } finally {
       setFinanceLoading(false)
     }
-  }, [headers])
+  }, [accessToken, headers])
 
   const toggleFinancePanel = useCallback(() => {
     const shouldOpen = openPanel !== 'finance'
@@ -736,7 +736,7 @@ export function WorkerOverlay() {
         }
       }
       closePendingApproval(approvalId)
-      resetLiveRepricerParityCache()
+      resetLiveRepricerParityCache(accessToken)
       window.dispatchEvent(new CustomEvent('vella:products-rows-updated'))
       window.dispatchEvent(new CustomEvent('vella:products-kpi-updated'))
       if (decision === 'approve') void loadStatus()
@@ -751,7 +751,7 @@ export function WorkerOverlay() {
     } finally {
       setApprovalBusy(null)
     }
-  }, [closePendingApproval, headers, loadStatus])
+  }, [accessToken, closePendingApproval, headers, loadStatus])
 
   useEffect(() => {
     if (!visible) return
@@ -801,7 +801,7 @@ export function WorkerOverlay() {
           }
         : current)
       if (succeededIds.size) {
-        resetLiveRepricerParityCache()
+        resetLiveRepricerParityCache(accessToken)
         window.dispatchEvent(new CustomEvent('vella:products-rows-updated'))
         window.dispatchEvent(new CustomEvent('vella:products-kpi-updated'))
       }

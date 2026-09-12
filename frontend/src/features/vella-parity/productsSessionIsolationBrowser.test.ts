@@ -1,0 +1,194 @@
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import react from '@vitejs/plugin-react'
+import { chromium, type Route } from 'playwright'
+import { build } from 'vite'
+import { expect, it } from 'vitest'
+
+type Account = 'A' | 'B'
+
+const envelope = (data: unknown) => ({ data, timestamp: '2026-09-12T12:00:00Z' })
+
+function cabinetMe(account: Account) {
+  const userId = account === 'A' ? '1' : '2'
+  const organizationId = account === 'A' ? 7 : 8
+  return {
+    organization: { organizationId, slug: `org-${account.toLowerCase()}`, name: `Org ${account}`, createdAt: '2026-01-01T00:00:00Z' },
+    user: { userId, organizationId, email: `${account.toLowerCase()}@test.local`, fullName: `User ${account}`, permissionProfile: 'admin', permissions: [], isActive: true, createdAt: '2026-01-01T00:00:00Z' },
+    activeSession: null,
+    preferences: { userId, notificationSettings: {}, exportSettings: {}, timezone: 'Europe/Moscow', updatedAt: '2026-09-12T00:00:00Z' },
+  }
+}
+
+function product(account: Account, index: number) {
+  return {
+    meta: {
+      articleId: `SKU-${account}-${index}`,
+      nmId: (account === 'A' ? 100_000 : 200_000) + index,
+      name: `Товар ${account}-${index}`,
+      status: 'auto',
+      currentPriceKopecks: 200_000,
+      basketsLast7d: 1,
+      basketNorm: 10,
+    },
+    settings: { wbCommissionPct: 15, minMarginPct: 20, cogsKopecks: 80_000, logisticsKopecks: 10_000 },
+    analytics: { baskets: 1, financeState: 'ok' },
+  }
+}
+
+function skuPayload(account: Account) {
+  const total = account === 'A' ? 3410 : 7
+  const items = Array.from({ length: account === 'A' ? 10 : 7 }, (_, index) => product(account, index + 1))
+  return {
+    items,
+    total,
+    totalCached: total,
+    itemsReturned: items.length,
+    page: 1,
+    pageSize: 150,
+    summary: { skuCount: total, totalBaskets: items.length },
+    cache: { pagesCached: 1, totalCached: total, nextOffset: total, pageLimit: 1000, basketsMatchedNmIds: total },
+  }
+}
+
+it.each([
+  { label: 'cached products', holdAccountARefresh: false },
+  { label: 'late account A refresh', holdAccountARefresh: true },
+])('isolates account B products from $label after logout', async ({ holdAccountARefresh }) => {
+  const root = fileURLToPath(new URL('../../../', import.meta.url))
+  const result = await build({
+    configFile: false,
+    envFile: false,
+    root,
+    logLevel: 'silent',
+    plugins: [react()],
+    define: {
+      'process.env.NODE_ENV': JSON.stringify('test'),
+      'import.meta.env.VITE_API_BASE_URL': JSON.stringify(''),
+      'import.meta.env.VITE_WB_LIVE_ENABLED': JSON.stringify('false'),
+      'import.meta.env.VITE_AUTH_BYPASS': JSON.stringify('false'),
+    },
+    resolve: { alias: { '@': path.join(root, 'src') } },
+    build: {
+      write: false,
+      minify: false,
+      lib: {
+        entry: fileURLToPath(new URL('./__fixtures__/productsSessionIsolationBrowser.tsx', import.meta.url)),
+        formats: ['iife'],
+        name: 'ProductsSessionIsolationTest',
+      },
+    },
+  })
+  const bundle = (Array.isArray(result) ? result : [result])
+    .flatMap(output => 'output' in output ? output.output : [])
+    .find(output => output.type === 'chunk' && output.isEntry)
+  if (!bundle || bundle.type !== 'chunk') throw new Error('Missing products session isolation bundle')
+
+  const browser = await chromium.launch({ headless: true })
+  let releaseAccountB: () => void = () => undefined
+  let releaseAccountARefresh: () => void = () => undefined
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
+    const errors: string[] = []
+    const skuRequests: Account[] = []
+    const refreshRequests: Account[] = []
+    const accountBResponse = new Promise<void>((resolve) => { releaseAccountB = resolve })
+    const accountARefreshResponse = new Promise<void>((resolve) => { releaseAccountARefresh = resolve })
+    page.on('pageerror', error => errors.push(error.message))
+    page.on('console', message => {
+      if (message.type() === 'error' && !message.text().startsWith('An empty string')) errors.push(message.text())
+    })
+    await page.route('**/*', async (route: Route) => {
+      const request = route.request()
+      const url = new URL(request.url())
+      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && !url.pathname.startsWith('/api/')) {
+        return route.fulfill({ contentType: 'text/html', body: '<title>Products session isolation</title><div id="root"></div>' })
+      }
+      if (request.resourceType() === 'image') {
+        return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
+      }
+      if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
+      if (!url.pathname.startsWith('/api/')) return route.abort()
+
+      const account: Account = request.headers().authorization === 'Bearer account-b-token' ? 'B' : 'A'
+      if (url.pathname === '/api/v1/auth/logout') return route.fulfill({ json: envelope({ status: 'ok' }) })
+      if (url.pathname === '/api/v1/auth/login') return route.fulfill({ json: envelope({ accessToken: 'account-b-token', expiresIn: 3600, tokenType: 'bearer' }) })
+      if (url.pathname === '/api/v1/auth/refresh') return route.fulfill({ status: 401, json: { error: { code: 'AUTH_REQUIRED', message: 'No synthetic refresh session' } } })
+      if (url.pathname === '/api/v1/cabinet/me') return route.fulfill({ json: envelope(cabinetMe(account)) })
+      if (url.pathname === '/api/v1/cabinet/sessions') return route.fulfill({ json: envelope([]) })
+      if (request.method() === 'POST' && url.pathname === '/api/v1/wb-repricer/sku/refresh') {
+        refreshRequests.push(account)
+        if (account === 'A') await accountARefreshResponse
+        return route.fulfill({ json: skuPayload(account) })
+      }
+      if (url.pathname === '/api/v1/wb-repricer/sku') {
+        skuRequests.push(account)
+        if (account === 'B') await accountBResponse
+        return route.fulfill({ json: skuPayload(account) })
+      }
+      if (url.pathname === '/api/v1/wb-repricer/strategies/catalog') return route.fulfill({ json: { items: [], total: 0 } })
+      if (url.pathname === '/api/v1/wb-repricer/sku-groups') return route.fulfill({ json: { items: [], total: 0 } })
+      if (url.pathname === '/api/v1/wb-repricer/sync/status') return route.fulfill({ json: { state: 'completed', running: false, steps: [] } })
+      if (url.pathname === '/api/v1/wb-repricer/worker/status') return route.fulfill({ json: { available: true, tasks: [] } })
+      if (url.pathname === '/api/v1/wb-repricer/changelog') return route.fulfill({ json: { items: [], total: 0 } })
+      if (url.pathname === '/api/v1/cabinet/team/users') return route.fulfill({ json: envelope([]) })
+      if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: envelope({ userId: account === 'A' ? '1' : '2', hasToken: false, tokenMasked: null, updatedAt: null }) })
+      if (url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: envelope({ userId: account === 'A' ? '1' : '2', hasCredentials: false, clientIdMasked: null, clientSecretMasked: null, accessTokenExpiresAt: null, updatedAt: null }) })
+      return route.fulfill({ json: envelope([]) })
+    })
+
+    await page.goto('http://satorna.test/wb/repricer')
+    await page.evaluate(() => localStorage.setItem('ogni.auth.access-token', 'account-a-token'))
+    await page.addScriptTag({ content: bundle.code })
+    const products = page.locator('#tab-products')
+    await expect.poll(() => products.locator('#totalCount').innerText(), { timeout: 15_000 }).toBe('3410')
+    await expect.poll(() => products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-A-1'))
+    if (holdAccountARefresh) {
+      await page.evaluate(() => {
+        const probe = window as typeof window & { __sessionIsolationRefreshPromise?: Promise<unknown> }
+        probe.__sessionIsolationRefreshPromise = Promise.resolve(window.__vellaRefreshLiveRepricerProducts?.(0)).catch(error => error)
+      })
+      await expect.poll(() => refreshRequests.includes('A')).toBe(true)
+    }
+
+    await page.locator('.user-chip').click()
+    await page.getByRole('button', { name: /Выйти/ }).click()
+    await page.waitForURL('**/auth/login')
+    await page.getByLabel('Email').fill('b@test.local')
+    await page.getByLabel('Пароль').fill('password')
+    await page.getByRole('button', { name: 'Войти' }).click()
+    await page.waitForURL('**/wb/repricer')
+    const accountAGetCountAfterLogin = skuRequests.filter(account => account === 'A').length
+
+    await expect.poll(() => skuRequests.includes('B'), { timeout: 3000 }).toBe(true)
+    expect(await products.locator('[data-sku]:visible').allInnerTexts()).not.toContainEqual(expect.stringContaining('SKU-A-1'))
+    releaseAccountB()
+    await expect.poll(() => products.locator('#totalCount').innerText()).toBe('7')
+    await expect.poll(() => products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-B-1'))
+    expect(await products.locator('[data-sku]:visible').allInnerTexts()).not.toContainEqual(expect.stringContaining('SKU-A-1'))
+    if (holdAccountARefresh) {
+      releaseAccountARefresh()
+      await page.evaluate(async () => {
+        const probe = window as typeof window & { __sessionIsolationRefreshPromise?: Promise<unknown> }
+        await probe.__sessionIsolationRefreshPromise
+      })
+      expect(skuRequests.filter(account => account === 'A')).toHaveLength(accountAGetCountAfterLogin)
+      expect(await products.locator('#totalCount').innerText()).toBe('7')
+      expect(await products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-B-1'))
+      expect(await products.locator('[data-sku]:visible').allInnerTexts()).not.toContainEqual(expect.stringContaining('SKU-A-1'))
+    }
+    const accountBGetCountBeforeRefresh = skuRequests.filter(account => account === 'B').length
+    const accountBRefreshCountBefore = refreshRequests.filter(account => account === 'B').length
+    await page.evaluate(() => window.__vellaRefreshLiveRepricerProducts?.(0))
+    expect(refreshRequests.filter(account => account === 'B')).toHaveLength(accountBRefreshCountBefore + 1)
+    expect(skuRequests.filter(account => account === 'B')).toHaveLength(accountBGetCountBeforeRefresh + 1)
+    expect(await products.locator('#totalCount').innerText()).toBe('7')
+    expect(await products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-B-1'))
+    expect(await products.locator('[data-sku]:visible').allInnerTexts()).not.toContainEqual(expect.stringContaining('SKU-A-1'))
+    expect(errors).toEqual([])
+  } finally {
+    releaseAccountB()
+    releaseAccountARefresh()
+    await browser.close()
+  }
+}, 60_000)

@@ -9903,7 +9903,7 @@ type PnlCashFlowRow = {
 }
 
 type PnlCashFlowPayload = {
-  status?: 'ready' | 'pending' | 'processing' | string | null
+  status?: 'ready' | 'pending' | 'processing' | 'disabled' | string | null
   job_id?: string | null
   data?: {
     job_id?: string | null
@@ -9934,8 +9934,16 @@ type PnlBackendReport = {
   rows?: PnlBackendRow[] | null
   cashFlow?: PnlCashFlowPayload | null
   reportJob?: PnlReportJobPayload | null
+  blockerIds?: string[] | null
   canonical?: CanonicalCompatibilityMeta | null
   canonicalSummary?: CanonicalAbcPnlPage['summary'] | null
+}
+
+const ONE_C_DISABLED_TITLE = 'Операционные расходы недоступны'
+const ONE_C_DISABLED_MESSAGE = 'Интеграция с 1С отключена. Данные расходов за выбранный период не получены.'
+
+function isOneCDisabledReport(report: { cashFlow?: PnlCashFlowPayload | null; blockerIds?: string[] | null } | null) {
+  return report?.cashFlow?.status === 'disabled' || report?.blockerIds?.includes('ONE_C_DISABLED') === true
 }
 
 type PnlLiveState =
@@ -10640,6 +10648,7 @@ type ExpensesBackendReport = {
   rows?: ExpensesBackendRow[] | null
   cashFlow?: PnlCashFlowPayload | null
   reportJob?: PnlReportJobPayload | null
+  blockerIds?: string[] | null
 }
 
 type ExpenseFinanceDrawerKind = 'ddsRule' | 'allocation' | 'review'
@@ -11151,22 +11160,27 @@ function ExpensesReportActiveIsland({ replacementKey }: { replacementKey: string
   }, [state])
 
   const expensesRows = state.status === 'ready' ? getExpensesRows(state.report) : []
-  const expensesHasRows = state.status === 'ready' && expensesRows.length > 0
+  const expensesSourceDisabled = state.status === 'ready' && isOneCDisabledReport(state.report)
+  const expensesHasRows = state.status === 'ready' && !expensesSourceDisabled && expensesRows.length > 0
   const expensesStateVariant: 'loading' | 'empty' | 'error' = state.status === 'loading'
     ? 'loading'
     : state.status === 'error'
       ? 'error'
       : 'empty'
-  const expensesStateTitle = state.status === 'loading'
-    ? 'Ждем расходы из 1С'
-    : state.status === 'error'
-      ? 'Расходы не загрузились'
-      : 'За выбранный период нет расходов'
-  const expensesStateMessage = state.status === 'loading'
-    ? 'Отчет появится автоматически, когда 1С пришлет данные за выбранный период.'
-    : state.status === 'error'
-      ? cleanReportStateMessage(state.message)
-      : 'Попробуйте выбрать другой период или проверьте, были ли в 1С расходные статьи за эти даты.'
+  const expensesStateTitle = expensesSourceDisabled
+    ? ONE_C_DISABLED_TITLE
+    : state.status === 'loading'
+      ? 'Ждем расходы из 1С'
+      : state.status === 'error'
+        ? 'Расходы не загрузились'
+        : 'За выбранный период нет расходов'
+  const expensesStateMessage = expensesSourceDisabled
+    ? ONE_C_DISABLED_MESSAGE
+    : state.status === 'loading'
+      ? 'Отчет появится автоматически, когда 1С пришлет данные за выбранный период.'
+      : state.status === 'error'
+        ? cleanReportStateMessage(state.message)
+        : 'Попробуйте выбрать другой период или проверьте, были ли в 1С расходные статьи за эти даты.'
 
   return (
     <div
@@ -12960,6 +12974,7 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
     pnlExport.current = select
     return () => { if (pnlExport.current === select) pnlExport.current = null }
   }, [accessToken, activeTab, canonicalPnlEnabled, canonicalRollout, manager, pnlExport, query, selectedRows, state])
+  const operationalSourceDisabled = isOperationalPnl && state.status === 'ready' && isOneCDisabledReport(state.report)
   const operationalCashFlowReady = isOperationalPnl && state.status === 'ready' && state.report.cashFlow?.status === 'ready'
   const operationalWaitingJob = state.status === 'ready'
     ? describePnlReportJob(state.report.reportJob ?? { state: operationalCashFlowReady ? 'completed' : 'waiting_1c', stage: operationalCashFlowReady ? 'completed' : 'waiting_1c', label: operationalCashFlowReady ? '1С ДДС готова' : 'Ждём 1С ДДС', percent: operationalCashFlowReady ? 100 : 20 })
@@ -13310,7 +13325,23 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       />
       <PnlLiveSourceStripIsland replacementKey={`${replacementKey}-source`} state={state} period={periodState} source={pnlSource} />
       {isOperationalPnl ? (
-        operationalCashFlowReady ? (
+        operationalSourceDisabled ? (
+          <ReportDataStateIsland
+            replacementKey={`${replacementKey}-disabled-1c`}
+            tabId="pnl"
+            variant="empty"
+            title={ONE_C_DISABLED_TITLE}
+            message={ONE_C_DISABLED_MESSAGE}
+          />
+        ) : state.status === 'error' ? (
+          <ReportDataStateIsland
+            replacementKey={`${replacementKey}-state`}
+            tabId="pnl"
+            variant="error"
+            title={pnlStateTitle}
+            message={pnlStateMessage}
+          />
+        ) : operationalCashFlowReady ? (
           <>
             <PnlLiveCostPanelIsland replacementKey={`${replacementKey}-op-cost`} state={state} />
             <PnlLiveStatusGridIsland replacementKey={`${replacementKey}-status-grid`} state={state} />
@@ -27498,7 +27529,7 @@ function ProductsBackendCacheControlsIsland() {
       setWorkerStatus(null)
       return null
     }
-    const status = await sharedStatusRequest('worker-status-4', 10_000, () =>
+    const status = await sharedStatusRequest(JSON.stringify([accessToken, 'worker-status-4']), 10_000, () =>
       apiRequest<ProductsWorkerStatusLite>('/api/v1/wb-repricer/worker/status?limit=4', {
         headers: authorizationHeaders(accessToken),
         cache: 'no-store',
@@ -27757,7 +27788,7 @@ function ProductsBackendCacheControlsIsland() {
 
     const reloadCompletedRange = async (generation: number) => {
       if (generation !== basketsDetailGenerationRef.current) return
-      resetLiveRepricerParityCache()
+      resetLiveRepricerParityCache(accessToken)
       const loaded = await window.__vellaLoadLiveRepricerProducts?.()
       if (generation !== basketsDetailGenerationRef.current) return
       window.__vellaProductsCacheMeta = loaded?.cache ?? window.__vellaProductsCacheMeta
@@ -30040,6 +30071,7 @@ function nestedAlgorithmValue(source: Record<string, unknown>, key: string) {
 }
 
 function AlgorithmCardsIsland({ replacementKey, sourceElement }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
+  const { accessToken } = useAuth()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [html, setHtml] = useState(() => prepareAlgorithmCardsHtml(sourceElement))
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null)
@@ -30172,7 +30204,7 @@ function AlgorithmCardsIsland({ replacementKey, sourceElement }: { replacementKe
             const normalized = typeof response === 'object' && response !== null ? response as Record<string, unknown> : payload
             setSettings(normalized)
             setSavedAt(String(normalized.savedAt || new Date().toISOString()))
-            resetLiveRepricerParityCache()
+            resetLiveRepricerParityCache(accessToken)
             void window.__vellaLoadLiveRepricerProducts?.()
           })
           .catch((err) => {
@@ -30190,7 +30222,7 @@ function AlgorithmCardsIsland({ replacementKey, sourceElement }: { replacementKe
       root.removeEventListener('change', markDirty)
       root.removeEventListener('input', markDirty)
     }
-  }, [settings, html])
+  }, [accessToken, settings, html])
 
   useEffect(() => {
     const root = rootRef.current
@@ -32215,7 +32247,7 @@ function LiquidationIsland({ replacementKey }: { replacementKey: string }) {
     setError(null)
     try {
       const period = productsPeriodRequest()
-      await refreshLiveRepricerParityProducts(accessToken, 0, undefined, period)
+      await refreshLiveRepricerParityProducts(accessToken, 0)
       await Promise.all([
         refreshLiveRepricerSource(accessToken, 'stocks', undefined, period),
         refreshLiveRepricerSource(accessToken, 'baskets', undefined, period),
@@ -32977,6 +33009,11 @@ function parseFirstHtmlElement(html: string) {
   return element instanceof HTMLElement ? element : null
 }
 
+const redundantProductsCountReplacements: HtmlReactReplacement[] = [{
+  selector: '[data-tab="products"] > .nav-badge, [data-tab="products"] > .subtab-count',
+  render: () => null,
+}]
+
 const ShellSidebarIsland = memo(function ShellSidebarIsland({ html }: { html: string }) {
   const { pathname } = useLocation()
   const sidebar = parseFirstHtmlElement(html)
@@ -33044,7 +33081,7 @@ const ShellSidebarIsland = memo(function ShellSidebarIsland({ html }: { html: st
       data-vella-island="sidebar"
       data-vella-island-status="explicit-jsx"
     >
-      {htmlToReactFragment(sidebar.innerHTML, 'shell-sidebar-content')}
+      {htmlToReactFragment(sidebar.innerHTML, 'shell-sidebar-content', redundantProductsCountReplacements)}
     </aside>
   )
 })
@@ -33076,7 +33113,7 @@ const ShellSubtabsIsland = memo(function ShellSubtabsIsland({ html }: { html: st
       data-vella-island="subtabs"
       data-vella-island-status="explicit-jsx"
     >
-      {htmlToReactFragment(subtabs.innerHTML, 'shell-subtabs-content', shellReplacements)}
+      {htmlToReactFragment(subtabs.innerHTML, 'shell-subtabs-content', [...shellReplacements, ...redundantProductsCountReplacements])}
     </div>
   )
 })
@@ -33620,7 +33657,7 @@ function WorkStatusPageIsland({ replacementKey }: { replacementKey: string }) {
           return
         }
       }
-      resetLiveRepricerParityCache()
+      resetLiveRepricerParityCache(accessToken)
       window.dispatchEvent(new CustomEvent('vella:products-rows-updated'))
       window.dispatchEvent(new CustomEvent('vella:products-kpi-updated'))
       if (decision === 'reject') {
@@ -33673,7 +33710,7 @@ function WorkStatusPageIsland({ replacementKey }: { replacementKey: string }) {
           }
         : current)
       if (succeededIds.size) {
-        resetLiveRepricerParityCache()
+        resetLiveRepricerParityCache(accessToken)
         window.dispatchEvent(new CustomEvent('vella:products-rows-updated'))
         window.dispatchEvent(new CustomEvent('vella:products-kpi-updated'))
       }
@@ -35262,6 +35299,7 @@ export function VellaHtmlParityPage() {
   }, [logout, profile, runtime, sessions, shellSettingsVersion])
 
   useEffect(() => {
+    const controller = new AbortController()
     let productsSearchTimer: number | undefined
     const reloadProductsFirstPage = () => {
       window.__vellaProductsListState = { ...(window.__vellaProductsListState ?? {}), page: 1 }
@@ -35286,11 +35324,12 @@ export function VellaHtmlParityPage() {
       }
       prepareProductsBackendLoad()
       try {
-        const result = await loadProductsPageFromRuntime(accessToken, window.__vellaProductsListState?.page ?? 1)
+        const result = await loadProductsPageFromRuntime(accessToken, window.__vellaProductsListState?.page ?? 1, controller.signal)
+        controller.signal.throwIfAborted()
         finalizeProductsBackendLoad(result)
         return result
       } catch (error) {
-        showProductsBackendError(error)
+        if (!controller.signal.aborted) showProductsBackendError(error)
         throw error
       }
     }
@@ -35307,16 +35346,17 @@ export function VellaHtmlParityPage() {
         const result = await refreshLiveRepricerParityProducts(
           accessToken,
           offset,
-          undefined,
-          productsPeriodRequest(),
+          controller.signal,
         )
+        controller.signal.throwIfAborted()
         window.__vellaProductsCacheMeta = result.cache
         window.__vellaProductsListState = { ...(window.__vellaProductsListState ?? {}), page: 1 }
-        const loaded = await loadProductsPageFromRuntime(accessToken, 1)
+        const loaded = await loadProductsPageFromRuntime(accessToken, 1, controller.signal)
+        controller.signal.throwIfAborted()
         finalizeProductsBackendLoad(loaded)
         return { total: loaded.total, cache: loaded.cache ?? result.cache }
       } catch (error) {
-        showProductsBackendError(error)
+        if (!controller.signal.aborted) showProductsBackendError(error)
         throw error
       }
     }
@@ -35358,6 +35398,7 @@ export function VellaHtmlParityPage() {
       return result
     }
     return () => {
+      controller.abort()
       window.clearTimeout(productsSearchTimer)
       delete window.__vellaLoadLiveRepricerProducts
       delete window.__vellaRefreshLiveRepricerProducts
