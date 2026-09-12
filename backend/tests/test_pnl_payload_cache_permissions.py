@@ -205,8 +205,6 @@ def test_job_endpoints_select_the_callers_permission_cache(
         not finance_allowed,
         None,
     )
-    job_key = reports._report_job_cache_key("pnl", START, END, "sku", "operational")
-    cache.pop((1, job_key))
     monkeypatch.setattr(
         reports, "_report_daily_sources_ready", lambda *args, **kw: (True, [])
     )
@@ -310,6 +308,106 @@ def abc_cache(cache, monkeypatch):
     return cache
 
 
+@pytest.mark.parametrize("report_id", ["abc", "pnl"])
+@pytest.mark.parametrize("build_order", [(True, False), (False, True)])
+def test_overlapping_report_jobs_keep_permission_scopes_isolated(
+    abc_cache, monkeypatch, report_id, build_order
+):
+    monkeypatch.setattr(
+        reports, "_report_daily_sources_ready", lambda *args, **kw: (True, [])
+    )
+    enqueued = {}
+
+    def enqueue(*args):
+        finance_allowed = args[-2]
+        task = SimpleNamespace(
+            id=f"{'finance' if finance_allowed else 'nofinance'}-task"
+        )
+        enqueued[finance_allowed] = args
+        return task
+
+    monkeypatch.setattr(repricer_tasks.build_report_for_org, "delay", enqueue)
+    api = TestClient(create_app())
+
+    for finance_allowed in build_order:
+        headers = auth_headers(
+            api, "finance_viewer" if finance_allowed else "viewer"
+        )
+        started = api.post(
+            f"/api/wb/reports/{report_id}/jobs", params=PARAMS, headers=headers
+        )
+        assert started.status_code == 200
+        assert started.json()["reused"] is False
+        assert started.json()["taskId"] == (
+            "finance-task" if finance_allowed else "nofinance-task"
+        )
+
+        repeated = api.post(
+            f"/api/wb/reports/{report_id}/jobs", params=PARAMS, headers=headers
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["reused"] is True
+        assert repeated.json()["taskId"] == started.json()["taskId"]
+
+    source_suffix = "_operational" if report_id == "pnl" else ""
+    expected_job_keys = {
+        f"reports_job_{report_id}_{START}_{END}_sku{source_suffix}_finance",
+        f"reports_job_{report_id}_{START}_{END}_sku{source_suffix}_nofinance",
+    }
+    assert {
+        key for org, key in abc_cache if key.startswith(f"reports_job_{report_id}_")
+    } == expected_job_keys
+    assert set(enqueued) == {False, True}
+
+    first_allowed, second_allowed = build_order
+    first_result = repricer_tasks.build_report_for_org.run(*enqueued[first_allowed])
+    assert first_result["state"] == "completed"
+
+    first_headers = auth_headers(
+        api, "finance_viewer" if first_allowed else "viewer"
+    )
+    second_headers = auth_headers(
+        api, "finance_viewer" if second_allowed else "viewer"
+    )
+    first_status = api.get(
+        f"/api/wb/reports/{report_id}/jobs", params=PARAMS, headers=first_headers
+    )
+    second_status = api.get(
+        f"/api/wb/reports/{report_id}/jobs", params=PARAMS, headers=second_headers
+    )
+    assert first_status.json()["state"] == "completed"
+    assert second_status.json()["state"] == "queued"
+    assert second_status.json()["taskId"] == (
+        "finance-task" if second_allowed else "nofinance-task"
+    )
+
+    second_result = repricer_tasks.build_report_for_org.run(*enqueued[second_allowed])
+    assert second_result["state"] == "completed"
+    for finance_allowed, headers in (
+        (first_allowed, first_headers),
+        (second_allowed, second_headers),
+    ):
+        response = api.get(
+            f"/api/wb/reports/{report_id}", params=PARAMS, headers=headers
+        )
+        latest = api.get(
+            f"/api/wb/reports/{report_id}/latest-cache",
+            params=PARAMS,
+            headers=headers,
+        )
+        assert response.status_code == latest.status_code == 200
+        expected = 12_345 if finance_allowed else None
+        field = "commissionKopecks" if report_id == "abc" else "overheadKopecks"
+        assert response.json()["rows"][0].get(field) == expected
+        assert latest.json()["rows"][0].get(field) == expected
+        if report_id == "pnl":
+            expected_cash_flow = PRIVATE_CASH_FLOW if finance_allowed else None
+            assert response.json()["cashFlow"] == expected_cash_flow
+            assert latest.json()["cashFlow"] == expected_cash_flow
+        assert response.json()["reportJob"]["state"] == "completed"
+        assert latest.json()["reportJob"]["state"] == "completed"
+
+
 @pytest.mark.parametrize("build_order", [(True, False), (False, True)])
 @pytest.mark.parametrize("suffix,params", [("", PARAMS), ("/latest-cache", PARAMS), ("/latest-cache", {})])
 def test_abc_worker_and_readers_keep_both_permission_variants(abc_cache, build_order, suffix, params):
@@ -382,7 +480,6 @@ def test_abc_job_endpoints_select_the_callers_permission_cache(abc_cache, monkey
     repricer_tasks.build_report_for_org.run(
         1, "synthetic-user", "abc", str(START), str(END), "sku", "operational", not allowed, None
     )
-    abc_cache.pop((1, reports._report_job_cache_key("abc", START, END, "sku", "operational")))
     monkeypatch.setattr(reports, "_report_daily_sources_ready", lambda *args, **kw: (True, []))
     enqueued = []
 

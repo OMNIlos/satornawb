@@ -1015,8 +1015,8 @@ def test_report_source_refresh_task_fails_without_wb_token(monkeypatch):
             None,
         )
 
-    assert saved["reports_job_abc_2026-07-10_2026-07-16_sku"]["state"] == "failed"
-    assert saved["reports_job_abc_2026-07-10_2026-07-16_sku"]["error"] == "no_cabinet_wb_token"
+    assert saved["reports_job_abc_2026-07-10_2026-07-16_sku_finance"]["state"] == "failed"
+    assert saved["reports_job_abc_2026-07-10_2026-07-16_sku_finance"]["error"] == "no_cabinet_wb_token"
 
 
 def test_report_source_refresh_task_fails_on_partial_wb_refresh(monkeypatch):
@@ -1053,7 +1053,7 @@ def test_report_source_refresh_task_fails_on_partial_wb_refresh(monkeypatch):
             None,
         )
 
-    failed_job = saved["reports_job_abc_2026-07-10_2026-07-16_sku"]
+    failed_job = saved["reports_job_abc_2026-07-10_2026-07-16_sku_finance"]
     assert failed_job["state"] == "failed"
     assert failed_job["error"] == "finance: 429 Too Many Requests"
 

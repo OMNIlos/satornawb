@@ -81,7 +81,14 @@ def seed(
         "percent": 37,
         "label": "Loading source",
     }
-    key = reports._report_job_cache_key(report_id, START, END, "sku", "operational")
+    key = reports._report_job_cache_key(
+        report_id,
+        START,
+        END,
+        "sku",
+        "operational",
+        finance_allowed=False,
+    )
     runtime.cache[1, key] = deepcopy(job)
     if cached:
         versions = {
@@ -483,7 +490,14 @@ def test_pnl_prepares_1c_before_either_dispatch(
         lambda *args: enqueue("refresh", args),
     )
     headers = auth_headers(runtime.api, "finance_viewer" if finance_allowed else "viewer")
-    key = reports._report_job_cache_key("pnl", START, END, "sku", "operational")
+    key = reports._report_job_cache_key(
+        "pnl",
+        START,
+        END,
+        "sku",
+        "operational",
+        finance_allowed=finance_allowed,
+    )
     for reused in (False, True):
         response = runtime.api.post(
             f"/api/wb/reports/pnl/{endpoint}", params=PARAMS, headers=headers

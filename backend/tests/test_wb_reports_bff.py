@@ -734,6 +734,7 @@ def test_report_job_status_does_not_overwrite_active_source_refresh(monkeypatch)
 
     monkeypatch.setattr(wb_reports_bff, "actor_from_request", lambda _request: SimpleNamespace(organization_id=1, user_id="viewer"))
     monkeypatch.setattr(wb_reports_bff, "assert_permission_or_audit", lambda **_kwargs: None)
+    monkeypatch.setattr(wb_reports_bff, "has_permission", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         wb_reports_bff,
         "get_source_cache",

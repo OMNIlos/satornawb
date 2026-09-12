@@ -206,7 +206,14 @@ def refresh_report_sources_for_org(self, organization_id: int, user_id: str, rep
     date_from = date_type.fromisoformat(date_from_iso)
     date_to = date_type.fromisoformat(date_to_iso)
     plan = _report_source_refresh_plan(report_id)
-    job_key = reports._digest_job_cache_key(date_from, date_to) if report_id == "digest" else reports._report_job_cache_key(report_id, date_from, date_to, group_by, source)
+    job_key = reports._digest_job_cache_key(date_from, date_to) if report_id == "digest" else reports._report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        group_by,
+        source,
+        finance_allowed=finance_allowed,
+    )
     task_id = str(getattr(self.request, "id", None) or f"manual-refresh-{uuid4().hex[:12]}")
     started_at = reports._utc_now_iso()
     resolved_wb_token = _report_refresh_wb_token(organization_id, user_id, wb_token)
@@ -302,7 +309,14 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
     date_from = date_type.fromisoformat(date_from_iso)
     date_to = date_type.fromisoformat(date_to_iso)
     date_range = {"preset": "custom", "from": date_from_iso, "to": date_to_iso}
-    job_key = reports._report_job_cache_key(report_id, date_from, date_to, group_by, source)
+    job_key = reports._report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        group_by,
+        source,
+        finance_allowed=finance_allowed,
+    )
     cache_key = reports._report_cache_key(
         report_id,
         date_from,
@@ -1463,7 +1477,13 @@ def _materialize_report_snapshots_for_profile(organization_id: int, profile: WbS
             reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="pnl", date_from=date_from, date_to=date_to, group_by="sku", source="financial", report=pnl_report, finance_allowed=True)
             reports.save_source_cache(
                 organization_id,
-                reports._report_job_cache_key("pnl", date_from, date_to, "sku"),
+                reports._report_job_cache_key(
+                    "pnl",
+                    date_from,
+                    date_to,
+                    "sku",
+                    finance_allowed=True,
+                ),
                 reports._completed_report_job_from_cache("pnl", date_from, date_to, "sku", pnl_cache, {"source": "report-snapshots"}),
             )
             saved.append("pnl")

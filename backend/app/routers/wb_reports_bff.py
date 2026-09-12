@@ -3439,9 +3439,22 @@ def _report_cache_key(
     return f"reports_payload_{report_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}"
 
 
-def _report_job_cache_key(report_id: str, date_from: date, date_to: date, group_by: str, source: str | None = None) -> str:
+def _report_job_cache_key(
+    report_id: str,
+    date_from: date,
+    date_to: date,
+    group_by: str,
+    source: str | None = None,
+    *,
+    finance_allowed: bool | None = None,
+) -> str:
     source_suffix = f"_{source}" if report_id == "pnl" and source else ""
-    return f"reports_job_{report_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}{source_suffix}"
+    finance_suffix = (
+        f"_{'finance' if finance_allowed else 'nofinance'}"
+        if report_id in {"abc", "pnl"} and finance_allowed is not None
+        else ""
+    )
+    return f"reports_job_{report_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}{source_suffix}{finance_suffix}"
 
 
 def _parse_report_job_timestamp(value: Any) -> datetime | None:
@@ -4401,6 +4414,7 @@ def get_reports_latest_cache(
             return payload
         raise HTTPException(status_code=404, detail="REPORT_LATEST_CACHE_MISSING")
 
+    finance_allowed = has_permission(actor, "finance:read")
     requested_from = None
     requested_to = None
     if preset != "latest" or from_ or to:
@@ -4413,7 +4427,7 @@ def get_reports_latest_cache(
         source=source,
         date_from=requested_from,
         date_to=requested_to,
-        finance_allowed=has_permission(actor, "finance:read"),
+        finance_allowed=finance_allowed,
     )
     if latest is None:
         if report_id == "week-over-week" and requested_from is not None and requested_to is not None:
@@ -4424,7 +4438,7 @@ def get_reports_latest_cache(
                 date_from=requested_from,
                 date_to=requested_to,
                 date_range=date_range,
-                finance_allowed=has_permission(actor, "finance:read"),
+                finance_allowed=finance_allowed,
                 wb_token=None,
             )
             if _week_report_has_period_activity(payload):
@@ -4437,7 +4451,14 @@ def get_reports_latest_cache(
                     source=source,
                     report=payload,
                 )
-                job_key = _report_job_cache_key(report_id, requested_from, requested_to, groupBy, source)
+                job_key = _report_job_cache_key(
+                    report_id,
+                    requested_from,
+                    requested_to,
+                    groupBy,
+                    source,
+                    finance_allowed=finance_allowed,
+                )
                 job = get_source_cache(actor.organization_id, job_key, slim=False) or {}
                 response_job = _completed_report_job_from_cache(report_id, requested_from, requested_to, groupBy, cache, job)
                 if response_job != job:
@@ -4451,7 +4472,18 @@ def get_reports_latest_cache(
     if report is None:
         raise HTTPException(status_code=404, detail="REPORT_LATEST_CACHE_MISSING")
     date_range = {"preset": "custom", "from": date_from.isoformat(), "to": date_to.isoformat()}
-    job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {}
+    job = get_source_cache(
+        actor.organization_id,
+        _report_job_cache_key(
+            report_id,
+            date_from,
+            date_to,
+            groupBy,
+            source,
+            finance_allowed=finance_allowed,
+        ),
+        slim=False,
+    ) or {}
     payload = _apply_report_rules_to_payload(report, actor.organization_id, compact_abc=False) if report_id == "abc" else dict(report)
     payload["cache"] = _report_payload_cache_meta(cache, date_range, "latest")
     payload["reportJob"] = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cache, job)
@@ -4662,6 +4694,14 @@ def get_reports_by_id(
     finance_allowed = has_permission(actor, "finance:read")
     wb_token = None if report_id in BACKGROUND_REPORT_IDS else _actor_wb_token(actor)
     date_from, date_to, date_range = _range_from_preset(preset, from_, to)
+    job_key = _report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        groupBy,
+        source,
+        finance_allowed=finance_allowed,
+    )
 
     if report_id == "expenses":
         cash_flow = get_cash_flow_for_period(
@@ -4670,7 +4710,7 @@ def get_reports_by_id(
             period_to=date_to,
             requested_by=actor.user_id,
         )
-        job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {
+        job = get_source_cache(actor.organization_id, job_key, slim=False) or {
             "state": "waiting_1c" if cash_flow.get("status") in {"pending", "processing"} else "completed",
             "reportId": report_id,
             "dateFrom": date_from.isoformat(),
@@ -4689,7 +4729,7 @@ def get_reports_by_id(
         if report is not None and _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
             job = get_source_cache(
                 actor.organization_id,
-                _report_job_cache_key(report_id, date_from, date_to, groupBy, source),
+                job_key,
                 slim=False,
             ) or {}
             payload = dict(report)
@@ -4701,7 +4741,7 @@ def get_reports_by_id(
         cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
         cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
         report = cached.get("report") if isinstance(cached.get("report"), dict) else None
-        job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {
+        job = get_source_cache(actor.organization_id, job_key, slim=False) or {
             "state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy,
         }
         if report is not None:
@@ -4710,7 +4750,7 @@ def get_reports_by_id(
             job = _report_job_for_response(job)
             response_job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
             if response_job != job:
-                save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), response_job)
+                save_source_cache(actor.organization_id, job_key, response_job)
             job = response_job
             payload = _apply_report_rules_to_payload(report, actor.organization_id)
             payload["cache"] = _report_payload_cache_meta(
@@ -4726,7 +4766,7 @@ def get_reports_by_id(
         cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=finance_allowed)
         cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
         report = cached.get("report") if isinstance(cached.get("report"), dict) else None
-        job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {
+        job = get_source_cache(actor.organization_id, job_key, slim=False) or {
             "state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy,
         }
         if report is not None:
@@ -4735,7 +4775,7 @@ def get_reports_by_id(
             job = _report_job_for_response(job)
             response_job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
             if response_job != job:
-                save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), response_job)
+                save_source_cache(actor.organization_id, job_key, response_job)
             job = response_job
             payload = _apply_report_rules_to_payload(report, actor.organization_id)
             payload["cache"] = _report_payload_cache_meta(
@@ -4751,7 +4791,6 @@ def get_reports_by_id(
     if daily_sources:
         ready, missing_sources = _report_daily_sources_ready(actor.organization_id, daily_sources, date_from=date_from, date_to=date_to)
         if not ready:
-            job_key = _report_job_cache_key(report_id, date_from, date_to, groupBy)
             current_job = get_source_cache(actor.organization_id, job_key, slim=False) or {}
             if _report_job_is_reusable(current_job):
                 return _empty_background_report(report_id, date_range, groupBy, current_job)
@@ -4901,8 +4940,16 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
     actor = actor_from_request(request)
     assert_permission_or_audit(actor=actor, permission="finance:read" if report_id == "expenses" else "settings:read", action="reports.bff.job.start", object_type="wb_report", object_id=report_id, reason="actor cannot refresh report")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
-    key = _report_job_cache_key(report_id, date_from, date_to, groupBy, source)
-    cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=has_permission(actor, "finance:read"))
+    finance_allowed = has_permission(actor, "finance:read")
+    key = _report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        groupBy,
+        source,
+        finance_allowed=finance_allowed,
+    )
+    cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=finance_allowed)
     cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
     current = get_source_cache(actor.organization_id, key, slim=False) or {}
     if _report_job_is_reusable(current):
@@ -4922,7 +4969,7 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
             period_to=date_to,
             requested_by=actor.user_id,
         )
-    cash_flow_response = {"cashFlow": cash_flow if has_permission(actor, "finance:read") else None} if cash_flow is not None else {}
+    cash_flow_response = {"cashFlow": cash_flow if finance_allowed else None} if cash_flow is not None else {}
     daily_sources = REPORT_DAILY_SOURCES_BY_ID.get(report_id, ())
     if daily_sources:
         ready, missing_sources = _report_daily_sources_ready(actor.organization_id, daily_sources, date_from=date_from, date_to=date_to)
@@ -4937,7 +4984,7 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
                 date_to.isoformat(),
                 groupBy,
                 source,
-                has_permission(actor, "finance:read"),
+                finance_allowed,
                 None,
             )
             payload = {
@@ -4954,7 +5001,7 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
             save_source_cache(actor.organization_id, key, payload)
             return {**payload, "reused": False, **cash_flow_response}
     from app.repricer_tasks import build_report_for_org
-    task = build_report_for_org.delay(actor.organization_id, actor.user_id, report_id, date_from.isoformat(), date_to.isoformat(), groupBy, source, has_permission(actor, "finance:read"), None)
+    task = build_report_for_org.delay(actor.organization_id, actor.user_id, report_id, date_from.isoformat(), date_to.isoformat(), groupBy, source, finance_allowed, None)
     payload = {"state": "queued", "taskId": task.id, "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy, "source": source, "queuedAt": _utc_now_iso()}
     save_source_cache(actor.organization_id, key, payload)
     return {**payload, "reused": False, **cash_flow_response}
@@ -4973,7 +5020,15 @@ def start_report_source_refresh_job(
     actor = actor_from_request(request)
     assert_permission_or_audit(actor=actor, permission="settings:read", action="reports.bff.sources_refresh.start", object_type="wb_report", object_id=report_id, reason="actor cannot refresh report sources")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
-    key = _digest_job_cache_key(date_from, date_to) if report_id == "digest" else _report_job_cache_key(report_id, date_from, date_to, groupBy, source)
+    finance_allowed = has_permission(actor, "finance:read")
+    key = _digest_job_cache_key(date_from, date_to) if report_id == "digest" else _report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        groupBy,
+        source,
+        finance_allowed=finance_allowed,
+    )
     current = get_source_cache(actor.organization_id, key, slim=False) or {}
     if _report_job_is_active_refresh(current):
         return {**current, "reused": True}
@@ -4985,7 +5040,7 @@ def start_report_source_refresh_job(
             requested_by=actor.user_id,
         )
     from app.repricer_tasks import refresh_report_sources_for_org
-    task = refresh_report_sources_for_org.delay(actor.organization_id, actor.user_id, report_id, date_from.isoformat(), date_to.isoformat(), groupBy, source, has_permission(actor, "finance:read"), None)
+    task = refresh_report_sources_for_org.delay(actor.organization_id, actor.user_id, report_id, date_from.isoformat(), date_to.isoformat(), groupBy, source, finance_allowed, None)
     payload = {
         "state": "queued",
         "taskId": task.id,
@@ -5009,7 +5064,15 @@ def get_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pn
     actor = actor_from_request(request)
     assert_permission_or_audit(actor=actor, permission="finance:read" if report_id == "expenses" else "settings:read", action="reports.bff.job.status", object_type="wb_report", object_id=report_id, reason="actor cannot read report job")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
-    key = _report_job_cache_key(report_id, date_from, date_to, groupBy, source)
+    finance_allowed = has_permission(actor, "finance:read")
+    key = _report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        groupBy,
+        source,
+        finance_allowed=finance_allowed,
+    )
     job = get_source_cache(actor.organization_id, key, slim=False) or {"state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy}
     if _report_job_is_reusable(job):
         return _report_job_for_response({**job, "reused": True})
@@ -5017,7 +5080,7 @@ def get_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pn
         return _report_job_for_response({**job, "reused": True})
     cached = get_source_cache(
         actor.organization_id,
-        _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=has_permission(actor, "finance:read")),
+        _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=finance_allowed),
         slim=False,
     ) or {}
     if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
