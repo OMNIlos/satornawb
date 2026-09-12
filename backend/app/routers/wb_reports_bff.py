@@ -2860,23 +2860,30 @@ def _map_abc_to_report_response(payload: Any, date_range: dict[str, str]) -> dic
 
 
 def _map_pnl_to_report_response(payload: Any, date_range: dict[str, str], cash_flow: dict[str, Any] | None = None, *, finance_allowed: bool = False) -> dict[str, Any]:
-    financial_confirmation_status = "confirmed" if "WB-03" not in payload.blockerIds else "pending"
+    cash_flow_disabled = (cash_flow or {}).get("status") == "disabled"
+    financial_confirmation_status = "confirmed" if "WB-03" not in payload.blockerIds and not cash_flow_disabled else "pending"
+    source_status = "partial" if cash_flow_disabled and payload.sourceStatus == "fresh" else payload.sourceStatus
+    rows = [row.model_dump(mode="json") for row in payload.rows]
+    if cash_flow_disabled:
+        for row in rows:
+            row.update(overheadKopecks=None, netProfitKopecks=None, marginPct=None, sourceStatus=source_status)
     return {
         "cacheVersion": PNL_REPORT_PAYLOAD_VERSION,
-        "meta": _meta("pnl", "P&L", "Unit P&L report.", "financial", payload.sourceStatus),
+        "meta": _meta("pnl", "P&L", "Unit P&L report.", "financial", source_status),
         "headline": "Финансовые поля показываются с учетом finance_viewer policy.",
-        "warning": None,
+        "warning": "Интеграция с 1С отключена. Операционные расходы и итоговая прибыль не подтверждены." if cash_flow_disabled else None,
+        "blockerIds": [*payload.blockerIds, "ONE_C_DISABLED"] if cash_flow_disabled else list(payload.blockerIds),
         "financialConfirmationStatus": financial_confirmation_status,
         "filters": {"dateRange": date_range, "groupBy": payload.groupBy},
         "kpis": [
             _kpi("revenue", "Выручка", str(payload.totals.revenueKopecks or 0)),
-            _kpi("net_profit", "Чистая прибыль", str(payload.totals.netProfitKopecks or 0)),
-            _kpi("margin_pct", "Маржа", f"{payload.totals.marginPct or 0}%"),
+            _kpi("net_profit", "Чистая прибыль", "—" if cash_flow_disabled else str(payload.totals.netProfitKopecks or 0)),
+            _kpi("margin_pct", "Маржа", "—" if cash_flow_disabled else f"{payload.totals.marginPct or 0}%"),
         ],
         "chart": {
             "title": "Маржа по строкам",
             "valueLabel": "Маржа, %",
-            "points": [{"label": row.label, "value": row.marginPct or 0} for row in payload.rows],
+            "points": [] if cash_flow_disabled else [{"label": row.label, "value": row.marginPct or 0} for row in payload.rows],
         },
         "columns": [
             {"key": "label", "label": "SKU"},
@@ -2890,7 +2897,7 @@ def _map_pnl_to_report_response(payload: Any, date_range: dict[str, str], cash_f
             {"key": "netProfitKopecks", "label": "Чистая прибыль"},
             {"key": "marginPct", "label": "Маржа"},
         ],
-        "rows": [row.model_dump(mode="json") for row in payload.rows],
+        "rows": rows,
         "cashFlow": cash_flow if finance_allowed else None,
     }
 
@@ -2901,6 +2908,7 @@ def _map_cash_flow_to_expenses_response(
     group_by: str,
     job: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    disabled = cash_flow.get("status") == "disabled"
     data = cash_flow.get("data") if isinstance(cash_flow.get("data"), dict) else {}
     source_rows = data.get("rows") if isinstance(data.get("rows"), list) else []
     period_label = f"{date_range['from']} — {date_range['to']}"
@@ -2926,16 +2934,17 @@ def _map_cash_flow_to_expenses_response(
     total_kopecks = data.get("totals", {}).get("operationalExpenseKopecks") if isinstance(data.get("totals"), dict) else None
     if total_kopecks is None:
         total_kopecks = sum(_int_value(row.get("amountKopecks")) for row in rows)
-    source_status = "fresh" if cash_flow.get("status") == "ready" else "pending_financial"
+    source_status = "partial" if disabled else "fresh" if cash_flow.get("status") == "ready" else "pending_financial"
     response = {
+        "cacheVersion": EXPENSES_REPORT_PAYLOAD_VERSION,
         "meta": _meta("expenses", "Расходы", "Статьи ДДС из 1С cash-flow для операционных расходов.", "financial", source_status),
         "headline": "Показываем операционные расходные статьи ДДС из 1С за выбранный период.",
-        "warning": None if cash_flow.get("status") == "ready" else "Ждём 1С cash-flow для выбранного периода.",
+        "warning": "Интеграция с 1С отключена. Данные расходов за выбранный период не получены." if disabled else None if cash_flow.get("status") == "ready" else "Ждём 1С cash-flow для выбранного периода.",
         "financialConfirmationStatus": "final_financial" if cash_flow.get("status") == "ready" else "pending_financial",
         "filters": {"dateRange": date_range, "groupBy": group_by},
         "kpis": [
-            _kpi("expense_rows", "Статей ДДС", str(len(rows))),
-            _kpi("operational_expenses", "Опер. расходы", str(total_kopecks or 0)),
+            _kpi("expense_rows", "Статей ДДС", "—" if disabled else str(len(rows))),
+            _kpi("operational_expenses", "Опер. расходы", "—" if disabled else str(total_kopecks or 0)),
             _kpi("cash_flow_status", "1С cash-flow", str(cash_flow.get("status") or "pending")),
         ],
         "chart": {
@@ -3372,7 +3381,8 @@ BACKGROUND_REPORT_QUEUED_STALE_AFTER = timedelta(seconds=30)
 DIGEST_CACHE_TTL = timedelta(hours=24)
 REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
 ABC_REPORT_PAYLOAD_VERSION = "v18"
-PNL_REPORT_PAYLOAD_VERSION = "v4"
+PNL_REPORT_PAYLOAD_VERSION = "v5"
+EXPENSES_REPORT_PAYLOAD_VERSION = "v1"
 RNP_REPORT_PAYLOAD_VERSION = "v3"
 STOCK_REPORT_PAYLOAD_VERSION = "v5"
 WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v3"
@@ -3540,9 +3550,14 @@ def _report_payload_cache_is_usable(report_id: str, cache: dict[str, Any], *, or
             return False
         if organization_id is not None and report.get("economicsVersion") != _abc_economics_version(organization_id):
             return False
-    if report_id == "pnl":
+    if report_id in {"pnl", "expenses"}:
         report = cache.get("report") if isinstance(cache.get("report"), dict) else {}
-        if report.get("cacheVersion") != PNL_REPORT_PAYLOAD_VERSION:
+        version = PNL_REPORT_PAYLOAD_VERSION if report_id == "pnl" else EXPENSES_REPORT_PAYLOAD_VERSION
+        if report.get("cacheVersion") != version:
+            return False
+        cash_flow = report.get("cashFlow")
+        cached_1c_disabled = "ONE_C_DISABLED" in (report.get("blockerIds") or []) or (isinstance(cash_flow, dict) and cash_flow.get("status") == "disabled")
+        if cached_1c_disabled != (not get_settings().one_c_enabled):
             return False
     if report_id == "week-over-week":
         report = cache.get("report") if isinstance(cache.get("report"), dict) else {}
@@ -4662,7 +4677,7 @@ def get_reports_by_id(
             "dateTo": date_to.isoformat(),
             "groupBy": groupBy,
             "stage": "waiting_1c" if cash_flow.get("status") in {"pending", "processing"} else "completed",
-            "label": "Ждём операционные расходы от 1С" if cash_flow.get("status") in {"pending", "processing"} else "Расходы из 1С готовы",
+            "label": "Операционные расходы недоступны" if cash_flow.get("status") == "disabled" else "Ждём операционные расходы от 1С" if cash_flow.get("status") in {"pending", "processing"} else "Расходы из 1С готовы",
             "percent": 20 if cash_flow.get("status") in {"pending", "processing"} else 100,
         }
         return _map_cash_flow_to_expenses_response(cash_flow, date_range, groupBy, job)

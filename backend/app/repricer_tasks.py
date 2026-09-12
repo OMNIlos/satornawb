@@ -375,10 +375,10 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
                 label = "1С забрала задачу, ждём операционные расходы" if cash_flow.get("status") == "processing" else "Ждём операционные расходы от 1С"
                 progress("waiting_1c", label, 20, "waiting_1c")
                 raise self.retry(countdown=3)
-            if cash_flow.get("status") != "ready":
+            if cash_flow.get("status") not in {"ready", "disabled"}:
                 raise RuntimeError(f"Не удалось получить расходы из 1С: {cash_flow.get('status') or 'статус неизвестен'}")
-            progress("pnl", "Собираем P&L с расходами 1С", 35)
-            payload = reports.build_pnl_report(date_from=date_from, date_to=date_to, group_by=group_by, requested_state="final" if source == "financial" else "preliminary", finance_allowed=finance_allowed, organization_id=organization_id, wb_token=None, progress_callback=progress)
+            progress("pnl", "Собираем P&L из данных WB" if cash_flow.get("status") == "disabled" else "Собираем P&L с расходами 1С", 35)
+            payload = reports.build_pnl_report(date_from=date_from, date_to=date_to, group_by=group_by, requested_state="final" if source == "financial" and cash_flow.get("status") == "ready" else "preliminary", finance_allowed=finance_allowed, organization_id=organization_id, wb_token=None, progress_callback=progress)
             progress("pnl-map", "Готовим таблицу P&L", 97)
             report = reports._map_pnl_to_report_response(payload, date_range, cash_flow, finance_allowed=finance_allowed)
         elif report_id == "expenses":
@@ -387,9 +387,9 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
                 label = "1С забрала задачу, ждём статьи ДДС" if cash_flow.get("status") == "processing" else "Ждём статьи ДДС от 1С"
                 progress("waiting_1c", label, 20, "waiting_1c")
                 raise self.retry(countdown=3)
-            if cash_flow.get("status") != "ready":
+            if cash_flow.get("status") not in {"ready", "disabled"}:
                 raise RuntimeError(f"Не удалось получить расходы из 1С: {cash_flow.get('status') or 'статус неизвестен'}")
-            progress("expenses", "Собираем статьи ДДС из 1С", 80)
+            progress("expenses", "Операционные расходы недоступны" if cash_flow.get("status") == "disabled" else "Собираем статьи ДДС из 1С", 80)
             report = reports._map_cash_flow_to_expenses_response(cash_flow, date_range, group_by)
         elif report_id == "week-over-week":
             previous_from, previous_to = reports._previous_period(date_from, date_to)

@@ -255,6 +255,7 @@ def test_cash_flow_and_expenses_require_finance_access(
         group_by="sku",
         source="operational",
         report={
+            "cacheVersion": reports.EXPENSES_REPORT_PAYLOAD_VERSION,
             "rows": [{"amountKopecks": 164_000}],
             "cashFlow": deepcopy(PRIVATE_CASH_FLOW),
         },
