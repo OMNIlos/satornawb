@@ -18,6 +18,8 @@
 # 42 FAIL, zero errors/skips; four repaired basket lifecycle controls explicit PASS.
 # Shrunk 42 to 37 from complete 0225e6a JUnit on 2026-09-12: 7900 PASS,
 # 37 FAIL, zero errors/skips; four Sprint B workflows and null-price probe explicit PASS.
+# Shrunk 37 to 31 from complete 7a28132 JUnit on 2026-09-13: 7906 PASS,
+# 31 FAIL, zero errors/skips; six repaired sync/worker fixtures explicit PASS.
 tests/test_app.py::test_sprint_d_reports_are_served_through_backend_app
 tests/test_avito_repricer_worker.py::test_avito_scheduler_execute_creates_pending_approval_when_real_apply_disabled
 tests/test_sprint_c_strategies.py::test_4600_requires_mode_then_supports_percent_rub_floor
@@ -49,9 +51,3 @@ tests/test_wb_repricer_bff.py::test_repricer_stats_endpoint_returns_backend_diag
 tests/test_wb_repricer_bff.py::test_repricer_stats_summary_uses_full_filtered_slice_not_first_page
 tests/test_wb_repricer_bff.py::test_repricer_stats_uses_available_cache_range_when_requested_range_is_missing
 tests/test_wb_repricer_bff.py::test_sku_list_page_limits_backend_row_build_for_unfiltered_first_page
-tests/test_wb_repricer_bff.py::test_sync_status_marks_onboarding_partial_without_daily_baskets_detail
-tests/test_wb_repricer_bff.py::test_sync_status_marks_onboarding_plan_queued
-tests/test_wb_repricer_bff.py::test_wb_sync_can_opt_into_daily_baskets_detail
-tests/test_wb_repricer_bff.py::test_wb_sync_runs_four_independent_sources_in_parallel_and_waits_for_goods
-tests/test_wb_repricer_bff.py::test_worker_status_returns_next_run_and_recent_scheduler_logs
-tests/test_wb_repricer_bff.py::test_worker_status_without_runs_uses_stable_interval_boundary
