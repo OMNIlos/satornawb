@@ -604,7 +604,7 @@ def list_source_cache_ranges_by_prefix(
                     "dailyDetailPreservedBy": row["daily_detail_preserved_by"],
                     "dailyDetailRequestsCompleted": row["daily_detail_requests_completed"],
                     "dailyDetailRequestsTotal": row["daily_detail_requests_total"],
-                    "dailyAggregatesDays": len(daily_dates) if daily_dates else None,
+                    "dailyAggregatesDays": len(daily_dates) if row["daily_aggregate_dates"] is not None else None,
                     "dailyAggregateDates": daily_dates,
                     "revenueBasis": row["revenue_basis"],
                     "financeSchemaVersion": row["finance_schema_version"],

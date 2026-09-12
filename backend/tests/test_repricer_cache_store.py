@@ -163,6 +163,7 @@ def test_list_source_cache_ranges_avoids_payload_and_parses_legacy_key(monkeypat
                 records[0],
                 {**records[0], "revenue_basis": "synthetic-seller-revenue",
                  "finance_schema_version": "synthetic-v2"},
+                {**records[0], "daily_aggregate_dates": []},
             ])
 
     class FakeSession:
@@ -189,6 +190,8 @@ def test_list_source_cache_ranges_avoids_payload_and_parses_legacy_key(monkeypat
     assert result[0]["financeSchemaVersion"] is None
     assert result[1]["revenueBasis"] == "synthetic-seller-revenue"
     assert result[1]["financeSchemaVersion"] == "synthetic-v2"
+    assert result[2]["dailyAggregateDates"] == []
+    assert result[2]["dailyAggregatesDays"] == 0
 
 
 def test_slim_finance_source_cache_drops_raw_rows():

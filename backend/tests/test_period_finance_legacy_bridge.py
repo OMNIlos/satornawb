@@ -20,6 +20,9 @@ def test_daily_stitch_skips_only_known_duplicate_days(monkeypatch, known_dates):
         for index, day in enumerate(days)
     }
     metadata = [
+        {"sourceKey": "finance_empty", "dateFrom": first, "dateTo": last,
+         "dailyAggregateDates": [], "dailyAggregatesDays": 0},
+    ] + [
         {"sourceKey": key, "dateFrom": first, "dateTo": last,
          "dailyAggregateDates": list(payload["dailyAggregates"]) if known_dates else known_dates}
         for key, payload in payloads.items()
@@ -29,6 +32,8 @@ def test_daily_stitch_skips_only_known_duplicate_days(monkeypatch, known_dates):
     def read(organization_id, source_key, *, slim):
         assert organization_id == 2 and slim is False
         reads.append(source_key)
+        if source_key == "finance_empty":
+            return {"dailyAggregates": {}}
         return payloads[source_key]
 
     def list_ranges(organization_id, prefix, *, limit):

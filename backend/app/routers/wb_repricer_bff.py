@@ -1038,6 +1038,8 @@ def _stitched_period_cache_from_days(
         source_key = str(meta.get("sourceKey") or "")
         if not source_key or "detail_status" in source_key or source_key.endswith("detail_active"):
             continue
+        if meta.get("dailyAggregatesDays") == 0:
+            continue
         meta_from = _parse_cache_date(meta.get("dateFrom"))
         meta_to = _parse_cache_date(meta.get("dateTo"))
         if meta_from and meta_to:
