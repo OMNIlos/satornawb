@@ -21,12 +21,12 @@ export function RequireAuth() {
 
   if (status === 'loading') return <AuthScreenLoader />
   if (isAuthenticated) {
-    return (
-      <>
-        {showWorkerOverlay && <WorkerOverlay />}
+    return showWorkerOverlay ? (
+      <div className="worker-layout">
+        <WorkerOverlay />
         <Outlet />
-      </>
-    )
+      </div>
+    ) : <Outlet />
   }
   if (!isAuthenticated) {
     return <Navigate to="/auth/login" replace state={{ from: `${location.pathname}${location.search}` }} />

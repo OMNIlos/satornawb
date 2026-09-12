@@ -51,11 +51,84 @@ function skuPayload(account: Account) {
   }
 }
 
+function workerStatus(withApproval = false) {
+  return {
+    organizationId: 7,
+    mode: {
+      wbApiMode: 'fake',
+      realPriceApplyEnabled: false,
+      schedulerEnabled: true,
+      schedulerPollIntervalMinutes: 5,
+      executeIntervalMinutes: 60,
+      fullSyncEnabled: true,
+      fullSyncIntervalMinutes: 60,
+      fullSyncPromotionsEnabled: true,
+      workerAutoApplyPricesEnabled: false,
+    },
+    timing: {
+      serverNow: '2026-09-12T12:00:00Z',
+      lastSchedulerRunAt: '2026-09-12T11:00:00Z',
+      nextSchedulerPollAt: '2026-09-12T12:05:00Z',
+      secondsUntilNextSchedulerPoll: 300,
+      nextRunAt: '2026-09-12T13:00:00Z',
+      secondsUntilNextRun: 3600,
+      lastFullSyncAt: '2026-09-12T11:00:00Z',
+      nextFullSyncAt: '2026-09-12T13:00:00Z',
+      secondsUntilNextFullSync: 3600,
+    },
+    runs: [{
+      runId: 'run-2026-09-12',
+      trigger: 'scheduler',
+      createdAt: '2026-09-12T11:00:00Z',
+      executedCount: 1,
+      skippedCount: 0,
+      blockedCount: 0,
+      itemCount: 1,
+      items: [{ articleId: 'SKU-A-1', status: 'executed', frontendStrategyId: 'turnover_control', explanation: 'Synthetic worker run' }],
+    }],
+    pendingApprovals: withApproval ? [{
+      approvalId: 'approval-1',
+      draftId: 'draft-1',
+      jobId: null,
+      runId: 'run-2026-09-12',
+      trigger: 'scheduler',
+      articleId: 'SKU-A-1',
+      nmId: 100_001,
+      name: 'Товар A-1',
+      status: 'pending',
+      applyState: 'pending',
+      sourceStatus: 'ready',
+      wbMutationSent: false,
+      wbUploadId: null,
+      wbStatus: null,
+      statusLabel: 'Ожидает подтверждения',
+      blockedReasons: [],
+      notes: [],
+      rowErrors: [],
+      error: null,
+      source: 'worker',
+      scenario: 'complete',
+      frontendStrategyId: 'turnover_control',
+      strategyId: 'turnover_control',
+      strategyName: 'Контроль оборачиваемости',
+      oldPriceKopecks: 200_000,
+      recommendedPriceKopecks: 195_000,
+      deltaKopecks: -5_000,
+      explanation: 'Synthetic approval boundary',
+      createdAt: '2026-09-12T11:00:00Z',
+      updatedAt: '2026-09-12T11:00:00Z',
+    }] : [],
+    sync: { state: 'completed', running: false, steps: [] },
+    syncHistory: [],
+    nightMedian: { enabled: false, eligibleItems: [], items: [] },
+  }
+}
+
 it.each([
   { label: 'cached products', holdAccountARefresh: false, expireLogout: false },
   { label: 'late account A refresh', holdAccountARefresh: true, expireLogout: false },
   { label: 'expired logout', holdAccountARefresh: false, expireLogout: true },
-])('isolates account B products from $label after logout', async ({ holdAccountARefresh, expireLogout }) => {
+])('isolates account B products from $label after logout', async ({ label, holdAccountARefresh, expireLogout }) => {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const result = await build({
     configFile: false,
@@ -84,6 +157,13 @@ it.each([
     .flatMap(output => 'output' in output ? output.output : [])
     .find(output => output.type === 'chunk' && output.isEntry)
   if (!bundle || bundle.type !== 'chunk') throw new Error('Missing products session isolation bundle')
+  const styles = (Array.isArray(result) ? result : [result])
+    .flatMap(output => 'output' in output ? output.output : [])
+    .flatMap(output => output.type === 'asset' && output.fileName.endsWith('.css')
+      ? [typeof output.source === 'string' ? output.source : new TextDecoder().decode(output.source)]
+      : [])
+    .join('\n')
+  if (!styles) throw new Error('Missing products session isolation styles')
 
   const browser = await chromium.launch({ headless: true })
   let releaseAccountB: () => void = () => undefined
@@ -95,7 +175,9 @@ it.each([
     const skuRequests: Account[] = []
     const refreshRequests: Account[] = []
     const logoutEvents: string[] = []
+    const approvalDecisions: string[] = []
     let accountASessionActive = true
+    let approvalPending = false
     const accountBResponse = new Promise<void>((resolve) => { releaseAccountB = resolve })
     const accountARefreshResponse = new Promise<void>((resolve) => { releaseAccountARefresh = resolve })
     page.on('pageerror', error => errors.push(error.message))
@@ -159,7 +241,30 @@ it.each([
       if (url.pathname === '/api/v1/wb-repricer/strategies/catalog') return route.fulfill({ json: { items: [], total: 0 } })
       if (url.pathname === '/api/v1/wb-repricer/sku-groups') return route.fulfill({ json: { items: [], total: 0 } })
       if (url.pathname === '/api/v1/wb-repricer/sync/status') return route.fulfill({ json: { state: 'completed', running: false, steps: [] } })
-      if (url.pathname === '/api/v1/wb-repricer/worker/status') return route.fulfill({ json: { available: true, tasks: [] } })
+      if (url.pathname === '/api/v1/wb-repricer/worker/status') return route.fulfill({ json: workerStatus(approvalPending) })
+      if (request.method() === 'POST' && url.pathname === '/api/v1/wb-repricer/price-approvals/approval-1/reject') {
+        approvalPending = false
+        approvalDecisions.push('reject:approval-1')
+        return route.fulfill({ json: { approval: { ...workerStatus(true).pendingApprovals[0], status: 'rejected' }, job: null } })
+      }
+      if (url.pathname === '/api/v1/wb-repricer/simulator') {
+        return route.fulfill({ json: {
+          mode: {
+            wbApiMode: 'fake',
+            realPriceApplyEnabled: false,
+            localPriceApplyEnabled: false,
+            schedulerEnabled: true,
+            executeIntervalMinutes: 60,
+            simulationAllowed: true,
+            inputOverridesAllowed: true,
+            simulatorRunApplyAllowed: false,
+            simulatorRunMode: 'preview_only',
+          },
+          summary: { activeTotal: 0, strategyCount: 0, liquidationCount: 0 },
+          worker: { beatTask: 'beat', orgTask: 'org', intervalMinutes: 60, queue: 'repricer', selectionRule: 'active', priceApplyRule: 'approval' },
+          items: [],
+        } })
+      }
       if (url.pathname === '/api/v1/wb-repricer/changelog') return route.fulfill({ json: { items: [], total: 0 } })
       if (url.pathname === '/api/v1/cabinet/team/users') return route.fulfill({ json: envelope([]) })
       if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: envelope({ userId: account === 'A' ? '1' : '2', hasToken: false, tokenMasked: null, updatedAt: null }) })
@@ -169,10 +274,51 @@ it.each([
 
     await page.goto('http://satorna.test/wb/repricer')
     await page.evaluate(() => localStorage.setItem('ogni.auth.access-token', 'account-a-token'))
+    await page.addStyleTag({ content: styles })
     await page.addScriptTag({ content: bundle.code })
     const products = page.locator('#tab-products')
     await expect.poll(() => products.locator('#totalCount').innerText(), { timeout: 15_000 }).toBe('3410')
     await expect.poll(() => products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-A-1'))
+    const profile = page.locator('.user-chip')
+    await page.getByTitle('Логи worker').click()
+    await expect.poll(() => page.locator('.worker-overlay-panel').isVisible()).toBe(true)
+    const overlayPrecedesWorkspace = await page.evaluate(() => {
+      const overlay = document.querySelector('.worker-overlay')?.getBoundingClientRect()
+      const workspace = document.querySelector('.vella-html-parity-root')?.getBoundingClientRect()
+      return Boolean(overlay && workspace && overlay.bottom <= workspace.top + 1)
+    })
+    const profileReceivesPointer = await profile.evaluate((element) => {
+      const bounds = element.getBoundingClientRect()
+      return document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)?.closest('.user-chip') === element
+    })
+    expect(profileReceivesPointer).toBe(true)
+    expect(overlayPrecedesWorkspace).toBe(true)
+    await profile.click()
+    await expect.poll(() => page.locator('#ddUser').evaluate(element => element.classList.contains('open'))).toBe(true)
+    await profile.click()
+    if (label === 'cached products') {
+      const screenshotDir = process.env.WORKER_LAYOUT_SCREENSHOT_DIR
+      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'desktop-worker-logs.png') })
+      await page.setViewportSize({ width: 390, height: 844 })
+      const mobileFitsViewport = await page.locator('.worker-overlay-bar').evaluate((element) => {
+        const bounds = element.getBoundingClientRect()
+        return bounds.left >= 0 && bounds.right <= document.documentElement.clientWidth && element.scrollWidth <= element.clientWidth
+      })
+      expect(mobileFitsViewport).toBe(true)
+      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'mobile-worker-logs.png') })
+      await page.setViewportSize({ width: 1440, height: 1000 })
+    }
+    await page.getByTitle('Логи worker').click()
+    if (label === 'cached products') {
+      const screenshotDir = process.env.WORKER_LAYOUT_SCREENSHOT_DIR
+      approvalPending = true
+      await page.locator('.worker-overlay-icon[title="Обновить"]').click()
+      await expect.poll(() => page.getByRole('dialog', { name: 'Нужно подтвердить изменение цены' }).isVisible()).toBe(true)
+      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'desktop-price-approval.png') })
+      await page.getByRole('button', { name: 'Не менять цену' }).click()
+      await expect.poll(() => page.getByRole('dialog', { name: 'Нужно подтвердить изменение цены' }).count()).toBe(0)
+      expect(approvalDecisions).toEqual(['reject:approval-1'])
+    }
     if (holdAccountARefresh) {
       await page.evaluate(() => {
         const probe = window as typeof window & { __sessionIsolationRefreshPromise?: Promise<unknown> }
@@ -221,6 +367,19 @@ it.each([
     expect(await products.locator('#totalCount').innerText()).toBe('7')
     await expect.poll(() => products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-B-1'))
     expect(await products.locator('[data-sku]:visible').allInnerTexts()).not.toContainEqual(expect.stringContaining('SKU-A-1'))
+    if (label === 'cached products') {
+      await page.evaluate(() => {
+        history.pushState({}, '', '/wb/repricer/simulator')
+        window.dispatchEvent(new PopStateEvent('popstate'))
+      })
+      await expect.poll(() => page.getByRole('heading', { name: 'Симулятор WB-товаров' }).isVisible()).toBe(true)
+      expect(await page.locator('.repricer-sim-page').evaluate(element => element.getBoundingClientRect().bottom <= innerHeight + 1)).toBe(true)
+      const screenshotDir = process.env.WORKER_LAYOUT_SCREENSHOT_DIR
+      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'desktop-simulator.png') })
+      await page.locator('.worker-overlay-icon[title="Закрыть"]').click()
+      await expect.poll(() => page.locator('.worker-overlay').count()).toBe(0)
+      expect(await page.locator('.repricer-sim-page').evaluate(element => element.getBoundingClientRect().top)).toBe(0)
+    }
     expect(errors).toEqual([])
   } finally {
     releaseAccountB()

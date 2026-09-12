@@ -1,11 +1,27 @@
+.worker-layout {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.worker-layout > .vella-html-parity-root,
+.worker-layout > .repricer-sim-page {
+  min-height: 0;
+  height: auto;
+  flex: 1 1 auto;
+}
+
 .worker-overlay {
-  position: fixed;
-  top: 12px;
-  right: 14px;
   z-index: 9999;
+  flex: 0 0 auto;
   display: grid;
   justify-items: end;
   gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
   color: #0f172a;
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -14,6 +30,8 @@
   min-height: 34px;
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 7px;
   border: 1px solid rgba(15, 23, 42, 0.14);
   background: rgba(255, 255, 255, 0.94);
@@ -801,15 +819,18 @@
 
 @media (max-width: 620px) {
   .worker-overlay {
-    top: 8px;
-    right: 8px;
-    left: 8px;
+    padding: 8px;
     justify-items: stretch;
   }
 
   .worker-overlay-bar {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .worker-overlay-main {
+    flex-wrap: wrap;
+    white-space: normal;
   }
 
   .worker-overlay-panel {
