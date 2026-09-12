@@ -51,7 +51,22 @@ function skuPayload(account: Account) {
   }
 }
 
-function workerStatus(withApproval = false) {
+function workerStatus(withApproval = false, denseRuns = false) {
+  const runs = Array.from({ length: denseRuns ? 8 : 1 }, (_, runIndex) => ({
+    runId: `run-2026-09-12-${runIndex + 1}`,
+    trigger: 'scheduler',
+    createdAt: `2026-09-12T${String(11 - runIndex).padStart(2, '0')}:00:00Z`,
+    executedCount: denseRuns ? 24 : 1,
+    skippedCount: 0,
+    blockedCount: 0,
+    itemCount: denseRuns ? 24 : 1,
+    items: Array.from({ length: denseRuns ? 24 : 1 }, (_, itemIndex) => ({
+      articleId: `SKU-A-${runIndex + 1}-${itemIndex + 1}`,
+      status: 'executed',
+      frontendStrategyId: 'turnover_control',
+      explanation: `Synthetic worker run ${runIndex + 1}, item ${itemIndex + 1}`,
+    })),
+  }))
   return {
     organizationId: 7,
     mode: {
@@ -76,16 +91,7 @@ function workerStatus(withApproval = false) {
       nextFullSyncAt: '2026-09-12T13:00:00Z',
       secondsUntilNextFullSync: 3600,
     },
-    runs: [{
-      runId: 'run-2026-09-12',
-      trigger: 'scheduler',
-      createdAt: '2026-09-12T11:00:00Z',
-      executedCount: 1,
-      skippedCount: 0,
-      blockedCount: 0,
-      itemCount: 1,
-      items: [{ articleId: 'SKU-A-1', status: 'executed', frontendStrategyId: 'turnover_control', explanation: 'Synthetic worker run' }],
-    }],
+    runs,
     pendingApprovals: withApproval ? [{
       approvalId: 'approval-1',
       draftId: 'draft-1',
@@ -241,7 +247,7 @@ it.each([
       if (url.pathname === '/api/v1/wb-repricer/strategies/catalog') return route.fulfill({ json: { items: [], total: 0 } })
       if (url.pathname === '/api/v1/wb-repricer/sku-groups') return route.fulfill({ json: { items: [], total: 0 } })
       if (url.pathname === '/api/v1/wb-repricer/sync/status') return route.fulfill({ json: { state: 'completed', running: false, steps: [] } })
-      if (url.pathname === '/api/v1/wb-repricer/worker/status') return route.fulfill({ json: workerStatus(approvalPending) })
+      if (url.pathname === '/api/v1/wb-repricer/worker/status') return route.fulfill({ json: workerStatus(approvalPending, label === 'cached products') })
       if (request.method() === 'POST' && url.pathname === '/api/v1/wb-repricer/price-approvals/approval-1/reject') {
         approvalPending = false
         approvalDecisions.push('reject:approval-1')
@@ -280,44 +286,84 @@ it.each([
     await expect.poll(() => products.locator('#totalCount').innerText(), { timeout: 15_000 }).toBe('3410')
     await expect.poll(() => products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-A-1'))
     const profile = page.locator('.user-chip')
+    if (label === 'cached products') {
+      approvalPending = true
+      await page.locator('.worker-overlay-icon[title="Обновить"]').click()
+      await expect.poll(() => page.getByRole('dialog', { name: 'Нужно подтвердить изменение цены' }).isVisible()).toBe(true)
+      await page.getByRole('button', { name: 'Не менять цену' }).click()
+      await expect.poll(() => page.getByRole('dialog', { name: 'Нужно подтвердить изменение цены' }).count()).toBe(0)
+      expect(approvalDecisions).toEqual(['reject:approval-1'])
+    }
     await page.getByTitle('Логи worker').click()
     await expect.poll(() => page.locator('.worker-overlay-panel').isVisible()).toBe(true)
-    const overlayPrecedesWorkspace = await page.evaluate(() => {
-      const overlay = document.querySelector('.worker-overlay')?.getBoundingClientRect()
-      const workspace = document.querySelector('.vella-html-parity-root')?.getBoundingClientRect()
-      return Boolean(overlay && workspace && overlay.bottom <= workspace.top + 1)
-    })
-    const profileReceivesPointer = await profile.evaluate((element) => {
-      const bounds = element.getBoundingClientRect()
-      return document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)?.closest('.user-chip') === element
-    })
-    expect(profileReceivesPointer).toBe(true)
-    expect(overlayPrecedesWorkspace).toBe(true)
-    await profile.click()
-    await expect.poll(() => page.locator('#ddUser').evaluate(element => element.classList.contains('open'))).toBe(true)
-    await profile.click()
     if (label === 'cached products') {
       const screenshotDir = process.env.WORKER_LAYOUT_SCREENSHOT_DIR
-      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'desktop-worker-logs.png') })
+      const runs = page.locator('.worker-overlay-runs')
+      const lastLogEntry = runs.locator('.worker-overlay-log').last().locator('.worker-overlay-log-items > div').last()
+      expect(await runs.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
+      await lastLogEntry.scrollIntoViewIfNeeded()
+      expect(await lastLogEntry.evaluate((element) => {
+        const viewport = element.closest('.worker-overlay-runs')!.getBoundingClientRect()
+        const bounds = element.getBoundingClientRect()
+        return bounds.top >= viewport.top && bounds.bottom <= viewport.bottom + 1
+      })).toBe(true)
       await page.setViewportSize({ width: 390, height: 844 })
       const mobileFitsViewport = await page.locator('.worker-overlay-bar').evaluate((element) => {
         const bounds = element.getBoundingClientRect()
         return bounds.left >= 0 && bounds.right <= document.documentElement.clientWidth && element.scrollWidth <= element.clientWidth
       })
       expect(mobileFitsViewport).toBe(true)
-      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'mobile-worker-logs.png') })
-      await page.setViewportSize({ width: 1440, height: 1000 })
-    }
-    await page.getByTitle('Логи worker').click()
-    if (label === 'cached products') {
-      const screenshotDir = process.env.WORKER_LAYOUT_SCREENSHOT_DIR
-      approvalPending = true
-      await page.locator('.worker-overlay-icon[title="Обновить"]').click()
-      await expect.poll(() => page.getByRole('dialog', { name: 'Нужно подтвердить изменение цены' }).isVisible()).toBe(true)
-      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'desktop-price-approval.png') })
-      await page.getByRole('button', { name: 'Не менять цену' }).click()
-      await expect.poll(() => page.getByRole('dialog', { name: 'Нужно подтвердить изменение цены' }).count()).toBe(0)
-      expect(approvalDecisions).toEqual(['reject:approval-1'])
+      await lastLogEntry.scrollIntoViewIfNeeded()
+      expect(await lastLogEntry.evaluate((element) => {
+        const viewport = element.closest('.worker-overlay-runs')!.getBoundingClientRect()
+        const bounds = element.getBoundingClientRect()
+        return bounds.top >= viewport.top && bounds.bottom <= viewport.bottom + 1
+      })).toBe(true)
+      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'dense-worker-mobile-390x844.png') })
+      for (const viewport of [{ width: 1440, height: 1000 }, { width: 1366, height: 768 }]) {
+        await page.setViewportSize(viewport)
+        await profile.click()
+        await expect.poll(() => page.locator('#ddUser').evaluate(element => element.classList.contains('open'))).toBe(true)
+        const profilePanel = page.locator('#profilePanel')
+        expect(await profilePanel.evaluate((element) => {
+          const bounds = element.getBoundingClientRect()
+          return element.scrollHeight > element.clientHeight && bounds.bottom <= innerHeight + 1
+        })).toBe(true)
+        const logout = page.getByRole('button', { name: /Выйти/ })
+        await logout.scrollIntoViewIfNeeded()
+        const logoutReceivesPointer = await logout.evaluate((element) => {
+          const bounds = element.getBoundingClientRect()
+          return bounds.top >= 0
+            && bounds.bottom <= innerHeight
+            && document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)?.closest('button') === element
+        })
+        expect(logoutReceivesPointer).toBe(true)
+        await logout.click({ trial: true })
+        expect(await page.locator('.vella-html-parity-root').evaluate((element) => element.clientHeight >= innerHeight - 310)).toBe(true)
+        if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, `dense-worker-profile-${viewport.width}x${viewport.height}.png`) })
+        await profile.click()
+        const notification = page.locator('.topbar-actions button[aria-label="Уведомления"]')
+        expect(await notification.evaluate((element) => {
+          const bounds = element.getBoundingClientRect()
+          return document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)?.closest('button') === element
+        })).toBe(true)
+        await notification.click()
+        await expect.poll(() => page.locator('#ddNotif').evaluate(element => element.classList.contains('open'))).toBe(true)
+        expect(await page.locator('#notifPanel').evaluate((element) => element.getBoundingClientRect().bottom <= innerHeight + 1)).toBe(true)
+        await notification.click()
+        if (viewport.width === 1366) {
+          await profile.click()
+          await expect.poll(() => page.locator('#ddUser').evaluate(element => element.classList.contains('open'))).toBe(true)
+          await page.getByRole('button', { name: /Выйти/ }).scrollIntoViewIfNeeded()
+        }
+      }
+    } else {
+      const overlayPrecedesWorkspace = await page.evaluate(() => {
+        const overlay = document.querySelector('.worker-overlay')?.getBoundingClientRect()
+        const workspace = document.querySelector('.vella-html-parity-root')?.getBoundingClientRect()
+        return Boolean(overlay && workspace && overlay.bottom <= workspace.top + 1)
+      })
+      expect(overlayPrecedesWorkspace).toBe(true)
     }
     if (holdAccountARefresh) {
       await page.evaluate(() => {
@@ -327,7 +373,7 @@ it.each([
       await expect.poll(() => refreshRequests.includes('A')).toBe(true)
     }
 
-    await page.locator('.user-chip').click()
+    if (label !== 'cached products') await profile.click()
     await page.getByRole('button', { name: /Выйти/ }).click()
     await page.waitForURL('**/auth/login')
     if (expireLogout) {

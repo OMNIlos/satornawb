@@ -131,7 +131,10 @@
 
 .worker-overlay-panel {
   width: min(460px, calc(100vw - 28px));
-  max-height: min(520px, calc(100vh - 68px));
+  /* ponytail: 240px keeps the repricer usable at 768px; logs remain fully available by scrolling. */
+  max-height: min(240px, calc(100vh - 180px));
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid rgba(15, 23, 42, 0.14);
   background: rgba(255, 255, 255, 0.98);
@@ -141,6 +144,7 @@
 
 .worker-overlay-panel-head {
   min-height: 44px;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -197,11 +201,25 @@
 }
 
 .worker-overlay-runs {
-  max-height: calc(min(520px, 100vh - 68px) - 44px);
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
   overflow: auto;
   padding: 8px;
   display: grid;
   gap: 8px;
+}
+
+.worker-layout .profile-panel,
+.worker-layout .notif-panel {
+  /* Capped worker row + topbar + dropdown gap leaves this usable viewport below the trigger. */
+  z-index: 2000;
+  max-height: calc(100vh - 368px);
+}
+
+.worker-layout .profile-panel {
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .worker-overlay-log {
