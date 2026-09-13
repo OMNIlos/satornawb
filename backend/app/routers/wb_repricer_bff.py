@@ -2013,7 +2013,7 @@ def _list_repricer_skus_from_cached_sources(
     period_cache_memo: dict[tuple[Any, ...], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     cached_goods = list_cached_goods(organization_id)
-    content_cache = get_source_cache(organization_id, "content_cards", slim=True) if include_content else {}
+    content_cache = (get_source_cache(organization_id, "content_cards", slim=True) or {}) if include_content else {}
     promotions_cache = get_source_cache(organization_id, "promotions", slim=True) or {}
     thresholds_cache = get_source_cache(organization_id, "promotion_thresholds", slim=True) or {}
     stocks_cache = get_source_cache(organization_id, "stocks", slim=True) or {}
@@ -4160,6 +4160,7 @@ def get_sku_list(
     if not filters_active:
         total_filtered = max(total_filtered, int(cache.get("totalCached") or total_filtered))
     cache["listTotalFiltered"] = total_filtered
+    cache["summaryScope"] = "filtered_skus" if filters_active else "catalog"
     if snapshot is not None and top_mode and not filters_active and isinstance(snapshot.get("summary"), dict):
         summary = snapshot["summary"]
     else:
@@ -4187,7 +4188,8 @@ def get_sku_list(
                 period_cache_memo=period_cache_memo,
             )
             if not filters_active
-            else _repricer_list_summary(all_items, finance_diagnostics=finance_diagnostics)
+            # Do not add cabinet-wide residual costs to a filtered selection.
+            else _repricer_list_summary(filtered)
         )
     _repricer_load_trace_step(
         trace,

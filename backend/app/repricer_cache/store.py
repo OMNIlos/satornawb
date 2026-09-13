@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.infra.db import get_session_factory
 from app.infra.redis_client import get_redis_client
@@ -625,18 +625,28 @@ def get_covering_source_cache(
     slim: bool = False,
 ) -> dict[str, Any] | None:
     def _db(session: Session) -> dict[str, Any] | None:
-        row = session.scalar(
+        candidates = aliased(
+            WbRepricerSourceCacheRow,
             select(WbRepricerSourceCacheRow)
             .where(
                 WbRepricerSourceCacheRow.organization_id == organization_id,
                 WbRepricerSourceCacheRow.source_key.like(f"{source_key_prefix}%"),
+            )
+            .order_by(WbRepricerSourceCacheRow.fetched_at.desc())
+            # Keep JSON checks above the sorted scan so LIMIT can stop early.
+            .offset(0)
+            .subquery(),
+        )
+        row = session.scalar(
+            select(candidates)
+            .where(
                 text("json_typeof(payload->'dailyAggregates') = 'object'"),
                 text("(payload->'dailyAggregates')::jsonb <> '{}'::jsonb"),
                 text("(payload->>'dateFrom') <= :date_from"),
                 text("(payload->>'dateTo') >= :date_to"),
             )
             .params(date_from=date_from.isoformat(), date_to=date_to.isoformat())
-            .order_by(WbRepricerSourceCacheRow.fetched_at.desc())
+            .order_by(candidates.fetched_at.desc())
             .limit(1)
         )
         if row is None:

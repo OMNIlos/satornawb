@@ -27,32 +27,43 @@ def isolated_cache_boundaries(monkeypatch):
     monkeypatch.setattr("app.repricer_cache.store._redis_delete", lambda *a, **kw: None)
 
 
-def test_covering_cache_keeps_payload_selection_without_whole_jsonb_cast(database, monkeypatch):
+@pytest.mark.parametrize("prefix,slim", [("baskets_", False), ("finance_", True)])
+@pytest.mark.parametrize("newest_metadata", [
+    {},
+    {"range_date_from": date(2027, 1, 1), "range_date_to": date(2027, 1, 2),
+     "daily_aggregate_dates": []},
+])
+def test_covering_cache_keeps_payload_selection_without_whole_jsonb_cast(
+    database, monkeypatch, prefix, slim, newest_metadata,
+):
     _, engine = database
     LkOrganizationRow.__table__.create(engine)
     WbRepricerSourceCacheRow.__table__.create(engine)
     first, last = "2026-09-01", "2026-09-02"
     now = datetime(2026, 9, 3, tzinfo=timezone.utc)
     payload = {"dateFrom": first, "dateTo": last, "dailyAggregates": {first: {}, "not-a-date": {}},
-               "aggregates": {"123": {"cartCount": 2}}}
+               "aggregates": {"123": {"cartCount": 2}}, "rows": [{"synthetic": True}]}
     with Session(engine) as session:
         session.add_all([LkOrganizationRow(organization_id=value, slug=f"synthetic-{value}", name="Synthetic")
                          for value in (1, 2)])
         session.commit()
         rows = [
-            WbRepricerSourceCacheRow(organization_id=1, source_key="baskets_older_typed", payload=payload,
+            WbRepricerSourceCacheRow(organization_id=1, source_key=f"{prefix}older_typed", payload=payload,
                                     range_date_from=date.fromisoformat(first), range_date_to=date.fromisoformat(last),
                                     daily_aggregate_dates=[first], fetched_at=now - timedelta(seconds=1)),
-            WbRepricerSourceCacheRow(organization_id=1, source_key="baskets_newest_legacy", payload=payload, fetched_at=now),
+            WbRepricerSourceCacheRow(organization_id=1, source_key=f"{prefix}newest", payload=payload,
+                                    fetched_at=now, **newest_metadata),
         ]
         invalid = [None, {}, {**payload, "dateFrom": None}, {**payload, "dateFrom": last},
                    {**payload, "dateTo": first},
                    *[{**payload, "dailyAggregates": value} for value in (None, {}, [], [{}], 0, False, "daily")]]
-        rows.extend(WbRepricerSourceCacheRow(organization_id=1, source_key=f"baskets_invalid_{index}",
-                                           payload=value, fetched_at=now + timedelta(seconds=index + 1))
+        rows.extend(WbRepricerSourceCacheRow(organization_id=1, source_key=f"{prefix}invalid_{index}",
+                                           payload=value, fetched_at=now + timedelta(seconds=index + 1),
+                                           range_date_from=date.fromisoformat(first),
+                                           range_date_to=date.fromisoformat(last), daily_aggregate_dates=[first])
                     for index, value in enumerate(invalid))
         rows.extend([
-            WbRepricerSourceCacheRow(organization_id=2, source_key="baskets_other_tenant", payload=payload,
+            WbRepricerSourceCacheRow(organization_id=2, source_key=f"{prefix}other_tenant", payload=payload,
                                     fetched_at=now + timedelta(days=1)),
             WbRepricerSourceCacheRow(organization_id=1, source_key="ads_other_source", payload=payload,
                                     fetched_at=now + timedelta(days=1)),
@@ -68,13 +79,28 @@ def test_covering_cache_keeps_payload_selection_without_whole_jsonb_cast(databas
         monkeypatch.setattr(store, "_run_db", lambda fn: fn(session))
         try:
             result = store.get_covering_source_cache(
-                1, "baskets_", date_from=date.fromisoformat(first), date_to=date.fromisoformat(last),
+                1, prefix, date_from=date.fromisoformat(first), date_to=date.fromisoformat(last), slim=slim,
             )
         finally:
             event.remove(engine, "before_cursor_execute", capture)
 
+        session.delete(rows[1])
+        session.commit()
+        older = store.get_covering_source_cache(
+            1, prefix, date_from=date.fromisoformat(first), date_to=date.fromisoformat(last), slim=slim,
+        )
+        assert older["sourceKey"] == f"{prefix}older_typed"
+        session.delete(rows[0])
+        session.commit()
+        assert store.get_covering_source_cache(
+            1, prefix, date_from=date.fromisoformat(first), date_to=date.fromisoformat(last), slim=slim,
+        ) is None
+
     assert datetime.fromisoformat(result.pop("fetchedAt")) == now
-    assert result == {**payload, "sourceKey": "baskets_newest_legacy"}
+    expected = {**payload, "sourceKey": f"{prefix}newest"}
+    if slim:
+        expected.pop("rows")
+    assert result == expected
     assert len(statements) == 1
     assert "payload::jsonb" not in statements[0]
 
