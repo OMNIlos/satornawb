@@ -7,6 +7,27 @@ import { withSyntheticVite } from './test-support/syntheticVite'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const parityPath = '/src/features/vella-parity/VellaHtmlParityPage.tsx'
+const ordersPath = '/src/features/orders/OrdersPrintListPage.tsx'
+const deferredRoutePaths = [
+  '/src/components/vella-system/VellaSystemCatalog.tsx',
+  '/src/components/vella/VellaFoundationWorkbench.tsx',
+  '/src/components/vella-system/html/VellaHtmlRepricer.tsx',
+  '/src/features/vella-react/VellaReactApp.tsx',
+  '/src/features/vella-static/VellaStaticPage.tsx',
+  ordersPath,
+  '/src/features/wb-repricer/TemplatesPage.tsx',
+  '/src/features/wb-repricer/WbRepricerPage.tsx',
+  '/src/features/wb-repricer/WbRepricerChangelogPage.tsx',
+  '/src/features/wb-repricer/WbRepricerSimulatorPage.tsx',
+  '/src/features/wb-repricer/WbRepricerStatsPage.tsx',
+  '/src/features/wb-reports/WbReportsPage.tsx',
+  '/src/features/wb-sources/WbSourcesPage.tsx',
+  '/src/wiki/pages/WbRepricerWiki.tsx',
+  '/src/wiki/pages/LiquidationWiki.tsx',
+  '/src/wiki/pages/PromotionsWiki.tsx',
+  '/src/wiki/pages/AlgorithmWiki.tsx',
+  '/src/wiki/pages/TemplatesWiki.tsx',
+]
 // Only the expensive page is synthetic. App, routing, auth gates and error boundary are real.
 const parityFixture = `import React from 'react';
 import {useLocation} from 'react-router-dom';
@@ -19,7 +40,7 @@ async function navigate(page: Page, path: string) {
   await page.evaluate(path => { history.pushState({}, '', path); dispatchEvent(new PopStateEvent('popstate')) }, path)
 }
 
-it('App defers parity on unrelated routes and contains pending/rejected imports without automatic replay', async () => {
+it('App defers unrelated route pages and recovers rejected lazy imports with reload', async () => {
   const browser = await chromium.launch({ headless: true })
   try {
     for (const authenticated of [false, true]) {
@@ -36,6 +57,7 @@ it('App defers parity on unrelated routes and contains pending/rejected imports 
         const page = await browser.newPage({ serviceWorkers: 'block' })
         page.setDefaultTimeout(15_000)
         let parityRequests = 0, snapshotRequests = 0
+        const routeRequests = Object.fromEntries(deferredRoutePaths.map(path => [path, 0]))
         let release: (() => Promise<void>) | undefined
         const external: string[] = []
         const errors: string[] = []
@@ -53,6 +75,7 @@ it('App defers parity on unrelated routes and contains pending/rejected imports 
             if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
             if (url.origin !== origin) { external.push(url.origin); return route.abort() }
             if (url.pathname.includes('vellaProductionSnapshot.generated')) snapshotRequests++
+            if (url.pathname in routeRequests) routeRequests[url.pathname]++
             if (url.pathname === parityPath) {
               parityRequests++
               release = async () => {
@@ -70,11 +93,15 @@ it('App defers parity on unrelated routes and contains pending/rejected imports 
             await page.getByRole('button', { name: 'Войти', exact: true }).waitFor()
           } else {
             await page.getByRole('heading', { name: 'Лист печати на сегодня', exact: true }).waitFor()
-            await navigate(page, '/wiki/algorithm')
-            await page.locator('#main-content').waitFor()
           }
+          const expectedRouteRequests = Object.fromEntries(deferredRoutePaths.map(path => [path, 0]))
+          if (authenticated) expectedRouteRequests[ordersPath] = 1
+          expect(routeRequests).toEqual(expectedRouteRequests)
           expect(parityRequests).toBe(0); expect(snapshotRequests).toBe(0)
           if (authenticated) {
+            await navigate(page, '/wiki/algorithm')
+            await page.getByRole('heading', { name: 'Настройки алгоритма', exact: true }).waitFor()
+            expect(routeRequests['/src/wiki/pages/AlgorithmWiki.tsx']).toBe(1)
             await navigate(page, '/internal/vella-parity/reports')
             await page.getByRole('status').filter({ hasText: 'Загружаем раздел' }).waitFor()
             expect(parityRequests).toBe(1)
@@ -124,6 +151,25 @@ it('App defers parity on unrelated routes and contains pending/rejected imports 
             await failed.getByRole('heading', { name: 'Лист печати на сегодня', exact: true }).waitFor()
             expect(attempts).toBe(2)
           } finally { await failed.close() }
+
+          const failedRoute = await browser.newPage({ serviceWorkers: 'block' })
+          failedRoute.setDefaultTimeout(5_000)
+          let routeAttempts = 0
+          try {
+            await failedRoute.route('**/*', async route => {
+              const url = new URL(route.request().url())
+              if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
+              if (url.origin !== origin || url.pathname.startsWith('/api/')) return route.abort()
+              if (url.pathname === ordersPath && ++routeAttempts === 1) return route.abort('failed')
+              return route.continue()
+            })
+            await failedRoute.goto(`${origin}/orders`)
+            await failedRoute.getByRole('alert').getByRole('heading', { name: 'Раздел не загрузился' }).waitFor()
+            expect(routeAttempts).toBe(1)
+            await failedRoute.getByRole('button', { name: 'Обновить страницу', exact: true }).click()
+            await failedRoute.getByRole('heading', { name: 'Лист печати на сегодня', exact: true }).waitFor()
+            expect(routeAttempts).toBe(2)
+          } finally { await failedRoute.close() }
         }
       })
     }
