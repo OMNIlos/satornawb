@@ -44,14 +44,18 @@
 .worker-overlay-main {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   font-size: 12px;
   font-weight: 800;
-  white-space: nowrap;
 }
 
 .worker-overlay-main span {
   color: #475569;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .worker-overlay-main b {

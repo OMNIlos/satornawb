@@ -833,8 +833,8 @@ export function WorkerOverlay() {
   const schedulerEnabled = Boolean(status?.mode?.schedulerEnabled)
   const fullSyncEnabled = Boolean(status?.mode?.fullSyncEnabled)
   const syncStatus = status?.sync ?? null
-  const syncCountdownLabel = !fullSyncEnabled
-    ? 'off'
+  const syncCountdownLabel = !status ? '—' : !fullSyncEnabled
+    ? 'выкл'
     : syncStatus?.running
       ? 'идёт'
       : formatCountdown(syncCountdownSeconds)
@@ -888,17 +888,15 @@ export function WorkerOverlay() {
       <div className="worker-overlay-bar">
         <div className="worker-overlay-main">
           <Clock3 size={15} />
-          <span>worker</span>
-          <b>{schedulerEnabled ? formatCountdown(countdownSeconds) : 'off'}</b>
-          <span>WB sync</span>
-          <b>{syncCountdownLabel}</b>
+          <span>До пересчёта <b>{!status ? '—' : schedulerEnabled ? formatCountdown(countdownSeconds) : 'выкл'}</b></span>
+          <span>До полной синхронизации <b>{syncCountdownLabel}</b></span>
           {status?.mode?.realPriceApplyEnabled ? <em>real</em> : <em>safe</em>}
           <em>{status?.mode?.workerAutoApplyPricesEnabled ? 'auto apply' : 'approval'}</em>
           {pendingApprovalCount > 0 ? <em className="worker-overlay-approval-chip">{pendingApprovalCount} approval</em> : null}
         </div>
 
         <span className={`worker-overlay-run ${tone}`}>
-          {latestRun ? `${latestRun.executedCount}/${latestRun.blockedCount}/${latestRun.skippedCount}` : 'нет запусков'}
+          {latestRun ? `Выполнено ${latestRun.executedCount} · заблокировано ${latestRun.blockedCount} · пропущено ${latestRun.skippedCount}` : 'нет запусков'}
         </span>
 
         <button
@@ -961,7 +959,7 @@ export function WorkerOverlay() {
                 <div className="worker-overlay-log-top">
                   <b>{run.runId?.slice(0, 13) ?? 'run'}</b>
                   <span>{formatRunTime(run.createdAt)}</span>
-                  <em className={runTone(run)}>{run.executedCount} calc · {run.blockedCount} block · {run.skippedCount} skip</em>
+                  <em className={runTone(run)}>Выполнено {run.executedCount} · заблокировано {run.blockedCount} · пропущено {run.skippedCount}</em>
                 </div>
                 {run.items.length ? (
                   <div className="worker-overlay-log-items">

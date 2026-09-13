@@ -207,6 +207,7 @@ export type LiveRepricerSkuListResponse = {
   periodDays?: number
   summary?: LiveRepricerSkuListSummary
   cache?: {
+    summaryScope?: 'filtered_skus' | 'catalog'
     pagesCached: number
     totalCached: number
     nextOffset: number
@@ -584,12 +585,14 @@ export type LiveRepricerCacheCoverage = {
 
 let liveProductsInFlight: Promise<LiveRepricerProductsPayload> | null = null
 let liveProductsInFlightKey = ''
+const liveProductsRequests = new Map<string, { request: Promise<LiveRepricerProductsPayload>; signal?: AbortSignal }>()
 let liveProductsCachedAt = 0
 let liveProductsCache: LiveRepricerProductsPayload | null = null
 let liveProductsCachePeriodDays = 7
 let liveProductsCacheKey = ''
 let liveStrategiesInFlight: Promise<LiveRepricerStrategySnapshotItem[]> | null = null
 let liveStrategiesInFlightKey = ''
+let liveStrategiesInFlightSignal: AbortSignal | undefined
 let liveStrategiesCachedAt = 0
 let liveStrategiesCache: LiveRepricerStrategySnapshotItem[] | null = null
 let liveStrategiesCacheKey = ''
@@ -1053,6 +1056,7 @@ export async function loadLiveRepricerParityProducts(
   periodDaysOrQuery: number | LiveRepricerProductsQuery = DEFAULT_REPRICER_PERIOD_DAYS,
   force = false,
 ) {
+  signal?.throwIfAborted()
   const query = typeof periodDaysOrQuery === 'number' ? { periodDays: periodDaysOrQuery } : periodDaysOrQuery
   const period = normalizeLiveRepricerPeriod(query)
   const periodDays = period.periodDays
@@ -1079,8 +1083,11 @@ export async function loadLiveRepricerParityProducts(
   ) {
     return liveProductsCache
   }
-  if (!force && liveProductsInFlight && liveProductsInFlightKey === cacheKey) {
-    return liveProductsInFlight
+  const existing = liveProductsRequests.get(cacheKey)
+  if (!force && existing && !existing.signal?.aborted) {
+    liveProductsInFlightKey = cacheKey
+    liveProductsInFlight = existing.request
+    return existing.request
   }
 
   const request: Promise<LiveRepricerProductsPayload> = apiRequest<LiveRepricerSkuListResponse>(`/api/v1/wb-repricer/sku?${params.toString()}`, {
@@ -1123,6 +1130,7 @@ export async function loadLiveRepricerParityProducts(
     }
     return mapped
   }).finally(() => {
+    if (liveProductsRequests.get(cacheKey)?.request === request) liveProductsRequests.delete(cacheKey)
     if (liveProductsInFlight === request) {
       liveProductsInFlight = null
       liveProductsInFlightKey = ''
@@ -1130,8 +1138,8 @@ export async function loadLiveRepricerParityProducts(
   })
   liveProductsInFlightKey = cacheKey
   liveProductsInFlight = request
+  liveProductsRequests.set(cacheKey, { request, signal })
 
-  if (signal?.aborted) throw new DOMException('Request aborted', 'AbortError')
   return request
 }
 
@@ -1163,6 +1171,9 @@ export async function loadLiveRepricerStats(
 }
 
 export function resetLiveRepricerParityCache(accessToken?: string | null) {
+  for (const key of liveProductsRequests.keys()) {
+    if (accessToken === undefined || JSON.parse(key)[0] === accessToken) liveProductsRequests.delete(key)
+  }
   if (accessToken === undefined || JSON.parse(liveProductsInFlightKey || '[]')[0] === accessToken) {
     liveProductsInFlight = null
     liveProductsInFlightKey = ''
@@ -1309,11 +1320,12 @@ export async function retryLiveRepricerSyncStep(
 }
 
 export async function loadLiveRepricerStrategies(accessToken: string, signal?: AbortSignal, force = false) {
+  signal?.throwIfAborted()
   const now = Date.now()
   if (!force && liveStrategiesCache && liveStrategiesCacheKey === accessToken && now - liveStrategiesCachedAt <= LIVE_PRODUCTS_CACHE_TTL_MS) {
     return liveStrategiesCache
   }
-  if (!force && liveStrategiesInFlight && liveStrategiesInFlightKey === accessToken) {
+  if (!force && liveStrategiesInFlight && liveStrategiesInFlightKey === accessToken && !liveStrategiesInFlightSignal?.aborted) {
     return liveStrategiesInFlight
   }
 
@@ -1337,8 +1349,8 @@ export async function loadLiveRepricerStrategies(accessToken: string, signal?: A
   })
   liveStrategiesInFlightKey = accessToken
   liveStrategiesInFlight = request
+  liveStrategiesInFlightSignal = signal
 
-  if (signal?.aborted) throw new DOMException('Request aborted', 'AbortError')
   return request
 }
 

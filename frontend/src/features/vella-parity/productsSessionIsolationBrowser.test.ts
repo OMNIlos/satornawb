@@ -308,6 +308,9 @@ it.each([
     await expect.poll(() => products.locator('#totalCount').innerText(), { timeout: 15_000 }).toBe('3410')
     await expect.poll(() => products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-A-1'))
     const profile = page.locator('.user-chip')
+    expect.soft(await page.locator('.worker-overlay-main').innerText()).toContain('До пересчёта')
+    expect.soft(await page.locator('.worker-overlay-main').innerText()).toContain('До полной синхронизации')
+    expect.soft(await page.locator('.worker-overlay-run').first().innerText()).toContain('Выполнено')
     if (label === 'cached products') {
       approvalPending = true
       await page.locator('.worker-overlay-icon[title="Обновить"]').click()

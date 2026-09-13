@@ -39,6 +39,12 @@ it('searches actual Ads campaign rows by supplied SKU and campaign without addit
           { campaignId: 910001, campaignName: 'Synthetic campaign-alpha', sku: 'FBBT_42', productName: 'Synthetic Alpha', managerId: null },
           { campaignId: 910002, campaignName: 'Synthetic campaign-beta', sku: 'FBBT_42', productName: 'Synthetic Alpha', managerId: null },
           { campaignId: 910003, campaignName: 'Synthetic campaign-gamma', sku: 'LBBT_33', productName: 'Synthetic Gamma', managerId: null },
+          ...Array.from({ length: 739 }, (_, index) => ({
+            campaignId: 910004 + index, campaignName: `Synthetic campaign-${index + 4}`,
+            sku: `SYNTHETIC-SKU-${index + 4}`, productName: `Synthetic product ${index + 4}`, managerId: null,
+            campaignType: index === 738 ? 8 : index === 737 ? 9 : index === 736 ? 'медиа' : null,
+            unallocatedSpend: index === 738, drrPct: index === 738 ? 18 : 3,
+          })),
         ], kpis: [], chart: null,
       }) })
     })
@@ -50,7 +56,9 @@ it('searches actual Ads campaign rows by supplied SKU and campaign without addit
     const surface = page.locator('#tab-ads')
     await surface.getByText('Synthetic campaign-alpha', { exact: true }).waitFor({ timeout: 15_000 })
     const visible = surface.locator('tr[data-report-row="ads"]:visible')
-    expect(await visible.count()).toBe(3)
+    expect(await visible.count()).toBe(50)
+    await surface.getByRole('button', { name: 'Показать ещё 50 · 50 из 742', exact: true }).click()
+    await expect.poll(() => visible.count()).toBe(100)
     // Current React toolbar uses search, not the standalone prototype's select.
     const search = surface.getByPlaceholder('nmID, SKU или рекламная кампания...')
     await search.fill('FBBT_42')
@@ -61,10 +69,22 @@ it('searches actual Ads campaign rows by supplied SKU and campaign without addit
     await search.fill('campaign-beta')
     expect(await visible.count()).toBe(1)
     expect(await visible.innerText()).toContain('Synthetic campaign-beta')
+    // Filtering must consider all 742 rows, not only the first 50 mounted rows.
+    await search.fill('SYNTHETIC-SKU-742')
+    await expect.poll(() => visible.count()).toBe(1)
+    expect(await visible.innerText()).toContain('Synthetic campaign-742')
     await search.fill('absent-synthetic-campaign')
-    expect(await visible.count()).toBe(0)
-    await search.fill('')
-    expect(await visible.count()).toBe(3)
+    await expect.poll(() => visible.count()).toBe(0)
+    await surface.getByRole('button', { name: 'Сбросить фильтры', exact: true }).click()
+    await expect.poll(() => visible.count()).toBe(50)
+    for (const [chip, campaign] of [['Поиск', '742'], ['Каталог', '741'], ['Медиа', '740'], ['Не распределено', '742'], ['ДРР выше порога', '742']]) {
+      await surface.locator('.chips .chip').filter({ hasText: chip }).click()
+      await expect.poll(() => visible.count()).toBe(1)
+      expect(await visible.innerText()).toContain(`Synthetic campaign-${campaign}`)
+    }
+    await surface.locator('.chips .chip').filter({ hasText: 'Все строки' }).click()
+    await expect.poll(() => visible.count()).toBe(50)
+    expect(await surface.locator('[data-vella-island="ads-live-summary-grid"]').innerText()).toContain('742')
     expect(requests).toHaveLength(1)
     const query = new URLSearchParams(requests[0])
     expect([query.get('from'), query.get('to'), query.get('groupBy'), query.get('source'), query.get('preset')])

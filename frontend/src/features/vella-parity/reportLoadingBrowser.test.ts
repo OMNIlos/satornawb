@@ -146,3 +146,138 @@ it('does not report an empty P&L when polling expires without a ready cache', as
     expect(errors).toEqual([])
   } finally { await browser.close() }
 }, 60_000)
+
+it.each(['abc', 'pnl', 'ads'])('stops a cold %s report poll after navigating to statistics', async report => {
+  const root = fileURLToPath(new URL('../../../', import.meta.url))
+  const result = await build({
+    configFile: false, envFile: false, root, logLevel: 'silent', plugins: [{
+      name: 'hidden-report-browser-router', enforce: 'pre',
+      transform(code, id) {
+        if (!id.endsWith('/__fixtures__/reportLoadingBrowser.tsx')) return null
+        return code.replaceAll('MemoryRouter', 'BrowserRouter').replace(' initialEntries={[window.location.pathname]}', '')
+      },
+    }, react()],
+    define: { 'process.env.NODE_ENV': '"test"', 'import.meta.env.VITE_API_BASE_URL': '""' },
+    resolve: { alias: { '@': path.join(root, 'src') } },
+    build: { write: false, minify: false, lib: {
+      entry: fileURLToPath(new URL('./__fixtures__/reportLoadingBrowser.tsx', import.meta.url)), formats: ['iife'], name: 'HiddenReportPollingTest',
+    } },
+  })
+  const bundle = (Array.isArray(result) ? result : [result]).flatMap(output => 'output' in output ? output.output : [])
+    .find(output => output.type === 'chunk' && output.isEntry)
+  if (!bundle || bundle.type !== 'chunk') throw new Error('Missing hidden report polling bundle')
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
+    let starts = 0, polls = 0
+    const unexpected: string[] = [], errors: string[] = []
+    page.on('pageerror', error => errors.push(error.message))
+    await page.route('**/*', route => {
+      const request = route.request(), url = new URL(request.url())
+      if (request.resourceType() === 'document') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
+      if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
+      if (url.origin === 'http://satorna.test' && url.pathname === `/api/wb/reports/${report}/latest-cache` && request.method() === 'GET') {
+        return route.fulfill({ status: 404, json: { error: { code: 'HTTP_404', message: 'REPORT_LATEST_CACHE_MISSING' } } })
+      }
+      if (url.origin === 'http://satorna.test' && url.pathname === `/api/wb/reports/${report}/jobs`) {
+        if (request.method() === 'POST') starts++
+        else polls++
+        return route.fulfill({ json: { state: 'queued', percent: 0, label: 'Получаем данные WB', dateFrom: url.searchParams.get('from'), dateTo: url.searchParams.get('to') } })
+      }
+      if (url.origin === 'http://satorna.test' && url.pathname === '/api/v1/wb-repricer/stats' && request.method() === 'GET') return route.fulfill({ json: {
+        items: [{ articleId: 'VISIBLE-STATS-SKU', name: 'Synthetic statistics', metrics: {}, sources: {}, decision: {}, priceProtection: {}, flags: [] }], total: 1, itemsReturned: 1, page: 1, pageSize: 500,
+      } })
+      unexpected.push(`${request.method()} ${url.href}`)
+      return route.abort()
+    })
+    await page.goto(`http://satorna.test/wb/reports/${report}`)
+    await page.addScriptTag({ content: bundle.code })
+    await expect.poll(() => starts, { timeout: 15000 }).toBe(1)
+    // Exercise the existing route handler; its parent navigation group is collapsed on reports.
+    await page.locator('#sidebar [data-tab="repricer-stats"]').dispatchEvent('click')
+    await page.getByText('VISIBLE-STATS-SKU', { exact: true }).waitFor({ timeout: 5000 })
+    const before = polls
+    await page.waitForTimeout(2200) // One real two-second poll boundary while the report is hidden.
+    expect(polls).toBe(before)
+    expect(starts).toBe(1)
+    expect(errors).toEqual([])
+    expect(unexpected).toEqual([])
+  } finally { await browser.close() }
+}, 60_000)
+
+it('reloads the requested Digest period after leaving during a cold refresh', async () => {
+  const root = fileURLToPath(new URL('../../../', import.meta.url))
+  const result = await build({
+    configFile: false, envFile: false, root, logLevel: 'silent', plugins: [{
+      name: 'digest-browser-router', enforce: 'pre',
+      transform(code, id) {
+        if (!id.endsWith('/__fixtures__/reportLoadingBrowser.tsx')) return null
+        return code.replaceAll('MemoryRouter', 'BrowserRouter').replace(' initialEntries={[window.location.pathname]}', '')
+      },
+    }, react()],
+    define: { 'process.env.NODE_ENV': '"test"', 'import.meta.env.VITE_API_BASE_URL': '""' },
+    resolve: { alias: { '@': path.join(root, 'src') } },
+    build: { write: false, minify: false, lib: { entry: fileURLToPath(new URL('./__fixtures__/reportLoadingBrowser.tsx', import.meta.url)), formats: ['iife'], name: 'DigestResumeTest' } },
+  })
+  const bundle = (Array.isArray(result) ? result : [result]).flatMap(output => 'output' in output ? output.output : [])
+    .find(output => output.type === 'chunk' && output.isEntry)
+  if (!bundle || bundle.type !== 'chunk') throw new Error('Missing Digest resume bundle')
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block' })
+    let starts = 0, cacheReadsB = 0, readyB = false
+    const errors: string[] = [], unexpected: string[] = []
+    page.on('pageerror', error => errors.push(error.message))
+    await page.route('**/*', route => {
+      const request = route.request(), url = new URL(request.url())
+      if (request.resourceType() === 'document') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
+      if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
+      if (url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/digest/latest-cache') {
+        const from = url.searchParams.get('from'), to = url.searchParams.get('to')
+        if (from === '2026-08-01') {
+          cacheReadsB++
+          if (!readyB) return route.fulfill({ status: 404, json: { error: { code: 'HTTP_404', message: 'REPORT_LATEST_CACHE_MISSING' } } })
+        }
+        return route.fulfill({ json: {
+          meta: { id: 'digest', title: 'Synthetic', sourceType: 'operational', freshnessState: 'fresh', lastUpdatedAt: '2026-09-09T12:00:00Z' },
+          headline: 'Synthetic', dateRange: { preset: 'custom', from, to }, kpis: [], planFactRows: [], freshness: [], alerts: [], charts: [], problemRows: [], quickLinks: [], periodCards: [],
+          weeklyBalance: { title: 'Synthetic', valueLabel: 'Заказы', compareLabel: 'Выкупили', points: [] },
+        } })
+      }
+      if (url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/digest/plan') return route.fulfill({ json: { company: { revenuePlanKopecks: 0, marginPlanKopecks: 0 }, managers: [] } })
+      if (url.origin === 'http://satorna.test' && ['/api/wb/reports/digest/refresh', '/api/wb/reports/digest/status'].includes(url.pathname)) {
+        if (request.method() === 'POST') starts++
+        return route.fulfill({ json: { state: 'queued', percent: 0, label: 'Получаем данные WB' } })
+      }
+      if (url.origin === 'http://satorna.test' && url.pathname === '/api/v1/wb-repricer/stats') return route.fulfill({ json: { items: [{ articleId: 'DIGEST-NAV-STATS', name: 'Synthetic', metrics: {}, decision: {}, sources: {}, flags: [] }], total: 1 } })
+      unexpected.push(`${request.method()} ${url.href}`)
+      return route.abort()
+    })
+    await page.goto('http://satorna.test/wb/reports')
+    await page.evaluate(() => {
+      window.__vellaReportPeriods = { digest: { days: 7, mode: 'custom', fromIso: '2026-09-02', toIso: '2026-09-08', label: 'Synthetic A' } }
+      window.__vellaReportPeriodManual = { digest: true }
+    })
+    await page.addScriptTag({ content: bundle.code })
+    await expect.poll(() => page.evaluate(() => window.__vellaDigestLiveReport?.dateRange.from), { timeout: 15000 }).toBe('2026-09-02')
+    await page.evaluate(() => {
+      const period = { days: 3, mode: 'custom' as const, fromIso: '2026-08-01', toIso: '2026-08-03', label: 'Synthetic B' }
+      window.__vellaReportPeriods = { ...window.__vellaReportPeriods, digest: period }
+      window.__vellaReportPeriodManual = { ...window.__vellaReportPeriodManual, digest: true }
+      window.dispatchEvent(new CustomEvent('vella:report-period-updated', { detail: { reportKey: 'digest', period } }))
+    })
+    await expect.poll(() => starts).toBe(1)
+    await page.locator('#sidebar [data-tab="repricer-stats"]').dispatchEvent('click')
+    await page.getByText('DIGEST-NAV-STATS', { exact: true }).waitFor()
+    await expect.poll(() => page.evaluate(() => window.__vellaDigestLiveLoading)).toBe(false)
+    readyB = true
+    await page.locator('#sidebar [data-tab="digest"]').dispatchEvent('click')
+    await expect.poll(() => page.evaluate(() => window.__vellaDigestLiveReport?.dateRange.from)).toBe('2026-08-01')
+    expect(cacheReadsB).toBe(2)
+    expect(starts).toBe(1)
+    expect(errors).toEqual([])
+    expect(unexpected).toEqual([])
+  } finally { await browser.close() }
+}, 60_000)

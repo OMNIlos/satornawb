@@ -1645,10 +1645,10 @@ function computeProductsKpiSnapshot() {
   const hasSummaryAdSpend = summaryRecord.adSpendKopecks != null
   const summaryAdSpendRub = Math.round(productNumber(summaryRecord, 'adSpendKopecks') / 100)
   const summaryAdRevenueRub = Math.round(productNumber(summaryRecord, 'adRevenueKopecks') / 100)
-  const revenue = summaryRevenue > 0 ? summaryRevenue : fallback.revenue
-  const marginRub = summaryMarginRub !== 0 ? summaryMarginRub : fallback.marginRub
-  const cogsRub = summaryCogsRub > 0 ? summaryCogsRub : fallback.cogsRub
-  const expensesRub = summaryExpensesRub > 0 ? summaryExpensesRub : fallback.expensesRub
+  const revenue = summaryRecord.revenueKopecks != null ? summaryRevenue : fallback.revenue
+  const marginRub = summaryRecord.marginKopecks != null ? summaryMarginRub : fallback.marginRub
+  const cogsRub = summaryRecord.cogsKopecks != null ? summaryCogsRub : fallback.cogsRub
+  const expensesRub = summaryRecord.expensesKopecks != null ? summaryExpensesRub : fallback.expensesRub
   const adSpendRub = hasSummaryAdSpend ? summaryAdSpendRub : fallback.adSpendRub
   const adRevenueRub = summaryRecord.adRevenueKopecks != null ? summaryAdRevenueRub : fallback.adRevenueRub
   const avgMargin = summaryRecord.avgMarginPct != null ? productNumber(summaryRecord, 'avgMarginPct') : fallback.avgMargin
@@ -1672,8 +1672,8 @@ function computeProductsKpiSnapshot() {
     promoShare: summaryRecord.promoSharePct != null ? productNumber(summaryRecord, 'promoSharePct') : fallback.promoShare,
     totalBaskets: summaryRecord.totalBaskets != null ? productNumber(summaryRecord, 'totalBaskets') : fallback.totalBaskets,
     avgMargin,
-    revenueAvailable: financeCacheLoaded || revenue > 0 || hasFinanceRows,
-    marginAvailable: financeCacheLoaded || marginRub !== 0 || revenue > 0 || hasFinanceRows,
+    revenueAvailable: summaryRecord.revenueKopecks !== null && (financeCacheLoaded || revenue !== 0 || hasFinanceRows),
+    marginAvailable: summaryRecord.marginKopecks !== null && (financeCacheLoaded || marginRub !== 0 || revenue !== 0 || hasFinanceRows),
     adsAvailable: adsCacheLoaded || hasSummaryAdSpend || adSpendRub > 0 || fallback.adSkuCount > 0,
   }
 }
@@ -2310,11 +2310,15 @@ function renderLiveRepricerStatsLoading() {
   if (body) body.innerHTML = '<tr data-report-row="1"><td colspan="13"><div class="report-empty-note visible">Загружаю статистику товаров...</div></td></tr>'
 }
 
-function renderLiveRepricerStatsError(error: unknown) {
-  clearLiveRepricerStatsAggregates()
+function renderLiveRepricerStatsError(error: unknown, preserveRows = false) {
+  if (!preserveRows) clearLiveRepricerStatsAggregates()
   const body = document.getElementById('repricerStatsBody')
   const message = error instanceof Error ? error.message : 'Не удалось загрузить статистику репрайсера'
-  if (body) body.innerHTML = `<tr data-report-row="1"><td colspan="13"><div class="report-empty-note visible">Статистика репрайсера недоступна: ${escapeHtml(message)}</div></td></tr>`
+  const html = `<tr data-report-row="1"><td colspan="13"><div class="report-empty-note visible" role="alert">${preserveRows ? 'Статистика загружена частично' : 'Статистика репрайсера недоступна'}: ${escapeHtml(message)}</div></td></tr>`
+  if (body) {
+    if (preserveRows) body.insertAdjacentHTML('beforeend', html)
+    else body.innerHTML = html
+  }
 }
 
 export function installRepricerStatsLiveBridge(accessToken: string | null) {
@@ -2331,6 +2335,7 @@ export function installRepricerStatsLiveBridge(accessToken: string | null) {
     renderLiveRepricerStatsLoading()
     const period = repricerStatsPeriodRequest()
     const queryInput = document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')
+    let renderedRows = false
     try {
       const baseQuery = {
         ...period,
@@ -2342,6 +2347,7 @@ export function installRepricerStatsLiveBridge(accessToken: string | null) {
       if (!isCurrent()) return null
       applyRepricerStatsCachePeriod(payload)
       renderLiveRepricerStats(payload)
+      renderedRows = (payload.items?.length ?? 0) > 0
       const total = Number(payload.total || 0)
       const maxRows = Math.min(total, REPRICER_STATS_MAX_ROWS)
       const pageCount = Math.ceil(maxRows / REPRICER_STATS_PAGE_SIZE)
@@ -2353,7 +2359,7 @@ export function installRepricerStatsLiveBridge(accessToken: string | null) {
         })
         if (!isCurrent()) return null
         mergedItems.push(...(pagePayload.items ?? []))
-        renderLiveRepricerStats({
+        if (page === pageCount) renderLiveRepricerStats({
           ...payload,
           ...pagePayload,
           items: mergedItems.slice(0, REPRICER_STATS_MAX_ROWS),
@@ -2365,7 +2371,7 @@ export function installRepricerStatsLiveBridge(accessToken: string | null) {
       return payload
     } catch (error) {
       if (!isCurrent()) return null
-      renderLiveRepricerStatsError(error)
+      renderLiveRepricerStatsError(error, renderedRows)
       throw error
     }
   }
@@ -5362,9 +5368,6 @@ function installDigestLiveDataBridge(accessToken: string | null) {
     const path = currentDigestReportPath(period)
     const url = buildApiUrl(path)
     const requestKey = digestReportRequestKey(period)
-    if (window.__vellaDigestLiveRequestKey === requestKey && window.__vellaDigestLiveReport) {
-      return window.__vellaDigestLiveReport
-    }
     const memoryEntry = digestReportMemoryCache.get(requestKey)
     if (memoryEntry && Date.now() - memoryEntry.cachedAt < 5 * 60_000) {
       window.__vellaDigestLiveLoading = false
@@ -5375,7 +5378,7 @@ function installDigestLiveDataBridge(accessToken: string | null) {
       return memoryEntry.report
     }
     if (window.__vellaDigestLiveLoading) {
-      if (window.__vellaDigestLiveRequestKey === requestKey) return window.__vellaDigestLiveReport ?? null
+      if (window.__vellaDigestLiveRequestKey === requestKey && !window.__vellaDigestLiveAbortController?.signal.aborted) return window.__vellaDigestLiveReport ?? null
       window.__vellaDigestLiveAbortController?.abort()
     }
     if (!accessToken) {
@@ -5963,7 +5966,7 @@ export function installAbcLiveDataBridge(accessToken: string | null, canonicalRo
       return memoryEntry.rows
     }
     if (window.__vellaAbcLiveLoading) {
-      if (window.__vellaAbcLiveRequestKey === requestKey) return window.__vellaAbcLiveRows ?? null
+      if (window.__vellaAbcLiveRequestKey === requestKey && !window.__vellaAbcLiveAbortController?.signal.aborted) return window.__vellaAbcLiveRows ?? null
       window.__vellaAbcLiveAbortController?.abort()
     }
     const controller = new AbortController()
@@ -8263,6 +8266,9 @@ function applyRnpReportFilter(tab: HTMLElement) {
   const filter = getRnpActiveChip(tab, '[data-rnp-filter]', 'all')
   const managerSelect = Array.from(tab.querySelectorAll<HTMLSelectElement>('select.adv-select')).find((select) => /менеджер/i.test(select.options?.[0]?.textContent ?? ''))
   const manager = managerSelect?.value || 'all'
+  window.dispatchEvent(new CustomEvent('vella:report-render-filter', { detail: {
+    tabId: tab.id, active: Boolean(query || group !== 'sku' || filter !== 'all' || manager !== 'all'),
+  } }))
   tab.querySelectorAll<HTMLElement>('tbody tr[data-report-row="rnp"]').forEach((row) => {
     const searchText = normalizeRnpFilterText(row.dataset.search || row.textContent)
     const tags = normalizeRnpFilterText(row.dataset.reportTags).split('|').filter(Boolean)
@@ -10939,11 +10945,30 @@ function ExpensesSourceStripIsland({ replacementKey, state }: { replacementKey: 
 
 const REPORT_TABLE_RENDER_BATCH = 50
 
-function useReportTableRenderLimit(rowCount: number) {
+function useReportTableRenderLimit(rowCount: number, tabId?: 'stock' | 'rnp' | 'week') {
   const [limit, setLimit] = useState(REPORT_TABLE_RENDER_BATCH)
-  useEffect(() => setLimit(REPORT_TABLE_RENDER_BATCH), [rowCount])
+  const [filtersActive, setFiltersActive] = useState(false)
+  useEffect(() => setLimit(REPORT_TABLE_RENDER_BATCH), [rowCount, filtersActive])
+  useLayoutEffect(() => {
+    if (!tabId) return
+    const read = (event: Event) => {
+      const detail = (event as CustomEvent<{ tabId: string; active: boolean }>).detail
+      if (detail?.tabId === `tab-${tabId}`) setFiltersActive(detail.active)
+    }
+    window.addEventListener('vella:report-render-filter', read)
+    return () => window.removeEventListener('vella:report-render-filter', read)
+  }, [tabId])
+  useLayoutEffect(() => {
+    if (!tabId) return
+    const tab = document.getElementById(`tab-${tabId}`)
+    if (!tab) return
+    // Legacy predicates own filtering. Reapply before paint after mounting the
+    // requested rows so search/chips also see items beyond the initial window.
+    if (tabId === 'rnp') applyRnpReportFilter(tab)
+    else window.applyGenericReportFilter?.(tab)
+  }, [tabId, rowCount, filtersActive, limit])
   return {
-    limit,
+    limit: filtersActive ? rowCount : limit,
     loadMore: () => setLimit((current) => current + REPORT_TABLE_RENDER_BATCH),
   }
 }
@@ -11423,7 +11448,7 @@ function StockLiveSourceStripIsland({ replacementKey, state }: { replacementKey:
 function StockTableShellIsland({ replacementKey, state }: { replacementKey: string; state: StockLiveState }) {
   const report = state.status === 'ready' ? state.report : null
   const rows = getStockRows(report)
-  const renderWindow = useReportTableRenderLimit(rows.length)
+  const renderWindow = useReportTableRenderLimit(rows.length, 'stock')
   const visibleRows = rows.slice(0, renderWindow.limit)
   if (state.status !== 'ready' || rows.length === 0) return null
   return (
@@ -12042,12 +12067,43 @@ function AdsLiveSummaryGridIsland({ replacementKey, state }: { replacementKey: s
   )
 }
 
+function adsRowSearchText(row: AdsBackendRow, index: number, runtimeProduct = adsRuntimeProduct(row)) {
+  return [
+    adsProductTitle(row, index, runtimeProduct),
+    adsRowString(row, ['brandName', 'brand_name']) || adsRuntimeString(runtimeProduct, ['brandName', 'brand_name', 'brand']),
+    adsRowString(row, ['categoryName', 'category_name']) || adsRuntimeString(runtimeProduct, ['size', 'categoryName', 'subjectName', 'category']),
+    row.campaignName, row.campaignId, row.campaignType, row.paymentType, row.sku, row.nmId, row.recommendationReason,
+  ].filter(Boolean).join(' ')
+}
+
 function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string; state: AdsLiveState }) {
   const report = state.status === 'ready' ? state.report : {}
-  const rows = state.status === 'ready' ? adsRows(report) : []
-  const renderWindow = useReportTableRenderLimit(rows.length)
-  const visibleRows = rows.slice(0, renderWindow.limit)
-  if (state.status !== 'ready' || rows.length === 0) return null
+  const sourceRows = Array.isArray(report.rows) ? report.rows : null
+  const [filter, setFilter] = useState({ query: '', chip: 'все строки' })
+  useEffect(() => {
+    const tab = document.getElementById('tab-ads')
+    if (!tab) return
+    const read = () => {
+      const next = {
+        query: tab.querySelector<HTMLInputElement>('.search input')?.value.trim().toLowerCase() || '',
+        chip: tab.querySelector('.chips .chip.active')?.textContent?.trim().toLowerCase() || 'все строки',
+      }
+      setFilter(current => current.query === next.query && current.chip === next.chip ? current : next)
+    }
+    tab.addEventListener('vella:ads-filter-updated', read)
+    read()
+    return () => tab.removeEventListener('vella:ads-filter-updated', read)
+  }, [])
+  const rows = useMemo(() => (sourceRows ?? []).map((row, index) => ({ row, index })).filter(({ row, index }) => {
+    const queryMatches = !filter.query || adsRowSearchText(row, index).toLowerCase().includes(filter.query)
+    const chipMatches = filter.chip === 'все строки' || adsTypeTags(row).split('|').includes(filter.chip)
+    return queryMatches && chipMatches
+  }), [sourceRows, filter])
+  const [pagination, setPagination] = useState({ sourceRows, filter, limit: REPORT_TABLE_RENDER_BATCH })
+  const changed = pagination.sourceRows !== sourceRows || pagination.filter !== filter
+  if (changed) setPagination({ sourceRows, filter, limit: REPORT_TABLE_RENDER_BATCH })
+  const visibleRows = rows.slice(0, changed ? REPORT_TABLE_RENDER_BATCH : pagination.limit)
+  if (state.status !== 'ready' || !sourceRows?.length) return null
   return (
     <div
       key={replacementKey}
@@ -12089,8 +12145,8 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
             <ReportHeaderCell label="Комментарий" tip="Пояснение к строке: что именно стоит проверить в кабинете WB." />
           </tr>
         </thead>
-        <tbody data-vella-island="ads-live-table-body" data-vella-island-status="explicit-jsx" data-vella-row-count={rows.length}>
-          {visibleRows.map((row, index) => {
+        <tbody data-vella-island="ads-live-table-body" data-vella-island-status="explicit-jsx" data-vella-row-count={sourceRows.length}>
+          {visibleRows.map(({ row, index }) => {
             const [attributionLabel, attributionClass] = adsAttributionLabel(row.attributionLevel)
             const [recommendationLabel, recommendationClass] = adsRecommendationLabel(row.recommendation, row.unallocatedSpend)
             const rowHasSku = adsRowHasSku(row)
@@ -12108,18 +12164,7 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
             const campaignType = row.campaignType && String(row.campaignType).toLowerCase() !== 'unknown' ? row.campaignType : '—'
             const runtimeProduct = adsRuntimeProduct(row)
             const productTitle = adsProductTitle(row, index, runtimeProduct)
-            const searchText = [
-              productTitle,
-              adsRowString(row, ['brandName', 'brand_name']) || adsRuntimeString(runtimeProduct, ['brandName', 'brand_name', 'brand']),
-              adsRowString(row, ['categoryName', 'category_name']) || adsRuntimeString(runtimeProduct, ['size', 'categoryName', 'subjectName', 'category']),
-              row.campaignName,
-              row.campaignId,
-              row.campaignType,
-              row.paymentType,
-              row.sku,
-              row.nmId,
-              row.recommendationReason,
-            ].filter(Boolean).join(' ')
+            const searchText = adsRowSearchText(row, index, runtimeProduct)
             return (
               <tr
                 key={`${row.campaignId ?? 'campaign'}-${row.sku ?? 'row'}-${index}`}
@@ -12164,7 +12209,18 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
               </tr>
             )
           })}
-          <ReportTableMoreRow colSpan={21} shown={visibleRows.length} total={rows.length} onMore={renderWindow.loadMore} />
+          {rows.length === 0 ? (
+            <tr data-report-empty="ads-filter">
+              <td colSpan={21}>
+                <div className="report-empty-note visible">
+                  <b>Нет позиций по выбранным фильтрам</b><br />
+                  <span>Измените поиск или фильтр кампаний.</span><br />
+                  <button className="btn btn-default btn-sm" type="button" onClick={event => window.resetGenericReportFilters?.(event.currentTarget)}>Сбросить фильтры</button>
+                </div>
+              </td>
+            </tr>
+          ) : null}
+          <ReportTableMoreRow colSpan={21} shown={visibleRows.length} total={rows.length} onMore={() => setPagination(current => ({ ...current, limit: current.limit + REPORT_TABLE_RENDER_BATCH }))} />
         </tbody>
       </table>
     </div>
@@ -12220,7 +12276,7 @@ function RnpDebugPanelIsland({ replacementKey, state = { status: 'loading' } as 
 
 function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as RnpLiveState }: { replacementKey: string; state?: RnpLiveState }) {
   const rows = state.status === 'ready' ? getRnpRows(state.report) : []
-  const renderWindow = useReportTableRenderLimit(rows.length)
+  const renderWindow = useReportTableRenderLimit(rows.length, 'rnp')
   const visibleRows = rows.slice(0, renderWindow.limit)
   if (state.status !== 'ready' || rows.length === 0) return null
   const showCartConversion = rows.some((row) => asAdsNumber(row.atcrPct) != null)
@@ -12441,7 +12497,7 @@ function PnlLiveTableShellIsland({ replacementKey, state, rows, mode = 'financia
 
 function WeekTableShellIsland({ replacementKey, state }: { replacementKey: string; state: WeekLiveState }) {
   const rows = state.status === 'ready' ? getWeekRows(state.report) : []
-  const renderWindow = useReportTableRenderLimit(rows.length)
+  const renderWindow = useReportTableRenderLimit(rows.length, 'week')
   const visibleRows = rows.slice(0, renderWindow.limit)
   if (state.status !== 'ready' || rows.length === 0) return null
   return (
@@ -26687,8 +26743,6 @@ const PRODUCT_SECTION_SPECS = [
   ['#tableWrap', 'products-table-shell'],
   ['#emptyState', 'products-empty-state'],
   ['#apiErrorState', 'products-api-error-state'],
-  ['.pagination', 'products-pagination'],
-  ['#bulkBar', 'products-bulk-bar'],
 ] as const
 
 function compactTableHtml(html: string) {
@@ -26972,11 +27026,16 @@ function ProductsKpiStripIsland() {
   const hasPeriodKpiSnapshot = Boolean(window.__vellaProductsSummary) || productsForKpi().length > 0
   const loading = Boolean(window.__vellaProductsLoading) && !hasPeriodKpiSnapshot
   const unavailable = Boolean(window.__vellaProductsKpiUnavailable)
+  const summaryScope = window.__vellaProductsCacheMeta?.summaryScope === 'filtered_skus'
+    ? 'Все товары по фильтру; дополнительные нераспределённые расходы кабинета не включены'
+    : productsQueryHasKpiFilters(productsQueryFromRuntime())
+      ? 'Сводка каталога · фильтры применены только к таблице'
+      : 'Весь каталог, не только текущая страница'
   const kpi = computeProductsKpiSnapshot()
   const revenueValue = kpi.revenueAvailable ? `${formatProductsInteger(kpi.revenue)} ₽` : '—'
   const marginValue = kpi.marginAvailable ? `${formatProductsInteger(kpi.marginRub)} ₽` : '—'
-  const cogsValue = kpi.revenueAvailable ? `${formatProductsInteger(kpi.cogsRub)} ₽` : '—'
-  const expensesValue = kpi.revenueAvailable ? `${formatProductsInteger(kpi.expensesRub)} ₽` : '—'
+  const cogsValue = kpi.revenueAvailable && window.__vellaProductsSummary?.cogsKopecks !== null ? `${formatProductsInteger(kpi.cogsRub)} ₽` : '—'
+  const expensesValue = kpi.revenueAvailable && window.__vellaProductsSummary?.expensesKopecks !== null ? `${formatProductsInteger(kpi.expensesRub)} ₽` : '—'
   const ordersValue = formatProductsInteger(kpi.ordersUnits)
   const salesValue = kpi.revenueAvailable ? formatProductsInteger(kpi.salesUnits) : '—'
   const returnsValue = formatProductsInteger(kpi.returnsUnits)
@@ -26985,22 +27044,35 @@ function ProductsKpiStripIsland() {
     ? `${formatProductsInteger(kpi.adSkuCount)} товаров · ${formatProductsInteger(window.__vellaProductsCacheMeta?.adsCampaignCount ?? 0)} камп.`
     : 'реклама ещё не загружена'
   const revenueDelta = kpi.revenueAvailable ? 'продажи из финансового отчёта' : 'финансы ещё не загружены'
-  const marginDelta = kpi.marginAvailable ? 'выручка − себестоимость − расходы' : 'финансы ещё не загружены'
+  const marginDelta = kpi.marginAvailable ? 'расчёт репрайсера с корректировками' : 'расчёт недоступен'
+  const ratioRevenue = window.__vellaProductsSummary?.revenueKopecks ?? kpi.revenue * 100
+  const ratioMargin = window.__vellaProductsSummary?.marginKopecks ?? kpi.marginRub * 100
+  const marginRatioValue = kpi.revenueAvailable && kpi.marginAvailable && ratioRevenue !== 0 && window.__vellaProductsSummary?.avgMarginPct !== null
+    ? `${(ratioMargin / ratioRevenue * 100).toFixed(1)}%` : '—'
   const items = [
-    ['Выручка за период', 'WB FBS, до выплат комиссии, по выбранному периоду', 'kpiRevenue', revenueValue, revenueDelta],
-    ['Средняя маржа %', 'Среднее по товарам в продаже за выбранный период', 'kpiMargin', `${kpi.avgMargin.toFixed(1)}%`, 'маржа ₽ / выручка'],
-    ['Маржа ₽', 'Сумма чистой маржи по товарам в таблице', 'kpiMarginRub', marginValue, marginDelta],
-    ['Продажи по себестоимости', 'Себестоимость проданных товаров: себестоимость × продажи', 'kpiCogs', cogsValue, 'себестоимость × продажи'],
+    ['Выручка за период', 'WB retailAmount: продажи минус возвраты за выбранный период, до вычета расходов', 'kpiRevenue', revenueValue, revenueDelta],
+    ['Маржа / выручка, %', 'Маржа репрайсера ÷ выручка × 100; отношение общих сумм за период', 'kpiMargin', marginRatioValue, 'отношение сумм за период'],
+    ['Маржа репрайсера, ₽', 'Выручка WB + корректировка за единицу из настроек × продажи за вычетом возвратов − себестоимость − расходы − справочный налог. Не итоговая прибыль бизнеса.', 'kpiMarginRub', marginValue, marginDelta],
+    ['Продажи по себестоимости', 'Себестоимость из настроек SKU × (продажи − возвраты)', 'kpiCogs', cogsValue, 'с учётом возвратов'],
     ['Расходы ₽', 'Комиссия, логистика, хранение, приёмка, штрафы, удержания, эквайринг, реклама и прочие расходы', 'kpiExpenses', expensesValue, 'финансы и реклама'],
     ['Реклама ₽', 'Расход рекламы за выбранный период', 'kpiAdsSpend', adsValue, adsDelta],
     ['Заказы, шт', 'Количество заказов за выбранный период', 'kpiOrdersUnits', ordersValue, 'заказы покупателей'],
-    ['Продажи, шт', 'Количество продаж; возвраты показаны отдельно', 'kpiSalesUnits', salesValue, 'проданные товары'],
+    ['Продажи нетто, шт', 'Продажи минус возвраты за выбранный период', 'kpiSalesUnits', salesValue, 'продажи − возвраты'],
     ['Возвраты, шт', 'Количество возвратов за выбранный период', 'kpiReturnsUnits', returnsValue, 'возвраты покупателей'],
     ['Цен изменено за период', 'Сколько товаров обновили цену в выбранном периоде', 'kpiPriceChanges', formatProductsInteger(kpi.priceChanges), 'история изменений', true],
     ['Корзины за период', 'Добавлений в корзину за выбранный период. Главный сигнал для репрайсера — важнее продаж.', 'kpiBaskets', formatProductsInteger(kpi.totalBaskets), 'сигнал спроса'],
     ['Товаров в продаже', 'Товары с остатком и активной ценой', 'kpiInSale', formatProductsInteger(kpi.inSale), 'активные товары'],
     ['% участия в акциях', 'Доля товаров из загруженного файла акции', 'kpiPromoShare', `${formatProductsInteger(kpi.promoShare)}%`, 'акции WB'],
   ] as const
+
+  const cards = items.map(([label, tip, id, value, delta, clickable]) => (
+    <div className="stat" key={id}>
+      <div className="stat-label">{label} <button type="button" className="stat-tip" data-tip={tip} aria-label={`${label}: ${tip}`}>i</button></div>
+      {clickable ? <button type="button" className="stat-val products-kpi-link" id={id} onClick={() => window.goSubtab?.('history')} aria-label="Открыть историю изменений цен">{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</button>
+        : <div className="stat-val" id={id}>{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</div>}
+      <div className="stat-delta neutral">{delta}</div>
+    </div>
+  ))
 
   const toggleCollapsed = () => {
     setCollapsed((value) => {
@@ -27024,26 +27096,16 @@ function ProductsKpiStripIsland() {
   return (
     <div className="products-kpi-summary" data-vella-island="products-kpi-strip" data-vella-island-status="explicit-jsx">
       <div className="products-kpi-summary-actions">
-        <span>Сводка за выбранный период</span>
+        <span>Сводка за выбранный период · {summaryScope}</span>
         <button className="btn btn-ghost btn-sm" type="button" data-vella-react-handlers="onclick" onClick={toggleCollapsed}>
           Скрыть сводку
         </button>
       </div>
-      <div className="stats repricer-kpis">
-        {items.map(([label, tip, id, value, delta, clickable]) => (
-          <div
-            className={clickable ? 'stat clickable' : 'stat'}
-            data-vella-react-handlers={clickable ? 'onclick' : undefined}
-            onClick={clickable ? () => window.goSubtab?.('history') : undefined}
-            data-tip={clickable ? 'Открыть историю изменений' : undefined}
-            key={id}
-          >
-            <div className="stat-label">{label} <span className="stat-tip" data-tip={tip}>i</span></div>
-            <div className="stat-val" id={id}>{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</div>
-            <div className="stat-delta neutral">{delta}</div>
-          </div>
-        ))}
-      </div>
+      <div className="stats repricer-kpis">{cards.slice(0, 5)}</div>
+      <details className="products-kpi-more">
+        <summary>Дополнительные показатели</summary>
+        <div className="stats repricer-kpis">{cards.slice(5)}</div>
+      </details>
     </div>
   )
 }
@@ -28067,15 +28129,23 @@ function ProductsBackendCacheControlsIsland() {
     : nextMaintenanceRow?.nextRunAt
       ? `${formatProductsBackendTime(nextMaintenanceRow.nextRunAt)}${nextMaintenanceRow.dueInSeconds ? ` · через ${formatProductsSyncDuration(nextMaintenanceRow.dueInSeconds)}` : ''}`
       : 'после первого успешного запуска'
-  const coldHasError = coldSyncPlanRows.some((item) => item.state === 'partial' || item.state === 'error')
+  const coldHasError = Boolean(syncStatus?.error || syncFailedSteps.length)
+    || ['error', 'failed'].includes(syncStatus?.state ?? '')
+    || coldSyncPlanRows.some((item) => item.state === 'error' || item.state === 'failed')
+  const syncIsStale = Boolean(syncStatus?.stale || syncStatus?.state === 'stale')
+  const syncIsPartial = coldPartialCount > 0 || syncStatus?.state === 'partial'
   const syncHeroTitle = coldHasError
-    ? 'Нужна проверка'
-    : productsDataLoading
-      ? 'Обновляем данные'
-      : selectedRangeHasWorkingData
-        ? 'Данные готовы'
-        : 'Данных пока нет'
-  const coldStatusTone = coldHasError ? 'is-error' : productsDataLoading ? 'is-running' : coldVisualFinishedCount >= coldSyncPlanRows.length && coldSyncPlanRows.length > 0 ? 'is-complete' : 'is-waiting'
+    ? 'Ошибка загрузки данных'
+    : syncIsStale
+      ? 'Данные устарели'
+      : syncIsPartial
+        ? 'Данные загружены частично'
+        : productsDataLoading
+          ? coldQueued || syncStatus?.state === 'queued' ? 'Загрузка в очереди' : 'Обновляем данные'
+          : selectedRangeHasWorkingData
+            ? 'Основные данные готовы'
+            : 'Данных пока нет'
+  const coldStatusTone = coldHasError || syncIsStale || syncIsPartial ? 'is-error' : productsDataLoading ? 'is-running' : selectedRangeHasWorkingData ? 'is-complete' : 'is-waiting'
   const coldStatusTitle = coldHasError
     ? 'Нужна проверка'
     : productsDataLoading
@@ -28092,13 +28162,7 @@ function ProductsBackendCacheControlsIsland() {
       : `${coldVisualFinishedCount}/${coldSyncPlanRows.length || 3} этапов готово`
   const lastAttemptAt = syncStatus?.finishedAt || syncStatus?.startedAt || syncStatus?.updatedAt || cache?.financeFetchedAt || cache?.latestFetchedAt
   const lastAttemptLabel = lastAttemptAt ? formatProductsBackendTime(lastAttemptAt) : 'ещё не запускался'
-  const syncHeroMeta = syncRunning
-    ? `${syncOperationPeriodLabel} · ${Math.round(unifiedSyncPct)}% общего прогресса`
-    : productsDataLoading
-      ? `Ждем ответ WB и обновляем таблицу за ${periodLabel}`
-    : selectedRangeHasWorkingData
-      ? `${formatProductsInteger(totalSku)} товаров · обновлено ${lastAttemptLabel}`
-      : 'Запустится фоновая загрузка после подключения и расписания.'
+  const syncHeroMeta = `Каталог: ${cache?.latestFetchedAt ? formatProductsBackendTime(cache.latestFetchedAt) : 'дата неизвестна'} · финансы: ${cache?.financeFetchedAt ? formatProductsBackendTime(cache.financeFetchedAt) : 'дата неизвестна'}`
   const workerSecondsUntilNext = workerStatus?.timing?.nextRunAt
     ? Math.max(0, Math.floor((new Date(workerStatus.timing.nextRunAt).getTime() - Date.now()) / 1000))
     : workerStatus?.timing?.secondsUntilNextRun ?? null
@@ -28129,51 +28193,41 @@ function ProductsBackendCacheControlsIsland() {
     <div className={`toolbar ${periodEmpty ? 'products-period-empty-toolbar' : ''}`} data-vella-island="products-backend-cache-controls" data-cache-version={cacheVersion}>
       <div className="toolbar-left">
         <div className="products-sync-panel">
-          <div className="products-sync-user-card">
-            <div
-              className="products-sync-ring"
-              style={{ '--sync-progress': `${unifiedSyncPct}%` } as CSSProperties}
-              role="progressbar"
-              aria-label={`Общий прогресс синхронизации WB: ${unifiedSyncPct}%`}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={unifiedSyncPct}
-            >
-              <b>{unifiedSyncPct}%</b>
-              <span>готово</span>
-            </div>
-            <div className="products-sync-user-copy">
-              <span className="products-sync-eyebrow">Данные WB</span>
+          <div className={`products-sync-summary ${coldStatusTone}`}>
+            <div role="status" aria-live="polite">
               <strong>{syncHeroTitle}</strong>
-              <p>{syncHeroStage}</p>
+              {syncRunning ? <span>{syncHeroStage}</span> : null}
               <small>{syncHeroMeta}</small>
+            </div>
+            <button
+              className="btn btn-default btn-sm"
+              type="button"
+              data-vella-react-handlers="onclick"
+              aria-expanded={syncPlanOpen}
+              aria-controls="products-sync-plan"
+              onClick={() => setSyncPlanOpen((value) => !value)}
+            >
+              {syncPlanOpen ? 'Скрыть этапы' : 'Этапы загрузки'}
+            </button>
+          </div>
+          {syncPlanOpen ? <div id="products-sync-plan" className={`products-cold-sync-strip ${coldStatusTone}`}>
+            <div className="products-cold-sync-head">
+              <div>
+                <span>Этапы данных</span>
+                <strong>{coldStatusTitle}</strong>
+                <small>{coldStatusMeta}</small>
+                <small>Последняя попытка: {lastAttemptLabel}</small>
+              </div>
+              <div className="products-cold-sync-head-actions">
+                <b>{unifiedSyncPct}%</b>
+              </div>
             </div>
             <div className="products-worker-timer-card">
               <span>Следующий пересчёт цен</span>
               <strong>{workerTimerLabel}</strong>
               <small>{workerIntervalLabel}{pendingApprovalsCount ? ` · ${pendingApprovalsCount} ждут решения` : ''}</small>
             </div>
-          </div>
-          <div className={`products-cold-sync-strip ${coldStatusTone}`}>
-            <div className="products-cold-sync-head">
-              <div>
-                <span>Этапы данных</span>
-                <strong>{coldStatusTitle}</strong>
-                <small>{coldStatusMeta}</small>
-              </div>
-              <div className="products-cold-sync-head-actions">
-                <b>{unifiedSyncPct}%</b>
-                <button
-                  className="btn btn-default btn-sm"
-                  type="button"
-                  data-vella-react-handlers="onclick"
-                  onClick={() => setSyncPlanOpen((value) => !value)}
-                >
-                  {syncPlanOpen ? 'Скрыть' : 'Подробнее'}
-                </button>
-              </div>
-            </div>
-            {syncPlanOpen ? <div className="products-cold-sync-road" aria-label="Этапы загрузки данных">
+            <div className="products-cold-sync-road" aria-label="Этапы загрузки данных">
               {(coldSyncPlanRows.length ? coldSyncPlanRows : [
                 { syncProfile: 'onboarding-7', syncProfileLabel: '7 дней', state: selectedRangeHasWorkingData ? 'completed' : 'pending' },
                 { syncProfile: 'onboarding-30', syncProfileLabel: '30 дней', state: selectedRangeHasWorkingData ? 'completed' : 'pending' },
@@ -28201,8 +28255,8 @@ function ProductsBackendCacheControlsIsland() {
                   </button>
                 )
               })}
-            </div> : null}
-          </div>
+            </div>
+          </div> : null}
           {syncDetailsOpen ? (
             <ProductsSyncPortal>
               <div
@@ -28431,7 +28485,7 @@ function ProductsBackendCacheControlsIsland() {
           onClick={() => void runNomenclatureExport()}
         >
           <FileSpreadsheet size={14} />
-          {loading === 'nomenclature-export' ? 'Выгружаем...' : 'Выгрузить XLSX'}
+          {loading === 'nomenclature-export' ? 'Выгружаем...' : 'Скачать настройки XLSX'}
         </button>
         <input
           ref={nomenclatureInputRef}
@@ -28453,7 +28507,7 @@ function ProductsBackendCacheControlsIsland() {
           onClick={() => nomenclatureInputRef.current?.click()}
         >
           <Upload size={14} />
-          {loading === 'nomenclature-import' ? 'Загружаем...' : 'Загрузить XLSX'}
+          {loading === 'nomenclature-import' ? 'Загружаем...' : 'Импорт настроек XLSX'}
         </button>
         {nomenclatureProgress ? (
           <div className="products-import-progress" role="status" aria-live="polite">
@@ -28598,60 +28652,6 @@ function ProductsBulkStrategyMenuIsland() {
           </div>
         )
       })}
-    </div>
-  )
-}
-
-function ProductsPaginationIsland() {
-  const [tick, setTick] = useState(0)
-  useEffect(() => {
-    const render = () => setTick((value) => value + 1)
-    window.addEventListener('vella:products-pagination-updated', render)
-    window.addEventListener('vella:products-rows-updated', render)
-    render()
-    return () => {
-      window.removeEventListener('vella:products-pagination-updated', render)
-      window.removeEventListener('vella:products-rows-updated', render)
-    }
-  }, [])
-  void tick
-  const cache = window.__vellaProductsCacheMeta
-  const state = window.__vellaProductsListState ?? { page: 1, pageSize: PRODUCTS_TABLE_RENDER_LIMIT }
-  const visibleRows = visibleProductsRowCount()
-  const page = Math.max(1, Number(state.page ?? 1))
-  const pageSize = Math.max(25, Number(state.pageSize ?? cache?.listItemsLimit ?? PRODUCTS_TABLE_RENDER_LIMIT))
-  const rawTotal = Number(cache?.listTotalFiltered ?? cache?.totalCached ?? visibleRows)
-  const total = Number.isFinite(rawTotal) && rawTotal > 0 ? rawTotal : visibleRows
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  const start = total && visibleRows ? (page - 1) * pageSize + 1 : 0
-  const end = total && visibleRows ? Math.min(total, start + visibleRows - 1) : 0
-  const goPage = (nextPage: number) => {
-    window.__vellaProductsListState = { ...state, page: Math.max(1, Math.min(totalPages, nextPage)), pageSize }
-    window.__vellaLoadLiveRepricerProducts?.()
-  }
-  const setPageSize = (nextSize: number) => {
-    window.__vellaProductsListState = { ...state, page: 1, pageSize: nextSize }
-    window.__vellaLoadLiveRepricerProducts?.()
-  }
-
-  return (
-    <div className="pagination" data-vella-island="products-pagination" data-vella-island-status="explicit-jsx">
-      <span className="page-info">Показано <b>{start}–{end}</b> из <b>{total}</b></span>
-      <div className="spacer" />
-      <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Строк на странице:</span>
-      <select className="per-page-sel" value={pageSize} data-vella-react-handlers="onchange" onChange={(event) => setPageSize(Number(event.currentTarget.value))}>
-        <option value={50}>50</option>
-        <option value={100}>100</option>
-        <option value={150}>150</option>
-        <option value={300}>300</option>
-        <option value={500}>500</option>
-      </select>
-      <div className="page-jump">
-        <button className="page-btn" type="button" disabled={page <= 1} data-vella-react-handlers="onclick" onClick={() => goPage(page - 1)}>‹</button>
-        <button className="page-btn active" type="button">{page}</button>
-        <span style={{ color: 'var(--gray-400)' }}>из {totalPages}</span>
-        <button className="page-btn" type="button" disabled={page >= totalPages} data-vella-react-handlers="onclick" onClick={() => goPage(page + 1)}>›</button>
-      </div>
     </div>
   )
 }
@@ -29532,13 +29532,6 @@ const productsTableShellReplacements: HtmlReactReplacement[] = [
   },
 ]
 
-const productsPaginationReplacements: HtmlReactReplacement[] = [
-  {
-    selector: '.pagination',
-    render: () => <ProductsPaginationIsland />,
-  },
-]
-
 function ProductSourceSectionIsland({
   replacementKey,
   sourceElement,
@@ -29565,10 +29558,6 @@ function ProductSourceSectionIsland({
 
   if (islandName === 'products-advanced-filters') {
     return <ProductsAdvancedFiltersIsland sourceElement={section} />
-  }
-
-  if (islandName === 'products-pagination') {
-    return <ProductsPaginationIsland />
   }
 
   if (islandName === 'products-table-shell') {
@@ -29605,8 +29594,6 @@ function ProductSourceSectionIsland({
         `${replacementKey}-${islandName}-content`,
         islandName === 'products-table-shell'
           ? productsTableShellReplacements
-          : islandName === 'products-pagination'
-            ? productsPaginationReplacements
           : islandName === 'products-toolbar'
             ? productsToolbarReplacements
           : islandName === 'products-bulk-bar'
@@ -29640,6 +29627,15 @@ function ProductsIsland({ replacementKey, sourceElement }: { replacementKey: str
           islandName={islandName}
         />
       ))}
+      <div className="products-table-footer">
+        <ProductSourceSectionIsland
+          replacementKey={replacementKey}
+          sourceElement={sourceElement}
+          selector="#bulkBar"
+          islandName="products-bulk-bar"
+        />
+        <ProductsStickyPaginationPanel />
+      </div>
     </div>
   )
 }
@@ -30495,10 +30491,11 @@ async function loadProductsPageFromRuntime(
     if (!isLatestLoad()) return firstPagePayload
     publishProductsLoadTrace(firstPagePayload.trace)
     window.__vellaProductsCacheMeta = firstPagePayload.cache
-    if (!firstPageHasKpiFilters) {
+    const updateKpiRows = !firstPageHasKpiFilters || firstPagePayload.cache?.summaryScope === 'filtered_skus'
+    if (updateKpiRows) {
       window.__vellaProductsSummary = firstPagePayload.summary
     }
-    applyLiveProductsToRuntime(firstPagePayload.products, { updateKpiRows: !firstPageHasKpiFilters })
+    applyLiveProductsToRuntime(firstPagePayload.products, { updateKpiRows })
     window.dispatchEvent(new CustomEvent('vella:products-pagination-updated'))
     loadProductsPriceChangesCountInBackground(
       accessToken,
@@ -30510,10 +30507,11 @@ async function loadProductsPageFromRuntime(
   }
 
   window.__vellaProductsCacheMeta = payload.cache
-  if (!queryHasKpiFilters) {
+  const updateKpiRows = !queryHasKpiFilters || payload.cache?.summaryScope === 'filtered_skus'
+  if (updateKpiRows) {
     window.__vellaProductsSummary = payload.summary
   }
-  applyLiveProductsToRuntime(payload.products, { updateKpiRows: !queryHasKpiFilters })
+  applyLiveProductsToRuntime(payload.products, { updateKpiRows })
   window.dispatchEvent(new CustomEvent('vella:products-pagination-updated'))
   loadProductsPriceChangesCountInBackground(
     accessToken,
@@ -35238,6 +35236,10 @@ export function VellaHtmlParityPage() {
     installAbcLiveDataBridge(accessToken, canonicalAbcPnlRollout)
     if (effectiveActiveParityTab === 'digest') void window.__vellaLoadLiveDigestReport?.()
     if (effectiveActiveParityTab === 'abc') void window.__vellaLoadLiveAbcReport?.()
+    return () => {
+      window.__vellaDigestLiveAbortController?.abort()
+      window.__vellaAbcLiveAbortController?.abort()
+    }
   }, [accessToken, canonicalAbcPnlRollout, effectiveActiveParityTab])
 
   useEffect(() => {
@@ -37086,6 +37088,12 @@ export function VellaHtmlParityPage() {
         .vella-html-parity-root #subtabsContext [data-context-control="period"] {
           order: 2;
         }
+        .vella-html-parity-root .subtabs:has([data-module-panel="repricer"].active) {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .vella-html-parity-root .subtabs-scroll:has([data-module-panel="repricer"].active) {
+          display: none;
+        }
         @media (max-width: 1599px) {
           .vella-html-parity-root .subtabs {
             grid-template-columns: minmax(0, 1fr);
@@ -37575,6 +37583,26 @@ export function VellaHtmlParityPage() {
           padding: 10px 20px;
           background: var(--white);
           border-bottom: 1px solid var(--gray-100);
+        }
+        .vella-html-parity-root .products-kpi-more > summary {
+          cursor: pointer;
+          padding: 6px 20px 10px;
+          font-size: 12px;
+          color: var(--gray-600);
+        }
+        .vella-html-parity-root .products-kpi-summary > .repricer-kpis {
+          grid-template-columns: repeat(5, minmax(136px, 1fr));
+        }
+        .vella-html-parity-root .products-kpi-summary button.stat-tip {
+          border: 0;
+          padding: 0;
+        }
+        .vella-html-parity-root .products-kpi-link {
+          border: 0;
+          padding: 0;
+          background: none;
+          color: inherit;
+          cursor: pointer;
         }
         .vella-html-parity-root #tab-products .products-advanced-filters-panel {
           margin: 10px 20px 12px;
@@ -38162,75 +38190,32 @@ export function VellaHtmlParityPage() {
           overflow-wrap: anywhere;
         }
         .vella-html-parity-root .products-sync-panel {
-          width: min(100%, 1120px);
+          width: 100%;
           display: grid;
           grid-template-columns: minmax(0, 1fr);
           align-items: center;
-          gap: 12px;
-          padding: 12px;
-          border: 1px solid var(--gray-200);
-          border-radius: 14px;
-          background: var(--white);
-          box-shadow: 0 12px 28px rgba(15, 23, 42, 0.07);
+          gap: 8px;
+        }
+        .vella-html-parity-root .products-sync-summary {
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 8px 16px;
+        }
+        .vella-html-parity-root .products-sync-summary > div {
+          display: grid;
+          gap: 3px;
+          font-size: 13px;
+        }
+        .vella-html-parity-root .products-sync-summary small {
+          color: var(--gray-500);
+          font-size: 11px;
+        }
+        .vella-html-parity-root .products-sync-summary.is-error strong {
+          color: #C2410C;
         }
         .vella-html-parity-root .products-period-empty-toolbar .products-sync-panel {
           width: 100%;
-        }
-        .vella-html-parity-root .products-sync-user-card {
-          display: grid;
-          grid-template-columns: auto minmax(260px, 1fr) minmax(210px, .55fr);
-          gap: 16px;
-          align-items: center;
-          min-width: 0;
-        }
-        .vella-html-parity-root .products-sync-ring {
-          --sync-progress: 0%;
-          width: 86px;
-          height: 86px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          align-content: center;
-          background:
-            radial-gradient(circle at center, var(--white) 0 58%, transparent 59%),
-            conic-gradient(var(--brand) var(--sync-progress), #E5E7EB 0);
-          box-shadow: inset 0 0 0 1px rgba(148, 163, 184, .18);
-        }
-        .vella-html-parity-root .products-sync-ring b {
-          color: var(--gray-950);
-          font-size: 20px;
-          line-height: 1;
-          font-weight: 950;
-        }
-        .vella-html-parity-root .products-sync-ring span {
-          color: var(--gray-500);
-          font-size: 10px;
-          font-weight: 800;
-        }
-        .vella-html-parity-root .products-sync-user-copy {
-          display: grid;
-          gap: 3px;
-          min-width: 0;
-        }
-        .vella-html-parity-root .products-sync-user-copy strong {
-          color: var(--gray-950);
-          font-size: 18px;
-          line-height: 1.15;
-          font-weight: 950;
-        }
-        .vella-html-parity-root .products-sync-user-copy p,
-        .vella-html-parity-root .products-sync-user-copy small {
-          margin: 0;
-          min-width: 0;
-          color: var(--gray-500);
-          font-size: 12px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        .vella-html-parity-root .products-sync-user-copy p {
-          color: var(--gray-700);
-          font-weight: 800;
         }
         .vella-html-parity-root .products-worker-timer-card {
           min-width: 0;
@@ -39490,9 +39475,6 @@ export function VellaHtmlParityPage() {
             grid-template-columns: 1fr;
             align-items: stretch;
           }
-          .vella-html-parity-root .products-sync-user-card {
-            grid-template-columns: auto minmax(0, 1fr);
-          }
           .vella-html-parity-root .products-worker-timer-card {
             grid-column: 1 / -1;
           }
@@ -39515,9 +39497,6 @@ export function VellaHtmlParityPage() {
           }
         }
         @media (max-width: 760px) {
-          .vella-html-parity-root .products-sync-user-card {
-            grid-template-columns: 1fr;
-          }
           .vella-html-parity-root #tab-products .products-advanced-filter-grid,
           .vella-html-parity-root #tab-products .products-advanced-filter-grid .products-filter-popover-grid,
           .vella-html-parity-root #tab-products .products-legacy-advanced-filters .adv-grid {
@@ -39525,10 +39504,6 @@ export function VellaHtmlParityPage() {
           }
           .vella-html-parity-root #tab-products .products-advanced-filter-grid .products-filter-section-wide {
             grid-column: auto;
-          }
-          .vella-html-parity-root .products-sync-ring {
-            width: 74px;
-            height: 74px;
           }
           .vella-html-parity-root .products-sync-debug-modal {
             width: calc(100vw - 24px);
@@ -39721,8 +39696,8 @@ export function VellaHtmlParityPage() {
         .vella-html-parity-root #tab-ads table.report-mid thead th:nth-child(2) {
           box-shadow: 8px 0 14px rgba(15, 23, 42, 0.06), inset 0 -1px 0 var(--gray-200);
         }
-        .vella-html-parity-root #tab-products {
-          padding-bottom: 104px;
+        .vella-html-parity-root #tab-products.tab-content {
+          padding-bottom: 0;
           box-sizing: border-box;
           height: 100%;
           max-height: 100%;
@@ -39813,24 +39788,39 @@ export function VellaHtmlParityPage() {
             justify-content: stretch;
           }
         }
+        .vella-html-parity-root .products-table-footer {
+          position: sticky;
+          bottom: 0;
+          z-index: 40;
+          flex: 0 0 auto;
+          margin-top: auto;
+          background: var(--white);
+          border-top: 1px solid var(--gray-200);
+        }
+        .vella-html-parity-root .products-table-footer .bulk-bar {
+          position: relative;
+          inset: auto;
+          transform: none;
+          display: none;
+          width: 100%;
+          max-width: 100%;
+          border-radius: 0;
+          box-shadow: none;
+          flex-wrap: wrap;
+          white-space: normal;
+        }
+        .vella-html-parity-root .products-table-footer .bulk-bar.show {
+          display: flex;
+        }
         .vella-products-sticky-pagination {
-          position: fixed;
-          left: 252px;
-          right: 20px;
-          bottom: 16px;
-          z-index: 1800;
           min-height: 54px;
           display: flex;
+          flex-wrap: wrap;
           align-items: center;
           justify-content: center;
           gap: 12px;
           padding: 10px 12px;
-          border: 1px solid rgba(148, 163, 184, 0.24);
-          border-radius: 14px;
-          background: rgba(255, 255, 255, 0.78);
-          box-shadow: 0 18px 48px rgba(15, 23, 42, 0.16);
-          backdrop-filter: blur(18px) saturate(1.35);
-          -webkit-backdrop-filter: blur(18px) saturate(1.35);
+          background: var(--white);
         }
         .vella-html-parity-root #dOverlay.drawer-overlay {
           z-index: 3000;
@@ -39838,9 +39828,6 @@ export function VellaHtmlParityPage() {
         .vella-html-parity-root #dPanel.drawer,
         .vella-html-parity-root #reportCommentDrawer.drawer {
           z-index: 3010;
-        }
-        .vella-html-parity-root .sidebar.collapsed ~ .vella-products-sticky-pagination {
-          left: 80px;
         }
         .vella-products-sticky-pagination__meta {
           display: flex;
@@ -39968,11 +39955,18 @@ export function VellaHtmlParityPage() {
         }
         @media (max-width: 960px) {
           .vella-products-sticky-pagination {
-            left: 76px;
-            right: 10px;
-            bottom: 10px;
             justify-content: flex-start;
-            overflow-x: auto;
+          }
+        }
+        @media (max-width: 720px) {
+          .vella-html-parity-root .products-table-footer {
+            display: none;
+          }
+          .vella-html-parity-root .desktop-only-fallback {
+            min-height: 0;
+            height: 100%;
+            padding: 14px;
+            overflow: auto;
           }
         }
         .vella-apply-prices-modal {
@@ -40439,7 +40433,6 @@ export function VellaHtmlParityPage() {
           {runtime.shellIsland
             ? <VellaShellIsland shellIsland={runtime.shellIsland} mode={routeTarget.tab === 'work-status' ? 'work-status' : 'default'} />
             : htmlFragment(runtime.bodyHtml, 'body-fallback')}
-          {!WB_ACCOUNT_PRODUCTS_ENABLED && isCanonicalProductsRoute(location.pathname) ? <ProductsStickyPaginationPanel /> : null}
           <AdsCacheRefreshButton accessToken={accessToken} active={routeTarget.tab === 'ads'} />
         </div>
       </ActiveParityTabContext.Provider>
@@ -40678,7 +40671,7 @@ declare global {
     __vellaLoadLiveRepricerStats?: () => Promise<LiveRepricerStatsResponse | null>
     __vellaRefreshLiveRepricerProducts?: (offset?: number) => Promise<{ total: number; cache?: { pagesCached: number; totalCached: number; nextOffset: number; pageLimit: number; latestFetchedAt?: string | null; listPage?: number; listItemsLimit?: number; listTotalFiltered?: number } }>
     __vellaRefreshLiveRepricerSource?: (source: 'content' | 'promotions' | 'stocks' | 'period-stats' | 'finance' | 'ads' | 'baskets', period?: number | LiveRepricerPeriodRequest) => Promise<{ source: string; count: number; requestedNmIds?: number; matchedNmIds?: number; cachedGoodsNmIds?: number; matchedCachedGoodsNmIds?: number; partial?: boolean; warning?: string } | null>
-    __vellaProductsCacheMeta?: { pagesCached: number; totalCached: number; nextOffset: number; pageLimit: number; latestFetchedAt?: string | null; periodDays?: number; dateFrom?: string | null; dateTo?: string | null; periodCacheSuffix?: string | null; stocksFetchedAt?: string | null; periodStatsFetchedAt?: string | null; financeFetchedAt?: string | null; financeCachedGoodsNmIds?: number | null; financeMatchedNmIds?: number | null; adsFetchedAt?: string | null; adsCount?: number | null; adsCampaignCount?: number | null; adsDateFrom?: string | null; adsDateTo?: string | null; adsSource?: string | null; adsSpendKopecks?: number | null; adsImpressions?: number | null; adsClicks?: number | null; adsCartAdds?: number | null; adsOrders?: number | null; adsRevenueKopecks?: number | null; adsLastStatus?: string | null; adsLastError?: string | null; adsLastFinishedAt?: string | null; basketsFetchedAt?: string | null; basketsRequestedNmIds?: number | null; basketsMatchedNmIds?: number | null; listPage?: number; listItemsLimit?: number; listTotalFiltered?: number }
+    __vellaProductsCacheMeta?: LiveRepricerProductsPayload['cache']
     __vellaProductsPeriodDays?: number
     __vellaProductsPeriodFromIso?: string
     __vellaProductsPeriodToIso?: string

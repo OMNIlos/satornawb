@@ -130,3 +130,48 @@ test.each(['products', 'strategies'] as const)('%s reset invalidates its own ses
   await load('synthetic-account-a')
   expect(fetchMock).toHaveBeenCalledTimes(4)
 })
+
+test('returning to an in-flight products range reuses its request after another range starts', async () => {
+  const api = await import('./liveParityData')
+  const pending: Array<() => void> = []
+  const fetchMock = vi.fn((url: string) => new Promise<Response>(resolve => {
+    const days = Number(new URL(url, 'http://satorna.test').searchParams.get('periodDays'))
+    pending.push(() => resolve(response('products', days)))
+  }))
+  vi.stubGlobal('fetch', fetchMock)
+  const calls = [
+    api.loadLiveRepricerParityProducts('synthetic-account-a', undefined, 7),
+    api.loadLiveRepricerParityProducts('synthetic-account-a', undefined, 14),
+    api.loadLiveRepricerParityProducts('synthetic-account-a', undefined, 7),
+  ]
+  try {
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    pending.forEach(resolve => resolve())
+    expect((await Promise.all(calls)).map(payload => payload.total)).toEqual([7, 14, 7])
+    expect((await api.loadLiveRepricerParityProducts('synthetic-account-a', undefined, 7)).total).toBe(7)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  } finally {
+    pending.forEach(resolve => resolve())
+    await Promise.allSettled(calls)
+  }
+})
+
+test.each(['products', 'strategies'] as const)('%s does not reuse an aborted request when the section reopens', async (kind) => {
+  const api = await import('./liveParityData')
+  const load = kind === 'products' ? api.loadLiveRepricerParityProducts : api.loadLiveRepricerStrategies
+  const controller = new AbortController()
+  const fetchMock = vi.fn((_url: unknown, init: RequestInit) => {
+    if (init.signal !== controller.signal) return Promise.resolve(response(kind, 2))
+    return new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('Request aborted', 'AbortError')), { once: true })
+    })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const first = load('synthetic-account-a', controller.signal)
+  controller.abort()
+  const second = load('synthetic-account-a', new AbortController().signal)
+  const results = await Promise.allSettled([first, second])
+  expect(results[0].status).toBe('rejected')
+  expect(results[1].status).toBe('fulfilled')
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+})

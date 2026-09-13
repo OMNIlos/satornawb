@@ -84,3 +84,59 @@ it.each(['success', 'error', 'logout', 'pagination', 'pagination-error', 'latest
     expect(errors).toEqual([])
   } finally { releaseFirst(); await browser.close() }
 }, 60_000)
+
+it.each([false, true])('renders the first statistics page once while later pages settle (failure=%s)', async failure => {
+  const root = fileURLToPath(new URL('../../../', import.meta.url))
+  const result = await build({
+    configFile: false, envFile: false, root, logLevel: 'silent', plugins: [react()],
+    define: { 'process.env.NODE_ENV': '"test"', 'import.meta.env.VITE_API_BASE_URL': '""' },
+    resolve: { alias: { '@': path.join(root, 'src') } },
+    build: { write: false, minify: false, lib: {
+      entry: fileURLToPath(new URL('./__fixtures__/repricerStatsRaceBrowser.ts', import.meta.url)), formats: ['iife'], name: 'StatsBatchTest',
+    } },
+  })
+  const bundle = (Array.isArray(result) ? result : [result]).flatMap(output => 'output' in output ? output.output : [])
+    .find(output => output.type === 'chunk' && output.isEntry)
+  if (!bundle || bundle.type !== 'chunk') throw new Error('Missing statistics batching bundle')
+  const browser = await chromium.launch({ headless: true })
+  let release = () => {}
+  const lastPage = new Promise<void>(resolve => { release = resolve })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block' })
+    const queries: number[] = [], errors: string[] = [], unexpected: string[] = []
+    page.on('pageerror', error => errors.push(error.message))
+    await page.route('**/*', async route => {
+      const url = new URL(route.request().url())
+      if (url.origin !== 'http://satorna.test' || route.request().method() !== 'GET') { unexpected.push(url.href); return route.abort() }
+      if (url.pathname === '/wb/repricer/stats') return route.fulfill({ contentType: 'text/html', body:
+        '<title>Synthetic statistics batching</title><button id="reload">Reload</button><button id="logout">Logout</button><section id="tab-repricer-stats"><div class="search"><input></div><div class="stats"><div class="stat"><span class="stat-val"></span><span class="stat-delta"></span></div></div><table><tbody id="repricerStatsBody"></tbody></table><div data-filter-summary><span></span></div></section>' })
+      if (url.pathname === '/favicon.ico') return route.fulfill({ status: 204 })
+      if (url.pathname !== '/api/v1/wb-repricer/stats') { unexpected.push(url.pathname); return route.abort() }
+      const pageNumber = Number(url.searchParams.get('page'))
+      queries.push(pageNumber)
+      if (pageNumber === 3) {
+        await lastPage
+        if (failure) return route.fulfill({ status: 503, json: { error: { code: 'SYNTHETIC_UNAVAILABLE', message: 'Источник временно недоступен' } } })
+      }
+      return route.fulfill({ json: { items: Array.from({ length: pageNumber === 3 ? 1 : 500 }, (_, i) => ({
+        articleId: `BATCH-SKU-${(pageNumber - 1) * 500 + i + 1}`, name: 'Synthetic product',
+        metrics: {}, decision: {}, sources: {}, priceProtection: {}, flags: [],
+      })), total: 1001, itemsReturned: pageNumber === 3 ? 1 : 500, page: pageNumber, pageSize: 500, summary: { baskets: 1001, orders: 1001 } } })
+    })
+    await page.goto('http://satorna.test/wb/repricer/stats')
+    await page.addScriptTag({ content: bundle.code })
+    await expect.poll(() => queries).toEqual([1, 2, 3])
+    const rows = page.locator('#repricerStatsBody [data-sku]')
+    expect(await rows.count()).toBe(500)
+    expect(await page.locator('[data-filter-summary]').innerText()).toContain('1 001')
+    expect(await page.locator('.stat-val').innerText()).toBe('1 001')
+    release()
+    await page.waitForFunction(() => document.body.dataset.firstSettled === 'true')
+    expect(await rows.count()).toBe(failure ? 500 : 1001)
+    if (failure) await page.getByRole('alert').filter({ hasText: 'Источник временно недоступен' }).waitFor()
+    else expect(await rows.last().innerText()).toContain('BATCH-SKU-1001')
+    expect(queries).toEqual([1, 2, 3])
+    expect(unexpected).toEqual([])
+    expect(errors).toEqual([])
+  } finally { release(); await browser.close() }
+}, 60_000)

@@ -49,8 +49,11 @@ it('hides the old RNP period while the next scoped cache response is pending', a
       if (second) await secondGate
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
         filters: { dateRange: { from, to } },
-        rows: [{ sku: second ? 'SECOND-PERIOD-SKU' : 'FIRST-PERIOD-SKU', productName: 'Synthetic product', nmId: 101,
-          photoUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' }],
+        rows: Array.from({ length: 51 }, (_, index) => ({
+          sku: index === 0 ? second ? 'SECOND-PERIOD-SKU' : 'FIRST-PERIOD-SKU' : `EXTRA-${second ? 'SECOND' : 'FIRST'}-${index + 1}`,
+          productName: 'Synthetic product', nmId: 101 + index,
+          photoUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+        })),
         kpis: [], formulaNotes: [], sourceEvidence: [], reportJob: null,
       }) })
     })
@@ -70,6 +73,14 @@ it('hides the old RNP period while the next scoped cache response is pending', a
     releaseSecond()
     await page.getByText('Артикул: SECOND-PERIOD-SKU', { exact: true }).first().waitFor({ state: 'visible', timeout: 5000 })
     expect(await first.count()).toBe(0)
+    const dataRows = page.locator('#tab-rnp [data-report-row="rnp"]:visible')
+    expect(await dataRows.count()).toBe(50)
+    const search = page.locator('#tab-rnp .search input')
+    await search.fill('EXTRA-SECOND-51')
+    await expect.poll(() => dataRows.count()).toBe(1)
+    expect(await dataRows.innerText()).toContain('EXTRA-SECOND-51')
+    await search.fill('')
+    await expect.poll(() => dataRows.count()).toBe(50)
     expect(periods).toEqual([['2026-08-01', '2026-08-07'], ['2026-08-08', '2026-08-14']])
     expect(queryScopes).toEqual([['sku', 'operational', 'custom'], ['sku', 'operational', 'custom']])
     await page.getByRole('button', { name: 'Clear test session', exact: true }).click()

@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client'
-import { MemoryRouter } from 'react-router-dom'
+import { BrowserRouter } from 'react-router-dom'
 import { AuthContext, type AuthContextValue } from '@/features/auth/authContext'
 import { VellaHtmlParityPage } from '../VellaHtmlParityPage'
 
@@ -12,7 +12,7 @@ const auth: AuthContextValue = {
 }
 
 createRoot(document.getElementById('root')!).render(
-  <MemoryRouter initialEntries={['/wb/repricer']}>
+  <BrowserRouter>
     <AuthContext.Provider value={auth}><VellaHtmlParityPage /></AuthContext.Provider>
-  </MemoryRouter>,
+  </BrowserRouter>,
 )

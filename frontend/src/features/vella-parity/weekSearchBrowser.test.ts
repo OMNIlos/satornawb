@@ -11,6 +11,10 @@ const rows: WeekSearchRow[] = [
   { sku: 'SYNTHETIC-WEEK-A', productName: 'Synthetic Alpha garment', productStatus: 'новинка', photoUrl: null, nmId: null },
   { sku: 'SYNTHETIC-WEEK-B', productName: 'Synthetic Beta garment', productStatus: 'средний', photoUrl: null, nmId: null },
   { sku: 'SYNTHETIC-WEEK-C', productName: 'Synthetic Gamma garment', productStatus: null, photoUrl: null, nmId: null },
+  ...Array.from({ length: 48 }, (_, index) => ({
+    sku: `SYNTHETIC-WEEK-${index + 4}`, productName: `Synthetic product ${index + 4}`,
+    productStatus: null, photoUrl: null, nmId: null,
+  })),
 ]
 
 it('searches Week by SKU, product name and the supplied product segment without inventing unknown segments', async () => {
@@ -55,23 +59,24 @@ it('searches Week by SKU, product name and the supplied product segment without 
     const surface = page.locator('#tab-week')
     const dataRows = surface.locator('tr[data-report-row="week"]')
     await surface.getByText('Synthetic Alpha garment', { exact: true }).waitFor({ timeout: 15_000 })
-    expect(await dataRows.count()).toBe(3)
+    expect(await dataRows.count()).toBe(50)
     const search = surface.getByPlaceholder('Артикул, товар или сегмент...')
     for (const [query, expectedProduct] of [
       ['SYNTHETIC-WEEK-B', 'Synthetic Beta garment'],
       ['Alpha garment', 'Synthetic Alpha garment'],
       ['новинка', 'Synthetic Alpha garment'],
       ['средний', 'Synthetic Beta garment'],
+      ['SYNTHETIC-WEEK-51', 'Synthetic product 51'],
     ]) {
       await search.fill(query)
       const visible = surface.locator('tr[data-report-row="week"]:visible')
-      expect(await visible.count(), `Visible rows for ${query}`).toBe(1)
+      await expect.poll(() => visible.count(), { message: `Visible rows for ${query}` }).toBe(1)
       expect(await visible.innerText()).toContain(expectedProduct)
     }
     await search.fill('absent-synthetic-segment')
     expect(await surface.locator('tr[data-report-row="week"]:visible').count()).toBe(0)
     await search.fill('')
-    expect(await surface.locator('tr[data-report-row="week"]:visible').count()).toBe(3)
+    expect(await surface.locator('tr[data-report-row="week"]:visible').count()).toBe(50)
     expect(queries).toHaveLength(1)
     const query = new URLSearchParams(queries[0])
     expect([query.get('from'), query.get('to'), query.get('groupBy'), query.get('source'), query.get('preset')])

@@ -49,7 +49,7 @@ describe('Products live loading source', () => {
   })
 
   it('keeps the products page vertically scrollable on short viewports', () => {
-    expect(source).toContain('.vella-html-parity-root #tab-products {')
+    expect(source).toContain('.vella-html-parity-root #tab-products.tab-content {')
     expect(source).toContain('overflow-y: auto !important;')
     expect(source).toContain('flex: 1 0 min(720px, calc(100vh - 220px));')
     expect(source).toContain('@media (max-height: 760px)')

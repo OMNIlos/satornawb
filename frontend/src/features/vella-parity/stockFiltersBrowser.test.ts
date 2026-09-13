@@ -61,8 +61,12 @@ const rows = [
     warehouses: [{ warehouseName: 'Казань', clusterName: 'Поволжье', wbStockUnits: 40, fromClientUnits: 0, toClientUnits: 0, availableUnits: 40 }],
   },
 ]
+rows.push(...Array.from({ length: 48 }, (_, index) => ({
+  ...rows[2], sku: `SYNTH-STOCK-EXTRA-${index + 4}`, nmId: 990104 + index,
+  warehouseName: 'Синтетический склад', warehouses: [],
+})))
 
-it('filters actual backend stock rows by chips and combined search, then restores every SKU on reset', async () => {
+it('filters the full stock response and restores its first display window on reset', async () => {
   const browser = await chromium.launch({ headless: true })
   try {
     const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
@@ -100,10 +104,10 @@ it('filters actual backend stock rows by chips and combined search, then restore
       elements.map(element => {
         const text = element.querySelector('td')?.textContent ?? ''
         // An unknown rendered row remains visible in the assertion, never silently filtered out.
-        return text.match(/SYNTH-STOCK-(?:RISK|EXCESS|NORMAL)/)?.[0] ?? text
+        return text.match(/SYNTH-STOCK-(?:RISK|EXCESS|NORMAL|EXTRA-\d+)/)?.[0] ?? text
       }).sort(),
     )
-    const allSkus = ['SYNTH-STOCK-EXCESS', 'SYNTH-STOCK-NORMAL', 'SYNTH-STOCK-RISK']
+    const allSkus = ['SYNTH-STOCK-EXCESS', 'SYNTH-STOCK-NORMAL', 'SYNTH-STOCK-RISK', ...Array.from({ length: 47 }, (_, index) => `SYNTH-STOCK-EXTRA-${index + 4}`)].sort()
     const expectSkus = async (expected: string[]) => {
       await expect.poll(visibleSkus, { timeout: 15_000 }).toEqual(expected)
     }
@@ -142,6 +146,8 @@ it('filters actual backend stock rows by chips and combined search, then restore
 
     await search.fill('SYNTH-STOCK-EXCESS')
     await expectSkus(['SYNTH-STOCK-EXCESS'])
+    await search.fill('SYNTH-STOCK-EXTRA-51')
+    await expectSkus(['SYNTH-STOCK-EXTRA-51'])
     await search.fill('')
     await expectSkus(allSkus)
     expect(requests, 'Local filter interactions must not refetch or trigger provider actions').toHaveLength(1)

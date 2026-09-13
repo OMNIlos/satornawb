@@ -10587,6 +10587,9 @@ body.avito-popup-open { overflow: hidden; }
       line-height: 1.5;
       color: var(--gray-500);
     }
+    .mobile-repricer-nav { display: grid; gap: 6px; margin-top: 16px; font-size: 12px; color: var(--gray-600); }
+    .mobile-repricer-nav[hidden] { display: none; }
+    .mobile-repricer-nav select { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--gray-200); border-radius: 8px; background: var(--white); color: var(--gray-900); font: inherit; }
     .desktop-only-card a {
       display: inline-flex;
       align-items: center;
@@ -15103,6 +15106,9 @@ function initTooltips(){
     el.dataset._tipBound = '1';
     el.addEventListener('mouseenter', () => showGlobalTip(el, el.getAttribute('data-tip')));
     el.addEventListener('mouseleave', hideGlobalTip);
+    el.addEventListener('focus', () => showGlobalTip(el, el.getAttribute('data-tip')));
+    el.addEventListener('blur', hideGlobalTip);
+    el.addEventListener('keydown', event => { if (event.key === 'Escape') hideGlobalTip(); });
   });
 }
 
@@ -22657,10 +22663,19 @@ function updateReportFilterSummary(tab){
 }
 function applyGenericReportFilter(tab){
   if (!tab) return;
+  if (tab.id === 'tab-ads' && tab.querySelector('[data-vella-island="ads-live-table-body"]')) {
+    tab.dispatchEvent(new CustomEvent('vella:ads-filter-updated'));
+    return;
+  }
   const active = tab.querySelector('.chips .chip.active')?.textContent?.trim() || 'Все';
   const query = tab.querySelector('.search input')?.value?.trim().toLowerCase() || '';
   const manager = managerFilterValue(tab);
   const sku = skuFilterValue(tab);
+  const normalizedChip = normalizeReportFilterText(active);
+  window.dispatchEvent(new CustomEvent('vella:report-render-filter', { detail: {
+    tabId: tab.id,
+    active: Boolean(query || manager !== 'all' || sku !== 'all' || (normalizedChip && !/^все/.test(normalizedChip) && normalizedChip !== 'sku'))
+  } }));
   tab.querySelectorAll('tbody tr[data-report-row]').forEach(row => {
     const searchText = ((row.dataset.search || rowText(row)) + (tab.id === 'tab-week' ? ' ' + (row.dataset.productStatus || '') : '')).toLowerCase();
     const queryOk = !query || searchText.includes(query);
@@ -23256,6 +23271,19 @@ function ensureDesktopFallback(){
     link.setAttribute('href', desktopOnly ? '#' : cfg[2]);
     link.setAttribute('aria-disabled', desktopOnly ? 'true' : 'false');
   }
+  let mobileNav = fallback.querySelector('.mobile-repricer-nav');
+  if (!mobileNav) {
+    mobileNav = document.createElement('label');
+    mobileNav.className = 'mobile-repricer-nav';
+    mobileNav.append('Раздел репрайсера', document.createElement('select'));
+    fallback.querySelector('.desktop-only-card').appendChild(mobileNav);
+  }
+  mobileNav.hidden = getModuleByTab(tab) !== 'repricer';
+  const mobileSelect = mobileNav.querySelector('select');
+  const navItems = [...document.querySelectorAll('#sidebar [data-nav-group="repricer"] .nav-item')];
+  mobileSelect.replaceChildren(...navItems.map(item => new Option(item.querySelector('.nav-label')?.textContent || '', item.dataset.tab || item.getAttribute('href'))));
+  mobileSelect.value = tab;
+  mobileSelect.onchange = () => navItems.find(item => (item.dataset.tab || item.getAttribute('href')) === mobileSelect.value)?.click();
 }
 function syncHiddenA11y(){
   document.querySelectorAll('.modal-overlay').forEach(el => {
