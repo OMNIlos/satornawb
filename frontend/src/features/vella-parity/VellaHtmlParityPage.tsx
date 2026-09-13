@@ -35294,7 +35294,9 @@ export function VellaHtmlParityPage() {
       settingsLoading: shellSettingsLoadingRef.current,
     })
     bindParityLogout(root, () => {
-      void logout()
+      void logout().catch(() => {
+        window.showToast?.('Не удалось выйти. Повторите попытку.', 'warn')
+      })
     })
   }, [logout, profile, runtime, sessions, shellSettingsVersion])
 

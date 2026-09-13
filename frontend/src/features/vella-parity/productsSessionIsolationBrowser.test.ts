@@ -131,10 +131,11 @@ function workerStatus(withApproval = false, denseRuns = false) {
 }
 
 it.each([
-  { label: 'cached products', holdAccountARefresh: false, expireLogout: false },
-  { label: 'late account A refresh', holdAccountARefresh: true, expireLogout: false },
-  { label: 'expired logout', holdAccountARefresh: false, expireLogout: true },
-])('isolates account B products from $label after logout', async ({ label, holdAccountARefresh, expireLogout }) => {
+  { label: 'cached products', holdAccountARefresh: false, expireLogout: false, rejectLogout: false },
+  { label: 'late account A refresh', holdAccountARefresh: true, expireLogout: false, rejectLogout: false },
+  { label: 'expired logout', holdAccountARefresh: false, expireLogout: true, rejectLogout: false },
+  { label: 'rejected logout retry', holdAccountARefresh: false, expireLogout: false, rejectLogout: true },
+])('isolates account B products from $label after logout', async ({ label, holdAccountARefresh, expireLogout, rejectLogout }) => {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const result = await build({
     configFile: false,
@@ -178,6 +179,7 @@ it.each([
     const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
     const errors: string[] = []
     const expectedUnauthorizedErrors: string[] = []
+    const expectedUnavailableErrors: string[] = []
     const skuRequests: Account[] = []
     const refreshRequests: Account[] = []
     const logoutEvents: string[] = []
@@ -191,6 +193,10 @@ it.each([
       if (message.type() !== 'error' || message.text().startsWith('An empty string')) return
       if (expireLogout && message.text() === 'Failed to load resource: the server responded with a status of 401 (Unauthorized)') {
         expectedUnauthorizedErrors.push(message.text())
+        return
+      }
+      if (rejectLogout && message.text() === 'Failed to load resource: the server responded with a status of 503 (Service Unavailable)') {
+        expectedUnavailableErrors.push(message.text())
         return
       }
       errors.push(message.text())
@@ -209,6 +215,15 @@ it.each([
 
       const account: Account = request.headers().authorization === 'Bearer account-b-token' ? 'B' : 'A'
       if (url.pathname === '/api/v1/auth/logout') {
+        if (rejectLogout && logoutEvents.length === 0) {
+          expect(request.headers().authorization).toBe('Bearer account-a-token')
+          expect(accountASessionActive).toBe(true)
+          logoutEvents.push('rejected')
+          return route.fulfill({
+            status: 503,
+            json: { error: { code: 'LOGOUT_UNAVAILABLE', message: 'Synthetic upstream detail' } },
+          })
+        }
         if (expireLogout && request.headers().authorization === 'Bearer account-a-token') {
           expect(accountASessionActive).toBe(true)
           logoutEvents.push('expired')
@@ -216,6 +231,13 @@ it.each([
         }
         if (expireLogout) {
           expect(request.headers().authorization).toBe('Bearer account-a-refreshed-token')
+          expect(account).toBe('A')
+          expect(accountASessionActive).toBe(true)
+          logoutEvents.push('revoked')
+          accountASessionActive = false
+        }
+        if (rejectLogout) {
+          expect(request.headers().authorization).toBe('Bearer account-a-token')
           expect(account).toBe('A')
           expect(accountASessionActive).toBe(true)
           logoutEvents.push('revoked')
@@ -375,12 +397,26 @@ it.each([
 
     if (label !== 'cached products') await profile.click()
     await page.getByRole('button', { name: /Выйти/ }).click()
+    if (rejectLogout) {
+      await expect.poll(() => logoutEvents).toEqual(['rejected'])
+      expect(new URL(page.url()).pathname).toBe('/wb/repricer')
+      expect(accountASessionActive).toBe(true)
+      expect(await page.evaluate(() => localStorage.getItem('ogni.auth.access-token'))).toBe('account-a-token')
+      await page.getByRole('alert').filter({ hasText: 'Не удалось выйти. Повторите попытку.' }).waitFor({ timeout: 3000 })
+      expect(errors).toEqual([])
+      expect(await page.locator('#ddUser').evaluate(element => element.classList.contains('open'))).toBe(true)
+      await page.getByRole('button', { name: /Выйти/ }).click()
+    }
     await page.waitForURL('**/auth/login')
     if (expireLogout) {
       expect(logoutEvents).toEqual(['expired', 'refresh', 'revoked'])
       expect(await page.evaluate(() => localStorage.getItem('ogni.auth.access-token'))).toBeNull()
       expect(await page.evaluate(async () => (await fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' })).status)).toBe(401)
       expect(expectedUnauthorizedErrors).toHaveLength(2)
+    }
+    if (rejectLogout) {
+      expect(logoutEvents).toEqual(['rejected', 'revoked'])
+      expect(expectedUnavailableErrors).toHaveLength(1)
     }
     await page.getByLabel('Email').fill('b@test.local')
     await page.getByLabel('Пароль').fill('password')

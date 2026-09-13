@@ -14350,6 +14350,7 @@ function showToast(text, type='info', undo=false){
   };
   const t = document.createElement('div');
   t.className = 'toast ' + type;
+  t.setAttribute('role', type === 'warn' ? 'alert' : 'status');
   t.innerHTML = '<div class="toast-icon">' + (ICONS[type] || ICONS.info) + '</div><div class="toast-body"><div class="toast-title">' + text + '</div></div>' + (undo ? '<span class="toast-undo">↶ Отменить</span>' : '');
   document.getElementById('toastContainer').appendChild(t);
   requestAnimationFrame(() => t.classList.add('show'));
