@@ -147,6 +147,88 @@ def _round_basis_points(amount_kopecks: int, basis_points: int) -> int:
     return sign * quotient
 
 
+@dataclass(frozen=True, slots=True)
+class ManagementProfitCalculation:
+    tax_kopecks: int | None
+    profit_before_internal_kopecks: int | None
+    net_profit_kopecks: int | None
+    blocker_ids: tuple[str, ...]
+    formula_version: str = "wb-management-profit-v1"
+
+
+def calculate_management_profit(
+    *,
+    sales_kopecks: int | None,
+    commission_kopecks: int | None,
+    logistics_kopecks: int | None,
+    storage_kopecks: int | None,
+    acceptance_kopecks: int | None,
+    advertising_kopecks: int | None,
+    penalty_kopecks: int | None,
+    cogs_kopecks: int | None,
+    tax_basis_points: int | None,
+    internal_expenses_kopecks: int | None,
+    sales_basis_confirmed: bool = False,
+    unmapped_components: dict[str, int | None] | None = None,
+) -> ManagementProfitCalculation:
+    """Pure calculation, not policy activation or evidence of financial readiness.
+
+    Callers must resolve authorized, complete inputs for one account/period and
+    the effective EconomicsPolicy first. The owner's rate is 750 bps; there is
+    deliberately no global default or write to historical policies here.
+    ``unmapped_components={}`` is an explicit completed reconciliation; None,
+    unknown amounts or nonzero amounts keep profit blocked. An account expense
+    must not be reused for filtered rows without an approved allocation.
+    """
+    expenses = {
+        "commission": commission_kopecks,
+        "logistics": logistics_kopecks,
+        "storage": storage_kopecks,
+        "acceptance": acceptance_kopecks,
+        "advertising": advertising_kopecks,
+        "penalty": penalty_kopecks,
+        "cogs": cogs_kopecks,
+    }
+    amounts = [sales_kopecks, internal_expenses_kopecks, *expenses.values()]
+    if unmapped_components is not None:
+        amounts.extend(unmapped_components.values())
+    if any(value is not None and type(value) is not int for value in amounts):
+        raise ValueError("Money must be integer kopecks or None")
+    if tax_basis_points is not None and (
+        type(tax_basis_points) is not int or not 0 <= tax_basis_points <= 10_000
+    ):
+        raise ValueError("Tax rate must be integer basis points in 0..10000")
+    if type(sales_basis_confirmed) is not bool:
+        raise ValueError("Sales basis confirmation must be boolean")
+    blockers: list[str] = []
+    if not sales_basis_confirmed:
+        blockers.append("WB_MANAGEMENT_SALES_BASIS_UNCONFIRMED")
+    if sales_kopecks is None:
+        blockers.append("WB_MANAGEMENT_SALES_MISSING")
+    if tax_basis_points is None:
+        blockers.append("WB_MANAGEMENT_TAX_POLICY_MISSING")
+    for name, amount in expenses.items():
+        if amount is None:
+            blockers.append(f"WB_MANAGEMENT_{name.upper()}_MISSING")
+    if unmapped_components is None or any(value != 0 for value in unmapped_components.values()):
+        blockers.append("WB_MANAGEMENT_OPERATIONS_UNRECONCILED")
+    tax = (
+        _round_basis_points(sales_kopecks, tax_basis_points)
+        if sales_basis_confirmed and sales_kopecks is not None and tax_basis_points is not None
+        else None
+    )
+    before_internal = None
+    if not blockers:
+        assert sales_kopecks is not None and tax is not None
+        before_internal = sales_kopecks - tax - sum(amount for amount in expenses.values() if amount is not None)
+    net = None
+    if internal_expenses_kopecks is None:
+        blockers.append("WB_MANAGEMENT_INTERNAL_EXPENSES_MISSING")
+    elif before_internal is not None:
+        net = before_internal - internal_expenses_kopecks
+    return ManagementProfitCalculation(tax, before_internal, net, tuple(blockers))
+
+
 def _empty_summary(
     advertising_total: int | None = None,
     unattributed_advertising: int | None = None,

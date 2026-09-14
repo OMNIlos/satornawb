@@ -67,7 +67,7 @@ beforeAll(async () => {
   bundleCode = chunk.code
 }, 60_000)
 
-async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false) {
+async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false, canonicalPayload = payload) {
   const errors: string[] = [], unexpected: string[] = [], queries: string[] = [], coverageQueries: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   // The unchanged legacy shell emits React's empty image src warning.
@@ -85,7 +85,7 @@ async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false) {
         const dateFrom = url.searchParams.get('dateFrom') ?? '2026-09-01', dateTo = url.searchParams.get('dateTo') ?? '2026-09-07'
         const start = new Date(`${dateFrom}T00:00:00+03:00`), end = new Date(`${dateTo}T00:00:00+03:00`)
         const days = (end.getTime() - start.getTime()) / 86400000 + 1
-        return route.fulfill({ json: { ...payload, meta: { ...payload.meta, marketplaceAccountId: Number(url.searchParams.get('marketplaceAccountId')), period: { ...payload.meta.period,
+        return route.fulfill({ json: { ...canonicalPayload, meta: { ...canonicalPayload.meta, marketplaceAccountId: Number(url.searchParams.get('marketplaceAccountId')), period: { ...canonicalPayload.meta.period,
           dateFrom, dateTo, days, startAt: start.toISOString(), endExclusiveAt: new Date(end.getTime() + 86400000).toISOString(),
         } } } })
       }
@@ -123,6 +123,61 @@ async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false) {
   expect(await page.title()).toBeTruthy()
   return { errors, unexpected, queries, coverageQueries }
 }
+
+it('shows each supplied profit stage without promoting preliminary profit or replacing unknown costs with zero', async () => {
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
+    // Hand checked, kopecks: 10000 - 2000 - 1500 = 6500;
+    // 6500 - 300 - 200 = 6000; 6000 - 1000 = 5000; 5000 - 100 = 4900.
+    // This is synthetic arithmetic, not an owner's tax rate or cost policy.
+    const known: CanonicalAbcPnlPage['items'][number] = { ...item, nmId: 500000001, sellerArticle: 'KNOWN', cogsKopecks: 2000,
+      costValueState: 'configured', costEvidenceStatus: 'dated', economicsValueState: 'configured', economicsEvidenceStatus: 'dated', blockerIds: [],
+      commissionKopecks: 1000, logisticsKopecks: 200, storageKopecks: 100,
+      acceptanceKopecks: 100, acquiringKopecks: 200, compensationKopecks: 100,
+      financeExpensesKopecks: 1500, settlementProfitKopecks: 6500, taxKopecks: 300,
+      otherExpensesKopecks: 200, profitBeforeAdsAndLoyaltyKopecks: 6000,
+      advertisingSpendKopecks: 1000, profitBeforeLoyaltyKopecks: 5000,
+      loyaltyNetCostKopecks: 100, profitAfterLoyaltyKopecks: 4900 }
+    const evidence = await mount(page, 'pnl', false, { ...payload,
+      items: [known, { ...item, nmId: 500000002, sellerArticle: 'UNKNOWN' },
+        { ...known, nmId: 500000003, sellerArticle: 'ZERO', advertisingSpendKopecks: 5900, profitBeforeLoyaltyKopecks: 100, profitAfterLoyaltyKopecks: 0 },
+        { ...known, nmId: 500000004, sellerArticle: 'LOSS', advertisingSpendKopecks: 6001, profitBeforeLoyaltyKopecks: -1, profitAfterLoyaltyKopecks: -101 },
+      ], total: 4, summary: { ...payload.summary, operationCount: 4, skuCount: 4,
+        revenueKopecks: 40000, salesRevenueKopecks: 40000, salesUnits: 4, netUnits: 4,
+        commissionKopecks: 3000, logisticsKopecks: 600, storageKopecks: 300,
+        acceptanceKopecks: 300, acquiringKopecks: 600, compensationKopecks: 300,
+        financeExpensesKopecks: 4500,
+      } })
+    const surface = page.locator('#tab-pnl')
+    await surface.getByText('Полный состав расчёта', { exact: true }).click()
+    const breakdown = surface.getByRole('table', { name: 'Состав прибыли по выбранным строкам' })
+    const value = (label: string) => breakdown.getByRole('row').filter({ has: page.getByRole('rowheader', { name: label, exact: true }) }).getByRole('cell').first()
+    expect(await value('Промежуточная прибыль WB').innerText()).toBe('нет данных')
+    await surface.locator('.search input').fill('500000001')
+    await expect.poll(() => surface.locator('[data-report-row]:visible').count()).toBe(1)
+    for (const [label, expected] of [['Расходы WB, всего', '15,00 ₽'], ['Компенсации WB', '1,00 ₽'],
+      ['Промежуточная прибыль WB', '65,00 ₽'], ['Налог', '3,00 ₽'], ['Прочие расходы по политике', '2,00 ₽'],
+      ['До рекламы и лояльности', '60,00 ₽'], ['До лояльности', '50,00 ₽'], ['После лояльности, предварительно', '49,00 ₽'],
+      ['Чистая прибыль', 'нет данных']]) expect(await value(label).innerText()).toBe(expected)
+    await surface.locator('.search input').fill('ZERO')
+    await expect.poll(() => value('После лояльности, предварительно').innerText()).toBe('0,00 ₽')
+    await surface.locator('.search input').fill('LOSS')
+    await expect.poll(() => value('После лояльности, предварительно').innerText()).toBe('-1,01 ₽')
+    if (process.env.SATORNA_REPORT_UI_SCREENSHOTS) {
+      await breakdown.scrollIntoViewIfNeeded()
+      await page.screenshot({ path: '/tmp/satorna-profit-breakdown-desktop.png' })
+    }
+    await page.setViewportSize({ width: 390, height: 844 })
+    expect(await breakdown.isVisible()).toBe(false)
+    if (process.env.SATORNA_REPORT_UI_SCREENSHOTS) await page.screenshot({ path: '/tmp/satorna-profit-breakdown-mobile.png' })
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await surface.locator('.search input').fill('absent')
+    await expect.poll(() => value('Чистая прибыль').innerText()).toBe('нет данных')
+    expect(evidence.errors).toEqual([])
+    expect(evidence.unexpected).toEqual([])
+  } finally { await browser.close() }
+}, 45_000)
 
 it.each(['abc', 'pnl'] as const)('searches all loaded %s rows before pagination and preserves filters', async tab => {
   const browser = await chromium.launch({ headless: true })

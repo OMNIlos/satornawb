@@ -2477,7 +2477,6 @@ def _repricer_list_summary(
         for key in ("commission", "logistics", "storage", "acceptance", "penalty", "deduction", "loyaltyCost", "acquiring", "additionalPayment")
     }
     buyer_revenue_kopecks = 0
-    margin_pct_values: list[float] = []
 
     for row in rows:
         meta = row.get("meta") or {}
@@ -2538,10 +2537,6 @@ def _repricer_list_summary(
         baskets_raw = analytics.get("baskets")
         total_baskets += _int_or_zero(baskets_raw if baskets_raw is not None else meta.get("basketsLast7d"))
 
-        margin_pct = _float_or_none(analytics.get("marginPct"))
-        if margin_pct is not None:
-            margin_pct_values.append(margin_pct)
-
         stock_units = _int_or_zero(analytics.get("wbStockUnits"))
         if stock_units > 0 and str(meta.get("status") or "") != "liquidation":
             in_sale += 1
@@ -2588,9 +2583,9 @@ def _repricer_list_summary(
         for key, amount in unassigned_finance_components.items()
     )
 
-    avg_margin_pct = (margin_kopecks / revenue_kopecks * 100) if revenue_kopecks > 0 else (
-        sum(margin_pct_values) / len(margin_pct_values) if margin_pct_values else 0
-    )
+    # Keep the same ratio for return-dominated periods; zero has no ratio.
+    # Per-SKU percentages are not a substitute for the ratio of totals.
+    avg_margin_pct = (margin_kopecks / revenue_kopecks * 100) if revenue_kopecks != 0 else None
     promo_share_pct = round(promo_count / len(rows) * 100) if rows else 0
     return {
         "revenueKopecks": revenue_kopecks,
@@ -2634,7 +2629,7 @@ def _repricer_list_summary(
         "deductionCompensationKopecks": deduction_compensation_kopecks,
         "additionalPaymentKopecks": additional_payment_kopecks,
         "missingOtherExpensesKopecks": missing_other_expenses_kopecks,
-        "avgMarginPct": round(avg_margin_pct, 1),
+        "avgMarginPct": round(avg_margin_pct, 1) if avg_margin_pct is not None else None,
         "totalBaskets": total_baskets,
         "inSale": in_sale,
         "promoSharePct": promo_share_pct,

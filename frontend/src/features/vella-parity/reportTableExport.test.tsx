@@ -132,7 +132,8 @@ it.each(['abc', 'pnl'] as const)('downloads every filtered %s row and zero-row r
           .toEqual([query ? '0 ₽' : '-79 ₽', count ? 'нет данных' : '0 ₽', '0 ₽', '0 ₽', '0 ₽', '0 ₽'])
       }
       expect(request.headers).toHaveLength(tab === 'abc' ? 24 : 13)
-      expect(request.headers).toEqual(await page.locator(`#tab-${tab} thead th`).evaluateAll(cells => cells.map(cell => cell.childNodes[0].textContent?.trim())))
+      // The calculation breakdown is a separate table, not part of the SKU export.
+      expect(request.headers).toEqual(await page.locator(`#tab-${tab} .${tab}-table-workspace thead th`).evaluateAll(cells => cells.map(cell => cell.childNodes[0].textContent?.trim())))
       expect(request.headers).toContain('Прибыль после лояльности')
       expect(request.headers).not.toContain('Чистая прибыль')
       expect(request.source).toMatchObject({ state: 'partial', financeSnapshotChecksum: 'synthetic-finance-checksum', blockerIds: ['WB_PNL_COST_MISSING'] })

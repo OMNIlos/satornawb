@@ -2324,9 +2324,13 @@ function renderLiveRepricerStatsError(error: unknown, preserveRows = false) {
 export function installRepricerStatsLiveBridge(accessToken: string | null) {
   let disposed = false
   let generation = 0
+  let activeController: AbortController | null = null
   const load = async () => {
     if (disposed) return null
     const currentGeneration = ++generation
+    activeController?.abort()
+    const controller = new AbortController()
+    activeController = controller
     const isCurrent = () => !disposed && currentGeneration === generation
     if (!accessToken) {
       renderLiveRepricerStatsError(new ApiError('AUTH_REQUIRED', 401))
@@ -2343,7 +2347,7 @@ export function installRepricerStatsLiveBridge(accessToken: string | null) {
         pageSize: REPRICER_STATS_PAGE_SIZE,
         q: queryInput?.value?.trim() || undefined,
       }
-      const payload = await loadLiveRepricerStats(accessToken, undefined, baseQuery)
+      const payload = await loadLiveRepricerStats(accessToken, controller.signal, baseQuery)
       if (!isCurrent()) return null
       applyRepricerStatsCachePeriod(payload)
       renderLiveRepricerStats(payload)
@@ -2353,7 +2357,7 @@ export function installRepricerStatsLiveBridge(accessToken: string | null) {
       const pageCount = Math.ceil(maxRows / REPRICER_STATS_PAGE_SIZE)
       const mergedItems = [...(payload.items ?? [])]
       for (let page = 2; page <= pageCount; page += 1) {
-        const pagePayload = await loadLiveRepricerStats(accessToken, undefined, {
+        const pagePayload = await loadLiveRepricerStats(accessToken, controller.signal, {
           ...baseQuery,
           page,
         })
@@ -2373,11 +2377,15 @@ export function installRepricerStatsLiveBridge(accessToken: string | null) {
       if (!isCurrent()) return null
       renderLiveRepricerStatsError(error, renderedRows)
       throw error
+    } finally {
+      if (activeController === controller) activeController = null
     }
   }
   window.__vellaLoadLiveRepricerStats = load
   return () => {
     disposed = true
+    activeController?.abort()
+    activeController = null
     if (window.__vellaLoadLiveRepricerStats === load) delete window.__vellaLoadLiveRepricerStats
   }
 }
@@ -9876,6 +9884,18 @@ type PnlBackendMeta = {
 }
 
 type PnlBackendRow = {
+  acceptanceKopecks?: number | null
+  penaltyKopecks?: number | null
+  deductionKopecks?: number | null
+  financeOtherExpensesKopecks?: number | null
+  compensationKopecks?: number | null
+  acquiringKopecks?: number | null
+  financeExpensesKopecks?: number | null
+  settlementProfitKopecks?: number | null
+  otherExpensesKopecks?: number | null
+  profitBeforeAdsAndLoyaltyKopecks?: number | null
+  profitBeforeLoyaltyKopecks?: number | null
+  loyaltyNetCostKopecks?: number | null
   label?: string | null
   category?: string | null
   articleId?: string | null
@@ -10517,6 +10537,55 @@ function PnlLiveWorkbenchIsland({ replacementKey, state, rows }: { replacementKe
           </div>
         ))}
       </div>
+      {isCanonical ? (
+        <details className="pnl-source pnl-profit-breakdown">
+          <style>{`
+            .pnl-profit-breakdown { display: block; min-width: 0; }
+            .pnl-profit-breakdown summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
+            .pnl-profit-breakdown-wrap { overflow-x: auto; max-width: 100%; }
+            .pnl-profit-breakdown table { width: 100%; min-width: 600px; table-layout: fixed; }
+            .pnl-profit-breakdown thead th:first-child { width: 30%; }
+            .pnl-profit-breakdown thead th:nth-child(2) { width: 18%; }
+            .pnl-profit-breakdown thead th:last-child { width: 52%; }
+            .pnl-profit-breakdown th, .pnl-profit-breakdown td { white-space: normal; overflow-wrap: anywhere; }
+            .pnl-profit-breakdown .num { white-space: nowrap; }
+            @media (max-width: 720px) { .pnl-profit-breakdown { display: none; } }
+          `}</style>
+          <summary>Полный состав расчёта</summary>
+          <p>Суммы по всем выбранным строкам, до пагинации, в рублях с копейками. Это поля canonical API, а не новый расчёт налога или распределения расходов. Пропуск хотя бы в одной строке означает «нет данных».</p>
+          <div className="pnl-profit-breakdown-wrap" tabIndex={0} role="region" aria-label="Прокрутка состава прибыли">
+            <table aria-label="Состав прибыли по выбранным строкам">
+              <thead><tr><th scope="col">Составляющая</th><th scope="col">Сумма</th><th scope="col">Участие в расчёте</th></tr></thead>
+              <tbody>{([
+                ['revenueKopecks', 'Выручка', 'Финансовые продажи за вычетом возвратов.'],
+                ['cogsKopecks', 'Себестоимость', 'Датированная себестоимость; вычитается из выручки.'],
+                ['commissionKopecks', 'Комиссия WB', 'Входит в расходы WB.'],
+                ['logisticsKopecks', 'Логистика', 'Входит в расходы WB.'],
+                ['storageKopecks', 'Хранение', 'Входит в расходы WB.'],
+                ['acceptanceKopecks', 'Приёмка', 'Входит в расходы WB.'],
+                ['penaltyKopecks', 'Штрафы', 'Входят в расходы WB.'],
+                ['deductionKopecks', 'Удержания без рекламы', 'Входят в расходы WB; продвижение не вычитается повторно.'],
+                ['financeOtherExpensesKopecks', 'Прочие расходы WB', 'Входят в расходы WB. Не внутренние расходы бизнеса.'],
+                ['acquiringKopecks', 'Эквайринг', 'Входит в расходы WB.'],
+                ['compensationKopecks', 'Компенсации WB', 'Уменьшают расходы WB; повторно к прибыли не прибавляются.'],
+                ['financeExpensesKopecks', 'Расходы WB, всего', 'Сумма перечисленных WB-расходов минус компенсации. Детали и итог не вычитаются одновременно.'],
+                ['settlementProfitKopecks', 'Промежуточная прибыль WB', 'Выручка − себестоимость − расходы WB. До налога, прочих расходов, рекламы и лояльности.'],
+                ['taxKopecks', 'Налог', 'Сумма из действующей политики API. Ставка и база не выводятся из этого значения.'],
+                ['otherExpensesKopecks', 'Прочие расходы по политике', 'Не доказывают полноту внутренних расходов бизнеса: нужны источник, период и распределение.'],
+                ['profitBeforeAdsAndLoyaltyKopecks', 'До рекламы и лояльности', 'Промежуточная прибыль WB − налог − прочие расходы по политике.'],
+                ['adSpendKopecks', 'Реклама', 'Вычитается один раз; нераспределённая реклама аккаунта показана отдельно.'],
+                ['profitBeforeLoyaltyKopecks', 'До лояльности', 'Результат до рекламы и лояльности − реклама.'],
+                ['loyaltyNetCostKopecks', 'Расходы на лояльность', 'Итог API по версии формулы; может быть отрицательным.'],
+                ['profitAfterLoyaltyKopecks', 'После лояльности, предварительно', 'Результат до лояльности − расходы на лояльность. Не финальная чистая прибыль.'],
+                ['netProfitKopecks', 'Чистая прибыль', 'Не подменяется промежуточным результатом. Пока API не подтверждает итог, значение неизвестно.'],
+              ] satisfies Array<[keyof PnlBackendRow, string, string]>).map(([field, label, explanation]) => {
+                const amount = rows.length ? total(field) : null
+                return <tr key={field}><th scope="row">{label}</th><td className="num">{amount === null || !Number.isSafeInteger(amount) ? 'нет данных' : `${(amount / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`}</td><td>{explanation}</td></tr>
+              })}</tbody>
+            </table>
+          </div>
+        </details>
+      ) : null}
       <div className="pnl-source" data-vella-island="pnl-account-summary">
         <b>Весь аккаунт · без фильтров</b>
         <span>

@@ -34,6 +34,36 @@ def session() -> Session:
         yield db
 
 
+def test_management_750_rate_uses_existing_dated_policy_without_cross_tenant_default(session: Session) -> None:
+    from app.modules.wb_reports.abc_pnl import calculate_management_profit
+    from app.platform.economics.policies import EconomicsService
+
+    one = EconomicsService(session, organization_id=1)
+    one.set_organization_policy(
+        # Complete synthetic legacy policy; these other-expense fields must NOT
+        # be silently treated as the owner's internal company expense input.
+        tax_basis_points=750, other_expense_price_basis_points=500,
+        other_expense_per_sale_kopecks=1000, value_state="configured",
+        effective_from=AT_20, source="fixture", source_reference="management-750",
+        evidence_status="dated",
+    )
+    rates = [
+        one.get_policies_for_points([(11, AT_19)])[(11, AT_19)].tax_basis_points,
+        one.get_policies_for_points([(11, AT_20)])[(11, AT_20)].tax_basis_points,
+        EconomicsService(session, organization_id=2).get_policies_for_points([(21, AT_20)])[(21, AT_20)].tax_basis_points,
+    ]
+    assert rates == [None, 750, None]
+    results = [calculate_management_profit(
+        sales_kopecks=100_000, commission_kopecks=0, logistics_kopecks=0,
+        storage_kopecks=0, acceptance_kopecks=0, advertising_kopecks=0,
+        penalty_kopecks=0, cogs_kopecks=0, tax_basis_points=rate,
+        internal_expenses_kopecks=None, sales_basis_confirmed=True, unmapped_components={},
+    ) for rate in rates]
+    assert [result.tax_kopecks for result in results] == [None, 7500, None]
+    assert results[1].profit_before_internal_kopecks == 92_500
+    assert all(result.net_profit_kopecks is None for result in results)
+
+
 def test_dated_policy_resolves_partial_override_and_clear(session: Session) -> None:
     from app.platform.economics.policies import EconomicsService
 

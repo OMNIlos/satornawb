@@ -295,6 +295,29 @@ describe('canonical ABC/P&L rollout', () => {
 })
 
 describe('canonical ABC/P&L contract', () => {
+  it.each(['row', 'summary'] as const)('rejects unsafe money in the %s before adapting the report', (scope) => {
+    const source = page()
+    const values = scope === 'row' ? source.items[0]! : source.summary
+    for (const key of Object.keys(values).filter((key) => key.endsWith('Kopecks') && key !== 'netProfitKopecks')) {
+      const invalid = { ...values, [key]: Number.MAX_SAFE_INTEGER + 1 }
+      const payload = scope === 'row' ? { ...source, items: [invalid] } : { ...source, summary: invalid }
+      expect(() => parseCanonicalAbcPnlPage(payload), key).toThrow(ApiError)
+    }
+  })
+
+  it('preserves exact safe integer money boundaries and unknown values', () => {
+    const source = page()
+    const parsed = parseCanonicalAbcPnlPage({ ...source, items: [{ ...row,
+      revenueKopecks: Number.MAX_SAFE_INTEGER,
+      settlementProfitKopecks: Number.MIN_SAFE_INTEGER,
+      taxKopecks: 0, otherExpensesKopecks: null,
+    }] })
+    expect(parsed.items[0]?.revenueKopecks).toBe(Number.MAX_SAFE_INTEGER)
+    expect(parsed.items[0]?.settlementProfitKopecks).toBe(Number.MIN_SAFE_INTEGER)
+    expect(parsed.items[0]?.taxKopecks).toBe(0)
+    expect(parsed.items[0]?.otherExpensesKopecks).toBeNull()
+  })
+
   it.each([false, true])('rejects repeated financial identities across pages (changed row=%s)', async (changed) => {
     const first = { ...page(), total: 2, limit: 1 }
     const second = { ...first, offset: 1, items: [{ ...row, revenueKopecks: changed ? 0 : row.revenueKopecks }] }

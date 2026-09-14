@@ -284,7 +284,7 @@ export type LiveRepricerSkuListSummary = {
   adOrders?: number
   adRevenueKopecks?: number
   adSkuCount?: number
-  avgMarginPct?: number
+  avgMarginPct?: number | null
   totalBaskets?: number
   inSale?: number
   promoSharePct?: number

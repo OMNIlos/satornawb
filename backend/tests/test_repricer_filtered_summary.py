@@ -6,6 +6,25 @@ import pytest
 from app.routers import wb_repricer_bff as router
 
 
+@pytest.mark.parametrize("revenue,profit,expected", [
+    (-10_000, -2_500, 25.0),
+    (-10_000, 2_500, -25.0),
+    (0, 2_500, None),
+    (10_000, 2_500, 25.0),
+])
+def test_margin_percentage_keeps_ratio_of_totals_for_signed_revenue(revenue, profit, expected):
+    summary = router._repricer_list_summary([
+        {"analytics": {"revenueKopecks": revenue, "netProfitKopecks": profit, "marginPct": 99}},
+    ])
+    assert summary["avgMarginPct"] == expected
+    assert summary["revenueKopecks"] == revenue
+    assert summary["marginKopecks"] == profit
+
+
+def test_empty_summary_has_no_margin_percentage():
+    assert router._repricer_list_summary([])["avgMarginPct"] is None
+
+
 @pytest.mark.parametrize("filters", [
     {"q": "selected"},
     {"brand": "selected"},
@@ -49,6 +68,7 @@ def test_filtered_summary_covers_every_selected_page_without_global_costs(monkey
         assert summary["skuCount"] == count
         assert summary["revenueKopecks"] == count * 100_000
         assert summary["marginKopecks"] == count * 50_000
+        assert summary["avgMarginPct"] == (50.0 if count else None)
         assert summary["cogsKopecks"] == count * 40_000
         assert summary["expensesKopecks"] == count * 10_000
         assert summary["storageKopecks"] == count * 500

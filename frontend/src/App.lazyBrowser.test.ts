@@ -61,6 +61,10 @@ it('App defers unrelated route pages and recovers rejected lazy imports with rel
         let release: (() => Promise<void>) | undefined
         const external: string[] = []
         const errors: string[] = []
+        const pending = new Set<string>()
+        page.on('request', request => pending.add(request.url()))
+        page.on('requestfinished', request => pending.delete(request.url()))
+        page.on('requestfailed', request => pending.delete(request.url()))
         page.on('pageerror', error => errors.push(error.message))
         page.on('console', message => {
           if (message.type() !== 'error') return
@@ -88,7 +92,13 @@ it('App defers unrelated route pages and recovers rejected lazy imports with rel
             if (url.pathname.startsWith('/api/')) return route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":{"code":"SYNTHETIC_UNAVAILABLE"}}' })
             return route.continue()
           })
-          await page.goto(`${origin}${authenticated ? '/orders' : '/auth/login'}`)
+          try {
+            await page.goto(`${origin}${authenticated ? '/orders' : '/auth/login'}`)
+          } catch (error) {
+            throw new Error(`Synthetic navigation failed: ${JSON.stringify({
+              pending: [...pending].map(url => new URL(url).pathname), parityRequests, snapshotRequests, errors,
+            })}`, { cause: error })
+          }
           if (!authenticated) {
             await page.getByRole('button', { name: 'Войти', exact: true }).waitFor()
           } else {
