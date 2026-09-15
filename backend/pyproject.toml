@@ -37,6 +37,9 @@ namespaces = true
 [tool.setuptools.package-dir]
 vella_wb_19_05 = "backend_contracts/vella_wb_19_05"
 
+[tool.setuptools.package-data]
+"app.wb_api" = ["*.pem"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "backend_contracts"]

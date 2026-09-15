@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -218,18 +219,15 @@ def fetch_external_spp_prices(
     sleep_fn: Callable[[float], None] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[int, int]:
-    """Fetch live buyer prices after SPP from the 41-spp API.
-
-    The API accepts up to 100 nm IDs joined by semicolon and requires a
-    10-second gap between batched requests.
-    """
+    """Fetch buyer prices in batches of 100, preserving the provider's units."""
     if httpx is None:
         raise RuntimeError("httpx is required for external SPP price fetch")
     settings = get_settings()
-    token = api_token or settings.spp_api_token
-    if not token:
-        return {}
     base_url = (api_base_url or settings.spp_api_base_url).rstrip("/")
+    public_api = base_url == "https://prices.wbcon.su"
+    token = api_token or settings.spp_api_token
+    if not public_api and not token:
+        return {}
     timeout = float(timeout_seconds if timeout_seconds is not None else settings.spp_api_timeout_seconds)
     sleeper = sleep_fn or time.sleep
     unique_nm_ids = []
@@ -246,11 +244,15 @@ def fetch_external_spp_prices(
 
     prices: dict[int, int] = {}
     batch_total = (len(unique_nm_ids) + EXTERNAL_SPP_BATCH_SIZE - 1) // EXTERNAL_SPP_BATCH_SIZE
-    headers = {
-        "accept": "application/json",
-        "Authorization": token if token.startswith("Bearer ") else f"Bearer {token}",
-    }
-    verify_ssl = ssl.create_default_context() if settings.spp_api_verify_ssl else False
+    headers = {"accept": "application/json"}
+    if not public_api:
+        headers["Authorization"] = token if token.startswith("Bearer ") else f"Bearer {token}"
+    verify_ssl = ssl.create_default_context() if public_api or settings.spp_api_verify_ssl else False
+    if public_api:
+        # WBCON omits its intermediate. Complete the chain to the system's trusted
+        # GlobalSign root; hostname, expiry and root verification remain required.
+        verify_ssl.load_verify_locations(cafile=Path(__file__).parent / "wb_api/globalsign-gcc-r6-alphassl-2025.pem")
+        verify_ssl.verify_flags &= ~ssl.VERIFY_X509_PARTIAL_CHAIN
     with httpx.Client(timeout=timeout, verify=verify_ssl) as client:
         for start in range(0, len(unique_nm_ids), EXTERNAL_SPP_BATCH_SIZE):
             if start > 0:
@@ -259,24 +261,29 @@ def fetch_external_spp_prices(
             if not batch:
                 continue
             response = client.get(
-                f"{base_url}/prices",
-                params={"nm": ";".join(str(item) for item in batch)},
+                f"{base_url}/{'get' if public_api else 'prices'}",
+                params={"articles" if public_api else "nm": ";".join(str(item) for item in batch)},
                 headers=headers,
             )
             response.raise_for_status()
             payload = response.json()
-            rows = payload.get("prices") if isinstance(payload, dict) else None
+            rows = payload if public_api else payload.get("prices") if isinstance(payload, dict) else None
             if not isinstance(rows, list):
                 continue
             for row in rows:
                 if not isinstance(row, dict):
+                    continue
+                if public_api:
+                    nm_id, product = row.get("id"), row.get("salePriceU")
+                    if type(nm_id) is int and nm_id in batch and type(product) is int and product > 0:
+                        prices[nm_id] = product
                     continue
                 try:
                     nm_id = int(row.get("nm") or 0)
                     product = wb_goods_price_to_kopecks(row.get("product"))
                 except (TypeError, ValueError):
                     continue
-                if nm_id > 0 and product > 0 and str(row.get("status") or "ok") == "ok":
+                if nm_id in batch and product > 0 and str(row.get("status") or "ok") == "ok":
                     prices[nm_id] = product
             if progress_callback is not None:
                 progress_callback(
@@ -292,6 +299,7 @@ def fetch_external_spp_prices(
 
 def _apply_external_spp_prices_to_goods(goods: list[dict[str, Any]], prices_by_nm: dict[int, int]) -> int:
     matched = 0
+    source = "prices.wbcon.su" if get_settings().spp_api_base_url.rstrip("/") == "https://prices.wbcon.su" else "41-spp"
     for good in goods:
         nm_id = _good_nm_id(good)
         if nm_id is None:
@@ -310,7 +318,7 @@ def _apply_external_spp_prices_to_goods(goods: list[dict[str, Any]], prices_by_n
         target_size["buyerPriceKopecks"] = buyer_price_kopecks
         target_size["buyerPrice"] = buyer_price_rubles
         target_size["clientPrice"] = buyer_price_rubles
-        target_size["buyerPriceSource"] = "41-spp"
+        target_size["buyerPriceSource"] = source
         target_size["buyerPriceObservedAt"] = _utc_now().isoformat()
         target_size["buyerPriceSellerKopecks"] = seller_price_kopecks
         # Keep other source sizes intact; the legacy nm-level enrichment does
@@ -1299,7 +1307,7 @@ def refresh_wb_data_sources(
                                 progressCurrent=completed,
                                 progressTotal=total or None,
                                 message=f"Получаем цены после СПП: пачка {batch_current} из {batch_total}",
-                                request="41-SPP · до 100 артикулов в запросе",
+                                request="Цены WB · до 100 артикулов в запросе",
                             )
 
                         external_spp_prices = fetch_external_spp_prices(page_nm_ids, progress_callback=report_spp_progress)
