@@ -9,7 +9,6 @@ describe('Repricer stats live source', () => {
     expect(source).toContain('loadLiveRepricerStats')
     expect(source).toContain('window.__vellaLoadLiveRepricerStats')
     // Route-driven loading is exercised by repricerStatsPageBrowser.test.ts.
-    expect(source).toContain('renderLiveRepricerStats(payload)')
     expect(source).toContain('repricerStatsBody')
     expect(source).toContain("protectedLiveTabs = new Set(['repricer-stats'")
     expect(source).toContain('REPRICER_STATS_PAGE_SIZE')

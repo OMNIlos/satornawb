@@ -22,11 +22,11 @@ it('filters all P&L rows before windowing and preserves manager semantics and or
   const exported = buildPnlTableRows(filterPnlTableRows(rows, 'SKU-64', 'all'))
   expect(exported[0]).toHaveLength(13)
   expect(exported[0].slice(2, 11)).toEqual([0, null, null, null, null, null, null, null, null])
-  expect(buildPnlTableRows([{ sku: 'negative', revenueKopecks: -123, profitAfterLoyaltyKopecks: 0 }])[0][2]).toBe(-1.23)
+  expect(buildPnlTableRows([{ sku: 'negative', revenueKopecks: -123, profitBeforeInternalExpensesKopecks: 0 }])[0][2]).toBe(-1.23)
 })
 
 it('selects all ABC snapshot indices in displayed order without parsing money', () => {
-  const raw = Array.from({ length: 65 }, (_, i) => ({ sku: `SKU-${i}`, nmId: i + 1, profitAfterLoyaltyKopecks: i === 64 ? 0 : -123 }))
+  const raw = Array.from({ length: 65 }, (_, i) => ({ sku: `SKU-${i}`, nmId: i + 1, profitBeforeInternalExpensesKopecks: i === 64 ? 0 : -123 }))
   const display = raw.map(row => ({ sku: row.sku, wb: row.nmId, net: '999 ₽', canonical: true }))
   const snapshot = { count: 65, rows: display.map((row, originalIndex) => ({ row, originalIndex })).reverse() }
   const rows = buildAbcTableRows(raw, display, snapshot, ['wb', 'net', 'cogs'])

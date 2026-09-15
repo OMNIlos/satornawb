@@ -51,22 +51,7 @@ function skuPayload(account: Account) {
   }
 }
 
-function workerStatus(withApproval = false, denseRuns = false) {
-  const runs = Array.from({ length: denseRuns ? 8 : 1 }, (_, runIndex) => ({
-    runId: `run-2026-09-12-${runIndex + 1}`,
-    trigger: 'scheduler',
-    createdAt: `2026-09-12T${String(11 - runIndex).padStart(2, '0')}:00:00Z`,
-    executedCount: denseRuns ? 24 : 1,
-    skippedCount: 0,
-    blockedCount: 0,
-    itemCount: denseRuns ? 24 : 1,
-    items: Array.from({ length: denseRuns ? 24 : 1 }, (_, itemIndex) => ({
-      articleId: `SKU-A-${runIndex + 1}-${itemIndex + 1}`,
-      status: 'executed',
-      frontendStrategyId: 'turnover_control',
-      explanation: `Synthetic worker run ${runIndex + 1}, item ${itemIndex + 1}`,
-    })),
-  }))
+function workerStatus(withApproval = false) {
   return {
     organizationId: 7,
     mode: {
@@ -91,7 +76,7 @@ function workerStatus(withApproval = false, denseRuns = false) {
       nextFullSyncAt: '2026-09-12T13:00:00Z',
       secondsUntilNextFullSync: 3600,
     },
-    runs,
+    runs: [],
     pendingApprovals: withApproval ? [{
       approvalId: 'approval-1',
       draftId: 'draft-1',
@@ -214,6 +199,9 @@ it.each([
       if (!url.pathname.startsWith('/api/')) return route.abort()
 
       const account: Account = request.headers().authorization === 'Bearer account-b-token' ? 'B' : 'A'
+      if (request.method() === 'POST' && url.pathname.startsWith('/api/v1/wb-repricer/price-approvals/')) {
+        approvalDecisions.push(url.pathname)
+      }
       if (url.pathname === '/api/v1/auth/logout') {
         if (rejectLogout && logoutEvents.length === 0) {
           expect(request.headers().authorization).toBe('Bearer account-a-token')
@@ -269,10 +257,9 @@ it.each([
       if (url.pathname === '/api/v1/wb-repricer/strategies/catalog') return route.fulfill({ json: { items: [], total: 0 } })
       if (url.pathname === '/api/v1/wb-repricer/sku-groups') return route.fulfill({ json: { items: [], total: 0 } })
       if (url.pathname === '/api/v1/wb-repricer/sync/status') return route.fulfill({ json: { state: 'completed', running: false, steps: [] } })
-      if (url.pathname === '/api/v1/wb-repricer/worker/status') return route.fulfill({ json: workerStatus(approvalPending, label === 'cached products') })
+      if (url.pathname === '/api/v1/wb-repricer/worker/status') return route.fulfill({ json: workerStatus(approvalPending) })
       if (request.method() === 'POST' && url.pathname === '/api/v1/wb-repricer/price-approvals/approval-1/reject') {
         approvalPending = false
-        approvalDecisions.push('reject:approval-1')
         return route.fulfill({ json: { approval: { ...workerStatus(true).pendingApprovals[0], status: 'rejected' }, job: null } })
       }
       if (url.pathname === '/api/v1/wb-repricer/simulator') {
@@ -301,6 +288,7 @@ it.each([
     })
 
     await page.goto('http://satorna.test/wb/repricer')
+    if (label === 'cached products') await page.clock.install()
     await page.evaluate(() => localStorage.setItem('ogni.auth.access-token', 'account-a-token'))
     await page.addStyleTag({ content: styles })
     await page.addScriptTag({ content: bundle.code })
@@ -308,43 +296,23 @@ it.each([
     await expect.poll(() => products.locator('#totalCount').innerText(), { timeout: 15_000 }).toBe('3410')
     await expect.poll(() => products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-A-1'))
     const profile = page.locator('.user-chip')
-    expect.soft(await page.locator('.worker-overlay-main').innerText()).toContain('До пересчёта')
-    expect.soft(await page.locator('.worker-overlay-main').innerText()).toContain('До полной синхронизации')
-    expect.soft(await page.locator('.worker-overlay-run').first().innerText()).toContain('Выполнено')
+    expect(await page.locator('.worker-layout, .worker-overlay').count()).toBe(0)
+    expect(await page.locator('.vella-html-parity-root').evaluate(element => element.getBoundingClientRect().top)).toBe(0)
     if (label === 'cached products') {
       approvalPending = true
-      await page.locator('.worker-overlay-icon[title="Обновить"]').click()
+      await page.clock.fastForward(15_000)
       await expect.poll(() => page.getByRole('dialog', { name: 'Нужно подтвердить изменение цены' }).isVisible()).toBe(true)
+      expect(approvalDecisions).toEqual([])
       await page.getByRole('button', { name: 'Не менять цену' }).click()
       await expect.poll(() => page.getByRole('dialog', { name: 'Нужно подтвердить изменение цены' }).count()).toBe(0)
-      expect(approvalDecisions).toEqual(['reject:approval-1'])
+      expect(approvalDecisions).toEqual(['/api/v1/wb-repricer/price-approvals/approval-1/reject'])
     }
-    await page.getByTitle('Логи worker').click()
-    await expect.poll(() => page.locator('.worker-overlay-panel').isVisible()).toBe(true)
     if (label === 'cached products') {
       const screenshotDir = process.env.WORKER_LAYOUT_SCREENSHOT_DIR
-      const runs = page.locator('.worker-overlay-runs')
-      const lastLogEntry = runs.locator('.worker-overlay-log').last().locator('.worker-overlay-log-items > div').last()
-      expect(await runs.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
-      await lastLogEntry.scrollIntoViewIfNeeded()
-      expect(await lastLogEntry.evaluate((element) => {
-        const viewport = element.closest('.worker-overlay-runs')!.getBoundingClientRect()
-        const bounds = element.getBoundingClientRect()
-        return bounds.top >= viewport.top && bounds.bottom <= viewport.bottom + 1
-      })).toBe(true)
       await page.setViewportSize({ width: 390, height: 844 })
-      const mobileFitsViewport = await page.locator('.worker-overlay-bar').evaluate((element) => {
-        const bounds = element.getBoundingClientRect()
-        return bounds.left >= 0 && bounds.right <= document.documentElement.clientWidth && element.scrollWidth <= element.clientWidth
-      })
-      expect(mobileFitsViewport).toBe(true)
-      await lastLogEntry.scrollIntoViewIfNeeded()
-      expect(await lastLogEntry.evaluate((element) => {
-        const viewport = element.closest('.worker-overlay-runs')!.getBoundingClientRect()
-        const bounds = element.getBoundingClientRect()
-        return bounds.top >= viewport.top && bounds.bottom <= viewport.bottom + 1
-      })).toBe(true)
-      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'dense-worker-mobile-390x844.png') })
+      expect(await page.locator('.worker-layout, .worker-overlay').count()).toBe(0)
+      expect(await page.locator('.vella-html-parity-root').evaluate(element => element.getBoundingClientRect().top)).toBe(0)
+      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'products-mobile-390x844.png') })
       for (const viewport of [{ width: 1440, height: 1000 }, { width: 1366, height: 768 }]) {
         await page.setViewportSize(viewport)
         await profile.click()
@@ -352,7 +320,7 @@ it.each([
         const profilePanel = page.locator('#profilePanel')
         expect(await profilePanel.evaluate((element) => {
           const bounds = element.getBoundingClientRect()
-          return element.scrollHeight > element.clientHeight && bounds.bottom <= innerHeight + 1
+          return bounds.top >= 0 && bounds.bottom <= innerHeight + 1
         })).toBe(true)
         const logout = page.getByRole('button', { name: /Выйти/ })
         await logout.scrollIntoViewIfNeeded()
@@ -364,8 +332,8 @@ it.each([
         })
         expect(logoutReceivesPointer).toBe(true)
         await logout.click({ trial: true })
-        expect(await page.locator('.vella-html-parity-root').evaluate((element) => element.clientHeight >= innerHeight - 310)).toBe(true)
-        if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, `dense-worker-profile-${viewport.width}x${viewport.height}.png`) })
+        expect(await page.locator('.vella-html-parity-root').evaluate((element) => element.clientHeight === innerHeight)).toBe(true)
+        if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, `products-profile-${viewport.width}x${viewport.height}.png`) })
         await profile.click()
         const notification = page.locator('.topbar-actions button[aria-label="Уведомления"]')
         expect(await notification.evaluate((element) => {
@@ -382,13 +350,6 @@ it.each([
           await page.getByRole('button', { name: /Выйти/ }).scrollIntoViewIfNeeded()
         }
       }
-    } else {
-      const overlayPrecedesWorkspace = await page.evaluate(() => {
-        const overlay = document.querySelector('.worker-overlay')?.getBoundingClientRect()
-        const workspace = document.querySelector('.vella-html-parity-root')?.getBoundingClientRect()
-        return Boolean(overlay && workspace && overlay.bottom <= workspace.top + 1)
-      })
-      expect(overlayPrecedesWorkspace).toBe(true)
     }
     if (holdAccountARefresh) {
       await page.evaluate(() => {
@@ -461,10 +422,23 @@ it.each([
       expect(await page.locator('.repricer-sim-page').evaluate(element => element.getBoundingClientRect().bottom <= innerHeight + 1)).toBe(true)
       const screenshotDir = process.env.WORKER_LAYOUT_SCREENSHOT_DIR
       if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'desktop-simulator.png') })
-      await page.locator('.worker-overlay-icon[title="Закрыть"]').click()
-      await expect.poll(() => page.locator('.worker-overlay').count()).toBe(0)
+      expect(await page.locator('.worker-layout, .worker-overlay').count()).toBe(0)
       expect(await page.locator('.repricer-sim-page').evaluate(element => element.getBoundingClientRect().top)).toBe(0)
+      await page.reload()
+      await page.addStyleTag({ content: styles })
+      await page.addScriptTag({ content: bundle.code })
+      await expect.poll(() => page.getByRole('heading', { name: 'Симулятор WB-товаров' }).isVisible()).toBe(true)
+      expect(await page.locator('.worker-layout, .worker-overlay').count()).toBe(0)
+      expect(await page.locator('.repricer-sim-page').evaluate(element => element.getBoundingClientRect().top)).toBe(0)
+      await page.evaluate(() => {
+        history.pushState({}, '', '/wb/repricer')
+        window.dispatchEvent(new PopStateEvent('popstate'))
+      })
+      await expect.poll(() => products.locator('#totalCount').innerText()).toBe('7')
+      expect(await page.locator('.worker-layout, .worker-overlay').count()).toBe(0)
+      expect(await page.locator('.vella-html-parity-root').evaluate(element => element.getBoundingClientRect().top)).toBe(0)
     }
+    expect(approvalDecisions).toEqual(label === 'cached products' ? ['/api/v1/wb-repricer/price-approvals/approval-1/reject'] : [])
     expect(errors).toEqual([])
   } finally {
     releaseAccountB()

@@ -27,8 +27,8 @@ describe('canonical ABC/P&L cutover wiring', () => {
   })
 
   it('uses preliminary labels and never aliases canonical profit to final net profit', () => {
-    expect(source).toContain('Прибыль после лояльности')
-    expect(source).toContain('profitAfterLoyaltyKopecks')
+    expect(source.includes('До внутренних расходов')).toBe(true)
+    expect(source.includes('profitBeforeInternalExpensesKopecks')).toBe(true)
     expect(source).toContain("abc: isCanonical ? (row.salesClass ? `${row.salesClass}·—` : '—')")
   })
 })

@@ -1501,6 +1501,19 @@ tr:hover .acts, tr.sel .acts { opacity: 1; }
 /* MODAL */
 .modal-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.45); z-index: 200; opacity: 0; pointer-events: none; transition: opacity 0.18s; display: flex; align-items: center; justify-content: center; padding: 20px; }
 .modal-overlay.open { opacity: 1; pointer-events: all; }
+dialog.modal-overlay { width: 100%; height: 100dvh; max-width: none; max-height: none; margin: 0; border: 0; background: transparent; color: inherit; }
+dialog.modal-overlay:not([open]) { display: none; }
+dialog.modal-overlay::backdrop { background: rgba(15,23,42,0.45); }
+body:has(dialog.modal-overlay[open]) { overflow: hidden; }
+dialog.modal-overlay .modal { max-height: 100%; display: flex; flex-direction: column; min-height: 0; }
+dialog.modal-overlay .modal-body { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+dialog.modal-overlay .modal-head, dialog.modal-overlay .modal-foot { flex-shrink: 0; }
+dialog.modal-overlay .modal-foot { flex-wrap: wrap; }
+@media (max-width: 600px) {
+  dialog.modal-overlay { padding: 12px; }
+  dialog.modal-overlay .modal-head, dialog.modal-overlay .modal-body, dialog.modal-overlay .modal-foot { padding: 12px; }
+  #m-bulkAssignManager .manager-assignment-fields { grid-template-columns: 1fr !important; }
+}
 .modal { background: var(--white); border-radius: 14px; box-shadow: var(--shadow-xl); max-width: 440px; width: 100%; transform: translateY(8px) scale(0.97); transition: transform 0.18s; }
 .modal.lg { max-width: 540px; }
 .modal.xl { max-width: 860px; }
@@ -1521,6 +1534,7 @@ tr:hover .acts, tr.sel .acts { opacity: 1; }
 
 /* TOAST */
 .toast-container { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 250; pointer-events: none; }
+.modal-overlay > .toast-container { top: 20px; bottom: auto; z-index: 1; max-width: calc(100vw - 40px); }
 .toast { background: var(--gray-900); color: white; border-radius: 10px; padding: 11px 14px 11px 12px; font-size: 13px; display: flex; align-items: center; gap: 10px; min-width: 280px; max-width: 380px; box-shadow: var(--shadow-xl); transform: translateX(20px); opacity: 0; transition: all 0.2s; pointer-events: all; }
 .toast.show { transform: translateX(0); opacity: 1; }
 .toast-icon { width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
@@ -5492,7 +5506,7 @@ body.avito-popup-open { overflow: hidden; }
   </div>
   <div class="nav-item" data-module="reviews" data-tab="reviews" data-tip="Отзывы WB: очередь AI-ответов" onclick="goSubtab('reviews')">
     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-    <span class="nav-label">Отзывы WB</span><span class="nav-badge alert" id="navReviewsCount">17</span>
+    <span class="nav-label">Отзывы WB</span><span class="nav-badge alert" id="navReviewsCount">—</span>
   </div>
 
   <div class="nav-section">Авито</div>
@@ -5738,7 +5752,7 @@ body.avito-popup-open { overflow: hidden; }
   <div class="module-panel" data-module-panel="reviews">
     <div class="subtab active" data-tab="reviews" onclick="goSubtab('reviews')">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-      Очередь ответов <span class="subtab-count" style="background:#FEE2E2;color:#991B1B">17</span>
+      Очередь ответов <span class="subtab-count" id="subtabReviewsCount" style="background:#FEE2E2;color:#991B1B">—</span>
     </div>
   </div>
 	  <div class="module-panel" data-module-panel="avito">
@@ -7327,7 +7341,7 @@ body.avito-popup-open { overflow: hidden; }
     </div>
   </aside>
 
-  <div class="modal-overlay" id="settingsInviteModal" onclick="if(event.target===this)closeSettingsInvite()">
+  <dialog class="modal-overlay" id="settingsInviteModal" onclick="if(event.target===this)closeSettingsInvite()">
     <div class="modal" style="max-width:560px">
       <div class="modal-head">
         <h3>Пригласить пользователя</h3>
@@ -7362,7 +7376,7 @@ body.avito-popup-open { overflow: hidden; }
         <button class="btn btn-primary" type="button" onclick="createSettingsInvite()">Сформировать ссылку</button>
       </div>
     </div>
-  </div>
+  </dialog>
 </div>
 
 <!-- ========================================================== -->
@@ -7392,27 +7406,22 @@ body.avito-popup-open { overflow: hidden; }
     <div class="stat">
       <div class="stat-label">Неотвеченные <span class="stat-tip" data-tip="Отзывы WB без опубликованного ответа">i</span></div>
       <div class="stat-val" id="reviewsKpiOpen">—</div>
-      <div class="stat-delta neutral">после загрузки backend</div>
     </div>
     <div class="stat alert">
       <div class="stat-label">Требуют проверки <span class="stat-tip" data-tip="AI подготовил черновик, но нужен человек">i</span></div>
       <div class="stat-val" id="reviewsKpiQueue">—</div>
-      <div class="stat-delta neutral">по правилам backend</div>
     </div>
     <div class="stat">
-      <div class="stat-label">Автоответы сегодня <span class="stat-tip" data-tip="Запланированные и отправленные безопасные ответы">i</span></div>
+      <div class="stat-label">Готовые черновики <span class="stat-tip" data-tip="Подготовленные ответы, которые ещё не опубликованы">i</span></div>
       <div class="stat-val" id="reviewsKpiAuto">—</div>
-      <div class="stat-delta neutral">draft-only режим</div>
     </div>
     <div class="stat">
       <div class="stat-label">Заблокировано <span class="stat-tip" data-tip="Низкая оценка, стоп-слово, конкурент, цена или компенсация">i</span></div>
       <div class="stat-val" id="reviewsKpiBlocked">—</div>
-      <div class="stat-delta neutral">по ответу backend</div>
     </div>
     <div class="stat">
       <div class="stat-label">Среднее время <span class="stat-tip" data-tip="От создания отзыва до ответа">i</span></div>
       <div class="stat-val" id="reviewsKpiAvgTime">—</div>
-      <div class="stat-delta neutral">нет данных</div>
     </div>
   </div>
 
@@ -7454,7 +7463,7 @@ body.avito-popup-open { overflow: hidden; }
       <aside class="reviews-queue">
         <div class="reviews-card-head">
           <div class="reviews-card-title">Требуют проверки</div>
-          <div class="reviews-card-meta">17 отзывов</div>
+          <div class="reviews-card-meta" id="reviewsQueueCount">—</div>
         </div>
         <div class="review-queue-list" id="reviewsQueueList"></div>
       </aside>
@@ -7587,10 +7596,6 @@ body.avito-popup-open { overflow: hidden; }
     <div class="chip" data-brand="aurora" onclick="setBrandFilter('aurora', this)"><span class="brand-chip aurora" style="margin-right:4px;padding:1px 6px;font-size:10.5px">Aurora</span><span class="chip-count">—</span></div>
   </div>
   <div class="toolbar-right">
-    <div class="density-toggle" aria-label="Плотность таблицы">
-      <button class="density-btn active" type="button" data-density="comfortable" onclick="setDensity('comfortable')">Комфортно</button>
-      <button class="density-btn" type="button" data-density="compact" onclick="setDensity('compact')">Компактно</button>
-    </div>
     <select id="managerSelect" class="adv-select" style="height:30px;padding:4px 8px;font-size:12px" onchange="setManagerFilter(this.value)" data-tip="Фильтр по менеджеру">
       <option value="all">Все менеджеры</option>
       <option value="mine">Мои SKU</option>
@@ -8744,11 +8749,10 @@ body.avito-popup-open { overflow: hidden; }
     </nav>
     <div class="settings-cards threshold-cards">
       <div class="settings-card" id="thr-profile">
-        <div class="card-title">Профиль правил <span class="card-title-help">Глобальные пороги отчётов и автоматики</span></div>
+        <div class="card-title">Профиль правил</div>
         <div class="threshold-profile-head">
           <div>
             <div class="threshold-profile-title" id="thresholdProfileTitle">Стандартный профиль</div>
-            <div class="threshold-profile-meta" id="thresholdProfileMeta">версия 3 · действует · обновлено 08.05.2026 08:55</div>
           </div>
           <span class="report-tag ok">действует</span>
         </div>
@@ -8757,10 +8761,6 @@ body.avito-popup-open { overflow: hidden; }
           <button class="threshold-preset active" type="button" data-preset="standard" onclick="setThresholdPreset('standard')">Стандартный</button>
           <button class="threshold-preset" type="button" data-preset="conservative" onclick="setThresholdPreset('conservative')">Осторожный</button>
           <button class="threshold-preset" type="button" data-preset="aggressive" onclick="setThresholdPreset('aggressive')">Агрессивный</button>
-        </div>
-        <div class="threshold-warning">
-          <span>!</span>
-          <div>Пороги меняют классификацию, статусы правил, алерты и отбор в автоматику. Сохранение не запускает мгновенное массовое изменение цен: репрайсер и ликвидация используют правила со следующего планового цикла.</div>
         </div>
       </div>
 
@@ -10613,7 +10613,7 @@ body.avito-popup-open { overflow: hidden; }
 </style>
 
 <!-- PROBLEM QUEUE -->
-<div class="modal-overlay" id="m-problemQueue" onclick="if(event.target===this)closeModal('problemQueue')">
+<dialog class="modal-overlay" id="m-problemQueue" onclick="if(event.target===this)closeModal('problemQueue')">
   <div class="modal xl">
     <div class="modal-head">
       <div class="modal-icon warn"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 2 5-7"/><circle cx="7" cy="14" r="1"/><circle cx="10" cy="11" r="1"/><circle cx="13" cy="13" r="1"/><circle cx="18" cy="6" r="1"/></svg></div>
@@ -10697,9 +10697,9 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-primary" onclick="showToast('Очередь выгружена в XLSX', 'success')">Экспорт XLSX</button>
     </div>
   </div>
-</div>
+</dialog>
 
-<div class="modal-overlay" id="m-planfactManagers" onclick="if(event.target===this)closeModal('planfactManagers')" aria-hidden="true">
+<dialog class="modal-overlay" id="m-planfactManagers" onclick="if(event.target===this)closeModal('planfactManagers')" aria-hidden="true">
   <div class="modal xl">
     <div class="modal-head">
       <div class="modal-icon fin"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 2 5-7"/></svg></div>
@@ -10712,10 +10712,10 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-default" type="button" onclick="closeModal('planfactManagers'); goSubtab('report-rules')">Настроить планы</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- THRESHOLD PROFILE PREVIEW -->
-<div class="modal-overlay" id="m-thresholdPreview" onclick="if(event.target===this)closeModal('thresholdPreview')">
+<dialog class="modal-overlay" id="m-thresholdPreview" onclick="if(event.target===this)closeModal('thresholdPreview')">
   <div class="modal xl">
     <div class="modal-head">
       <div class="modal-icon brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 2 5-7"/></svg></div>
@@ -10740,10 +10740,10 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-primary" onclick="applyThresholdProfile()">Применить профиль</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- APPLY (UNCHANGED) -->
-<div class="modal-overlay" id="m-apply">
+<dialog class="modal-overlay" id="m-apply">
   <div class="modal lg">
     <div class="modal-head">
       <div class="modal-icon brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
@@ -10776,10 +10776,10 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-primary" onclick="closeModal('apply'); openModal('applyProgress'); runApplyProgress();">Применить 47 цен</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- APPLY PROGRESS (NEW — UX-3) -->
-<div class="modal-overlay" id="m-applyProgress">
+<dialog class="modal-overlay" id="m-applyProgress">
   <div class="modal lg">
     <!-- Progress state -->
     <div id="applyProgressView">
@@ -10850,10 +10850,10 @@ body.avito-popup-open { overflow: hidden; }
       </div>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- NIGHT MEDIAN (UNCHANGED) -->
-<div class="modal-overlay" id="m-night">
+<dialog class="modal-overlay" id="m-night">
   <div class="modal lg">
     <div class="modal-head">
       <div class="modal-icon brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg></div>
@@ -10870,10 +10870,10 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-default" onclick="goSubtab('algo'); closeModal('night')">Открыть в настройках</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- BULK PMIN PREVIEW -->
-<div class="modal-overlay" id="m-bulkPmin">
+<dialog class="modal-overlay" id="m-bulkPmin">
   <div class="modal lg">
     <div class="modal-head">
       <div class="modal-icon brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg></div>
@@ -10899,18 +10899,18 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-primary" onclick="applyBulkPminPreview()">Применить после preview</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- BULK MANAGER ASSIGNMENT -->
-<div class="modal-overlay" id="m-bulkAssignManager" onclick="if(event.target===this)closeModal('bulkAssignManager')">
+<dialog class="modal-overlay" id="m-bulkAssignManager" onclick="if(event.target===this)closeModal('bulkAssignManager')">
   <div class="modal lg">
     <div class="modal-head">
       <div class="modal-icon brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></svg></div>
       <h2>Назначить менеджера для <span id="bulkAssignCount">0</span> SKU</h2>
-      <p>Будет создано одно групповое действие и отдельные записи по затронутым SKU. Причина обязательна.</p>
+      <p>Ответственный изменится только у выбранных товаров. Укажите причину назначения.</p>
     </div>
     <div class="modal-body">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="manager-assignment-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <label style="display:flex;flex-direction:column;gap:6px"><span class="s-desc">Новый ответственный</span><select id="bulkAssignManagerSelect" class="adv-select" onchange="renderBulkAssignPreview()"></select></label>
         <label style="display:flex;flex-direction:column;gap:6px"><span class="s-desc">Причина</span><input id="bulkAssignReason" class="s-input" style="width:100%;text-align:left" placeholder="Например: перераспределение SKU на май"></label>
       </div>
@@ -10920,18 +10920,16 @@ body.avito-popup-open { overflow: hidden; }
           <tbody id="bulkAssignRows"></tbody>
         </table>
       </div>
-      <div class="bulk-preview-note"><span>!</span><div>XLSX назначения ожидает колонки: SKU, номенклатура, ID менеджера и имя менеджера. Ошибочные строки импорта не блокируют валидные.</div></div>
     </div>
     <div class="modal-foot">
       <button class="btn btn-ghost" onclick="closeModal('bulkAssignManager')">Отмена</button>
-      <button class="btn btn-default" onclick="showManagerImportResult('assignments')">Показать пример ошибок XLSX</button>
       <button class="btn btn-primary" onclick="applyBulkManagerAssignment()">Назначить</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- BULK STRATEGY PREVIEW -->
-<div class="modal-overlay" id="m-bulkStrategy">
+<dialog class="modal-overlay" id="m-bulkStrategy">
   <div class="modal lg">
     <div class="modal-head">
       <div class="modal-icon brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg></div>
@@ -10956,10 +10954,10 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-primary" onclick="applyBulkStrategyPreview()">Применить стратегию</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- BULK LIQUIDATE (TWO-STEP — TZ-1) -->
-<div class="modal-overlay" id="m-bulkLiq" data-step="1">
+<dialog class="modal-overlay" id="m-bulkLiq" data-step="1">
   <div class="modal lg">
 
     <!-- STEP 1: General confirmation -->
@@ -11033,10 +11031,10 @@ body.avito-popup-open { overflow: hidden; }
     </div>
 
   </div>
-</div>
+</dialog>
 
 <!-- P_MIN WARNING (NEW — TZ-1.5) -->
-<div class="modal-overlay" id="m-pminWarning">
+<dialog class="modal-overlay" id="m-pminWarning">
   <div class="modal">
     <div class="modal-head">
       <div class="modal-icon warn"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
@@ -11073,10 +11071,10 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-primary" onclick="closeModal('pminWarning'); showToast('Решение применено к FBBT_29', 'success')">Применить решение</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- CREATE / EDIT STRATEGY -->
-<div class="modal-overlay" id="m-createTpl">
+<dialog class="modal-overlay" id="m-createTpl">
   <div class="modal lg">
     <div class="modal-head">
       <div class="modal-icon brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div>
@@ -11110,10 +11108,10 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-primary" id="strategySaveBtn" onclick="saveStrategyFromForm()">Создать</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- SAVE VIEW -->
-<div class="modal-overlay" id="m-saveView">
+<dialog class="modal-overlay" id="m-saveView">
   <div class="modal">
     <div class="modal-head">
       <div class="modal-icon brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg></div>
@@ -11138,10 +11136,10 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-primary" onclick="saveCurrentView(false)">Сохранить</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- SEGMENT DETAILS -->
-<div class="modal-overlay" id="m-segmentDetails">
+<dialog class="modal-overlay" id="m-segmentDetails">
   <div class="modal">
     <div class="modal-head">
       <div class="modal-icon brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18"/><path d="M7 12h10"/><path d="M10 20h4"/></svg></div>
@@ -11159,10 +11157,10 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-primary" id="segmentDetailsUpdateBtn" onclick="updateActiveSavedView()">Обновить сегмент</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- SHORTCUTS HELP -->
-<div class="modal-overlay" id="m-shortcuts">
+<dialog class="modal-overlay" id="m-shortcuts">
   <div class="modal">
     <div class="modal-head">
       <div class="modal-icon brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h8M9 16h6"/></svg></div>
@@ -11183,7 +11181,7 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-primary" onclick="closeModal('shortcuts')">Понятно</button>
     </div>
   </div>
-</div>
+</dialog>
 <div class="drawer-overlay" id="reviewDrawerOverlay" onclick="closeReviewDrawer()" aria-hidden="true"></div>
 <aside class="drawer" id="reviewDrawer" aria-hidden="true" aria-label="Карточка отзыва WB">
   <div class="drawer-header">
@@ -11255,7 +11253,7 @@ body.avito-popup-open { overflow: hidden; }
   </div>
 </aside>
 
-<div class="modal-overlay" id="m-reviewSettings" onclick="if(event.target===this)closeModal('reviewSettings')" aria-hidden="true">
+<dialog class="modal-overlay" id="m-reviewSettings" onclick="if(event.target===this)closeModal('reviewSettings')" aria-hidden="true">
   <div class="modal xl" role="dialog" aria-modal="true" aria-labelledby="reviewSettingsTitle">
     <div class="modal-head">
       <h2 id="reviewSettingsTitle">Настройки правил автоответов WB</h2>
@@ -11312,7 +11310,7 @@ body.avito-popup-open { overflow: hidden; }
       <button class="btn btn-primary" onclick="applyReviewSettingsPreview()">Пересчитать очередь</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- TOAST CONTAINER -->
 <div class="toast-container" id="toastContainer"></div>
@@ -11371,6 +11369,7 @@ syncAdvancedStrategyOptions();
 
 // type: F-футболка/H-худи/L-лонгслив; color: B-белый/C-чёрный
 const PRODUCTS = [];
+window.PRODUCTS = PRODUCTS;
 
 // =========================================================
 // THRESHOLD PROFILE — Reports rules + automation levels
@@ -12345,17 +12344,8 @@ function deleteActiveSavedView(){
   showToast('Сегмент удалён: ' + view.name, 'success');
 }
 restoreSavedViews();
-function setDensity(mode){
-  const compact = mode === 'compact';
-  document.body.classList.toggle('density-compact', compact);
-  try { localStorage.setItem('vella-density', compact ? 'compact' : 'comfortable'); } catch (e) {}
-  document.querySelectorAll('.density-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.density === (compact ? 'compact' : 'comfortable')));
-}
-function restoreDensity(){
-  let mode = 'comfortable';
-  try { mode = localStorage.getItem('vella-density') || 'comfortable'; } catch (e) {}
-  setDensity(mode);
-}
+function setDensity(){ document.body.classList.remove('density-compact'); }
+function restoreDensity(){ setDensity(); }
 const ABC_LABELS = { loko:'Локомотив', profit:'Прибыльный', persp:'Перспективный', weak:'Слабый', loss:'Убыточный', new:'Новинка' };
 const BRAND_LABELS = { anomie:'Anomie', aurora:'Aurora' };
 const CAT_LETTER = { fb:'F', fc:'F', hb:'H', hc:'H', lb:'L', lc:'L' };
@@ -12872,7 +12862,7 @@ function statusCellHTML(p){
   return '<div class="cell-drop-wrap" onclick="openCellDrop(event,this,\'status\',\'' + p.sku + '\')">' + inner + '</div>';
 }
 function marginHTML(p){
-  if (p.mg == null && p.mgRub == null) return '<span class="metric-main" data-tip="Маржа появится после загрузки цены и себестоимости SKU">нет данных</span>';
+  if (p.mg == null && p.mgRub == null) return '<span class="metric-main" data-tip="Для плановой маржи нужны цена, себестоимость и подтверждённый тариф WB">нет данных</span>';
   let cls = 'mg-mid';
   if (p.mg < 0) cls = 'mg-neg';
   else if (p.mg <= 10) cls = 'mg-low';
@@ -12882,6 +12872,7 @@ function marginHTML(p){
 }
 function bskCellHTML(p){
   if (p.basketsState === 'no_data') return '<span class="metric-main" data-tip="Корзины появятся после успешного обновления WB Analytics Sales Funnel">нет данных</span>';
+  if (p.basketsState === 'partial') return '<div class="metric-stack" data-tip="' + escapeHtml(p.basketsReason || 'Не все дни выбранного периода загружены') + '"><span class="metric-main">' + fmt(p.bsk) + '</span><span class="metric-sub">частично</span></div>';
   const arr = p.bskTrend === 'up' ? '<span class="up">↑</span>' : (p.bskTrend === 'down' ? '<span class="down">↓</span>' : '');
   let sparkCls = '';
   if (p.bsk <= 5) sparkCls = ' low';
@@ -12904,7 +12895,7 @@ function stockCellHTML(p){
 }
 function tplHTML(p){
   let inner;
-  if (!p.tpl) inner = '<span class="tpl-none">— нет —</span>';
+  if (!p.tpl) inner = '<span class="tpl-none">Не назначена</span>';
   else {
     const t = TPL[p.tpl];
     inner = '<span class="tpl-chip ' + t.cls + '"><span class="tpl-color-dot" style="background:' + t.dot + ';width:6px;height:6px"></span>' + t.label + '</span>';
@@ -12971,8 +12962,8 @@ function avgPriceHTML(p){
   return '<div class="metric-stack"><span class="metric-main">' + value + '</span><span class="metric-sub">с СПП</span></div>';
 }
 function walletPriceHTML(p){
-  const value = p.priceWithWallet ?? p.accountedBuyerPrice ?? (p.wbWallet != null ? p.priceFinal : null);
-  if (value == null) return '<span class="metric-main" data-tip="Цена с WB кошельком считается отдельно от цены с СПП.">нет данных</span>';
+  const value = p.priceWithWallet;
+  if (value == null) return '<span class="metric-main" data-tip="Источник ещё не передал текущую цену покупателя с WB кошельком.">нет данных</span>';
   return '<div class="metric-stack"><span class="metric-main">' + fmt(value) + ' ₽</span><span class="metric-sub">с кошельком</span></div>';
 }
 function formatPercentValue(value, digits){
@@ -12986,9 +12977,7 @@ function sppHTML(p){
 }
 function commissionHTML(p){
   if (p.commissionPct == null) {
-    const source = p.commissionSource || 'tariffs.commission';
-    const reason = p.commissionReason || (source.indexOf('fallback.') === 0 ? 'fallback скрыт: нет подтверждённого тарифа WB' : 'нет подтверждённого тарифа WB');
-    return '<div class="metric-stack" data-tip="' + escapeHtml(reason + ' · source: ' + source) + '"><span class="metric-main">нет тарифа</span><span class="metric-sub">' + escapeHtml(source) + '</span></div>';
+    return '<span class="metric-main" data-tip="Тариф WB для категории товара ещё не загружен. Фактическая комиссия сохраняется в финансовом отчёте.">нет тарифа</span>';
   }
   return '<span class="metric-main" data-tip="Тариф категории + эквайринг">' + p.commissionPct + '%</span>';
 }
@@ -14343,7 +14332,15 @@ function confirmApply(){
 // TOASTS
 // =========================================================
 function showToast(text, type='info', undo=false){
-  const existingToast = [...document.querySelectorAll('#toastContainer .toast .toast-title')]
+  const dialog = [...document.querySelectorAll('dialog:modal')].at(-1);
+  let container = dialog?.querySelector('.toast-container');
+  if (dialog && !container) {
+    container = document.createElement('div');
+    container.className = 'toast-container';
+    dialog.appendChild(container);
+  }
+  container = container || document.getElementById('toastContainer');
+  const existingToast = [...container.querySelectorAll('.toast .toast-title')]
     .some(el => el.textContent === text);
   if (existingToast) return;
   const ICONS = {
@@ -14355,7 +14352,7 @@ function showToast(text, type='info', undo=false){
   t.className = 'toast ' + type;
   t.setAttribute('role', type === 'warn' ? 'alert' : 'status');
   t.innerHTML = '<div class="toast-icon">' + (ICONS[type] || ICONS.info) + '</div><div class="toast-body"><div class="toast-title">' + text + '</div></div>' + (undo ? '<span class="toast-undo">↶ Отменить</span>' : '');
-  document.getElementById('toastContainer').appendChild(t);
+  container.appendChild(t);
   requestAnimationFrame(() => t.classList.add('show'));
   setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 250); }, 3500);
 }
@@ -14481,7 +14478,9 @@ function renderReviews(){
 function renderReviewsQueue(){
   const list = document.getElementById('reviewsQueueList');
   if (!list) return;
-  const queue = REVIEWS.filter(r => ['pending_review','blocked','error'].includes(r.status));
+  const queue = filteredReviews().filter(r => ['pending_review','blocked','error','new'].includes(r.status));
+  const count = document.getElementById('reviewsQueueCount');
+  if(count) count.textContent = `${queue.length} отзывов`;
   list.innerHTML = queue.map(r => `
     <button class="review-queue-item" data-review-id="${r.id}" onclick="openReviewDrawer('${r.id}')">
       <div class="review-queue-top"><span class="review-stars">${reviewStars(r.rating)}</span><span class="review-brand">${r.brand}</span><span class="review-age">${r.age}</span></div>
@@ -14491,16 +14490,18 @@ function renderReviewsQueue(){
   `).join('');
 }
 function updateReviewsKpi(){
-  const open = REVIEWS.filter(r => !['sent','sent_pending_verify'].includes(r.status)).length;
-  const queue = REVIEWS.filter(r => ['pending_review','blocked','error'].includes(r.status)).length;
-  const auto = REVIEWS.filter(r => ['scheduled','sent','sent_pending_verify'].includes(r.status)).length + 78;
-  const blocked = REVIEWS.filter(r => ['blocked','error'].includes(r.status)).length;
+  const rows = filteredReviews();
+  const open = rows.filter(r => !['sent','sent_pending_verify'].includes(r.status)).length;
+  const queue = rows.filter(r => ['pending_review','blocked','error','new'].includes(r.status)).length;
+  const drafts = rows.filter(r => !['sent','sent_pending_verify'].includes(r.status) && (r.draftId || r.draft?.trim())).length;
+  const blocked = rows.filter(r => ['blocked','error'].includes(r.status)).length;
   const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
   set('reviewsKpiOpen', open);
   set('reviewsKpiQueue', queue);
-  set('reviewsKpiAuto', auto);
+  set('reviewsKpiAuto', drafts);
   set('reviewsKpiBlocked', blocked);
   set('navReviewsCount', queue);
+  set('subtabReviewsCount', queue);
 }
 function setReviewsFilter(el){
   const group = el.dataset.reviewFilter;
@@ -14774,8 +14775,7 @@ function openProfileSettings(){
 }
 function openInterfaceSettings(){
   toggleDD('ddUser');
-  document.body.classList.toggle('density-compact');
-  showToast(document.body.classList.contains('density-compact') ? 'Включена компактная плотность' : 'Включена обычная плотность', 'info');
+  setDensity();
 }
 function switchDemoRole(){
   toggleDD('ddUser');
@@ -15627,7 +15627,7 @@ function syncContextControls(key){
   const showDigestMode = false;
   const showLiveStatus = normalizedKey === 'digest';
   const showPeriod = normalizedKey === 'products' || periodReportTabs.includes(normalizedKey) || periodDataTabs.includes(normalizedKey) || normalizedKey === 'digest' || normalizedKey === 'avito-stats' || normalizedKey === 'avito-repricer';
-  const showExport = normalizedKey === 'products' || periodReportTabs.includes(normalizedKey) || periodDataTabs.includes(normalizedKey) || normalizedKey === 'digest' || normalizedKey === 'avito-stats' || normalizedKey === 'avito-repricer';
+  const showExport = normalizedKey !== 'report-rules' && (normalizedKey === 'products' || periodReportTabs.includes(normalizedKey) || periodDataTabs.includes(normalizedKey) || normalizedKey === 'digest' || normalizedKey === 'avito-stats' || normalizedKey === 'avito-repricer');
   const visibility = {
     'digest-mode': showDigestMode,
     'digest-brand': normalizedKey === 'digest',
@@ -22644,7 +22644,7 @@ function updateReportEmptyState(table){
     empty.appendChild(cell);
     tbody.appendChild(empty);
   }
-  empty.style.display = visibleCount ? 'none' : '';
+  empty.style.display = visibleCount || tbody.querySelector('[data-report-state]') ? 'none' : '';
 }
 function updateReportFilterSummary(tab){
   const summary = tab?.querySelector?.('[data-filter-summary]');
@@ -22659,7 +22659,9 @@ function updateReportFilterSummary(tab){
   const filters = chips.concat(query ? ['поиск: ' + query] : [], selects).filter(Boolean);
   const label = filters.length ? filters.join(' · ') : 'без фильтров';
   const span = summary.querySelector('span');
-  if (span) span.innerHTML = `Показано <b>${visible.toLocaleString('ru-RU')}</b> из ${rows.length.toLocaleString('ru-RU')} · фильтры: ${escapeHtml(label)}`;
+  const total = Number(tab.dataset.reportTotal ?? rows.length);
+  const progress = total > rows.length ? ` · загружено ${rows.length.toLocaleString('ru-RU')} из ${total.toLocaleString('ru-RU')}` : '';
+  if (span) span.innerHTML = `Показано <b>${visible.toLocaleString('ru-RU')}</b> из ${rows.length.toLocaleString('ru-RU')}${progress} · фильтры: ${escapeHtml(label)}`;
 }
 function applyGenericReportFilter(tab){
   if (!tab) return;
@@ -23290,6 +23292,30 @@ function syncHiddenA11y(){
     const open = el.classList.contains('open');
     el.setAttribute('aria-hidden', open ? 'false' : 'true');
     if ('inert' in el) el.inert = !open;
+    if (el instanceof HTMLDialogElement) {
+      const title = el.querySelector('h2');
+      if (title && !el.hasAttribute('aria-labelledby')) {
+        title.id ||= el.id + '-title';
+        el.setAttribute('aria-labelledby', title.id);
+      }
+      el.oncancel = event => {
+        event.preventDefault();
+        if (el.id.startsWith('m-')) closeModal(el.id.slice(2));
+        else { el.classList.remove('open'); syncHiddenA11y(); }
+      };
+      el.onkeydown = event => {
+        if (event.key !== 'Tab') return;
+        const controls = [...el.querySelectorAll('button, [href], input, select, textarea, [tabindex]')]
+          .filter(control => !control.disabled && control.tabIndex >= 0 && control.getClientRects().length);
+        const first = controls[0], last = controls.at(-1);
+        if (event.shiftKey && document.activeElement === first || !event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          (event.shiftKey ? last : first)?.focus();
+        }
+      };
+      if (open && !el.open) el.showModal();
+      if (!open && el.open) el.close();
+    }
   });
   const drawer = document.getElementById('dPanel');
   const overlay = document.getElementById('dOverlay');

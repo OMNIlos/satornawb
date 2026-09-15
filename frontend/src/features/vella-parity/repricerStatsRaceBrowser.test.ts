@@ -85,7 +85,7 @@ it.each(['success', 'error', 'logout', 'pagination', 'pagination-error', 'latest
   } finally { releaseFirst(); await browser.close() }
 }, 60_000)
 
-it.each([false, true])('renders the first statistics page once while later pages settle (failure=%s)', async failure => {
+it.each([false, true])('keeps every received statistics page and retries a failed page (failure=%s)', async failure => {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const result = await build({
     configFile: false, envFile: false, root, logLevel: 'silent', plugins: [react()],
@@ -116,7 +116,7 @@ it.each([false, true])('renders the first statistics page once while later pages
       queries.push(pageNumber)
       if (pageNumber === 3) {
         await lastPage
-        if (failure) return route.fulfill({ status: 503, json: { error: { code: 'SYNTHETIC_UNAVAILABLE', message: 'Источник временно недоступен' } } })
+        if (failure && queries.filter(number => number === 3).length === 1) return route.fulfill({ status: 503, json: { error: { code: 'SYNTHETIC_UNAVAILABLE', message: 'Источник временно недоступен' } } })
       }
       return route.fulfill({ json: { items: Array.from({ length: pageNumber === 3 ? 1 : 500 }, (_, i) => ({
         articleId: `BATCH-SKU-${(pageNumber - 1) * 500 + i + 1}`, name: 'Synthetic product',
@@ -127,15 +127,22 @@ it.each([false, true])('renders the first statistics page once while later pages
     await page.addScriptTag({ content: bundle.code })
     await expect.poll(() => queries).toEqual([1, 2, 3])
     const rows = page.locator('#repricerStatsBody [data-sku]')
-    expect(await rows.count()).toBe(500)
+    expect(await rows.count()).toBe(1000)
     expect(await page.locator('[data-filter-summary]').innerText()).toContain('1 001')
     expect(await page.locator('.stat-val').innerText()).toBe('1 001')
     release()
     await page.waitForFunction(() => document.body.dataset.firstSettled === 'true')
-    expect(await rows.count()).toBe(failure ? 500 : 1001)
-    if (failure) await page.getByRole('alert').filter({ hasText: 'Источник временно недоступен' }).waitFor()
+    expect(await rows.count()).toBe(failure ? 1000 : 1001)
+    if (failure) {
+      await page.getByRole('alert').filter({ hasText: 'Источник временно недоступен' }).waitFor()
+      expect(await page.locator('#repricerStatsBody [data-report-row]').count()).toBe(1000)
+      await page.getByRole('button', { name: 'Повторить загрузку', exact: true }).click()
+      await page.getByText('BATCH-SKU-1001', { exact: true }).waitFor()
+      expect(await rows.count()).toBe(1001)
+      expect(await page.getByRole('alert').count()).toBe(0)
+    }
     else expect(await rows.last().innerText()).toContain('BATCH-SKU-1001')
-    expect(queries).toEqual([1, 2, 3])
+    expect(queries).toEqual(failure ? [1, 2, 3, 3] : [1, 2, 3])
     expect(unexpected).toEqual([])
     expect(errors).toEqual([])
   } finally { release(); await browser.close() }

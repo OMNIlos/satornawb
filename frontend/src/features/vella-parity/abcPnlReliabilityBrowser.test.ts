@@ -19,8 +19,8 @@ const item: CanonicalAbcPnlPage['items'][number] = {
   economicsValueState: 'missing', economicsEvidenceStatus: null, taxKopecks: null, otherExpensesKopecks: null,
   profitBeforeAdsAndLoyaltyKopecks: null, advertisingSpendKopecks: null, profitBeforeLoyaltyKopecks: null,
   cashbackAmountKopecks: null, cashbackDiscountKopecks: null, cashbackCommissionChangeKopecks: null,
-  loyaltyNetCostKopecks: null, profitAfterLoyaltyKopecks: null, salesClass: 'A', profitClass: null,
-  abcCode: null, netProfitKopecks: null, blockerIds: ['WB_PNL_COST_MISSING'],
+  loyaltyNetCostKopecks: null, profitBeforeInternalExpensesKopecks: null, profitAfterLoyaltyKopecks: null, salesClass: 'A', profitClass: null,
+  abcCode: null, internalExpensesKopecks: null, netProfitKopecks: null, blockerIds: ['WB_PNL_COST_MISSING'],
 }
 const payload: CanonicalAbcPnlPage = {
   items: Array.from({ length: 60 }, (_, i) => ({ ...item, nmId: 500000000 + i, sellerArticle: `SKU-${i + 1}` })),
@@ -33,7 +33,7 @@ const payload: CanonicalAbcPnlPage = {
     cogsKopecks: null, settlementProfitKopecks: null, taxKopecks: null, otherExpensesKopecks: null,
     profitBeforeAdsAndLoyaltyKopecks: null, advertisingSpendKopecks: null, unattributedAdvertisingSpendKopecks: null,
     profitBeforeLoyaltyKopecks: null, cashbackAmountKopecks: null, cashbackDiscountKopecks: null,
-    cashbackCommissionChangeKopecks: null, loyaltyNetCostKopecks: null, profitAfterLoyaltyKopecks: null, netProfitKopecks: null,
+    cashbackCommissionChangeKopecks: null, loyaltyNetCostKopecks: null, profitBeforeInternalExpensesKopecks: null, profitAfterLoyaltyKopecks: null, internalExpensesKopecks: null, netProfitKopecks: null,
   },
   meta: {
     state: 'partial', marketplaceAccountId: 31, period: { dateFrom: '2026-09-01', dateTo: '2026-09-07',
@@ -138,11 +138,11 @@ it('shows each supplied profit stage without promoting preliminary profit or rep
       financeExpensesKopecks: 1500, settlementProfitKopecks: 6500, taxKopecks: 300,
       otherExpensesKopecks: 200, profitBeforeAdsAndLoyaltyKopecks: 6000,
       advertisingSpendKopecks: 1000, profitBeforeLoyaltyKopecks: 5000,
-      loyaltyNetCostKopecks: 100, profitAfterLoyaltyKopecks: 4900 }
+      loyaltyNetCostKopecks: 100, profitBeforeInternalExpensesKopecks: 4900 , profitAfterLoyaltyKopecks: 4900 }
     const evidence = await mount(page, 'pnl', false, { ...payload,
       items: [known, { ...item, nmId: 500000002, sellerArticle: 'UNKNOWN' },
-        { ...known, nmId: 500000003, sellerArticle: 'ZERO', advertisingSpendKopecks: 5900, profitBeforeLoyaltyKopecks: 100, profitAfterLoyaltyKopecks: 0 },
-        { ...known, nmId: 500000004, sellerArticle: 'LOSS', advertisingSpendKopecks: 6001, profitBeforeLoyaltyKopecks: -1, profitAfterLoyaltyKopecks: -101 },
+        { ...known, nmId: 500000003, sellerArticle: 'ZERO', advertisingSpendKopecks: 5900, profitBeforeLoyaltyKopecks: 100, profitBeforeInternalExpensesKopecks: 0 , profitAfterLoyaltyKopecks: 0 },
+        { ...known, nmId: 500000004, sellerArticle: 'LOSS', advertisingSpendKopecks: 6001, profitBeforeLoyaltyKopecks: -1, profitBeforeInternalExpensesKopecks: -101 , profitAfterLoyaltyKopecks: -101 },
       ], total: 4, summary: { ...payload.summary, operationCount: 4, skuCount: 4,
         revenueKopecks: 40000, salesRevenueKopecks: 40000, salesUnits: 4, netUnits: 4,
         commissionKopecks: 3000, logisticsKopecks: 600, storageKopecks: 300,

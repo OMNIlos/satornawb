@@ -32,6 +32,8 @@ it('loads live statistics through the actual React route and clears them on sess
     .find(output => output.type === 'chunk' && output.isEntry)
   if (!bundle || bundle.type !== 'chunk') throw new Error('Missing synthetic stats page bundle')
   const browser = await chromium.launch({ headless: true })
+  let release = () => {}
+  const firstPage = new Promise<void>(resolve => { release = resolve })
   try {
     const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
     const unexpected: string[] = [], errors: string[] = [], requests: string[] = []
@@ -49,6 +51,7 @@ it('loads live statistics through the actual React route and clears them on sess
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       requests.push(url.search)
+      if (requests.length === 1) await firstPage
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
         items: [{ articleId: url.searchParams.get('dateFrom') === '2026-08-01' ? 'NEW-PERIOD-REACT-STATS-SKU' : 'ACTUAL-REACT-STATS-SKU', nmId: 101, name: 'Synthetic route product', brand: 'Synthetic', managerName: '',
           metrics: {}, decision: {}, sources: {}, priceProtection: {}, flags: [] }],
@@ -57,6 +60,11 @@ it('loads live statistics through the actual React route and clears them on sess
     })
     await page.goto('http://satorna.test/wb/repricer/stats')
     await page.addScriptTag({ content: bundle.code })
+    await expect.poll(() => requests.length).toBe(1)
+    await page.getByText('Загружаю статистику товаров...', { exact: true }).waitFor()
+    expect(await page.locator('#repricerStatsBody [data-report-row]').count()).toBe(0)
+    expect(await page.locator('#tab-repricer-stats [data-filter-summary]').innerText()).not.toContain('1 из 1')
+    release()
     await page.getByText('ACTUAL-REACT-STATS-SKU', { exact: true }).waitFor({ state: 'visible', timeout: 15000 })
     expect(await page.locator('#tab-repricer-stats').isVisible()).toBe(true)
     expect(await page.title()).toBe('Satorna — Репрайсер WB')
@@ -78,5 +86,5 @@ it('loads live statistics through the actual React route and clears them on sess
     expect(requests).toHaveLength(2)
     expect(unexpected, `Unexpected fixture requests: ${JSON.stringify(unexpected)}`).toEqual([])
     expect(errors).toEqual([])
-  } finally { await browser.close() }
+  } finally { release(); await browser.close() }
 }, 60_000)

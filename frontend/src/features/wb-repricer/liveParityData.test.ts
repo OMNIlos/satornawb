@@ -151,7 +151,7 @@ describe('mapLiveRepricerRowToParityProduct', () => {
     expect(product.buyerPriceNoWallet).toBe(1425)
     expect(product.priceWithSpp).toBe(1425)
     expect(product.priceFinal).toBe(1425)
-    expect(product.priceWithWallet).toBe(1650)
+    expect(product.priceWithWallet).toBe(1600)
     expect(product.spp).toBe(35.23)
   })
 
@@ -179,6 +179,28 @@ describe('mapLiveRepricerRowToParityProduct', () => {
 
     expect(product.priceWithSpp).toBeNull()
     expect(product.avgPriceSpp).toBe(1500)
+  })
+
+  test('preserves partial baskets and actual commission without a planned tariff', () => {
+    const product = mapLiveRepricerRowToParityProduct({
+      meta: { articleId: 'SKU-PARTIAL', nmId: 125, currentPriceKopecks: 220000, basketsLast7d: 30, basketNorm: 1 },
+      settings: { cogsKopecks: 50000 },
+      analytics: {
+        baskets: 0, basketsState: 'partial', basketsReason: 'Данные за 6 из 7 дней.',
+        commissionState: 'no_data', commissionReason: 'wb_commission_tariff_missing',
+        financeState: 'ok', commissionKopecks: 10000,
+        marginPct: 65, marginKopecks: 143000,
+        accountedBuyerPriceKopecks: 150000,
+      },
+    } as any, 0)
+    expect(product.bsk).toBe(0)
+    expect(product.basketsState).toBe('partial')
+    expect(product.basketsReason).toBe('Данные за 6 из 7 дней.')
+    expect(product.commissionRub).toBe(100)
+    expect(product.commissionPct).toBeNull()
+    expect(product.mg).toBeNull()
+    expect(product.mgRub).toBeNull()
+    expect(product.priceWithWallet).toBeNull()
   })
 
   test('recomputes invalid SPP percent from seller and buyer prices', () => {

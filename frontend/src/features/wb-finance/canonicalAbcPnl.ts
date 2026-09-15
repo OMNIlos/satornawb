@@ -67,10 +67,12 @@ const rowSchema = z.object({
   cashbackCommissionChangeKopecks: nullableInteger,
   loyaltyNetCostKopecks: nullableInteger,
   profitAfterLoyaltyKopecks: nullableInteger,
+  profitBeforeInternalExpensesKopecks: nullableInteger.optional().default(null),
+  internalExpensesKopecks: nullableInteger.optional().default(null),
   salesClass: z.enum(['A', 'B', 'C']).nullable(),
   profitClass: z.literal(null),
   abcCode: z.literal(null),
-  netProfitKopecks: z.literal(null),
+  netProfitKopecks: nullableInteger,
   blockerIds: z.array(z.string()),
 }).strict()
 
@@ -106,7 +108,9 @@ const summarySchema = z.object({
   cashbackCommissionChangeKopecks: nullableInteger,
   loyaltyNetCostKopecks: nullableInteger,
   profitAfterLoyaltyKopecks: nullableInteger,
-  netProfitKopecks: z.literal(null),
+  profitBeforeInternalExpensesKopecks: nullableInteger.optional().default(null),
+  internalExpensesKopecks: nullableInteger.optional().default(null),
+  netProfitKopecks: nullableInteger,
 }).strict()
 
 const metaSchema = z.object({
@@ -222,6 +226,11 @@ export function parseCanonicalAbcPnlPage(payload: unknown): CanonicalAbcPnlPage 
   const result = pageSchema.safeParse(payload)
   if (!result.success) {
     throw new ApiError('Invalid canonical ABC/P&L response', 502, 'INVALID_API_RESPONSE', result.error.flatten())
+  }
+  for (const row of [result.data.summary, ...result.data.items]) {
+    if (row.netProfitKopecks !== null && (row.profitBeforeInternalExpensesKopecks === null || row.internalExpensesKopecks === null || row.netProfitKopecks !== row.profitBeforeInternalExpensesKopecks - row.internalExpensesKopecks)) {
+      throw new ApiError('Invalid canonical ABC/P&L response', 502, 'INVALID_API_RESPONSE')
+    }
   }
   return result.data
 }
@@ -342,6 +351,9 @@ export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage) {
       salesComposite: { units: item.netUnits, kopecks: item.revenueKopecks, deltaPct: null },
       adSpendKopecks: item.advertisingSpendKopecks,
       profitAfterLoyaltyKopecks: item.profitAfterLoyaltyKopecks,
+      profitBeforeInternalExpensesKopecks: item.profitBeforeInternalExpensesKopecks,
+      internalExpensesKopecks: item.internalExpensesKopecks,
+      netProfitKopecks: item.netProfitKopecks,
       salesClass: item.salesClass,
       abcCode: item.abcCode,
       costValueState: item.costValueState,
@@ -355,6 +367,9 @@ export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage) {
       salesKopecks: page.summary.revenueKopecks,
       salesCount: page.summary.netUnits,
       profitAfterLoyaltyKopecks: page.summary.profitAfterLoyaltyKopecks,
+      profitBeforeInternalExpensesKopecks: page.summary.profitBeforeInternalExpensesKopecks,
+      internalExpensesKopecks: page.summary.internalExpensesKopecks,
+      netProfitKopecks: page.summary.netProfitKopecks,
       attentionCount: page.items.filter((item) => item.blockerIds.length > 0).length,
     },
     sourceStatus: page.meta.state,
@@ -400,7 +415,9 @@ export function adaptCanonicalPnlReport(page: CanonicalAbcPnlPage) {
       profitBeforeLoyaltyKopecks: item.profitBeforeLoyaltyKopecks,
       loyaltyNetCostKopecks: item.loyaltyNetCostKopecks,
       adSpendKopecks: item.advertisingSpendKopecks,
-      overheadKopecks: null,
+      overheadKopecks: item.internalExpensesKopecks,
+      profitBeforeInternalExpensesKopecks: item.profitBeforeInternalExpensesKopecks,
+      internalExpensesKopecks: item.internalExpensesKopecks,
       returnsPenaltyKopecks: item.penaltyKopecks + item.deductionKopecks,
       netProfitKopecks: item.netProfitKopecks,
       profitAfterLoyaltyKopecks: item.profitAfterLoyaltyKopecks,

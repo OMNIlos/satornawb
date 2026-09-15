@@ -121,9 +121,10 @@ export type LiveRepricerSkuRow = {
     promotionId?: string | number | null
     wbStockUnits?: number | null
     stockState?: 'ok' | 'fallback' | 'no_data'
-    buyoutPct?: number
+    buyoutPct?: number | null
     baskets?: number | null
-    basketsState?: 'ok' | 'fallback' | 'no_data'
+    basketsState?: 'ok' | 'fallback' | 'partial' | 'no_data'
+    basketsReason?: string | null
     ordersUnits?: number
     cancelledOrdersUnits?: number | null
     previousPeriod?: {
@@ -286,6 +287,7 @@ export type LiveRepricerSkuListSummary = {
   adSkuCount?: number
   avgMarginPct?: number | null
   totalBaskets?: number
+  totalBasketsState?: 'ok' | 'partial' | 'no_data'
   inSale?: number
   promoSharePct?: number
   skuCount?: number
@@ -599,9 +601,9 @@ let liveStrategiesCacheKey = ''
 const LIVE_PRODUCTS_CACHE_TTL_MS = 30_000
 const DEFAULT_REPRICER_PERIOD_DAYS = 7
 
-function sourcePriority(state: 'ok' | 'fallback' | 'no_data' | null | undefined) {
+function sourcePriority(state: 'ok' | 'partial' | 'fallback' | 'no_data' | null | undefined) {
   if (state === 'ok') return 2
-  if (state === 'fallback') return 1
+  if (state === 'fallback' || state === 'partial') return 1
   return 0
 }
 
@@ -785,7 +787,7 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
   const buyerPriceWithWalletRub = buyerPriceWithWalletKopecks != null
     ? kopecksToRub(buyerPriceWithWalletKopecks)
     : null
-  const priceWithWallet = accountedBuyerPriceRub ?? buyerPriceWithWalletRub
+  const priceWithWallet = buyerPriceWithWalletRub
   const directSppPrice = priceWithSpp
   const financeState = row.analytics?.financeState ?? 'no_data'
   const hasFinance = financeState === 'ok' || financeState === 'fallback'
@@ -793,7 +795,6 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
   const ordersPeriod = periodStatsState === 'no_data' ? 0 : row.analytics?.ordersUnits ?? Math.max(0, baskets - 2)
   const previousBaskets = row.analytics?.previousPeriod?.baskets
   const previousOrders = row.analytics?.previousPeriod?.ordersUnits ?? row.analytics?.previousPeriod?.funnelOrderCount
-  const marginRub = row.analytics?.marginKopecks != null ? kopecksToRub(row.analytics.marginKopecks) : null
   const managerName = row.meta.managerName || 'Без ответственного'
   const commissionSource = row.analytics?.commissionSource ?? null
   const commissionIsFallbackSource = !commissionSource
@@ -804,6 +805,7 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     ? row.analytics.commissionDisplayPct
     : null
   const commissionPct = commissionDisplayPct != null ? Number(commissionDisplayPct.toFixed(1)) : null
+  const marginRub = commissionPct != null && row.analytics?.marginKopecks != null ? kopecksToRub(row.analytics.marginKopecks) : null
   const sppPct = normalizeSppPct(row.analytics?.sppPct)
     ?? deriveSppPct(row.meta.currentPriceKopecks, buyerPriceNoWalletKopecks)
   const commissionRub = hasFinance && row.analytics?.commissionKopecks != null
@@ -883,9 +885,10 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     financeState,
     financeLabel: hasFinance ? null : 'нет данных',
     basketsState,
+    basketsReason: row.analytics?.basketsReason ?? null,
     periodStatsState,
     stockState,
-    mg: row.analytics?.marginPct != null ? Math.round(row.analytics.marginPct) : null,
+    mg: commissionPct != null && row.analytics?.marginPct != null ? Math.round(row.analytics.marginPct) : null,
     mgRub: marginRub,
     bsk: baskets,
     previousBaskets,

@@ -179,6 +179,8 @@ const row = {
   cashbackCommissionChangeKopecks: -50,
   loyaltyNetCostKopecks: 700,
   profitAfterLoyaltyKopecks: null,
+  profitBeforeInternalExpensesKopecks: null,
+  internalExpensesKopecks: null,
   salesClass: 'A' as const,
   profitClass: null,
   abcCode: null,
@@ -218,6 +220,8 @@ const summary = {
   cashbackCommissionChangeKopecks: -50,
   loyaltyNetCostKopecks: 700,
   profitAfterLoyaltyKopecks: null,
+  profitBeforeInternalExpensesKopecks: null,
+  internalExpensesKopecks: null,
   netProfitKopecks: null,
 }
 
@@ -363,6 +367,17 @@ describe('canonical ABC/P&L contract', () => {
   it('rejects a response that invents final profit or a second ABC letter', () => {
     expect(() => parseCanonicalAbcPnlPage({ ...page(), items: [{ ...row, netProfitKopecks: 1 }] })).toThrow(/canonical ABC\/P&L response/i)
     expect(() => parseCanonicalAbcPnlPage({ ...page(), items: [{ ...row, abcCode: 'AA' }] })).toThrow(/canonical ABC\/P&L response/i)
+  })
+
+  it('preserves approved profit, internal expenses and final profit without using the old subtotal', () => {
+    const amounts = { profitBeforeInternalExpensesKopecks: 24_800_000, internalExpensesKopecks: 5_000_000, netProfitKopecks: 19_800_000 }
+    const parsed = parseCanonicalAbcPnlPage({ ...page(), items: [{ ...row, ...amounts }], summary: { ...summary, ...amounts } })
+    expect(adaptCanonicalAbcReport(parsed).rows[0]).toMatchObject(amounts)
+    expect(adaptCanonicalPnlReport(parsed).rows[0]).toMatchObject(amounts)
+    expect(adaptCanonicalPnlReport(parsed).canonicalSummary).toMatchObject(amounts)
+    const missing = parseCanonicalAbcPnlPage(page())
+    expect(adaptCanonicalAbcReport(missing).rows[0].profitBeforeInternalExpensesKopecks).toBeNull()
+    expect(adaptCanonicalPnlReport(missing).rows[0].internalExpensesKopecks).toBeNull()
   })
 
   it('keeps source evidence and blockers in both compatibility adapters', () => {

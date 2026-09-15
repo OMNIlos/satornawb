@@ -468,8 +468,6 @@ describe('vella source of truth', () => {
     expect(html).toContain('audit-diff')
     expect(html).toContain('audit-scope')
 
-    expect(html).toContain('density-toggle')
-    expect(html).toContain("localStorage.setItem('vella-density'")
     expect(html).toContain('id="m-shortcuts"')
     expect(html).toContain('Alt + 1...6')
   })
