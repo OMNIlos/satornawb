@@ -5022,7 +5022,7 @@ def _build_sku_row(
             + int(other_expenses_kopecks or 0)
             - int(additional_payment_kopecks or 0)
         ) if use_demo_data else None
-        net_profit_kopecks = None
+        net_profit_kopecks = round((unit_margin_kopecks or 0) * max(1, sales_units)) if use_demo_data else None
         report_commission_pct = None
     planned_sales_units = max(0, sales_units)
     planned_revenue_base_kopecks = (

@@ -56,6 +56,7 @@ def test_1c_cash_flow_accepts_payload_and_exposes_logs(tmp_path, monkeypatch):
 
 
 def test_cash_flow_job_queue_roundtrip_and_pnl_attachment(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.routers.wb_reports_bff.legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
     monkeypatch.setattr("app.routers.one_c_cash_flow.LOG_PATH", tmp_path / "1c_logs.json")
     monkeypatch.setattr("app.routers.one_c_cash_flow.JOBS_PATH", tmp_path / "1c_jobs.json")
     report_cache: dict[tuple[int, str], dict] = {}

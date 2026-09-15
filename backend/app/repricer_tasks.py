@@ -522,8 +522,11 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
                 organization_id=organization_id,
                 finance_allowed=finance_allowed,
             )
-        cached_report = {"report": report, "completedAt": reports._utc_now_iso()}
-        reports.save_source_cache(organization_id, cache_key, cached_report)
+        reports._save_exact_report_payload_cache(
+            organization_id=organization_id, report_id=report_id,
+            date_from=date_from, date_to=date_to, group_by=group_by, source=source,
+            report=report, finance_allowed=finance_allowed,
+        )
         persisted_report = reports.get_source_cache(organization_id, cache_key, slim=False)
         if not isinstance(persisted_report, dict) or not isinstance(persisted_report.get("report"), dict):
             raise RuntimeError(f"Background report payload was not persisted: {cache_key}")

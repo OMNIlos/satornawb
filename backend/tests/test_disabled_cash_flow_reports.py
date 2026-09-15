@@ -32,6 +32,13 @@ def disabled_source(monkeypatch, tmp_path):
         if owner == org and key.startswith(prefix)
     ])
     monkeypatch.setattr(reports, "load_active_profile", default_report_rules)
+    monkeypatch.setattr(reports, "legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
+    monkeypatch.setattr("app.wb_reports_sprint_d.legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
+    # Isolate 1C readiness from the independently tested dated-tax SQL bridge.
+    monkeypatch.setattr("app.wb_reports_sprint_d.get_legacy_finance_taxes", lambda org, finance, period: {
+        str(nm): {"taxKopecks": 0, "factTaxState": "configured", "factTaxReason": None}
+        for nm in finance.get("aggregates", {})
+    })
     monkeypatch.setattr(repricer_tasks, "_report_snapshot_sources_ready", lambda *a, **kw: (True, []))
     return jobs_path, cache
 
@@ -114,7 +121,7 @@ def test_current_version_cache_is_rejected_when_1c_mode_changes(disabled_source,
         report["blockerIds"] = [] if was_enabled else ["ONE_C_DISABLED"]
     report["cashFlow"] = {"status": "ready" if was_enabled else "disabled"} if finance_allowed else None
     key = reports._report_cache_key(report_id, START, END, "sku", "operational", organization_id=1, finance_allowed=finance_allowed)
-    cached = {"report": report, "dateFrom": str(START), "dateTo": str(END), "completedAt": reports._utc_now_iso()}
+    cached = {"report": report, "dateFrom": str(START), "dateTo": str(END), "completedAt": reports._utc_now_iso(), "taxRevision": "synthetic-confirmation"}
     cache[1, key] = deepcopy(cached)
     api = TestClient(create_app())
     headers = auth_headers(api, "finance_viewer" if finance_allowed else "viewer")

@@ -4709,6 +4709,7 @@ def test_wb_sync_goods_step_persists_spp_heartbeat_progress(monkeypatch):
     )
     monkeypatch.setattr("app.repricer_sync.record_wb_sync_history_event", lambda *_args, **_kwargs: {})
     monkeypatch.setattr("app.repricer_sync.record_wb_sync_notification", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.repricer_sync.fetch_commission_tariffs", lambda *_args, **_kwargs: {})
     monkeypatch.setattr("app.repricer_sync.list_cached_goods", lambda _organization_id: [])
     monkeypatch.setattr(
         "app.repricer_sync.fetch_catalog_goods_page",
@@ -4741,7 +4742,7 @@ def test_wb_sync_goods_step_persists_spp_heartbeat_progress(monkeypatch):
     ]
     assert any(step.get("phase") == "spp" and step.get("progressPercent") == 95 for step in running_goods)
     assert any(step.get("message") == "Получаем цены после СПП: пачка 1 из 1" for step in running_goods)
-    assert any(step.get("request") == "41-SPP · до 100 артикулов в запросе" for step in running_goods)
+    assert any(step.get("request") == "Цены WB · до 100 артикулов в запросе" for step in running_goods)
     assert result["steps"][0]["progressPercent"] == 100
 
 

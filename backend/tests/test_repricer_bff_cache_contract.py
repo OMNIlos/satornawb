@@ -31,6 +31,8 @@ def test_cached_sku_uses_demo_only_in_explicit_fake_mode(monkeypatch, mode, toke
     assert analytics["financeState"] == ("fallback" if demo else "no_data")
     assert analytics["basketsState"] == ("fallback" if demo else "no_data")
     assert analytics["commissionCalcMode"] == ("demo_planned" if demo else "no_finance")
+    assert analytics["taxKopecks"] is None
+    assert analytics["factTaxState"] == "missing"
     if demo:
         assert analytics["ordersUnits"] > 0
         assert analytics["netProfitKopecks"] is not None

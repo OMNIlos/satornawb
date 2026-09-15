@@ -34,6 +34,7 @@ PRIVATE_CASH_FLOW = {
 @pytest.fixture
 def cache(monkeypatch):
     entries = {}
+    monkeypatch.setattr(reports, "legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
     monkeypatch.setattr(
         reports,
         "get_source_cache",
@@ -306,6 +307,30 @@ def abc_cache(cache, monkeypatch):
 
     monkeypatch.setattr(reports, "build_abc_report", build_abc)
     return cache
+
+
+@pytest.mark.parametrize("report_id", ["abc", "pnl"])
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_background_report_publishes_retryable_tax_cache_metadata(abc_cache, monkeypatch, report_id, unavailable):
+    build = getattr(reports, f"build_{report_id}_report")
+    def with_tax_status(**kwargs):
+        result = build(**kwargs)
+        if unavailable:
+            result.blockerIds = ["tax_policy_unavailable"]
+        return result
+    monkeypatch.setattr(reports, f"build_{report_id}_report", with_tax_status)
+    result = repricer_tasks.build_report_for_org.run(
+        1, "synthetic-user", report_id, str(START), str(END), "sku", "operational", True, None,
+    )
+    assert result["state"] == "completed"
+    key = reports._report_cache_key(report_id, START, END, "sku", "operational", organization_id=1, finance_allowed=True)
+    cached = abc_cache[1, key]
+    assert cached["taxRevision"] == ("unavailable" if unavailable else "synthetic-confirmation")
+    before = deepcopy(abc_cache)
+    api = TestClient(create_app())
+    response = api.get(f"/api/wb/reports/{report_id}/latest-cache", params=PARAMS, headers=auth_headers(api, "finance_viewer"))
+    assert response.status_code == (404 if unavailable else 200)
+    assert abc_cache == before
 
 
 @pytest.mark.parametrize("report_id", ["abc", "pnl"])

@@ -18,7 +18,7 @@ PARAMS = {"preset": "custom", "from": str(START), "to": str(END)}
 
 @pytest.fixture
 def runtime(monkeypatch):
-    state = SimpleNamespace(cache={}, writes=[], builds=[], refreshes=[], ready=False)
+    state = SimpleNamespace(cache={}, writes=[], builds=[], refreshes=[], ready=False, tax_revision="synthetic-confirmation")
 
     def save(org, key, payload):
         state.writes.append(key)
@@ -44,6 +44,7 @@ def runtime(monkeypatch):
         ],
     )
     monkeypatch.setattr(reports, "_abc_economics_version", lambda org: "cafef00d")
+    monkeypatch.setattr(reports, "legacy_finance_tax_revision", lambda org: state.tax_revision)
     readiness = lambda *args, **kw: (state.ready, [] if state.ready else ["ads"])
     monkeypatch.setattr(reports, "_report_daily_sources_ready", readiness)
     monkeypatch.setattr(repricer_tasks, "_report_snapshot_sources_ready", readiness)
@@ -100,6 +101,7 @@ def seed(
             report_id, START, END, "sku", "operational", organization_id=1
         )
         runtime.cache[1, payload_key] = {
+            "taxRevision": runtime.tax_revision,
             "completedAt": reports._utc_now_iso(),
             "dateFrom": str(START),
             "dateTo": str(END),
@@ -110,6 +112,19 @@ def seed(
             },
         }
     return key, job
+
+
+@pytest.mark.parametrize("report_id", ["abc", "pnl", "week-over-week"])
+@pytest.mark.parametrize("revision", ["changed-confirmation", "unavailable"])
+def test_report_cache_rejects_changed_or_unavailable_tax_without_mutating_job(runtime, report_id, revision):
+    key, job = seed(runtime, report_id)
+    endpoint = f"/api/wb/reports/{report_id}/latest-cache"
+    assert runtime.api.get(endpoint, params=PARAMS).status_code == 200
+    before = deepcopy(runtime.cache)
+    runtime.tax_revision = revision
+    assert runtime.api.get(endpoint, params=PARAMS).status_code == 404
+    assert runtime.cache == before and runtime.cache[1, key] == job
+    assert runtime.writes == runtime.builds == runtime.refreshes == []
 
 
 @pytest.mark.parametrize("report_id,previous", [("abc", "v17"), ("pnl", "v3"), ("week-over-week", "v2")])
