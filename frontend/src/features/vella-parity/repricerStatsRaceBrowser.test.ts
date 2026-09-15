@@ -28,6 +28,9 @@ it.each(['success', 'error', 'logout', 'pagination', 'pagination-error', 'latest
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url())
+      if (request.method() === 'GET' && request.resourceType() === 'image' && url.href === 'https://basket-01.wbbasket.ru/vol0/part0/101/images/c516x688/1.webp') {
+        return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
+      }
       if (url.origin !== 'http://satorna.test' || request.method() !== 'GET') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }

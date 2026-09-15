@@ -8884,7 +8884,7 @@ body.avito-popup-open { overflow: hidden; }
   <div class="toolbar">
     <div class="search"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" placeholder="Артикул, товар или статус..."></div>
     <div class="chips" role="group" aria-label="Фильтры статистики репрайсера">
-      <button class="chip active" type="button" aria-pressed="true">Все товары</button><button class="chip" type="button" aria-pressed="false">готово к пересчёту</button><button class="chip" type="button" aria-pressed="false">Цена заблокирована</button><button class="chip" type="button" aria-pressed="false">данные требуют внимания</button><button class="chip" type="button" aria-pressed="false">корзины растут</button><button class="chip" type="button" aria-pressed="false">корзины падают</button><button class="chip" type="button" aria-pressed="false">риск закончиться на складе</button><button class="chip" type="button" aria-pressed="false">В акции</button><button class="chip" type="button" aria-pressed="false">В рекламе</button>
+      <button class="chip active" type="button" aria-pressed="true">Все товары</button><button class="chip" type="button" aria-pressed="false">готово к пересчёту</button><button class="chip" type="button" aria-pressed="false">Цена заблокирована</button><button class="chip" type="button" aria-pressed="false">Без пересчёта</button><button class="chip" type="button" aria-pressed="false">данные требуют внимания</button><button class="chip" type="button" aria-pressed="false">корзины растут</button><button class="chip" type="button" aria-pressed="false">корзины падают</button><button class="chip" type="button" aria-pressed="false">риск закончиться на складе</button><button class="chip" type="button" aria-pressed="false">В акции</button><button class="chip" type="button" aria-pressed="false">В рекламе</button>
     </div>
     <div class="toolbar-right"><button class="btn btn-default btn-sm" type="button" onclick="goSubtab('report-rules')">Планы менеджеров</button><button class="btn btn-default btn-sm" type="button" onclick="goSubtab('rnp')">РНП</button><button class="btn btn-default btn-sm" type="button" onclick="goSubtab('abc')">ABC</button><button class="btn btn-default btn-sm" type="button" onclick="goSubtab('pnl')">P&amp;L</button></div>
   </div>
@@ -21037,9 +21037,7 @@ function repricerPhotoUrlByNm(nmId){
 
 function repricerProductPhotoUrl(p){
   if (!p) return '';
-  const wbUrl = repricerPhotoUrlByNm(p.nmId || p.wb || p.wbId || p.sku);
-  const backendUrl = p.photoUrl || p.imageUrl || '';
-  return backendUrl && !/\/\/basket-\d+\.wbbasket\.ru\//i.test(backendUrl) ? backendUrl : (wbUrl || backendUrl);
+  return p.photoUrl || p.imageUrl || repricerPhotoUrlByNm(p.nmId || p.wb || p.wbId || p.sku);
 }
 function wbPhotoUrlByNm(nmId){
   const id = parseInt(String(nmId || '').replace(/\D/g, ''), 10);
@@ -21050,36 +21048,25 @@ function wbPhotoUrlByNm(nmId){
 }
 function reportPhotoUrl(row){
   if (!row) return '';
-  const wbUrl = wbPhotoUrlByNm(row.wb || row.nmId);
-  const backendUrl = row.photoUrl || row.imageUrl || '';
-  return backendUrl && !/\/\/basket-\d+\.wbbasket\.ru\//i.test(backendUrl) ? backendUrl : (wbUrl || backendUrl);
-}
-function wbPhotoFallbackUrl(nmId, basket){
-  const id = parseInt(String(nmId || '').replace(/\D/g, ''), 10);
-  if (!id || id <= 0) return '';
-  const vol = Math.floor(id / 100000);
-  const part = Math.floor(id / 1000);
-  return 'https://basket-' + String(basket).padStart(2, '0') + '.wbbasket.ru/vol' + vol + '/part' + part + '/' + id + '/images/c516x688/1.webp';
+  return row.photoUrl || row.imageUrl || wbPhotoUrlByNm(row.wb || row.nmId);
 }
 function repairWbProductImage(img){
-  const id = img?.dataset?.wbNm;
-  if (!id) return;
-  let current = Number(img.dataset.wbImgAttempt || 0);
-  const vol = Math.floor(parseInt(String(id).replace(/\D/g, ''), 10) / 100000);
-  const preferred = [wbBasketNumber(vol), 44, 33, 27, 23, 20, 17];
-  const baskets = [...new Set(preferred.concat(Array.from({length: 80}, (_, index) => index + 1)))];
-  let nextUrl = '';
-  while (baskets[current]) {
-    nextUrl = wbPhotoFallbackUrl(id, baskets[current]);
-    current += 1;
-    if (nextUrl && img.src !== nextUrl) break;
-  }
-  if (!nextUrl || img.src === nextUrl) {
-    img.onerror = null;
+  if (!img || img.src.startsWith('data:image/svg+xml')) return;
+  const id = img.dataset.wbNm || img.src.match(/\/\/basket-\d+\.wbbasket\.ru\/vol\d+\/part\d+\/(\d+)\/images\//i)?.[1];
+  const fallback = wbPhotoUrlByNm(id);
+  if (fallback && img.src !== fallback) {
+    img.src = fallback;
     return;
   }
-  img.dataset.wbImgAttempt = String(current);
-  img.src = nextUrl;
+  img.alt = 'Фото недоступно';
+  img.title = 'Фото недоступно';
+  img.onload = () => {
+    if (img.src.startsWith('data:image/svg+xml')) return;
+    img.alt = '';
+    img.removeAttribute('title');
+    img.onload = null;
+  };
+  img.src = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="44" height="56" viewBox="0 0 44 56"><rect width="44" height="56" fill="#f0f2f5"/><path d="M14 28h16" stroke="#94a3b8" stroke-width="2"/></svg>');
 }
 function reportThumb(type, row){
   const photoUrl = reportPhotoUrl(row);

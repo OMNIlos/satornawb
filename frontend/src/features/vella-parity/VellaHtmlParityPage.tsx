@@ -1557,9 +1557,10 @@ function computeProductsKpiFallbackSnapshot() {
     const backendRevenue = productNumber(product, 'revenue7d') || productNumber(product, 'revenue')
     return sum + backendRevenue
   }, 0)
-  const marginRub = products.reduce((sum, product) => {
+  const factMarginMissing = products.some(product => product.factTaxState && (product.factTaxState === 'missing' || product.netSku == null))
+  const marginRub = factMarginMissing ? null : products.reduce((sum, product) => {
     const periodNet = productNumber(product, 'netSku')
-    if (periodNet !== 0) return sum + periodNet
+    if (product.factTaxState === 'configured' || periodNet !== 0) return sum + periodNet
     const unitMargin = productNumber(product, 'mgRub') || productNumber(product, 'netPerUnit')
     return sum + unitMargin * productNumber(product, 'ordersPeriod')
   }, 0)
@@ -1585,7 +1586,7 @@ function computeProductsKpiFallbackSnapshot() {
   const fallbackAvgMargin = activeProducts.length
     ? activeProducts.reduce((sum, product) => sum + productNumber(product, 'mg'), 0) / activeProducts.length
     : 0
-  const avgMargin = revenue > 0 ? (marginRub / revenue) * 100 : fallbackAvgMargin
+  const avgMargin = marginRub == null ? null : revenue > 0 ? (marginRub / revenue) * 100 : fallbackAvgMargin
   const promoShare = products.length
     ? Math.round((products.filter((product) => Boolean(product.promoActive)).length / products.length) * 100)
     : 0
@@ -1621,7 +1622,7 @@ function computeProductsKpiSnapshot() {
     return {
       ...fallback,
       revenueAvailable: financeCacheLoaded || hasFinanceRows,
-      marginAvailable: financeCacheLoaded || fallback.marginRub !== 0 || fallback.revenue > 0 || hasFinanceRows,
+      marginAvailable: fallback.marginRub != null && (financeCacheLoaded || fallback.marginRub !== 0 || fallback.revenue > 0 || hasFinanceRows),
       adsAvailable: Boolean(window.__vellaProductsCacheMeta?.adsFetchedAt) || fallback.adSpendRub > 0 || fallback.adSkuCount > 0,
     }
   }
@@ -1635,12 +1636,14 @@ function computeProductsKpiSnapshot() {
   const summaryAdSpendRub = Math.round(productNumber(summaryRecord, 'adSpendKopecks') / 100)
   const summaryAdRevenueRub = Math.round(productNumber(summaryRecord, 'adRevenueKopecks') / 100)
   const revenue = summaryRecord.revenueKopecks != null ? summaryRevenue : fallback.revenue
-  const marginRub = summaryRecord.marginKopecks != null ? summaryMarginRub : fallback.marginRub
+  const marginRub = summaryRecord.factTaxState === 'missing' || summaryRecord.marginKopecks === null
+    ? null : summaryRecord.marginKopecks != null ? summaryMarginRub : fallback.marginRub
   const cogsRub = summaryRecord.cogsKopecks != null ? summaryCogsRub : fallback.cogsRub
   const expensesRub = summaryRecord.expensesKopecks != null ? summaryExpensesRub : fallback.expensesRub
   const adSpendRub = hasSummaryAdSpend ? summaryAdSpendRub : fallback.adSpendRub
   const adRevenueRub = summaryRecord.adRevenueKopecks != null ? summaryAdRevenueRub : fallback.adRevenueRub
-  const avgMargin = summaryRecord.avgMarginPct != null ? productNumber(summaryRecord, 'avgMarginPct') : fallback.avgMargin
+  const avgMargin = summaryRecord.factTaxState === 'missing' || summaryRecord.avgMarginPct === null
+    ? null : summaryRecord.avgMarginPct != null ? productNumber(summaryRecord, 'avgMarginPct') : fallback.avgMargin
   const hasFinanceRows = productsForKpi().some((product) => String(product.financeState ?? 'no_data') !== 'no_data')
   const adsCacheLoaded = Boolean(window.__vellaProductsCacheMeta?.adsFetchedAt)
 
@@ -1662,7 +1665,7 @@ function computeProductsKpiSnapshot() {
     totalBaskets: summaryRecord.totalBaskets != null ? productNumber(summaryRecord, 'totalBaskets') : fallback.totalBaskets,
     avgMargin,
     revenueAvailable: summaryRecord.revenueKopecks !== null && (financeCacheLoaded || revenue !== 0 || hasFinanceRows),
-    marginAvailable: summaryRecord.marginKopecks !== null && (financeCacheLoaded || marginRub !== 0 || revenue !== 0 || hasFinanceRows),
+    marginAvailable: marginRub != null && (financeCacheLoaded || marginRub !== 0 || revenue !== 0 || hasFinanceRows),
     adsAvailable: adsCacheLoaded || hasSummaryAdSpend || adSpendRub > 0 || fallback.adSkuCount > 0,
   }
 }
@@ -2106,7 +2109,7 @@ function repricerStatsPct(value: unknown) {
 function repricerStatsTagClass(tone: unknown) {
   if (tone === 'ok' || tone === 'ready' || tone === 'can_recalculate') return 'ok'
   if (tone === 'bad' || tone === 'blocked' || tone === 'price_blocked') return 'warn'
-  if (tone === 'neutral') return 'neutral'
+  if (tone === 'neutral' || tone === 'paused') return 'neutral'
   return 'warn'
 }
 
@@ -2132,6 +2135,8 @@ function repricerStatsProtectionLabel(status: unknown) {
   if (status === 'can_recalculate') return 'разрешено'
   if (status === 'needs_review') return 'на проверку'
   if (status === 'blocked') return 'остановлено'
+  if (status === 'not_configured') return 'не настроено'
+  if (status === 'paused') return 'приостановлено'
   return 'нет данных'
 }
 
@@ -2148,6 +2153,11 @@ function repricerStatsBlockerLabel(value: unknown) {
     baskets: 'нет добавлений в корзину',
     periodStats: 'нет статистики периода',
     manual_status: 'ручной режим',
+    manual_mode: 'ручной режим',
+    no_strategy: 'не назначена стратегия',
+    no_nm_id: 'нет артикула WB',
+    automation_disabled: 'автоматизация выключена',
+    warmup: 'идёт прогрев',
     margin: 'низкая маржа',
   }
   return labels[String(value || '')] || String(value || 'проверить')
@@ -2166,9 +2176,9 @@ function repricerStatsSourceLabelRu(value: unknown) {
 }
 
 function renderRepricerStatsThumb(item: LiveRepricerStatsItem) {
-  const imageUrl = item.imageUrl || item.photoUrl
+  const imageUrl = resolveReportProductPhoto(item.imageUrl || item.photoUrl || null, item.nmId)
   if (imageUrl) {
-    return `<div class="report-thumb report-thumb-photo"><img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" /></div>`
+    return `<div class="report-thumb report-thumb-photo"><img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" data-wb-nm="${escapeHtml(String(item.nmId || ''))}" onerror="repairWbProductImage(this)" /></div>`
   }
   return `<div class="report-thumb thumb-w"><span>${escapeHtml(String(item.articleId || '?').slice(0, 2))}</span></div>`
 }
@@ -2182,6 +2192,7 @@ function renderLiveRepricerStatsRow(item: LiveRepricerStatsItem) {
   const tags = [
     decision.id === 'can_recalculate' ? 'готово к пересчёту' : '',
     protection.status === 'blocked' ? 'Цена заблокирована' : '',
+    protection.status === 'not_configured' || protection.status === 'paused' ? 'Без пересчёта' : '',
     sources.status !== 'ready' ? 'данные требуют внимания' : '',
     flags.includes('cart_growth') ? 'корзины растут' : '',
     flags.includes('below_basket_norm') || flags.includes('cart_drop') ? 'корзины падают' : '',
@@ -8931,9 +8942,7 @@ function wbReportProductPhotoUrl(nmId?: number | string | null) {
 }
 
 function resolveReportProductPhoto(cachedPhotoUrl: string | null, nmId?: number | string | null) {
-  const computedPhotoUrl = wbReportProductPhotoUrl(nmId)
-  if (cachedPhotoUrl && !/\/\/basket-\d+\.wbbasket\.ru\//i.test(cachedPhotoUrl)) return cachedPhotoUrl
-  return computedPhotoUrl || cachedPhotoUrl
+  return cachedPhotoUrl || wbReportProductPhotoUrl(nmId)
 }
 
 function ReportProductCell({
@@ -8950,7 +8959,7 @@ function ReportProductCell({
   return (
     <div className="report-product-cell">
       {photoUrl ? (
-        <img className="report-product-photo" src={photoUrl} alt="" loading="lazy" />
+        <img className="report-product-photo" src={photoUrl} alt="" loading="lazy" onError={event => window.repairWbProductImage?.(event.currentTarget)} />
       ) : (
         <div className="report-product-photo report-product-photo-empty" aria-hidden="true" />
       )}
@@ -27070,7 +27079,7 @@ function ProductsKpiStripIsland() {
       : 'Весь каталог, не только текущая страница'
   const kpi = computeProductsKpiSnapshot()
   const revenueValue = kpi.revenueAvailable ? `${formatProductsInteger(kpi.revenue)} ₽` : '—'
-  const marginValue = kpi.marginAvailable ? `${formatProductsInteger(kpi.marginRub)} ₽` : '—'
+  const marginValue = kpi.marginAvailable && kpi.marginRub != null ? `${formatProductsInteger(kpi.marginRub)} ₽` : '—'
   const cogsValue = kpi.revenueAvailable && window.__vellaProductsSummary?.cogsKopecks !== null ? `${formatProductsInteger(kpi.cogsRub)} ₽` : '—'
   const expensesValue = kpi.revenueAvailable && window.__vellaProductsSummary?.expensesKopecks !== null ? `${formatProductsInteger(kpi.expensesRub)} ₽` : '—'
   const ordersValue = formatProductsInteger(kpi.ordersUnits)
@@ -27081,15 +27090,18 @@ function ProductsKpiStripIsland() {
     ? `${formatProductsInteger(kpi.adSkuCount)} товаров · ${formatProductsInteger(window.__vellaProductsCacheMeta?.adsCampaignCount ?? 0)} камп.`
     : 'реклама ещё не загружена'
   const revenueDelta = kpi.revenueAvailable ? 'продажи из финансового отчёта' : 'финансы ещё не загружены'
-  const marginDelta = kpi.marginAvailable ? 'расчёт репрайсера с корректировками' : 'расчёт недоступен'
+  const factTaxMissing = window.__vellaProductsSummary?.factTaxState === 'missing'
+    || (!window.__vellaProductsSummary?.factTaxState && productsForKpi().some(product => product.factTaxState === 'missing'))
+  const marginDelta = factTaxMissing ? 'налог за период не подтверждён'
+    : kpi.marginAvailable ? 'расчёт репрайсера с корректировками' : 'расчёт недоступен'
   const ratioRevenue = window.__vellaProductsSummary?.revenueKopecks ?? kpi.revenue * 100
-  const ratioMargin = window.__vellaProductsSummary?.marginKopecks ?? kpi.marginRub * 100
-  const marginRatioValue = kpi.revenueAvailable && kpi.marginAvailable && ratioRevenue !== 0 && window.__vellaProductsSummary?.avgMarginPct !== null
+  const ratioMargin = kpi.marginRub == null ? null : window.__vellaProductsSummary?.marginKopecks ?? kpi.marginRub * 100
+  const marginRatioValue = kpi.revenueAvailable && kpi.marginAvailable && ratioMargin != null && ratioRevenue !== 0 && window.__vellaProductsSummary?.avgMarginPct !== null
     ? `${(ratioMargin / ratioRevenue * 100).toFixed(1)}%` : '—'
   const items = [
     ['Выручка за период', 'WB retailAmount: продажи минус возвраты за выбранный период, до вычета расходов', 'kpiRevenue', revenueValue, revenueDelta],
     ['Маржа / выручка, %', 'Маржа репрайсера ÷ выручка × 100; отношение общих сумм за период', 'kpiMargin', marginRatioValue, 'отношение сумм за период'],
-    ['Маржа репрайсера, ₽', 'Выручка WB + корректировка за единицу из настроек × продажи за вычетом возвратов − себестоимость − расходы − справочный налог. Не итоговая прибыль бизнеса.', 'kpiMarginRub', marginValue, marginDelta],
+    ['Маржа репрайсера, ₽', 'Выручка WB + корректировка за единицу из настроек × продажи за вычетом возвратов − себестоимость − расходы − налог по подтверждённой политике за период. Не итоговая прибыль бизнеса.', 'kpiMarginRub', marginValue, marginDelta],
     ['Продажи по себестоимости', 'Себестоимость из настроек SKU × (продажи − возвраты)', 'kpiCogs', cogsValue, 'с учётом возвратов'],
     ['Расходы ₽', 'Комиссия, логистика, хранение, приёмка, штрафы, удержания, эквайринг, реклама и прочие расходы', 'kpiExpenses', expensesValue, 'финансы и реклама'],
     ['Реклама ₽', 'Расход рекламы за выбранный период', 'kpiAdsSpend', adsValue, adsDelta],
@@ -33196,7 +33208,7 @@ function renderDrawerSkuOverride(product: DrawerParityProduct) {
   const multiplier = Math.max(0.01, 1 - spp / 100)
   const currentPrice = drawerNumber(product.price) ?? 0
   const calculatedPmin = drawerRubNumber(product.pmin, currentPrice) ?? 0
-  const pminBefore = Math.round(drawerRubNumber(product.pminBeforeSpp, currentPrice) ?? calculatedPmin)
+  const pminBefore = Math.round((drawerNumber(product.settings?.pMinKopecks) ?? 0) / 100)
   const pmaxBefore = Math.round(drawerRubNumber(product.pmaxBeforeSpp, currentPrice) ?? Math.max(currentPrice, pminBefore))
   const pminAfter = Math.round(pminBefore * multiplier)
   const pmaxAfter = Math.round(pmaxBefore * multiplier)
@@ -39188,6 +39200,7 @@ export function VellaHtmlParityPage() {
 
 declare global {
   interface Window {
+    repairWbProductImage?: (image: HTMLImageElement) => void
     _goSubtabSilent?: (key: string, options?: Record<string, unknown>) => void
     __vellaHistoryNavigationBridgeInstalled?: boolean
     __vellaOriginalPushState?: History['pushState']

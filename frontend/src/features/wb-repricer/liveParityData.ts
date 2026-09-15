@@ -70,6 +70,8 @@ export type LiveRepricerSkuRow = {
     maxMarginKopecks?: number | null
     maxMarginPct?: number | null
     pMinKopecks?: number | null
+    effectivePMinKopecks?: number
+    effectivePMinSource?: 'explicit' | 'calculated'
     pMaxKopecks?: number | null
     priceStepPct?: number | null
     priceStepMinutes?: number | null
@@ -187,6 +189,8 @@ export type LiveRepricerSkuRow = {
     acquiringKopecks?: number | null
     plannedMarginKopecks?: number | null
     plannedPeriodMarginKopecks?: number | null
+    factTaxState?: 'configured' | 'missing'
+    factTaxReason?: string | null
     factNetProfitKopecks?: number | null
     netProfitKopecks?: number | null
     cogsTotalKopecks?: number | null
@@ -266,7 +270,10 @@ export type LiveRepricerLoadTrace = {
 
 export type LiveRepricerSkuListSummary = {
   revenueKopecks?: number
-  marginKopecks?: number
+  marginKopecks?: number | null
+  taxKopecks?: number | null
+  factTaxState?: 'configured' | 'missing'
+  factTaxReason?: string | null
   cogsKopecks?: number
   expensesKopecks?: number
   storageKopecks?: number
@@ -340,6 +347,9 @@ export type LiveRepricerStatsItem = {
   metrics?: LiveRepricerStatsMetricPayload
   priceProtection?: {
     status?: string | null
+    skipReason?: 'no_strategy' | 'no_nm_id' | 'manual_mode' | 'automation_disabled' | 'warmup' | null
+    effectivePMinKopecks?: number | null
+    effectivePMinSource?: 'explicit' | 'calculated' | null
     blockerIds?: string[]
     message?: string | null
   }
@@ -829,8 +839,12 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
   const expensesRub = hasFinance && row.analytics?.expensesKopecks != null
     ? kopecksToRub(row.analytics.expensesKopecks)
     : null
-  const financeNetProfitRub = hasFinance && row.analytics?.netProfitKopecks != null
-    ? kopecksToRub(row.analytics.netProfitKopecks)
+  const factTaxState = row.analytics?.factTaxState
+  const financeNetProfitKopecks = factTaxState && row.analytics?.factNetProfitKopecks !== undefined
+    ? row.analytics.factNetProfitKopecks
+    : row.analytics?.netProfitKopecks
+  const financeNetProfitRub = hasFinance && financeNetProfitKopecks != null
+    ? kopecksToRub(financeNetProfitKopecks)
     : null
   const plannedPeriodMarginRub = row.analytics?.plannedPeriodMarginKopecks != null
     ? kopecksToRub(row.analytics.plannedPeriodMarginKopecks)
@@ -839,17 +853,20 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
   const revenue7d = hasFinance ? financeRevenueRub : 0
   const storagePerSku = storageRub
   const netPerUnit = marginRub
-  const netSku = financeNetProfitRub != null
+  const netSku = factTaxState
+    ? factTaxState === 'configured' ? financeNetProfitRub : null
+    : financeNetProfitRub != null
     ? financeNetProfitRub
     : plannedPeriodMarginRub != null
       ? plannedPeriodMarginRub
     : marginRub != null && ordersPeriod > 0
       ? marginRub * ordersPeriod
       : null
-  const calculatedPminRub = parityPMinRub(row)
-  const pminRub = row.settings.pMinKopecks != null && row.settings.pMinKopecks > 0
-    ? kopecksToRub(row.settings.pMinKopecks)
-    : calculatedPminRub
+  const pminRub = row.settings.effectivePMinKopecks != null
+    ? kopecksToRub(row.settings.effectivePMinKopecks)
+    : row.settings.pMinKopecks != null && row.settings.pMinKopecks > 0
+      ? kopecksToRub(row.settings.pMinKopecks)
+      : parityPMinRub(row)
   const pmaxRub = kopecksToRub(row.settings.pMaxKopecks ?? Math.max(row.analytics?.basePriceKopecks ?? 0, row.meta.currentPriceKopecks))
   const walletPct = row.analytics?.accountedWbWalletPct ?? row.analytics?.walletPct ?? row.analytics?.wbWalletPct ?? 0
   const sppMultiplier = Math.max(0, 1 - (sppPct ?? 0) / 100)
@@ -861,11 +878,7 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
   const noPromotionReason = /^Не участвует:/i.test(rawPromotionLabel) ? rawPromotionLabel : ''
   const promotionFallbackLabel = row.analytics?.promotionId != null ? `Акция ${row.analytics.promotionId}` : ''
   const displayPromotionLabel = promotionLabel && promotionLabel !== 'В акции' ? promotionLabel : promotionFallbackLabel
-  const wbPhotoUrl = wbProductPhotoUrl(row.meta.nmId)
-  const backendPhotoUrl = row.meta.imageUrl || row.meta.photoUrl || null
-  const photoUrl = backendPhotoUrl && !/\/\/basket-\d+\.wbbasket\.ru\//i.test(backendPhotoUrl)
-    ? backendPhotoUrl
-    : wbPhotoUrl || backendPhotoUrl
+  const photoUrl = row.meta.imageUrl || row.meta.photoUrl || wbProductPhotoUrl(row.meta.nmId)
 
   return {
     sel: index < 2,
@@ -968,6 +981,8 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     revenue: revenue7d,
     netPerUnit,
     netSku,
+    factTaxState,
+    factTaxReason: row.analytics?.factTaxReason,
     wbWallet: row.analytics?.accountedWbWalletPct ?? row.analytics?.walletPct ?? row.analytics?.wbWalletPct ?? null,
     totalWbDiscountPct: accountedPlatformDiscountPct ?? row.analytics?.totalWbDiscountPct ?? null,
     buyerPriceNoWallet: buyerPriceNoWalletKopecks != null ? kopecksToRub(buyerPriceNoWalletKopecks) : null,
