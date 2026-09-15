@@ -165,14 +165,14 @@ export function WbRepricerStatsPage() {
             <div className="vella-report-head">
               <div>
                 <h1>Статистика репрайсера</h1>
-                <p>Воронка за выбранный период: показы, клики, корзины, заказы, остатки и медиана цены. Экран помогает настройке репрайсера и не дублирует full BI отчёты.</p>
+                <p>Рекламные показы и клики, корзины и заказы WB за выбранный период, остатки и ориентир цены.</p>
               </div>
               <span className={`vella-badge ${error ? 'bad' : loading ? 'warn' : 'good'}`}>{error ? 'ошибка загрузки' : loading ? 'загрузка' : 'backend live'}</span>
             </div>
 
             <div className="vella-kpis">
-              <div className="vella-kpi"><div className="vella-kpi-label">Показы <HelpTip>Источник рекламы WB берётся из backend diagnostics.</HelpTip></div><div className="vella-kpi-value">{kpis.impressions.toLocaleString('ru-RU')}</div></div>
-              <div className="vella-kpi"><div className="vella-kpi-label">CTR</div><div className="vella-kpi-value">{summary?.adCtrPct == null ? pct(kpis.clicks, kpis.impressions) : `${summary.adCtrPct.toFixed(1)}%`}</div></div>
+              <div className="vella-kpi"><div className="vella-kpi-label">Показы рекламы <HelpTip>Показы рекламных кампаний WB за выбранный период.</HelpTip></div><div className="vella-kpi-value">{kpis.impressions.toLocaleString('ru-RU')}</div></div>
+              <div className="vella-kpi"><div className="vella-kpi-label">CTR рекламы</div><div className="vella-kpi-value">{summary?.adCtrPct == null ? pct(kpis.clicks, kpis.impressions) : `${summary.adCtrPct.toFixed(1)}%`}</div></div>
               <div className="vella-kpi"><div className="vella-kpi-label">Корзины</div><div className="vella-kpi-value">{basketNumber(kpis.baskets)}</div><div className="vella-kpi-delta good">{kpis.orders.toLocaleString('ru-RU')} заказов</div></div>
               <div className="vella-kpi"><div className="vella-kpi-label">Защита цены <HelpTip>Цены не отправляются при устаревших или неподтверждённых финансах, СПП или источниках.</HelpTip></div><div className="vella-kpi-value">{(summary?.priceBlocked ?? 0).toLocaleString('ru-RU')} SKU</div><div className="vella-kpi-delta warn">{(summary?.canRecalculate ?? 0).toLocaleString('ru-RU')} можно пересчитать</div></div>
             </div>
@@ -199,8 +199,8 @@ export function WbRepricerStatsPage() {
                       <th>Статус</th>
                       <th>Менеджер</th>
                       <th>Фильтры</th>
-                      <th className="num">Показы</th>
-                      <th className="num">Клики</th>
+                      <th className="num">Показы рекламы</th>
+                      <th className="num">Клики рекламы</th>
                       <th className="num">Корзины</th>
                       <th className="num">Заказы</th>
                       <th className="num">CR корзины→заказ</th>
