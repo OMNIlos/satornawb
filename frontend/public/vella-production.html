@@ -12958,7 +12958,7 @@ function promoHTML(p){
   return promoStateHTML(Boolean(p.promoActive), p.promoActive ? 'Участвует в акции, цена акции ' + fmt(p.promoPrice) + ' ₽' : 'Не участвует в акции');
 }
 function avgPriceHTML(p){
-  const value = p.avgPriceSpp == null ? '—' : fmt(p.avgPriceSpp) + ' ₽';
+  const value = p.priceWithSpp == null ? '—' : fmt(p.priceWithSpp) + ' ₽';
   return '<div class="metric-stack"><span class="metric-main">' + value + '</span><span class="metric-sub">с СПП</span></div>';
 }
 function walletPriceHTML(p){
@@ -13603,8 +13603,8 @@ function productSortValue(p, key){
     abc: () => p.abc || '',
     promo: () => p.promoActive ? 1 : 0,
     price: () => p.price ?? 0,
-    avgPriceSpp: () => p.avgPriceSpp ?? 0,
-    priceWithWallet: () => p.priceWithWallet ?? p.priceFinal ?? 0,
+    avgPriceSpp: () => p.priceWithSpp ?? 0,
+    priceWithWallet: () => p.priceWithWallet ?? 0,
     spp: () => p.spp ?? 0,
     mg: () => p.mg ?? 0,
     commissionPct: () => p.commissionPct ?? 0,
