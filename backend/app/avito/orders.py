@@ -347,11 +347,12 @@ class LiveAvitoOrdersClient:
                 return self._fetch_orders_with_client(request, client)
         except httpx.HTTPStatusError as exc:
             return AvitoOrdersFetchResult(status="blocked", error=self._http_error(exc))
-        except Exception as exc:
-            return AvitoOrdersFetchResult(
-                status="blocked",
-                error=AvitoOrdersError(code="transport_error", message=str(exc), retryable=True, blockerIds=["AVITO_ORDERS"]),
-            )
+        except Exception:
+            pass
+        return AvitoOrdersFetchResult(
+            status="blocked",
+            error=AvitoOrdersError(code="transport_error", message="Avito transport error", retryable=True, blockerIds=["AVITO_ORDERS"]),
+        )
 
     def _fetch_orders_with_client(self, request: AvitoOrdersFetchRequest, client: Any) -> AvitoOrdersFetchResult:
         params: dict[str, Any] = {"limit": request.limit, "page": request.page}
@@ -378,33 +379,34 @@ class LiveAvitoOrdersClient:
             status="synced",
             orders=orders,
             total=self._total(payload, len(orders)),
-            diagnostics={**diagnostics, "rawCount": len(rows)},
+            diagnostics={**diagnostics, "rawCount": len(rows) if len(rows) <= 2**31 - 1 else None},
         )
 
     @staticmethod
     def _avito_orders_diagnostics(status_code: int, payload: Any, *, request_url: str, request_params: dict[str, Any]) -> dict[str, Any]:
-        result = payload.get("result") if isinstance(payload, dict) else None
         rows = LiveAvitoOrdersClient._orders_rows(payload)
-        first = rows[0] if rows else None
+        safe_status = status_code if type(status_code) is int and 100 <= status_code <= 599 else None
+        # URL/params remain accepted for call compatibility, never copied into
+        # diagnostics. Provider keys and first-row fields can contain identifiers.
         return {
-            "status": status_code,
+            "status": safe_status,
             "endpoint": "GET /order-management/1/orders",
-            "requestUrl": request_url,
-            "requestParams": request_params,
-            "payloadKeys": sorted(payload.keys()) if isinstance(payload, dict) else [],
-            "resultKeys": sorted(result.keys()) if isinstance(result, dict) else [],
-            "ordersCount": len(rows),
-            "firstOrderKeys": sorted(first.keys())[:40] if isinstance(first, dict) else [],
-            "reason": "avito_http_error" if status_code >= 400 else None,
+            "ordersCount": len(rows) if len(rows) <= 2**31 - 1 else None,
+            "reason": "avito_http_error" if safe_status is not None and safe_status >= 400 else None,
         }
 
     @staticmethod
     def _log_avito_orders_response(diagnostics: dict[str, Any]) -> None:
-        logger.warning("[AVITO_ORDERS_STATUS] %s", diagnostics.get("status"))
-        logger.warning("[AVITO_ORDERS_REQUEST_URL] %s", diagnostics.get("requestUrl"))
-        logger.warning("[AVITO_ORDERS_REQUEST_PARAMS] %s", diagnostics.get("requestParams"))
-        logger.warning("[AVITO_ORDERS_COUNT] %s", diagnostics.get("ordersCount"))
-        logger.warning("[AVITO_ORDERS_REASON] %s", diagnostics.get("reason"))
+        values = diagnostics if type(diagnostics) is dict else {}
+        status, count = values.get("status"), values.get("ordersCount")
+        safe_status = status if type(status) is int and 100 <= status <= 599 else None
+        safe_count = count if type(count) is int and 0 <= count <= 2**31 - 1 else None
+        reason = values.get("reason")
+        safe_reason = "avito_http_error" if type(reason) is str and reason == "avito_http_error" else None
+        logger.warning("[AVITO_ORDERS_STATUS] %s", safe_status)
+        logger.warning("[AVITO_ORDERS_ENDPOINT] GET /order-management/1/orders")
+        logger.warning("[AVITO_ORDERS_COUNT] %s", safe_count)
+        logger.warning("[AVITO_ORDERS_REASON] %s", safe_reason)
 
     @staticmethod
     def _orders_rows(payload: Any) -> list[dict[str, Any]]:
@@ -545,6 +547,8 @@ class LiveAvitoOrdersClient:
 
     @staticmethod
     def _http_error_from_status(status_code: int) -> AvitoOrdersError:
+        if type(status_code) is not int or not 100 <= status_code <= 599:
+            return AvitoOrdersError(code="avito_request_failed", message="Avito request failed", retryable=True, blockerIds=["AVITO_ORDERS"])
         if status_code == 401:
             code, retryable, blocker = "auth_required", False, "AVITO_AUTH"
         elif status_code == 403:

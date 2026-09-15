@@ -1,0 +1,66 @@
+{
+  "fixture": "synthetic-only",
+  "cases": {
+    "unanswered": {
+      "feedback_id": "test-wb-review-shared-001",
+      "nm_id": 71001,
+      "created_date": "2026-09-01T10:15:30+03:00",
+      "rating": 5,
+      "text": "[TEST] WB synthetic positive review",
+      "is_answered": false,
+      "source_status": "published"
+    },
+    "answered": {
+      "feedback_id": "test-wb-review-answered-001",
+      "nm_id": 71002,
+      "created_date": "2026-09-01T08:00:00Z",
+      "source_updated_at": "2026-09-02T09:30:00+03:00",
+      "rating": 2,
+      "text": "[TEST] WB synthetic critical review",
+      "is_answered": true,
+      "source_status": "answered"
+    },
+    "missing_optional": {
+      "feedback_id": "test-wb-review-missing-001",
+      "created_date": "2026-09-03T12:00:00Z",
+      "is_answered": false
+    }
+  },
+  "invalid": {
+    "float_id": {
+      "feedback_id": 41001.5,
+      "created_date": "2026-09-03T12:00:00Z",
+      "is_answered": false
+    },
+    "boolean_id": {
+      "feedback_id": true,
+      "created_date": "2026-09-03T12:00:00Z",
+      "is_answered": false
+    },
+    "exponent_id": {
+      "feedback_id": "1e3",
+      "created_date": "2026-09-03T12:00:00Z",
+      "is_answered": false
+    },
+    "zero_rating": {
+      "feedback_id": "test-wb-review-invalid-rating-001",
+      "created_date": "2026-09-03T12:00:00Z",
+      "rating": 0,
+      "text": "[TEST] WB synthetic invalid rating review",
+      "is_answered": false
+    },
+    "high_rating": {
+      "feedback_id": "test-wb-review-invalid-rating-002",
+      "created_date": "2026-09-03T12:00:00Z",
+      "rating": 6,
+      "text": "[TEST] WB synthetic invalid high rating review",
+      "is_answered": false
+    },
+    "naive_timestamp": {
+      "feedback_id": "test-wb-review-invalid-time-001",
+      "created_date": "2026-09-03T12:00:00",
+      "text": "[TEST] WB synthetic invalid timestamp review",
+      "is_answered": false
+    }
+  }
+}

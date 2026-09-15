@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import logging
+import xml.etree.ElementTree as ET
 from datetime import date
 from io import BytesIO
-import logging
 from zipfile import ZipFile
-import xml.etree.ElementTree as ET
 
 from fastapi.testclient import TestClient
 
@@ -89,11 +89,19 @@ def test_live_avito_orders_client_returns_safe_diagnostics_on_avito_error():
     assert result.error.code == "forbidden_scope"
     assert result.diagnostics is not None
     assert result.diagnostics["status"] == 403
-    assert result.diagnostics["requestUrl"] == "https://api.avito.ru/order-management/1/orders"
+    assert result.diagnostics == {
+        "status": 403, "endpoint": "GET /order-management/1/orders",
+        "ordersCount": 0, "reason": "avito_http_error",
+    }
     assert "bodyPreview" not in result.diagnostics
 
 
-def test_live_avito_orders_client_does_not_log_order_body(caplog):
+def test_live_avito_orders_client_does_not_log_order_body(caplog, monkeypatch):
+    # Other application-entrypoint tests can disable existing loggers globally.
+    # Exercise this logger's real output without retaining that unrelated state.
+    logger = logging.getLogger("app.avito.orders")
+    monkeypatch.setattr(logger, "disabled", False)
+    monkeypatch.setattr(logger, "propagate", True)
     http_client = RecordingAvitoOrdersHttpClient(
         {
             "orders": [
@@ -118,6 +126,9 @@ def test_live_avito_orders_client_does_not_log_order_body(caplog):
     assert "private-nested-value" not in str(result.diagnostics)
     assert "[AVITO_ORDERS_STATUS] 200" in messages
     assert "[AVITO_ORDERS_COUNT] 1" in messages
+    assert "[AVITO_ORDERS_ENDPOINT] GET /order-management/1/orders" in messages
+    assert "[AVITO_ORDERS_REQUEST_URL]" not in messages
+    assert "[AVITO_ORDERS_REQUEST_PARAMS]" not in messages
     assert "[AVITO_ORDERS_BODY]" not in messages
     assert "private-buyer-name" not in messages
     assert "+79991234567" not in messages
@@ -646,6 +657,13 @@ def test_avito_orders_extension_token_regeneration_revokes_previous_token(monkey
 
 
 def test_avito_orders_picking_list_xlsx_matches_avito_order_rows(monkeypatch):
+    monkeypatch.setattr(
+        "app.routers.avito_orders._listing_dicts_from_cache",
+        lambda *_args: [{
+            "itemId": "8098482225", "size": "M", "color": "черный",
+            "imageUrl": "https://synthetic.invalid/item.png",
+        }],
+    )
     recording_client: RecordingOrdersClient | None = None
 
     def build_client(*_args, **kwargs):
@@ -814,7 +832,8 @@ def test_avito_orders_endpoint_ignores_blocked_cache_and_refetches(monkeypatch):
     monkeypatch.setattr("app.routers.avito_orders.resolve_user_avito_access_token", lambda **_kwargs: "avito-bearer-token")
     monkeypatch.setattr(
         "app.routers.avito_orders.get_source_cache",
-        lambda *_args, **_kwargs: {
+        lambda _org, source_key, **_kwargs: None
+        if source_key == "avito_orders_browser_snapshot" else {
             "status": "blocked",
             "period": {"dateFrom": "2026-07-15", "days": 15},
             "filters": {"statuses": [], "page": 1, "limit": 20},

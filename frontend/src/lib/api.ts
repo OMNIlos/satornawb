@@ -85,7 +85,9 @@ function extractErrorHeaders(response: Response) {
 }
 
 async function parseResponse<T>(response: Response) {
-  const isJson = response.headers.get('content-type')?.includes('application/json')
+  const mediaType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+  const isJson = mediaType === 'application/json' || mediaType.endsWith('+json')
+  if (response.ok && (response.status === 204 || response.status === 205)) return null as T
   const payload = isJson ? ((await response.json()) as T) : null
   if (!response.ok) {
     const errorPayload = payload as {
@@ -100,13 +102,23 @@ async function parseResponse<T>(response: Response) {
       extractErrorHeaders(response),
     )
   }
+  if (!isJson) {
+    throw new ApiError(
+      'API returned a successful non-JSON response',
+      502,
+      'INVALID_API_RESPONSE',
+      { contentType: response.headers.get('content-type') },
+      extractErrorHeaders(response),
+    )
+  }
   return payload
 }
 
-function isAuthEndpoint(path: string) {
+function skipsAccessTokenRefresh(path: string) {
   const url = buildApiUrl(path)
   try {
-    return new URL(url, window.location.origin).pathname.startsWith('/api/v1/auth/')
+    const pathname = new URL(url, 'http://localhost').pathname
+    return pathname.startsWith('/api/v1/auth/') && pathname !== '/api/v1/auth/logout'
   } catch {
     return path.includes('/api/v1/auth/')
   }
@@ -142,7 +154,7 @@ function extractAuthErrorCodes(payload: unknown) {
 
 export async function shouldTryAccessTokenRefresh(path: string, response: Response, headers: Headers) {
   if (response.status !== 401) return false
-  if (isAuthEndpoint(path)) return false
+  if (skipsAccessTokenRefresh(path)) return false
   if (!headers.has('Authorization') && !readStoredAccessToken()) return false
   try {
     const isJson = response.headers.get('content-type')?.includes('application/json')

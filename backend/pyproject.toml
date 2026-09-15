@@ -14,6 +14,7 @@ dependencies = [
   "alembic>=1.13",
   "redis>=5.0",
   "celery>=5.4",
+  "cryptography>=44,<46",
   "psycopg[binary]>=3.2",
   "httpx>=0.28",
   "uvicorn>=0.38",
@@ -21,16 +22,23 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
+  "setuptools>=69",
+  "wheel",
   "httpx>=0.28",
   "pytest>=8.4",
   "datamodel-code-generator>=0.58",
 ]
 
-[tool.setuptools]
-packages = ["app", "app.avito", "app.contracts", "app.discovery", "app.routers", "app.wb_api", "app.source_registry", "app.control_plane", "app.account_health", "app.cabinet", "app.repricer_cache", "app.repricer_persistence", "app.reviews", "app.modules", "app.modules.wb_reports", "app.platform", "app.platform.advertising", "app.platform.catalog", "app.platform.economics", "app.platform.finance", "app.platform.identity", "app.platform.integrations", "vella_wb_19_05", "app.infra"]
+[tool.setuptools.packages.find]
+where = [".", "backend_contracts"]
+include = ["app", "app.*", "vella_wb_19_05", "vella_wb_19_05.*"]
+namespaces = true
 
 [tool.setuptools.package-dir]
 vella_wb_19_05 = "backend_contracts/vella_wb_19_05"
+
+[tool.setuptools.package-data]
+"app.wb_api" = ["*.pem"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

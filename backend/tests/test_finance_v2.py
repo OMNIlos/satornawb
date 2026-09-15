@@ -178,7 +178,7 @@ def test_finance_v2_is_cache_only_and_returns_one_consistent_snapshot(
         "temporalState": "complete",
     }
     assert payload["meta"]["snapshot"]["operationCount"] == 1
-    assert payload["meta"]["snapshot"]["formulaVersion"] == "wb-finance-v2"
+    assert payload["meta"]["snapshot"]["formulaVersion"] == "wb-finance-v3"
     assert payload["timestamp"] == "2026-09-01T12:34:56Z"
     assert "token" not in str(payload).lower()
 

@@ -99,7 +99,10 @@ def test_avito_scheduler_execute_creates_pending_approval_when_real_apply_disabl
         },
     )
     monkeypatch.setattr("app.repricer_tasks.get_source_cache", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("app.repricer_tasks.load_avito_repricer_strategy_assignments", lambda _organization_id: {})
+    monkeypatch.setattr(
+        "app.repricer_tasks.load_avito_repricer_strategy_assignments",
+        lambda _organization_id: {"8098482225": "chat_demand_balanced"},
+    )
     monkeypatch.setattr("app.repricer_tasks.save_source_cache", lambda organization_id, source_key, payload: saved.append((organization_id, source_key, payload)) or payload)
     monkeypatch.setattr(
         "app.repricer_tasks.get_organization_avito_credentials_secret",

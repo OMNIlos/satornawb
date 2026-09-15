@@ -109,6 +109,14 @@ def _covered_cache_from_daily(cache: dict[str, Any], *, prefix: str, suffix: str
     daily_aggregates = cache.get("dailyAggregates")
     if not isinstance(daily_aggregates, dict):
         return {}
+    observed_days = {
+        day for key, values in daily_aggregates.items()
+        if isinstance(values, dict)
+        and (day := _parse_cache_date(key)) is not None
+        and date_from <= day <= date_to
+    }
+    if len(observed_days) != (date_to - date_from).days + 1:
+        return {}
     aggregates = _rollup_daily_aggregates(daily_aggregates, date_from, date_to)
     if not aggregates and cache.get("aggregates"):
         return {}
@@ -146,6 +154,12 @@ def _period_cache(organization_id: int, prefix: str, date_from: date, date_to: d
     if exact:
         return exact
     fallback = get_source_cache(organization_id, f"{prefix}_{resolved_days}", slim=False) or {}
+    if (
+        fallback
+        and _parse_cache_date(fallback.get("dateFrom")) == date_from
+        and _parse_cache_date(fallback.get("dateTo")) == date_to
+    ):
+        return fallback
     if fallback and _cache_covers_range(fallback, date_from, date_to):
         rolled = _covered_cache_from_daily(fallback, prefix=prefix, suffix=suffix, resolved_days=resolved_days, date_from=date_from, date_to=date_to)
         if rolled:
@@ -155,7 +169,9 @@ def _period_cache(organization_id: int, prefix: str, date_from: date, date_to: d
         rolled = _covered_cache_from_daily(covering, prefix=prefix, suffix=suffix, resolved_days=resolved_days, date_from=date_from, date_to=date_to)
         if rolled:
             return rolled
-    return fallback or {}
+    # A duration-only key does not identify the requested business period.
+    # Do not relabel another period's totals when a daily rollup was unavailable.
+    return {}
 
 
 def _cache_aggregates(cache: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -461,7 +477,7 @@ def _cached_ads_rows(organization_id: int, date_from: date, date_to: date) -> tu
             }
         ]
     }
-    return rows, totals, "fresh" if has_any_data else "blocked", "high" if has_any_data else "blocked", [] if has_any_data else ["WB_ADS_CACHE_EMPTY"], diagnostics
+    return rows, totals, "fresh" if has_any_data else "blocked", "high" if has_any_data else "blocked", [] if has_any_data else ["WB-02", "WB_ADS_CACHE_EMPTY"], diagnostics
 
 
 def _ads_by_nm(rows: list[AdsAttributionRow]) -> dict[int, dict[str, int]]:
@@ -871,6 +887,8 @@ def build_rnp_snapshot(
             order_sum = sum(_row_revenue_for_drr(row) for row in rows)
             drr_pct = _pct(ad_spend, order_sum)
             blocker_ids = list(cached_report.get("blockerIds") or [])
+            if cached_report.get("adsSourceStatus") in {"blocked", "unknown"}:
+                blocker_ids = sorted(set(blocker_ids + ["WB-02"]))
             if drr_pct is None:
                 blocker_ids = sorted(set(blocker_ids + ["WB-11"]))
             else:

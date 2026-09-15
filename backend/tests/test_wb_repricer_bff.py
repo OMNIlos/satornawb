@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.main import create_app
 from app import repricer_bff as repricer_bff_module
@@ -964,7 +965,7 @@ def test_build_sku_row_prefers_sales_funnel_orders_when_available():
         use_demo_data=False,
         period_aggregate={"ordersUnits": 100, "buyoutPct": 10, "sppPct": 26, "sppSource": "supplier.orders.spp"},
         finance_aggregate={"salesUnits": 10, "returnsUnits": 1, "sellerRevenueKopecks": 1_223_000},
-        baskets_aggregate={"orderCount": 1763, "buyoutPct": 84.6},
+        baskets_aggregate={"orderCount": 1763, "buyoutPct": 84.6, "buyoutSource": "sales_funnel.conversions.buyoutPercent"},
         baskets_cache_loaded=True,
     )
 
@@ -1170,7 +1171,7 @@ def test_repricer_bff_frontend_strategy_catalog_and_sku_shape(monkeypatch):
     assert any(item["name"] == "Контроль оборачиваемости" for item in payload["items"])
 
 
-def test_repricer_sku_uses_article_subject_fallback_when_category_missing(monkeypatch):
+def test_repricer_sku_does_not_infer_category_from_article_when_category_missing(monkeypatch):
     monkeypatch.setattr(repricer_bff_module, "fetch_commission_tariffs", lambda *_args, **_kwargs: {})
     rows = repricer_bff_module.list_repricer_skus(
         wb_token="env-token",
@@ -1205,7 +1206,7 @@ def test_repricer_sku_uses_article_subject_fallback_when_category_missing(monkey
     )
 
     row = rows[0]
-    assert row["meta"]["subject"] == "Футболки"
+    assert row["meta"]["subject"] == "Товары"
     assert row["analytics"]["baseWbCommissionPct"] == 0.0
     assert row["analytics"]["commissionDisplayPct"] is None
     assert row["analytics"]["commissionSource"] == "tariffs.commission.missing"
@@ -2597,6 +2598,15 @@ def test_baskets_daily_detail_skips_existing_days_when_chunks_empty(monkeypatch)
 
 
 def test_baskets_detail_job_merges_exact_cache_and_cache_hit_avoids_duplicate(monkeypatch):
+    monkeypatch.setattr(
+        wb_repricer_bff_router,
+        "get_wb_sync_status",
+        lambda _organization_id: {
+            "state": "completed",
+            "dateFrom": "2026-06-01",
+            "dateTo": "2026-06-03",
+        },
+    )
     source_state = {
         "baskets_2026-06-01_2026-06-03": {
             "aggregates": {"101": {"cartCount": 9}},
@@ -2714,6 +2724,15 @@ def test_baskets_detail_start_combines_split_nightly_caches(monkeypatch):
 
 
 def test_baskets_detail_start_rejects_second_active_run_for_same_org(monkeypatch):
+    monkeypatch.setattr(
+        wb_repricer_bff_router,
+        "get_wb_sync_status",
+        lambda _organization_id: {
+            "state": "completed",
+            "dateFrom": "2026-06-01",
+            "dateTo": "2026-06-03",
+        },
+    )
     monkeypatch.setattr("app.routers.wb_repricer_bff._request_actor_and_wb_token", lambda _request: (SimpleNamespace(organization_id=7), "token"))
     monkeypatch.setattr(
         "app.routers.wb_repricer_bff.get_source_cache",
@@ -2728,6 +2747,15 @@ def test_baskets_detail_start_rejects_second_active_run_for_same_org(monkeypatch
 
 
 def test_baskets_detail_start_reuses_same_range_active_run(monkeypatch):
+    monkeypatch.setattr(
+        wb_repricer_bff_router,
+        "get_wb_sync_status",
+        lambda _organization_id: {
+            "state": "completed",
+            "dateFrom": "2026-06-01",
+            "dateTo": "2026-06-03",
+        },
+    )
     active = {"runId": "active-run", "state": "running", "dateFrom": "2026-06-01", "dateTo": "2026-06-03", "progressPercent": 40}
     monkeypatch.setattr("app.routers.wb_repricer_bff._request_actor_and_wb_token", lambda _request: (SimpleNamespace(organization_id=7), "token"))
     monkeypatch.setattr("app.routers.wb_repricer_bff.get_source_cache", lambda organization_id, key, **_kwargs: active if organization_id == 7 and key == "baskets_detail_active" else {})
@@ -2741,6 +2769,15 @@ def test_baskets_detail_start_reuses_same_range_active_run(monkeypatch):
 
 
 def test_baskets_detail_start_marks_stale_active_run_failed_and_starts_new(monkeypatch):
+    monkeypatch.setattr(
+        wb_repricer_bff_router,
+        "get_wb_sync_status",
+        lambda _organization_id: {
+            "state": "completed",
+            "dateFrom": "2026-06-01",
+            "dateTo": "2026-06-03",
+        },
+    )
     active = {
         "runId": "stale-run",
         "state": "running",
@@ -2750,21 +2787,17 @@ def test_baskets_detail_start_marks_stale_active_run_failed_and_starts_new(monke
         "requestsCompleted": 57,
         "requestsTotal": 124,
         "progressPercent": 46,
-        "updatedAt": "2026-07-21T12:00:00+00:00",
+        "updatedAt": (
+            datetime.now(timezone.utc)
+            - wb_repricer_bff_router.BASKETS_DETAIL_HEARTBEAT_TIMEOUT
+            - timedelta(seconds=1)
+        ).isoformat(),
     }
     source_state = {"7:baskets_detail_active": active}
     saved: list[tuple[str, dict]] = []
 
     monkeypatch.setattr("app.routers.wb_repricer_bff._request_actor_and_wb_token", lambda _request: (SimpleNamespace(organization_id=7), "token"))
     monkeypatch.setattr("app.routers.wb_repricer_bff.list_cached_goods", lambda organization_id: [{"nmID": 101}] if organization_id == 7 else [])
-    monkeypatch.setattr(
-        "app.routers.wb_repricer_bff.datetime",
-        SimpleNamespace(
-            now=lambda _tz=None: datetime(2026, 7, 21, 13, 0, tzinfo=timezone.utc),
-            fromisoformat=datetime.fromisoformat,
-        ),
-    )
-
     def get_cache(organization_id, key, **_kwargs):
         return deepcopy(source_state.get(f"{organization_id}:{key}") or {})
 
@@ -3394,6 +3427,16 @@ def test_manual_sync_run_returns_window_profile_metadata(monkeypatch):
 def test_manual_cold_full_sync_enqueues_onboarding_task(monkeypatch):
     queued: list[tuple[int, str]] = []
     saved_statuses: list[dict[str, Any]] = []
+    threads: list[dict[str, object]] = []
+
+    def status_stub(actor):
+        assert actor.organization_id == 7
+        saved = saved_statuses[-1]
+        return {"state": "queued", "running": True, "syncProfile": saved["sync_profile"], "taskId": saved["task_id"]}
+
+    # Test route orchestration only: do not enter status diagnostics/secret reads.
+    monkeypatch.setattr(wb_repricer_bff_router, "_repricer_sync_status_payload", status_stub)
+    monkeypatch.setattr(wb_repricer_bff_router, "uuid4", lambda: "synthetic-request-id")
 
     monkeypatch.setattr("app.routers.wb_repricer_bff._request_actor_and_wb_token", lambda _request: (SimpleNamespace(user_id="user-1", organization_id=7), "wb-token"))
     monkeypatch.setattr("app.routers.wb_repricer_bff.is_wb_sync_running", lambda _organization_id: False)
@@ -3403,10 +3446,28 @@ def test_manual_cold_full_sync_enqueues_onboarding_task(monkeypatch):
     class TaskStub:
         @staticmethod
         def delay(organization_id: int, scenario: str):
-            queued.append((organization_id, scenario))
-            return SimpleNamespace(id="cold-sync-task-1")
+            raise AssertionError("manual onboarding currently uses the API background runner, not Celery")
+
+    def run_onboarding_stub(
+        organization_id: int, scenario: str, wb_token_override: str
+    ):
+        queued.append((organization_id, scenario))
+
+    class InlineThread:
+        def __init__(self, *, target, kwargs, **_thread_options):
+            self._target = target
+            self._kwargs = kwargs
+            threads.append({"target": target, "kwargs": kwargs, **_thread_options})
+
+        def start(self):
+            self._target(**self._kwargs)
 
     monkeypatch.setattr("app.repricer_tasks.sync_wb_onboarding_for_org", TaskStub)
+    monkeypatch.setattr("app.repricer_tasks.run_wb_onboarding_for_org", run_onboarding_stub)
+    monkeypatch.setattr(
+        "app.routers.wb_repricer_bff.threading",
+        SimpleNamespace(Thread=InlineThread),
+    )
 
     payload = wb_repricer_bff_router.post_repricer_sync_run(
         object(),
@@ -3418,11 +3479,17 @@ def test_manual_cold_full_sync_enqueues_onboarding_task(monkeypatch):
     assert payload["state"] == "queued"
     assert payload["running"] is True
     assert payload["syncProfile"] == "onboarding-full"
-    assert payload["taskId"] == "cold-sync-task-1"
+    assert payload["taskId"] == "api-bg-onboarding-synthetic-request-id"
     assert saved_statuses[0]["organizationId"] == 7
     assert saved_statuses[0]["trigger"] == "manual-onboarding"
     assert saved_statuses[0]["sync_profile"] == "onboarding-full"
-    assert saved_statuses[0]["task_id"] == "cold-sync-task-1"
+    assert saved_statuses[0]["task_id"] == payload["taskId"]
+    assert threads == [{
+        "target": run_onboarding_stub,
+        "kwargs": {"organization_id": 7, "scenario": "complete", "wb_token_override": "wb-token"},
+        "name": "wb-onboarding-7",
+        "daemon": True,
+    }]
 
 
 def test_sync_status_includes_schedule_plan(monkeypatch):
@@ -3495,11 +3562,18 @@ def test_sync_status_marks_onboarding_plan_queued(monkeypatch):
     payload = wb_repricer_bff_router.get_repricer_sync_status(object())
 
     onboarding = [item for item in payload["syncPlan"] if item["group"] == "onboarding"]
-    assert [item["state"] for item in onboarding] == ["queued", "queued", "queued"]
+    assert [(item["syncProfile"], item["state"]) for item in onboarding] == [
+        ("onboarding-7d", "queued"),
+        ("onboarding-30d", "queued"),
+    ]
     assert all(item["running"] is False for item in onboarding)
 
 
 def test_sync_status_marks_onboarding_partial_without_daily_baskets_detail(monkeypatch):
+    monkeypatch.setattr(wb_repricer_bff_router, "datetime", SimpleNamespace(
+        now=lambda _tz=None: datetime(2026, 7, 29, 9, tzinfo=timezone.utc),
+        fromisoformat=datetime.fromisoformat,
+    ))
     caches_by_prefix = {
         "period_stats_": [{"dateFrom": "2026-07-22", "dateTo": "2026-07-28"}],
         "finance_": [{"dateFrom": "2026-07-22", "dateTo": "2026-07-28"}],
@@ -4005,6 +4079,7 @@ def test_wb_sync_runs_four_independent_sources_in_parallel_and_waits_for_goods(m
         "finance",
         "ads",
         "baskets",
+        "sku-snapshot",
     ]
     assert result["state"] == "completed"
 
@@ -4115,17 +4190,23 @@ def test_wb_sync_can_opt_into_daily_baskets_detail(monkeypatch):
         lambda *_args, **kwargs: {"aggregates": {}, "count": 0, "requestedNmIds": 1001, "matchedNmIds": 0},
     )
 
-    def fetch_detail(*_args, **kwargs):
+    def fetch_detail(*args, **kwargs):
         detail_calls.append(kwargs)
-        kwargs["progress_callback"]({"phase": "completed", "dayIndex": 1, "daysTotal": 7, "batch": 1, "batchesTotal": 2, "requestsCompleted": 1, "requestsTotal": 14})
-        return {"dailyAggregates": {}, "requestsCompleted": 14, "requestsTotal": 14}
+        return repricer_bff_module.fetch_baskets_daily_detail(*args, **kwargs)
 
     monkeypatch.setattr("app.repricer_sync.fetch_baskets_daily_detail", fetch_detail)
+    monkeypatch.setattr(
+        repricer_bff_module,
+        "_request_or_raise_sales_funnel_products",
+        lambda *_args, **_kwargs: {"data": {"products": []}},
+    )
 
     result = refresh_wb_data_sources(
         organization_id=1,
         wb_token="token",
         period_days=7,
+        date_from=date(2026, 7, 22),
+        date_to=date(2026, 7, 28),
         sources=["baskets"],
         execute_lock=False,
         baskets_include_daily_detail=True,
@@ -4133,7 +4214,12 @@ def test_wb_sync_can_opt_into_daily_baskets_detail(monkeypatch):
     )
 
     assert len(detail_calls) == 1
-    assert any(item.get("source") == "baskets" and item.get("phase") == "daily-detail" for item in observed)
+    assert any(
+        item.get("source") == "baskets" and item.get("status") == "running"
+        and item.get("phase") == "completed"
+        and item.get("progressCurrent") == item.get("progressTotal") == 7
+        for item in observed
+    )
     assert result["state"] == "completed"
 
 
@@ -4623,6 +4709,7 @@ def test_wb_sync_goods_step_persists_spp_heartbeat_progress(monkeypatch):
     )
     monkeypatch.setattr("app.repricer_sync.record_wb_sync_history_event", lambda *_args, **_kwargs: {})
     monkeypatch.setattr("app.repricer_sync.record_wb_sync_notification", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.repricer_sync.fetch_commission_tariffs", lambda *_args, **_kwargs: {})
     monkeypatch.setattr("app.repricer_sync.list_cached_goods", lambda _organization_id: [])
     monkeypatch.setattr(
         "app.repricer_sync.fetch_catalog_goods_page",
@@ -4655,7 +4742,7 @@ def test_wb_sync_goods_step_persists_spp_heartbeat_progress(monkeypatch):
     ]
     assert any(step.get("phase") == "spp" and step.get("progressPercent") == 95 for step in running_goods)
     assert any(step.get("message") == "Получаем цены после СПП: пачка 1 из 1" for step in running_goods)
-    assert any(step.get("request") == "41-SPP · до 100 артикулов в запросе" for step in running_goods)
+    assert any(step.get("request") == "Цены WB · до 100 артикулов в запросе" for step in running_goods)
     assert result["steps"][0]["progressPercent"] == 100
 
 
@@ -5476,7 +5563,8 @@ def test_repricer_simulator_updates_wb_input_caches_and_runs_engine(monkeypatch)
         repricer_bff_module.SKU_SETTINGS_OVERRIDES.update(previous_settings)
 
 
-def test_repricer_simulator_allows_input_overrides_in_real_apply_mode_without_applying(monkeypatch):
+@pytest.mark.parametrize("tariff_available", [False, True])
+def test_repricer_simulator_allows_input_overrides_in_real_apply_mode_without_applying(monkeypatch, tariff_available):
     monkeypatch.setattr(
         repricer_execution_module,
         "_utc_now",
@@ -5520,6 +5608,9 @@ def test_repricer_simulator_allows_input_overrides_in_real_apply_mode_without_ap
     monkeypatch.setattr("app.routers.wb_repricer_bff.get_source_cache_fetched_at", lambda _organization_id, key: source_state.get(key, {}).get("fetchedAt"))
     monkeypatch.setattr("app.routers.wb_repricer_bff.compact_heavy_source_cache_rows", lambda _organization_id: None)
     monkeypatch.setattr("app.repricer_bff.fetch_commission_tariffs", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("app.repricer_bff.cached_commission_tariffs", lambda *_args, **_kwargs: {
+        "name:футболки": {"baseCommissionPct": 15, "sourceField": "tariffs.commission.kgvpMarketplace"},
+    } if tariff_available else {})
 
     def save_goods_page_stub(**kwargs):
         goods_state[:] = kwargs["goods"]
@@ -5593,7 +5684,9 @@ def test_repricer_simulator_allows_input_overrides_in_real_apply_mode_without_ap
         assert run_body["runMode"] == "preview_only"
         assert run_body["mode"]["simulatorRunApplyAllowed"] is False
         item = run_body["report"]["items"][0]
-        assert item["status"] == "executed"
+        assert item["status"] == ("executed" if tariff_available else "blocked")
+        if not tariff_available:
+            assert "commission_missing" in {detail["code"] for detail in item["blockerDetails"]}
         assert item["draftId"] is None
         assert item["jobId"] is None
         assert item["applyState"] is None
@@ -5608,7 +5701,7 @@ def test_repricer_simulator_allows_input_overrides_in_real_apply_mode_without_ap
 
 
 def test_worker_status_returns_next_run_and_recent_scheduler_logs(monkeypatch):
-    monkeypatch.setattr("app.routers.wb_repricer_bff._hydrate_org_repricer_state", lambda _request: 10)
+    monkeypatch.setattr("app.routers.wb_repricer_bff.hydrate_repricer_bff_state", lambda *_args: None)
     previous_algorithm = dict(repricer_bff_module.ALGORITHM_SETTINGS_STATE)
     repricer_bff_module.ALGORITHM_SETTINGS_STATE["syncIntervalMinutes"] = 5
     repricer_bff_module.ALGORITHM_SETTINGS_STATE["fullSyncIntervalMinutes"] = 30
@@ -5658,11 +5751,13 @@ def test_worker_status_returns_next_run_and_recent_scheduler_logs(monkeypatch):
     })
 
     try:
-        response = client().get("/api/v1/wb-repricer/worker/status")
+        api = client()
+        assert api.get("/api/v1/wb-repricer/worker/status").status_code == 401
+        response = api.get("/api/v1/wb-repricer/worker/status", headers=auth_headers(api, "viewer"))
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["organizationId"] == 10
+        assert payload["organizationId"] == 1
         assert payload["mode"]["schedulerEnabled"] is True
         assert payload["mode"]["schedulerPollIntervalMinutes"] == 5
         assert payload["mode"]["executeIntervalMinutes"] == 5
@@ -5683,7 +5778,7 @@ def test_worker_status_returns_next_run_and_recent_scheduler_logs(monkeypatch):
 
 
 def test_worker_status_without_runs_uses_stable_interval_boundary(monkeypatch):
-    monkeypatch.setattr("app.routers.wb_repricer_bff._hydrate_org_repricer_state", lambda _request: 10)
+    monkeypatch.setattr("app.routers.wb_repricer_bff.hydrate_repricer_bff_state", lambda *_args: None)
     previous_algorithm = dict(repricer_bff_module.ALGORITHM_SETTINGS_STATE)
     repricer_bff_module.ALGORITHM_SETTINGS_STATE["syncIntervalMinutes"] = 5
     monkeypatch.setattr("app.routers.wb_repricer_bff.get_settings", lambda: SimpleNamespace(
@@ -5703,7 +5798,8 @@ def test_worker_status_without_runs_uses_stable_interval_boundary(monkeypatch):
     monkeypatch.setattr("app.routers.wb_repricer_bff.get_wb_sync_status", lambda _organization_id: {"state": "idle"})
 
     try:
-        response = client().get("/api/v1/wb-repricer/worker/status")
+        api = client()
+        response = api.get("/api/v1/wb-repricer/worker/status", headers=auth_headers(api, "viewer"))
 
         assert response.status_code == 200
         payload = response.json()
@@ -5738,7 +5834,21 @@ def test_algorithm_put_persists_minute_intervals(monkeypatch):
         repricer_bff_module.ALGORITHM_SETTINGS_STATE.update(previous_algorithm)
 
 
-def test_algorithm_economics_dual_write_is_scoped(monkeypatch):
+@pytest.mark.parametrize(
+    "previous_tax,payload,tax_changed",
+    [
+        (6, {"taxPct": 7.5}, True),
+        ("7.50", {"taxPct": 9}, True),
+        (7.5, {"taxPct": 0}, True),
+        (7.5, {"taxPct": "7.50"}, False),
+        (7.5, {"taxPct": 7.501}, False),
+        (7.5, {"taxPct": 7.5, "otherExpensePricePct": 6}, False),
+        (7.5, {"otherExpensePricePct": 6}, False),
+    ],
+)
+def test_algorithm_economics_dual_write_is_scoped(
+    monkeypatch, previous_tax, payload, tax_changed,
+):
     calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         "app.routers.wb_repricer_bff._hydrate_org_repricer_state",
@@ -5751,16 +5861,17 @@ def test_algorithm_economics_dual_write_is_scoped(monkeypatch):
     monkeypatch.setattr(
         "app.routers.wb_repricer_bff.EconomicsService.reconcile_legacy_organization",
         lambda _self, settings, **kwargs: calls.append(
-            {"settings": settings, **kwargs}
+            {"organization_id": _self.organization_id, "settings": settings, **kwargs}
         ),
     )
     previous_algorithm = dict(repricer_bff_module.ALGORITHM_SETTINGS_STATE)
     try:
+        repricer_bff_module.ALGORITHM_SETTINGS_STATE["taxPct"] = previous_tax
         api = client()
 
         economics = api.put(
             "/api/v1/wb-repricer/algorithm",
-            json={"taxPct": 7.5},
+            json=payload,
         )
         unrelated = api.put(
             "/api/v1/wb-repricer/algorithm",
@@ -5769,7 +5880,12 @@ def test_algorithm_economics_dual_write_is_scoped(monkeypatch):
 
         assert economics.status_code == unrelated.status_code == 200
         assert len(calls) == 1
-        assert calls[0]["settings"]["taxPct"] == 7.5
+        assert calls[0]["organization_id"] == 10
+        assert calls[0]["settings"]["taxPct"] == payload.get("taxPct", previous_tax)
+        assert calls[0].get("tax_value_state") == ("configured" if tax_changed else None)
+        assert calls[0].get("tax_evidence_status") == ("dated" if tax_changed else None)
+        for field in ("workerAutoApplyPricesEnabled", "nightMedianAutoApplyEnabled"):
+            assert economics.json().get(field) == previous_algorithm.get(field)
     finally:
         repricer_bff_module.ALGORITHM_SETTINGS_STATE.clear()
         repricer_bff_module.ALGORITHM_SETTINGS_STATE.update(previous_algorithm)

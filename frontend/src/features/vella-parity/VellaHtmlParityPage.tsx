@@ -1,9 +1,18 @@
-import { Fragment, createContext, memo, startTransition, type CSSProperties, type ChangeEvent, type KeyboardEvent, type MouseEvent, type ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { Fragment, createContext, memo, startTransition, type CSSProperties, type ChangeEvent, type KeyboardEvent, type MouseEvent, type ReactNode, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, FileSpreadsheet, FolderPlus, Settings, Sparkles, Upload, X } from 'lucide-react'
 import QRCode from 'qrcode'
-import { useAuth } from '@/features/auth/authContext'
+import { AuthContext, useAuth } from '@/features/auth/authContext'
+import { WbConnection } from '@/features/wb-live/WbConnection'
+import { WbProducts } from '@/features/wb-live/WbProducts'
+import { CanonicalAvitoStatisticsPage, canonicalAvitoStatisticsEnabled } from '@/features/avito/CanonicalAvitoStatistics'
+import { CanonicalNotificationsIsland, canonicalNotificationsEnabled } from '@/features/notifications/CanonicalNotificationsIsland'
+import { CanonicalNotificationPreferencesForm } from '@/features/notifications/NotificationPreferencesForm'
+import { CanonicalReviewDrawer, canonicalReviewSelectionEvent } from '@/features/wb-reviews/CanonicalReviewDrawer'
+import { canonicalReviewsEnabled } from '@/features/wb-reviews/canonicalReviewDetail'
+
+// The canonical account-scoped screen owns WB product reads after this cutover.
+const WB_ACCOUNT_PRODUCTS_ENABLED = import.meta.env.VITE_WB_LIVE_ENABLED === 'true'
 import { authorizationHeaders, type PermissionProfile } from '@/features/auth/authApi'
 import { applyAuthProfileToParity, bindParityLogout } from '@/features/auth/parityBridge'
 import {
@@ -35,11 +44,25 @@ import {
 } from '@/features/wb-reports/reportRulesApi'
 import { lastClosedWbDay, resolvePresetPeriodRange } from '@/features/wb-repricer/presetPeriodAnchor'
 import {
+  adaptCanonicalAbcReport,
+  adaptCanonicalPnlReport,
+  canonicalAbcPnlEmptyMessage,
+  canonicalPnlRowStatus,
+  fetchCanonicalAbcPnl,
+  resolveCanonicalAbcPnlRollout,
+  shouldUseCanonicalAbcPnl,
+  type CanonicalAbcPnlPage,
+  type CanonicalAbcPnlRollout,
+  type CanonicalCompatibilityMeta,
+} from '@/features/wb-finance/canonicalAbcPnl'
+import { buildAbcTableRows, buildPnlTableRows, downloadReportTableXlsx, filterPnlTableRows, PNL_TABLE_EXPORT_HEADERS, reportTableSource, type ReportTableExportPayload } from '@/features/wb-finance/reportTableExport'
+import {
   describePnlReportJob,
   type PnlReportJobPayload,
   type PnlReportJobView,
 } from './pnlReportJob'
 import { shouldPollBackgroundReportJob } from './backgroundReportPolling'
+import { selectScopedReportState, type ScopedReportState } from './scopedReportState'
 import { avitoCooldownRemainingMs, avitoCooldownUntilFromPayload, formatAvitoRefreshCountdown } from './avitoCooldown'
 import { downloadAvitoOrdersPickingXlsx } from './avitoOrdersXlsx'
 import { clearVellaWindowProperty } from './windowGlobals'
@@ -95,16 +118,14 @@ import {
   type ReviewPromptMatrix,
   type ReviewPromptRule,
 } from '@/features/reviewsPromptMatrix'
-import { ApiError, apiRequest, buildApiUrl } from '@/lib/api'
+import { ApiError, apiData, apiRequest, buildApiUrl } from '@/lib/api'
 import {
   applyLiveRepricerStrategy,
-  downloadLiveRepricerNomenclatureXlsx,
   executeLiveRepricerStrategies,
   previewLiveRepricerStrategies,
   type LiveRepricerExecutionReport,
   loadLiveRepricerSyncStatus,
   loadLiveRepricerReportSnapshotsStatus,
-  loadLiveBasketsDetailStatus,
   loadLiveRepricerCacheCoverage,
   loadLiveRepricerParityProducts,
   loadLiveRepricerStats,
@@ -114,9 +135,6 @@ import {
   mapLiveRepricerRowToParityProduct,
   refreshLiveRepricerParityProducts,
   refreshLiveRepricerSource,
-  retryLiveRepricerSyncStep,
-  startLiveBasketsDetail,
-  startLiveRepricerColdFullSync,
   resetLiveRepricerParityCache,
   updateLiveRepricerSkuManager,
   updateLiveRepricerSkuSettings,
@@ -134,9 +152,7 @@ import {
   type LiveWbPromotion,
   uploadLiveWbPromotionExcel,
   uploadLiveWbPromotionsExcelBulk,
-  uploadLiveRepricerNomenclatureXlsx,
   type LiveRepricerPeriodRequest,
-  type LiveBasketsDetailStatus,
   type LiveRepricerCacheCoverage,
 } from '@/features/wb-repricer/liveParityData'
 import type { PricingStatusResponse, SkuTimeseriesResponse } from '@/features/wb-repricer/schemas'
@@ -144,10 +160,11 @@ import { routeStateFromPath, vellaTitleFromPath } from '../vella-static/VellaSta
 import { elementAttributesToProps, htmlToReactFragment, styleAttributeToObject, type HtmlReactReplacement } from './vellaDomReactAdapter'
 import { shouldLoadPeriodSurface, type PeriodRequestSurface } from './reportPeriodScope'
 import { makeServerProductsPeriodLabel } from './serverPeriodLabel'
-import { sharedStatusRequest } from '@/features/wb-repricer/sharedStatusRequest'
 
 const SHELL_ISLAND_STATUS = 'explicit-jsx'
 const ActiveParityTabContext = createContext<string | null>(null)
+const PnlReportModeContext = createContext<[PnlReportMode, (mode: PnlReportMode) => void] | null>(null)
+const PnlTableExportContext = createContext<{ current: (() => ReportTableExportPayload) | null } | null>(null)
 
 export function shouldMountParityTabIsland(
   activeTab: string | null | undefined,
@@ -632,8 +649,6 @@ const SETTINGS_ACCESS_RIGHTS = [
 ]
 
 const PRODUCTS_TABLE_RENDER_LIMIT = 150
-type RepricerSource = 'content' | 'promotions' | 'stocks' | 'period-stats' | 'finance' | 'ads' | 'baskets'
-const PRODUCT_FULL_SYNC_SOURCES = ['goods', 'content', 'promotions', 'stocks', 'period-stats', 'finance', 'ads', 'baskets'] as const
 
 type SettingsInviteAccess = {
   modules: string[]
@@ -1257,7 +1272,7 @@ function syncRouteChrome(root: HTMLElement, targetTab: string) {
   if (repricerBanner) repricerBanner.style.display = module === 'repricer' ? '' : 'none'
   root.querySelector<HTMLElement>('#reportsBanner')?.classList.toggle('active', module === 'reports')
 
-  const showPeriodControls = targetTab === 'products'
+  const showPeriodControls = (targetTab === 'products' && !WB_ACCOUNT_PRODUCTS_ENABLED)
     || REPORT_ROUTE_TABS.has(targetTab)
     || targetTab === 'repricer-stats'
     || targetTab === 'expenses'
@@ -1542,9 +1557,10 @@ function computeProductsKpiFallbackSnapshot() {
     const backendRevenue = productNumber(product, 'revenue7d') || productNumber(product, 'revenue')
     return sum + backendRevenue
   }, 0)
-  const marginRub = products.reduce((sum, product) => {
+  const factMarginMissing = products.some(product => product.factTaxState && (product.factTaxState === 'missing' || product.netSku == null))
+  const marginRub = factMarginMissing ? null : products.reduce((sum, product) => {
     const periodNet = productNumber(product, 'netSku')
-    if (periodNet !== 0) return sum + periodNet
+    if (product.factTaxState === 'configured' || periodNet !== 0) return sum + periodNet
     const unitMargin = productNumber(product, 'mgRub') || productNumber(product, 'netPerUnit')
     return sum + unitMargin * productNumber(product, 'ordersPeriod')
   }, 0)
@@ -1570,7 +1586,7 @@ function computeProductsKpiFallbackSnapshot() {
   const fallbackAvgMargin = activeProducts.length
     ? activeProducts.reduce((sum, product) => sum + productNumber(product, 'mg'), 0) / activeProducts.length
     : 0
-  const avgMargin = revenue > 0 ? (marginRub / revenue) * 100 : fallbackAvgMargin
+  const avgMargin = marginRub == null ? null : revenue > 0 ? (marginRub / revenue) * 100 : fallbackAvgMargin
   const promoShare = products.length
     ? Math.round((products.filter((product) => Boolean(product.promoActive)).length / products.length) * 100)
     : 0
@@ -1606,7 +1622,7 @@ function computeProductsKpiSnapshot() {
     return {
       ...fallback,
       revenueAvailable: financeCacheLoaded || hasFinanceRows,
-      marginAvailable: financeCacheLoaded || fallback.marginRub !== 0 || fallback.revenue > 0 || hasFinanceRows,
+      marginAvailable: fallback.marginRub != null && (financeCacheLoaded || fallback.marginRub !== 0 || fallback.revenue > 0 || hasFinanceRows),
       adsAvailable: Boolean(window.__vellaProductsCacheMeta?.adsFetchedAt) || fallback.adSpendRub > 0 || fallback.adSkuCount > 0,
     }
   }
@@ -1619,13 +1635,15 @@ function computeProductsKpiSnapshot() {
   const hasSummaryAdSpend = summaryRecord.adSpendKopecks != null
   const summaryAdSpendRub = Math.round(productNumber(summaryRecord, 'adSpendKopecks') / 100)
   const summaryAdRevenueRub = Math.round(productNumber(summaryRecord, 'adRevenueKopecks') / 100)
-  const revenue = summaryRevenue > 0 ? summaryRevenue : fallback.revenue
-  const marginRub = summaryMarginRub !== 0 ? summaryMarginRub : fallback.marginRub
-  const cogsRub = summaryCogsRub > 0 ? summaryCogsRub : fallback.cogsRub
-  const expensesRub = summaryExpensesRub > 0 ? summaryExpensesRub : fallback.expensesRub
+  const revenue = summaryRecord.revenueKopecks != null ? summaryRevenue : fallback.revenue
+  const marginRub = summaryRecord.factTaxState === 'missing' || summaryRecord.marginKopecks === null
+    ? null : summaryRecord.marginKopecks != null ? summaryMarginRub : fallback.marginRub
+  const cogsRub = summaryRecord.cogsKopecks != null ? summaryCogsRub : fallback.cogsRub
+  const expensesRub = summaryRecord.expensesKopecks != null ? summaryExpensesRub : fallback.expensesRub
   const adSpendRub = hasSummaryAdSpend ? summaryAdSpendRub : fallback.adSpendRub
   const adRevenueRub = summaryRecord.adRevenueKopecks != null ? summaryAdRevenueRub : fallback.adRevenueRub
-  const avgMargin = summaryRecord.avgMarginPct != null ? productNumber(summaryRecord, 'avgMarginPct') : fallback.avgMargin
+  const avgMargin = summaryRecord.factTaxState === 'missing' || summaryRecord.avgMarginPct === null
+    ? null : summaryRecord.avgMarginPct != null ? productNumber(summaryRecord, 'avgMarginPct') : fallback.avgMargin
   const hasFinanceRows = productsForKpi().some((product) => String(product.financeState ?? 'no_data') !== 'no_data')
   const adsCacheLoaded = Boolean(window.__vellaProductsCacheMeta?.adsFetchedAt)
 
@@ -1646,8 +1664,8 @@ function computeProductsKpiSnapshot() {
     promoShare: summaryRecord.promoSharePct != null ? productNumber(summaryRecord, 'promoSharePct') : fallback.promoShare,
     totalBaskets: summaryRecord.totalBaskets != null ? productNumber(summaryRecord, 'totalBaskets') : fallback.totalBaskets,
     avgMargin,
-    revenueAvailable: financeCacheLoaded || revenue > 0 || hasFinanceRows,
-    marginAvailable: financeCacheLoaded || marginRub !== 0 || revenue > 0 || hasFinanceRows,
+    revenueAvailable: summaryRecord.revenueKopecks !== null && (financeCacheLoaded || revenue !== 0 || hasFinanceRows),
+    marginAvailable: marginRub != null && (financeCacheLoaded || marginRub !== 0 || revenue !== 0 || hasFinanceRows),
     adsAvailable: adsCacheLoaded || hasSummaryAdSpend || adSpendRub > 0 || fallback.adSkuCount > 0,
   }
 }
@@ -2082,6 +2100,7 @@ function repricerStatsRubFromKopecks(value: unknown) {
 }
 
 function repricerStatsPct(value: unknown) {
+  if (value === null || value === undefined || value === '') return '—'
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return '—'
   return `${parsed.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`
@@ -2090,7 +2109,7 @@ function repricerStatsPct(value: unknown) {
 function repricerStatsTagClass(tone: unknown) {
   if (tone === 'ok' || tone === 'ready' || tone === 'can_recalculate') return 'ok'
   if (tone === 'bad' || tone === 'blocked' || tone === 'price_blocked') return 'warn'
-  if (tone === 'neutral') return 'neutral'
+  if (tone === 'neutral' || tone === 'paused') return 'neutral'
   return 'warn'
 }
 
@@ -2116,6 +2135,8 @@ function repricerStatsProtectionLabel(status: unknown) {
   if (status === 'can_recalculate') return 'разрешено'
   if (status === 'needs_review') return 'на проверку'
   if (status === 'blocked') return 'остановлено'
+  if (status === 'not_configured') return 'не настроено'
+  if (status === 'paused') return 'приостановлено'
   return 'нет данных'
 }
 
@@ -2132,6 +2153,11 @@ function repricerStatsBlockerLabel(value: unknown) {
     baskets: 'нет добавлений в корзину',
     periodStats: 'нет статистики периода',
     manual_status: 'ручной режим',
+    manual_mode: 'ручной режим',
+    no_strategy: 'не назначена стратегия',
+    no_nm_id: 'нет артикула WB',
+    automation_disabled: 'автоматизация выключена',
+    warmup: 'идёт прогрев',
     margin: 'низкая маржа',
   }
   return labels[String(value || '')] || String(value || 'проверить')
@@ -2150,9 +2176,9 @@ function repricerStatsSourceLabelRu(value: unknown) {
 }
 
 function renderRepricerStatsThumb(item: LiveRepricerStatsItem) {
-  const imageUrl = item.imageUrl || item.photoUrl
+  const imageUrl = resolveReportProductPhoto(item.imageUrl || item.photoUrl || null, item.nmId)
   if (imageUrl) {
-    return `<div class="report-thumb report-thumb-photo"><img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" /></div>`
+    return `<div class="report-thumb report-thumb-photo"><img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" data-wb-nm="${escapeHtml(String(item.nmId || ''))}" onerror="repairWbProductImage(this)" /></div>`
   }
   return `<div class="report-thumb thumb-w"><span>${escapeHtml(String(item.articleId || '?').slice(0, 2))}</span></div>`
 }
@@ -2166,6 +2192,7 @@ function renderLiveRepricerStatsRow(item: LiveRepricerStatsItem) {
   const tags = [
     decision.id === 'can_recalculate' ? 'готово к пересчёту' : '',
     protection.status === 'blocked' ? 'Цена заблокирована' : '',
+    protection.status === 'not_configured' || protection.status === 'paused' ? 'Без пересчёта' : '',
     sources.status !== 'ready' ? 'данные требуют внимания' : '',
     flags.includes('cart_growth') ? 'корзины растут' : '',
     flags.includes('below_basket_norm') || flags.includes('cart_drop') ? 'корзины падают' : '',
@@ -2208,7 +2235,7 @@ function renderLiveRepricerStatsRow(item: LiveRepricerStatsItem) {
       <td><div class="report-manager-cell"><span class="mgr-avatar">${escapeHtml(repricerStatsManagerInitials(managerName))}</span><span class="report-manager-main"><span class="report-manager-name">${escapeHtml(managerName)}</span><span class="report-manager-meta">${escapeHtml(managerMeta)}</span></span></div></td>
       <td class="num">${repricerStatsNumber(metrics.impressions)}</td>
       <td class="num">${repricerStatsNumber(metrics.clicks)} / ${repricerStatsPct(metrics.ctrPct)}</td>
-      <td class="num">${repricerStatsNumber(metrics.baskets)}</td>
+      <td class="num">${repricerStatsNumber(metrics.baskets)}${sources.states?.baskets === 'partial' ? '<span class="sub">часть периода</span>' : ''}</td>
       <td class="num">${repricerStatsPct(metrics.cartToOrderCrPct)}</td>
       <td class="num">${repricerStatsNumber(metrics.orders)}</td>
       <td class="num">${escapeHtml(adText)}</td>
@@ -2250,14 +2277,18 @@ function updateLiveRepricerStatsKpis(payload: LiveRepricerStatsResponse) {
   tab.querySelector<HTMLElement>('.report-source-strip.report-source-compact')?.remove()
 }
 
-function renderLiveRepricerStats(payload: LiveRepricerStatsResponse) {
+function renderLiveRepricerStats(payload: LiveRepricerStatsResponse, append = false) {
   const tab = document.getElementById('tab-repricer-stats')
   const body = document.getElementById('repricerStatsBody')
   if (!tab || !body) return
   const rows = Array.isArray(payload.items) ? payload.items : []
-  body.innerHTML = rows.length
+  const html = rows.length
     ? rows.map(renderLiveRepricerStatsRow).join('')
-    : '<tr data-report-row="1"><td colspan="13"><div class="report-empty-note visible">За выбранный период пока нет товаров для статистики.</div></td></tr>'
+    : '<tr data-report-state="empty"><td colspan="13"><div class="report-empty-note visible">За выбранный период пока нет товаров для статистики.</div></td></tr>'
+  body.querySelectorAll('[data-report-state], [data-report-empty]').forEach(row => row.remove())
+  if (append) body.insertAdjacentHTML('beforeend', html)
+  else body.innerHTML = html
+  tab.dataset.reportTotal = String(payload.total ?? rows.length)
   updateLiveRepricerStatsKpis(payload)
   const summary = tab.querySelector<HTMLElement>('[data-filter-summary] span')
   if (summary) summary.innerHTML = `Показано <b>${repricerStatsNumber(payload.itemsReturned ?? rows.length)}</b> из ${repricerStatsNumber(payload.total)}`
@@ -2265,15 +2296,101 @@ function renderLiveRepricerStats(payload: LiveRepricerStatsResponse) {
   window.initTooltips?.()
 }
 
-function renderLiveRepricerStatsLoading() {
-  const body = document.getElementById('repricerStatsBody')
-  if (body) body.innerHTML = '<tr data-report-row="1"><td colspan="13"><div class="report-empty-note visible">Загружаю статистику товаров...</div></td></tr>'
+function clearLiveRepricerStatsAggregates() {
+  const tab = document.getElementById('tab-repricer-stats')
+  if (!tab) return
+  delete tab.dataset.reportTotal
+  tab.querySelectorAll<HTMLElement>('.stats .stat-val').forEach(value => { value.textContent = '—' })
+  tab.querySelectorAll<HTMLElement>('.stats .stat-delta').forEach(delta => {
+    delta.textContent = ''
+    delta.classList.remove('up', 'down', 'neutral')
+  })
+  const summary = tab.querySelector<HTMLElement>('[data-filter-summary] span')
+  if (summary) summary.textContent = ''
 }
 
-function renderLiveRepricerStatsError(error: unknown) {
+function renderLiveRepricerStatsLoading() {
+  clearLiveRepricerStatsAggregates()
+  const body = document.getElementById('repricerStatsBody')
+  if (body) body.innerHTML = '<tr data-report-state="loading"><td colspan="13"><div class="report-empty-note visible" role="status">Загружаю статистику товаров...</div></td></tr>'
+}
+
+function renderLiveRepricerStatsError(error: unknown, preserveRows = false) {
+  if (!preserveRows) clearLiveRepricerStatsAggregates()
   const body = document.getElementById('repricerStatsBody')
   const message = error instanceof Error ? error.message : 'Не удалось загрузить статистику репрайсера'
-  if (body) body.innerHTML = `<tr data-report-row="1"><td colspan="13"><div class="report-empty-note visible">Статистика репрайсера недоступна: ${escapeHtml(message)}</div></td></tr>`
+  const html = `<tr data-report-state="error"><td colspan="13"><div class="report-empty-note visible" role="alert">${preserveRows ? 'Статистика загружена частично' : 'Статистика репрайсера недоступна'}: ${escapeHtml(message)} <button class="btn btn-default btn-sm" type="button" data-stats-retry>Повторить загрузку</button></div></td></tr>`
+  if (body) {
+    body.querySelectorAll('[data-report-state], [data-report-empty]').forEach(row => row.remove())
+    if (preserveRows) body.insertAdjacentHTML('beforeend', html)
+    else body.innerHTML = html
+  }
+}
+
+export function installRepricerStatsLiveBridge(accessToken: string | null) {
+  let disposed = false
+  let generation = 0
+  let controller: AbortController | null = null
+  const load = async () => {
+    if (disposed) return null
+    controller?.abort()
+    controller = new AbortController()
+    const signal = controller.signal
+    const currentGeneration = ++generation
+    const isCurrent = () => !disposed && currentGeneration === generation
+    if (!accessToken) {
+      renderLiveRepricerStatsError(new ApiError('AUTH_REQUIRED', 401))
+      return null
+    }
+    renderLiveRepricerStatsLoading()
+    const period = repricerStatsPeriodRequest()
+    const queryInput = document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')
+    const baseQuery = {
+      ...period,
+      pageSize: REPRICER_STATS_PAGE_SIZE,
+      q: queryInput?.value?.trim() || undefined,
+    }
+    let page = 1
+    let pageCount = 1
+    let firstPayload: LiveRepricerStatsResponse | null = null
+    let loading = false
+    const fetchPages = async (): Promise<LiveRepricerStatsResponse | null> => {
+      if (!isCurrent() || loading) return null
+      loading = true
+      const body = document.getElementById('repricerStatsBody')
+      try {
+        while (page <= pageCount) {
+          body?.querySelectorAll('[data-report-state], [data-report-empty]').forEach(row => row.remove())
+          body?.insertAdjacentHTML('beforeend', `<tr data-report-state="loading"><td colspan="13"><div class="report-empty-note visible" role="status">${page === 1 ? 'Загружаю статистику товаров...' : `Загружаю страницу ${page} из ${pageCount}…`}</div></td></tr>`)
+          const payload = await loadLiveRepricerStats(accessToken, signal, { ...baseQuery, page })
+          if (!isCurrent()) return null
+          if (page === 1) {
+            firstPayload = payload
+            applyRepricerStatsCachePeriod(payload)
+            pageCount = Math.ceil(Math.min(Number(payload.total || 0), REPRICER_STATS_MAX_ROWS) / REPRICER_STATS_PAGE_SIZE)
+          }
+          renderLiveRepricerStats({ ...payload, summary: firstPayload?.summary }, page > 1)
+          page += 1
+        }
+        return firstPayload
+      } catch (error) {
+        if (!isCurrent()) return null
+        renderLiveRepricerStatsError(error, page > 1)
+        const retry = body?.querySelector<HTMLButtonElement>('[data-stats-retry]')
+        if (retry) retry.onclick = () => { void fetchPages() }
+        return null
+      } finally {
+        loading = false
+      }
+    }
+    return fetchPages()
+  }
+  window.__vellaLoadLiveRepricerStats = load
+  return () => {
+    disposed = true
+    controller?.abort()
+    if (window.__vellaLoadLiveRepricerStats === load) delete window.__vellaLoadLiveRepricerStats
+  }
 }
 
 function installSecondaryReportHeaderGuard() {
@@ -2394,6 +2511,19 @@ function installSecondaryReportRowsBridge() {
 
 function installNotificationsReactBridge() {
   if (window.__vellaNotificationsReactBridgeInstalled || typeof window.renderNotificationsPage !== 'function') return
+  if (canonicalNotificationsEnabled) window.eval?.(`
+    var __canonicalLegacyNotifPanel = renderNotifPanel;
+    renderNotifPanel = function() {
+      if (location.pathname.indexOf('/avito/notifications') !== -1) return __canonicalLegacyNotifPanel();
+      ['notifBadge', 'notifHeadCount', 'notifMarkAll', 'navNotifCount', 'notifSubtabCount'].forEach(function(id) {
+        var node = document.getElementById(id); if (node) node.style.display = 'none';
+      });
+      var count = document.getElementById('profileNotifCount'); if (count) count.textContent = '—';
+      var body = document.getElementById('notifBody');
+      if (body) body.innerHTML = '<div class="notif-empty">Уведомления доступны для выбранного аккаунта.<br><a href="/notifications">Открыть центр уведомлений</a></div>';
+    };
+    renderNotifPanel();
+  `)
   const originalRenderNotificationsPage = window.renderNotificationsPage
   window.__vellaNotificationsReactBridgeInstalled = true
   window.eval?.(`
@@ -2779,6 +2909,11 @@ function openBackendReviewDrawer(review: VellaReview) {
   setReviewText('reviewDrawerSku', `${review.sku} · ${review.nm}`)
   setReviewText('reviewDrawerTitle', review.product)
   setReviewText('reviewDrawerMeta', `${review.brand} · ${review.rating} звезд · ${review.age}`)
+  if (canonicalReviewsEnabled) {
+    setReviewText('reviewDrawerTitle', 'Каноническая карточка WB')
+    setReviewText('reviewDrawerMeta', `Внешний ID отзыва: ${review.id}`)
+    setReviewText('reviewDrawerSku', 'Аккаунт выбирается ниже')
+  }
   setReviewText('reviewDrawerStars', reviewStars(review.rating))
   setReviewText('reviewDrawerText', review.text || 'Покупатель оставил оценку без текста.')
   setReviewText('reviewDrawerMedia', review.media)
@@ -2818,16 +2953,17 @@ function openBackendReviewDrawer(review: VellaReview) {
   }
   document.getElementById('reviewDrawerOverlay')?.classList.add('open')
   document.getElementById('reviewDrawer')?.classList.add('open')
+  if (canonicalReviewsEnabled) window.dispatchEvent(new CustomEvent(canonicalReviewSelectionEvent, { detail: review.id }))
   window.switchReviewDrawerTab?.('answer')
   window.setTimeout(() => textarea?.focus(), 0)
   window.syncHiddenA11y?.()
 }
 
 function updateBackendReviewsKpi() {
-  const reviews = window.__vellaReviewsData ?? []
+  const reviews = filteredReactReviews(window.__vellaReviewsData ?? [])
   const open = reviews.filter((review) => !['sent', 'sent_pending_verify'].includes(review.status)).length
-  const queue = reviews.filter((review) => ['pending_review', 'blocked', 'error', 'new'].includes(review.status)).length
-  const auto = reviews.filter((review) => ['scheduled', 'sent', 'sent_pending_verify'].includes(review.status)).length
+  const queue = reviewsQueue(reviews).length
+  const drafts = reviews.filter((review) => !['sent', 'sent_pending_verify'].includes(review.status) && (review.draftId || review.draft?.trim())).length
   const blocked = reviews.filter((review) => ['blocked', 'error'].includes(review.status)).length
   const set = (id: string, value: string | number) => {
     const el = document.getElementById(id)
@@ -2835,9 +2971,10 @@ function updateBackendReviewsKpi() {
   }
   set('reviewsKpiOpen', open)
   set('reviewsKpiQueue', queue)
-  set('reviewsKpiAuto', auto)
+  set('reviewsKpiAuto', drafts)
   set('reviewsKpiBlocked', blocked)
   set('navReviewsCount', queue)
+  set('subtabReviewsCount', queue)
 }
 
 function patchReviewRow(review: VellaReview, options: { refreshDrawer?: boolean } = {}) {
@@ -3346,6 +3483,7 @@ function installReviewsReactRowsBridge(accessToken: string | null, shouldLoad = 
     }
   }
   window.saveReviewDraft = () => {
+    if (canonicalReviewsEnabled) return window.showToast?.('Используйте каноническую локальную правку в карточке.', 'warn')
     const review = (window.__vellaReviewsData ?? []).find((row) => row.id === window.__vellaCurrentReviewId)
     if (!review) return
     const draft = (document.getElementById('reviewDraftText') as HTMLTextAreaElement | null)?.value ?? review.draft
@@ -4345,6 +4483,7 @@ type AbcBackendRow = {
   otherExpensesKopecks?: number | null
   drrSalesPct?: number | null
   netTotalKopecks?: number | null
+  netProfitKopecks?: number | null
   netPerUnitKopecks?: number | null
   logisticsCostPct?: number | null
   logisticsDeltaPct?: number | null
@@ -4362,6 +4501,12 @@ type AbcBackendRow = {
   promotionId?: string | number | null
   promotionType?: string | null
   abcCode?: string | null
+  salesClass?: 'A' | 'B' | 'C' | null
+  profitAfterLoyaltyKopecks?: number | null
+  profitBeforeInternalExpensesKopecks?: number | null
+  internalExpensesKopecks?: number | null
+  blockerIds?: string[] | null
+  canonicalSourceState?: CanonicalCompatibilityMeta['state'] | null
   buyoutPct?: number | null
   ruleEvaluation?: {
     status?: 'unknown' | 'risk' | 'opportunity' | 'normal' | null
@@ -4377,6 +4522,8 @@ type AbcBackendReport = {
   calculatedAt?: string | null
   warning?: string | null
   reportJob?: PnlReportJobPayload | null
+  canonical?: CanonicalCompatibilityMeta | null
+  canonicalSummary?: CanonicalAbcPnlPage['summary'] | null
 }
 type AbcLiveState = {
   loading: boolean
@@ -4384,6 +4531,7 @@ type AbcLiveState = {
   rows: AbcReportRow[]
   error: string | null
   authExpired: boolean
+  accessDenied: boolean
 }
 type AbcTextLookup = (key: string, fallback?: string) => string
 type AbcRowRenderContext = {
@@ -5235,9 +5383,6 @@ function installDigestLiveDataBridge(accessToken: string | null) {
     const path = currentDigestReportPath(period)
     const url = buildApiUrl(path)
     const requestKey = digestReportRequestKey(period)
-    if (window.__vellaDigestLiveRequestKey === requestKey && window.__vellaDigestLiveReport) {
-      return window.__vellaDigestLiveReport
-    }
     const memoryEntry = digestReportMemoryCache.get(requestKey)
     if (memoryEntry && Date.now() - memoryEntry.cachedAt < 5 * 60_000) {
       window.__vellaDigestLiveLoading = false
@@ -5248,7 +5393,7 @@ function installDigestLiveDataBridge(accessToken: string | null) {
       return memoryEntry.report
     }
     if (window.__vellaDigestLiveLoading) {
-      if (window.__vellaDigestLiveRequestKey === requestKey) return window.__vellaDigestLiveReport ?? null
+      if (window.__vellaDigestLiveRequestKey === requestKey && !window.__vellaDigestLiveAbortController?.signal.aborted) return window.__vellaDigestLiveReport ?? null
       window.__vellaDigestLiveAbortController?.abort()
     }
     if (!accessToken) {
@@ -5599,7 +5744,8 @@ function abcFiltersForBackendRow(row: AbcBackendRow, statusLabel: string) {
   if (statusLabel.includes('нов')) filters.push('Новинки')
   if (statusLabel.includes('нелик')) filters.push('Неликвид')
   if (row.promotionStatus === 'yes') filters.push('В акции')
-  if ((asAbcNumber(row.netTotalKopecks) ?? 0) < 0) filters.push('Убыток')
+  const profit = row.canonicalSourceState ? row.profitBeforeInternalExpensesKopecks : row.netTotalKopecks
+  if ((asAbcNumber(profit) ?? 0) < 0) filters.push('Убыток')
   return filters
 }
 
@@ -5617,9 +5763,10 @@ function abcPromotionLabelFromBackend(row: AbcBackendRow) {
 }
 
 export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
-  const status = statusLabelFromBackend(row.productStatus)
-  const promo = abcPromotionLabelFromBackend(row)
-  const action = actionFromBackendAbc(row)
+  const isCanonical = !!row.canonicalSourceState
+  const status = isCanonical ? 'нет данных' : statusLabelFromBackend(row.productStatus)
+  const promo = isCanonical ? '—' : abcPromotionLabelFromBackend(row)
+  const action = isCanonical ? { action: 'нет данных', actionCls: 'neutral' } : actionFromBackendAbc(row)
   const managerName = row.manager || '—'
   const price = row.priceBeforeSppKopecks ?? row.priceKopecks
   const priceWithSpp = row.priceWithSppKopecks
@@ -5631,6 +5778,7 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
   const ctrPct = asAbcNumber(row.ctrPct)
   const clicksDelta = asAbcNumber(row.clicksDeltaPct)
   const ktrIndex = asAbcNumber(row.ktrIndex)
+  const displayedProfit = asAbcNumber(isCanonical ? row.profitBeforeInternalExpensesKopecks : row.netTotalKopecks)
   const netPerUnit = row.netPerUnitKopecks ?? (
     salesUnits > 0
       ? Math.round((asAbcNumber(row.netTotalKopecks) ?? 0) / salesUnits)
@@ -5643,8 +5791,8 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
     name: row.productName || [row.brand, row.category].filter(Boolean).join(' · ') || row.sku || 'Товар',
     photoUrl: row.photoUrl,
     status,
-    statusCls: statusClassFromLabel(status),
-    abc: String(row.abcCode ?? 'CC').toUpperCase(),
+    statusCls: isCanonical ? 'neutral' : statusClassFromLabel(status),
+    abc: isCanonical ? (row.salesClass ? `${row.salesClass}·—` : '—') : String(row.abcCode ?? 'CC').toUpperCase(),
     action: action.action,
     actionCls: action.actionCls,
     promo,
@@ -5656,29 +5804,34 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
     cogs: formatAbcKopecks(cogsPerUnit),
     type: abcSkuTypeFromBackend(row),
     margin: `${formatAbcKopecks(row.marginKopecks)} / ${marginPct === null ? '—' : formatAbcPct(marginPct)}`,
-    marginCls: marginPct !== null && marginPct < 0 ? 'metric-down' : 'metric-up',
+    marginCls: marginPct === null ? '' : marginPct < 0 ? 'metric-down' : 'metric-up',
     delta: formatAbcDeltaPct(row.marginDeltaPct, ' пп'),
     views: impressions === null ? '—' : Math.round(impressions).toLocaleString('ru-RU'),
     clicks: clicks === null ? '—' : Math.round(clicks).toLocaleString('ru-RU'),
     clicksSub: `CTR ${ctrPct === null ? '—' : formatAbcPct(ctrPct)}${clicksDelta === null ? '' : ` · ${formatAbcDeltaPct(clicksDelta)}`}`,
-    baskets: (asAbcNumber(row.baskets) ?? 0).toLocaleString('ru-RU'),
+    baskets: isCanonical ? '—' : (asAbcNumber(row.baskets) ?? 0).toLocaleString('ru-RU'),
     basketDelta: formatAbcDeltaPct(row.basketsDeltaPct),
     cr: formatAbcPct(asAbcNumber(row.cartCrPct) ?? Number.NaN),
-    orders: formatAbcMetricPair(row.ordersComposite),
+    orders: isCanonical ? '—' : formatAbcMetricPair(row.ordersComposite),
     sales: formatAbcMetricPair(row.salesComposite),
     ads: `${formatAbcKopecks(row.adSpendKopecks)} / ${formatAbcPct(asAbcNumber(row.drrSalesPct) ?? Number.NaN)}`,
-    net: formatAbcKopecks(row.netTotalKopecks),
-    netCls: (asAbcNumber(row.netTotalKopecks) ?? 0) < 0 ? 'metric-down' : 'metric-up',
-    netSub: netPerUnit === null ? 'на товар' : `${formatAbcKopecks(netPerUnit)}/шт`,
+    net: formatAbcKopecks(isCanonical ? row.profitBeforeInternalExpensesKopecks : row.netTotalKopecks),
+    netCls: displayedProfit === null ? '' : displayedProfit < 0 ? 'metric-down' : 'metric-up',
+    netSub: isCanonical ? `Чистая: ${formatAbcKopecks(row.netProfitKopecks)}` : netPerUnit === null ? 'на товар' : `${formatAbcKopecks(netPerUnit)}/шт`,
     costs: `${formatAbcPct(asAbcNumber(row.logisticsCostPct) ?? Number.NaN)} / ${formatAbcPct(asAbcNumber(row.commissionCostPct) ?? Number.NaN)} / ${formatAbcPct(asAbcNumber(row.storageCostPct) ?? Number.NaN)}`,
     costDeltas: `${formatAbcDeltaPct(row.logisticsDeltaPct, ' пп')} / ${formatAbcDeltaPct(row.commissionDeltaPct, ' пп')} / ${formatAbcDeltaPct(row.storageDeltaPct, ' пп')}`,
     warehouse: ktrIndex === null ? '—' : ktrIndex.toLocaleString('ru-RU'),
     warehouseCls: ktrIndex === null ? '' : ktrIndex > 1.5 ? 'metric-down' : 'metric-up',
     localization: formatAbcPct(asAbcNumber(row.localizationPct) ?? Number.NaN),
-    stock: `${(asAbcNumber(row.wbStockUnits) ?? 0).toLocaleString('ru-RU')} шт`,
+    stock: isCanonical ? '—' : `${(asAbcNumber(row.wbStockUnits) ?? 0).toLocaleString('ru-RU')} шт`,
     stockRub: formatAbcKopecks(row.wbStockKopecks),
     filters: abcFiltersForBackendRow(row, status),
     buyoutPct: row.buyoutPct,
+    canonical: isCanonical,
+    blockerIds: row.blockerIds,
+    ordersKnown: !isCanonical,
+    profitKnown: !isCanonical || asAbcNumber(row.profitBeforeInternalExpensesKopecks) !== null,
+    adsKnown: !isCanonical || asAbcNumber(row.adSpendKopecks) !== null,
   }
 }
 
@@ -5689,6 +5842,7 @@ function currentAbcLiveState(): AbcLiveState {
     rows: Array.isArray(window.__vellaAbcLiveRows) ? window.__vellaAbcLiveRows : [],
     error: window.__vellaAbcLiveError ?? null,
     authExpired: !!window.__vellaAbcLiveAuthExpired,
+    accessDenied: !!window.__vellaAbcLiveAccessDenied,
   }
 }
 
@@ -5706,21 +5860,40 @@ function emitAbcLiveStateUpdated() {
   window.dispatchEvent(new CustomEvent('vella:abc-live-updated'))
 }
 
+function currentScopedAbcLiveState() {
+  return {
+    scope: JSON.stringify([abcReportMemoryToken, abcReportMemoryRolloutKey, window.__vellaAbcLiveRequestKey]),
+    state: currentAbcLiveState(),
+  }
+}
+
 function useAbcLiveState() {
-  const [state, setState] = useState<AbcLiveState>(currentAbcLiveState)
+  const auth = useContext(AuthContext)
+  const [published, setPublished] = useState(currentScopedAbcLiveState)
 
   useEffect(() => {
-    const refresh = () => setState(currentAbcLiveState())
+    const refresh = () => setPublished(currentScopedAbcLiveState())
     window.addEventListener('vella:abc-live-updated', refresh)
     window.addEventListener('vella:abc-rows-updated', refresh)
+    window.addEventListener(REPORT_PERIOD_EVENT, refresh)
     refresh()
     return () => {
       window.removeEventListener('vella:abc-live-updated', refresh)
       window.removeEventListener('vella:abc-rows-updated', refresh)
+      window.removeEventListener(REPORT_PERIOD_EVENT, refresh)
     }
   }, [])
 
-  return state
+  // Standalone legacy renderers have no auth provider. In the application,
+  // compare the selected scope during render, before the bridge's effect runs.
+  if (!auth) return published.state
+  const rollout = resolveCanonicalAbcPnlRollout(auth.cabinetMe?.organization.organizationId)
+  const rolloutKey = rollout ? `canonical:${rollout.organizationId}:${rollout.marketplaceAccountId}` : 'legacy'
+  const period = readReportPeriodState('abc')
+  const requestKey = `${rolloutKey}:${period.fromIso}:${period.toIso}:sku`
+  return selectScopedReportState<AbcLiveState>(JSON.stringify([auth.accessToken, rolloutKey, requestKey]), published, {
+    loading: true, report: null, rows: [], error: null, authExpired: false, accessDenied: false,
+  })
 }
 
 function abcBackendSummaryNumber(report: AbcBackendReport | null, key: string) {
@@ -5764,6 +5937,7 @@ function abcLiveMeta(report: AbcBackendReport | null, hash: string) {
 const ABC_REPORT_MEMORY_TTL_MS = 5 * 60_000
 const abcReportMemoryCache = new Map<string, { report: AbcBackendReport; rows: AbcReportRow[]; cachedAt: number }>()
 let abcReportMemoryToken: string | null = null
+let abcReportMemoryRolloutKey = 'legacy'
 
 function cacheAbcReport(requestKey: string, report: AbcBackendReport, rows: AbcReportRow[]) {
   const now = Date.now()
@@ -5773,11 +5947,13 @@ function cacheAbcReport(requestKey: string, report: AbcBackendReport, rows: AbcR
   abcReportMemoryCache.set(requestKey, { report, rows, cachedAt: now })
 }
 
-export function installAbcLiveDataBridge(accessToken: string | null) {
-  if (abcReportMemoryToken !== accessToken) {
+export function installAbcLiveDataBridge(accessToken: string | null, canonicalRollout: CanonicalAbcPnlRollout | null = null) {
+  const rolloutKey = canonicalRollout ? `canonical:${canonicalRollout.organizationId}:${canonicalRollout.marketplaceAccountId}` : 'legacy'
+  if (abcReportMemoryToken !== accessToken || abcReportMemoryRolloutKey !== rolloutKey) {
     window.__vellaAbcLiveAbortController?.abort()
     abcReportMemoryCache.clear()
     abcReportMemoryToken = accessToken
+    abcReportMemoryRolloutKey = rolloutKey
     window.__vellaAbcLiveRequestKey = undefined
     window.__vellaAbcLiveRows = undefined
     window.__vellaAbcLiveReport = undefined
@@ -5786,10 +5962,7 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
     const activeTab = resolveParityRouteTarget(window.location.pathname, window.location.search).tab
     if (!shouldLoadPeriodSurface(activeTab, 'abc')) return null
     const period = readReportPeriodState('abc')
-    const requestKey = `${period.fromIso}:${period.toIso}:sku`
-    if (window.__vellaAbcLiveRequestKey === requestKey && Array.isArray(window.__vellaAbcLiveRows) && window.__vellaAbcLiveReport) {
-      return window.__vellaAbcLiveRows
-    }
+    const requestKey = `${rolloutKey}:${period.fromIso}:${period.toIso}:sku`
     const memoryEntry = abcReportMemoryCache.get(requestKey)
     if (memoryEntry && Date.now() - memoryEntry.cachedAt < ABC_REPORT_MEMORY_TTL_MS) {
       if (window.__vellaAbcLiveLoading && window.__vellaAbcLiveRequestKey !== requestKey) {
@@ -5798,6 +5971,7 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
       window.__vellaAbcLiveLoading = false
       window.__vellaAbcLiveError = undefined
       window.__vellaAbcLiveAuthExpired = false
+      window.__vellaAbcLiveAccessDenied = false
       window.__vellaAbcLiveRows = memoryEntry.rows
       window.__vellaAbcLiveReport = memoryEntry.report
       window.__vellaAbcLiveRequestKey = requestKey
@@ -5807,7 +5981,7 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
       return memoryEntry.rows
     }
     if (window.__vellaAbcLiveLoading) {
-      if (window.__vellaAbcLiveRequestKey === requestKey) return window.__vellaAbcLiveRows ?? null
+      if (window.__vellaAbcLiveRequestKey === requestKey && !window.__vellaAbcLiveAbortController?.signal.aborted) return window.__vellaAbcLiveRows ?? null
       window.__vellaAbcLiveAbortController?.abort()
     }
     const controller = new AbortController()
@@ -5818,6 +5992,7 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
     window.__vellaAbcLiveReport = null
     window.__vellaAbcLiveError = undefined
     window.__vellaAbcLiveAuthExpired = false
+    window.__vellaAbcLiveAccessDenied = false
     window.__vellaPublishAbcRowsSnapshot?.()
     emitAbcLiveStateUpdated()
     if (!accessToken) {
@@ -5832,9 +6007,16 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
     const authToken = accessToken
     try {
       if (authToken) {
-        const latest = await loadLatestReportCache<AbcBackendReport>('abc', 'abc', authToken, 'sku', period, 'operational', {
-          signal: controller.signal,
-        })
+        const latest: AbcBackendReport | null = canonicalRollout && shouldUseCanonicalAbcPnl(canonicalRollout, 'abc')
+          ? adaptCanonicalAbcReport(await fetchCanonicalAbcPnl({
+              accessToken: authToken,
+              marketplaceAccountId: canonicalRollout.marketplaceAccountId,
+              period,
+              signal: controller.signal,
+            }))
+          : await loadLatestReportCache<AbcBackendReport>('abc', 'abc', authToken, 'sku', period, 'operational', {
+              signal: controller.signal,
+            })
         if (controller.signal.aborted || window.__vellaAbcLiveAbortController !== controller) return null
         if (latest) {
           const rows = Array.isArray(latest.rows)
@@ -5861,12 +6043,15 @@ export function installAbcLiveDataBridge(accessToken: string | null) {
       if (isReportLoadAbort(error) || controller.signal.aborted || window.__vellaAbcLiveAbortController !== controller) return null
       console.warn('Failed to load live ABC report', error)
       const authExpired = isAbcAuthExpiredError(error)
+      const accessDenied = shouldUseCanonicalAbcPnl(canonicalRollout, 'abc') && error instanceof ApiError && error.status === 403
       window.__vellaAbcLiveAuthExpired = authExpired
+      window.__vellaAbcLiveAccessDenied = accessDenied
       window.__vellaAbcLiveRows = []
       window.__vellaAbcLiveReport = null
       window.__vellaAbcLiveError = authExpired
         ? 'Сессия истекла. Войдите снова, чтобы открыть ABC-отчет.'
-        : error instanceof Error ? error.message : 'Не удалось получить ABC-отчет'
+        : accessDenied ? 'Нет доступа к canonical ABC/P&L для выбранного аккаунта.'
+          : error instanceof Error ? error.message : 'Не удалось получить ABC-отчет'
       window.__vellaPublishAbcRowsSnapshot?.()
       emitAbcLiveStateUpdated()
       return window.__vellaAbcLiveRows ?? null
@@ -5969,29 +6154,14 @@ function showAbcColumnControls(event: MouseEvent<HTMLButtonElement>) {
   window.toggleReportColumns?.(event.currentTarget)
 }
 
-function abcRowMatchesFilter(row: HTMLElement, state: AbcFilterState) {
-  const chip = state.chip || 'Все товары'
-  const query = state.query || ''
-  const manager = state.manager || 'all'
-  const status = state.status || 'all'
-  const promo = state.promo || 'all'
-  const abc = state.abc || 'all'
-  const managerKey = row.dataset.managerId === 'unassigned' ? '' : row.dataset.managerId || ''
-
-  const chipOk = chip === 'Все товары' || (row.dataset.filter || '').split('|').includes(chip)
-  const searchOk = !query || (row.dataset.search || '').includes(query)
-  const managerOk = !manager || manager === 'all' || (manager === 'unassigned' ? !managerKey : managerKey === manager)
-  const statusOk = status === 'all' || row.dataset.status === status
-  const promoOk = promo === 'all' || row.dataset.promo === promo
-  const abcOk = abc === 'all' || row.dataset.abc === abc
-  return chipOk && searchOk && managerOk && statusOk && promoOk && abcOk
-}
-
-function updateAbcSummaryFromRows(rows: HTMLElement[], state: AbcFilterState) {
-  const orderCount = rows.reduce((sum, row) => sum + Number(row.dataset.ordersCount || 0), 0)
-  const orderRub = rows.reduce((sum, row) => sum + Number(row.dataset.ordersRub || 0), 0)
-  const profitRub = rows.reduce((sum, row) => sum + Number(row.dataset.profitRub || 0), 0)
-  const adsRub = rows.reduce((sum, row) => sum + Number(row.dataset.adsRub || 0), 0)
+function updateAbcSummaryFromRows(rows: AbcReportRow[], state: AbcFilterState) {
+  const ordersKnown = rows.every((row) => row.ordersKnown !== false)
+  const profitKnown = rows.every((row) => row.profitKnown !== false)
+  const adsKnown = rows.every((row) => row.adsKnown !== false)
+  const orderCount = rows.reduce((sum, row) => sum + parseAbcFirstNumber(row.orders), 0)
+  const orderRub = rows.reduce((sum, row) => sum + parseAbcSecondNumber(row.orders), 0)
+  const profitRub = rows.reduce((sum, row) => sum + parseAbcNumber(row.net), 0)
+  const adsRub = rows.reduce((sum, row) => sum + parseAbcFirstNumber(row.ads), 0)
   const marginPct = orderRub ? (profitRub / orderRub) * 100 : NaN
   const filterLabel = state.chip === 'Все товары' && !state.query
     ? 'все товары'
@@ -6014,14 +6184,14 @@ function updateAbcSummaryFromRows(rows: HTMLElement[], state: AbcFilterState) {
   setText('abcFilteredTitle', `Выбранные товары: ${filterLabel}`)
   setText('abcFilteredMeta', abcLiveMeta(window.__vellaAbcLiveReport ?? null, hash))
   setText('abcFilteredSkuCount', rows.length.toLocaleString('ru-RU'))
-  setText('abcFilteredOrders', `${Math.round(orderCount).toLocaleString('ru-RU')} / ${formatAbcRub(orderRub)}`)
-  const profitEl = setText('abcFilteredProfit', formatAbcRub(profitRub))
-  profitEl?.classList.toggle('good', profitRub >= 0)
-  profitEl?.classList.toggle('bad', profitRub < 0)
+  setText('abcFilteredOrders', ordersKnown ? `${Math.round(orderCount).toLocaleString('ru-RU')} / ${formatAbcRub(orderRub)}` : '—')
+  const profitEl = setText('abcFilteredProfit', profitKnown ? formatAbcRub(profitRub) : '—')
+  profitEl?.classList.toggle('good', profitKnown && profitRub >= 0)
+  profitEl?.classList.toggle('bad', profitKnown && profitRub < 0)
   const marginEl = setText('abcFilteredMargin', formatAbcPct(marginPct))
   marginEl?.classList.toggle('good', Number.isFinite(marginPct) && marginPct >= 12)
   marginEl?.classList.toggle('bad', Number.isFinite(marginPct) && marginPct < 0)
-  setText('abcFilteredAdSpend', formatAbcRub(adsRub))
+  setText('abcFilteredAdSpend', adsKnown ? formatAbcRub(adsRub) : '—')
 }
 
 function applyAbcFilterFromDom(state: AbcFilterState = {}) {
@@ -6034,13 +6204,7 @@ function applyAbcFilterFromDom(state: AbcFilterState = {}) {
   state.promo = state.promo || 'all'
   state.abc = state.abc || 'all'
 
-  const visibleRows: HTMLElement[] = []
-  tab.querySelectorAll<HTMLElement>('[data-report-row]').forEach((row) => {
-    const visible = abcRowMatchesFilter(row, state)
-    row.style.display = visible ? '' : 'none'
-    if (visible) visibleRows.push(row)
-  })
-  updateAbcSummaryFromRows(visibleRows, state)
+  window.__vellaPublishAbcRowsSnapshot?.()
 }
 
 function abcRowCell(cellName: string, content: string, leadingAttributes = '', trailingAttributes = '') {
@@ -6050,14 +6214,15 @@ function abcRowCell(cellName: string, content: string, leadingAttributes = '', t
 function renderAbcIdentityCells(ctx: AbcRowRenderContext) {
   const { row, text, sku, type, promo } = ctx
   const promoTip = promo !== 'нет' ? `Акция WB: ${promo}` : 'Не участвует в акции WB'
+  const abcTip = row.canonical ? 'Класс продаж A/B/C; класс прибыли и вторая буква не рассчитаны' : '1-я буква — продажи, 2-я — чистая прибыль'
   return [
     abcRowCell('abc-product-cell', `<div class="report-product-cell" ${window.reportSkuOpenAttrs?.(sku) ?? ''}>${window.reportThumb?.(type, row) ?? ''}<div><div class="sku">${sku}</div><span class="sub">${text('name')}</span></div></div>`, 'class="report-sticky"'),
     abcRowCell('abc-wb-cell', `<a class="report-link" href="https://www.wildberries.ru/catalog/${text('wb')}/detail.aspx" target="_blank" data-tip="Открыть карточку на WB в новой вкладке">${text('wb')}</a>`),
     abcRowCell('abc-status-cell', `<span class="report-tag ${text('statusCls')}" data-tip="Рабочий статус товара в отчёте">${text('status')}</span>`),
-    abcRowCell('abc-code-cell', `<span class="abc-badge ${window.abcBadgeClass?.(text('abc')) ?? 'cc'}" data-tip="1-я буква — продажи, 2-я — чистая прибыль">${text('abc')}</span>`),
+    abcRowCell('abc-code-cell', `<span class="abc-badge ${window.abcBadgeClass?.(text('abc')) ?? 'cc'}" data-tip="${abcTip}">${text('abc')}</span>`),
     abcRowCell('abc-action-cell', `<span class="action-chip ${text('actionCls')}" data-tip="Статус правила, действие не применяется автоматически">${text('action')}</span>`),
-    abcRowCell('abc-promo-cell', window.promoStateHTML?.(promo, promoTip) ?? ''),
-    abcRowCell('abc-manager-cell', text('managerId') ? window.managerCellHTML?.(row) ?? '' : '<span class="report-tag neutral">Без ответственного</span>', '', 'data-tip="Ответственный менеджер"'),
+    abcRowCell('abc-promo-cell', row.canonical ? '<span class="report-tag neutral">нет данных</span>' : window.promoStateHTML?.(promo, promoTip) ?? ''),
+    abcRowCell('abc-manager-cell', row.canonical ? '<span class="report-tag neutral">нет данных</span>' : text('managerId') ? window.managerCellHTML?.(row) ?? '' : '<span class="report-tag neutral">Без ответственного</span>', '', 'data-tip="Ответственный менеджер"'),
   ].join('\n    ')
 }
 
@@ -6081,12 +6246,13 @@ function renderAbcTrafficCells(ctx: AbcRowRenderContext) {
 }
 
 function renderAbcFinancialCells(ctx: AbcRowRenderContext) {
-  const { text } = ctx
+  const { row, text } = ctx
+  const profitTip = row.canonical ? 'Продажи за вычетом возвратов минус комиссия, логистика, хранение, приёмка, реклама, штрафы, налог и себестоимость' : 'Чистая прибыль товара'
   return [
     abcRowCell('abc-orders-cell', window.pairMetricCell?.(text('orders'), 'Заказы за выбранный период', 'сумма/динамика') ?? '', 'class="num"'),
     abcRowCell('abc-sales-cell', window.pairMetricCell?.(text('sales'), 'Продажи из финансового отчёта WB (retailAmount)', 'сумма/динамика') ?? '', 'class="num"', 'data-tip="Продажи из финансового отчёта WB (retailAmount, возвраты со знаком)"'),
     abcRowCell('abc-ads-cell', text('ads'), 'class="num"', 'data-tip="Расход рекламы и ДРР"'),
-    abcRowCell('abc-net-cell', `<span class="${text('netCls')}" data-tip="Чистая прибыль товара">${text('net')}</span><span class="sub">${text('netSub')}</span>`, 'class="num"'),
+    abcRowCell('abc-net-cell', `<span class="${text('netCls')}" data-tip="${profitTip}">${text('net')}</span><span class="sub">${text('netSub')}</span>`, 'class="num"'),
   ].join('\n    ')
 }
 
@@ -6102,6 +6268,10 @@ function renderAbcWarehouseCells(ctx: AbcRowRenderContext) {
 }
 
 function renderAbcCommentCell(ctx: AbcRowRenderContext) {
+  if (ctx.row.canonical) {
+    const blockers = Array.isArray(ctx.row.blockerIds) ? ctx.row.blockerIds.map(String) : []
+    return abcRowCell('abc-comment-cell', blockers.length ? `<span class="report-tag warn">${escapeHtml(blockers.join(' · '))}</span>` : '<span class="report-tag good">canonical</span>')
+  }
   return abcRowCell('abc-comment-cell', window.reportCommentCell?.(ctx.row, 'ABC') ?? '')
 }
 
@@ -6132,7 +6302,7 @@ export function renderAbcRowHtml(row: AbcReportRow, originalIndex: number) {
     type,
   }
 
-  return `<tr data-report-row data-vella-island="abc-table-row" data-vella-island-status="react-row-renderer" data-vella-filter-owner="react" data-filter="${filter}" data-manager="${text('manager', '—')}" data-manager-id="${text('managerId', 'unassigned')}" data-status="${text('status')}" data-promo="${promo}" data-abc="${text('abc')}" data-search="${dataSearch}" data-orders-count="${ordersCount}" data-orders-rub="${ordersRub}" data-profit-rub="${profitRub}" data-ads-rub="${adsRub}">
+  return `<tr data-report-row data-vella-island="abc-table-row" data-vella-island-status="react-row-renderer" data-vella-filter-owner="react" data-filter="${filter}" data-manager="${text('manager', '—')}" data-manager-id="${text('managerId', 'unassigned')}" data-status="${text('status')}" data-promo="${promo}" data-abc="${text('abc')}" data-search="${dataSearch}" data-orders-count="${ordersCount}" data-orders-rub="${ordersRub}" data-orders-known="${row.ordersKnown !== false}" data-profit-rub="${profitRub}" data-profit-known="${row.profitKnown !== false}" data-ads-rub="${adsRub}" data-ads-known="${row.adsKnown !== false}">
     ${renderAbcIdentityCells(ctx)}
     ${renderAbcCommercialCells(ctx)}
     ${renderAbcTrafficCells(ctx)}
@@ -6158,7 +6328,9 @@ function installAbcRowRendererBridge() {
     };
     window.__vellaPublishAbcRowsSnapshot = function(){
       const sourceRows = Array.isArray(window.__vellaAbcLiveRows) ? window.__vellaAbcLiveRows : [];
-      const rows = window.__vellaSortAbcRows(sourceRows, normalizeReportSortStack('abc'));
+      const filter = reportFilterState.abc;
+      const sort = normalizeReportSortStack('abc');
+      const rows = window.__vellaSortAbcRows(sourceRows.filter(function(row){ return abcDataMatchesFilter(row, filter); }), sort);
       const originalIndexes = new Map(sourceRows.map(function(row, index){ return [row, index]; }));
       window.__vellaAbcRowsState = {
         rows: rows.map(function(row){
@@ -6169,7 +6341,9 @@ function installAbcRowRendererBridge() {
             html: ''
           };
         }),
-        count: rows.length
+        count: rows.length,
+        filter: { ...filter },
+        sort: sort.map(function(item){ return { ...item }; })
       };
       window.__vellaReactRenderAbcRows?.();
       window.dispatchEvent(new CustomEvent('vella:abc-rows-updated'));
@@ -6304,13 +6478,16 @@ function DigestBrandFilterIsland({ replacementKey }: { replacementKey: string })
 }
 
 function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
-  const { accessToken } = useAuth()
+  const { accessToken, cabinetMe } = useAuth()
+  const [pnlMode] = useContext(PnlReportModeContext)!
   const location = useLocation()
   const routeTab = resolveParityRouteTarget(location.pathname, location.search).tab
   const [activeTab, setActiveTab] = useState(routeTab)
   const isAvitoTab = activeTab.startsWith('avito-')
   const isLiveWbPeriod = usesLiveWbPeriodControl(activeTab)
   const activeReportPeriodKey = reportPeriodKeyForTab(activeTab)
+  const canonicalPeriod = (activeTab === 'abc' || activeTab === 'pnl')
+    && shouldUseCanonicalAbcPnl(resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId), activeTab, pnlMode)
   const readActivePeriod = () => activeReportPeriodKey ? readReportPeriodState(activeReportPeriodKey) : readProductsPeriodState()
   const [productsPeriod, setProductsPeriod] = useState(readActivePeriod)
   const [customFromIso, setCustomFromIso] = useState(() => readActivePeriod().fromIso)
@@ -6338,10 +6515,10 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
       const date = addLocalDays(gridStart, index)
       const iso = toLocalIsoDate(date)
       const coverageDay = coverageByDate.get(iso)
-      const state = coverageDay?.state ?? (coverageLoading ? 'loading' : 'missing')
+      const state = canonicalPeriod ? 'unknown' : coverageDay?.state ?? (coverageLoading ? 'loading' : 'missing')
       const inAllowedWindow = iso >= minCustomIso && iso <= todayIso
       const inCurrentMonth = date.getMonth() === firstOfMonth.getMonth()
-      const selectable = Boolean(coverageDay) && state !== 'missing' && inAllowedWindow
+      const selectable = inAllowedWindow && (canonicalPeriod || Boolean(coverageDay) && state !== 'missing')
       return {
         iso,
         label: String(date.getDate()),
@@ -6355,7 +6532,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
         isTo: iso === customToIso,
       }
     })
-  }, [calendarMonthIso, coverageByDate, coverageLoading, customFromIso, customToIso, minCustomIso, todayIso])
+  }, [calendarMonthIso, canonicalPeriod, coverageByDate, coverageLoading, customFromIso, customToIso, minCustomIso, todayIso])
   const canGoPrevMonth = addIsoMonths(calendarMonthIso, -1) >= monthStartIso(minCustomIso)
   const canGoNextMonth = addIsoMonths(calendarMonthIso, 1) <= monthStartIso(todayIso)
 
@@ -6393,7 +6570,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
   }, [activeReportPeriodKey, activeTab, isLiveWbPeriod])
 
   useEffect(() => {
-    if (!isLiveWbPeriod || !accessToken) {
+    if (!isLiveWbPeriod || !accessToken || canonicalPeriod) {
       setCoverage(null)
       setCoverageLoading(false)
       return
@@ -6417,7 +6594,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
       controller.abort()
       window.clearTimeout(timer)
     }
-  }, [accessToken, calendarOpen, coverageVersion, isLiveWbPeriod, minCustomIso, todayIso])
+  }, [accessToken, calendarOpen, canonicalPeriod, coverageVersion, isLiveWbPeriod, minCustomIso, todayIso])
 
   useEffect(() => {
     if (!isLiveWbPeriod) return
@@ -6677,7 +6854,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
                         ? `; нет ${day.coverageDay.missingSources.join(', ')}`
                         : ''
                       const title = day.selectable
-                        ? `${day.iso}: ${productsCoverageStateLabel(day.state)}${missingSources}`
+                        ? `${day.iso}: ${canonicalPeriod ? 'выбрать дату отчёта' : productsCoverageStateLabel(day.state) + missingSources}`
                         : coverageLoading
                           ? `${day.iso}: загружаем данные`
                           : `${day.iso}: нет данных еще`
@@ -6706,9 +6883,11 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
                     })}
                   </div>
                   <div className="products-cache-calendar-foot">
+                    {canonicalPeriod ? <span>Наличие данных проверяется при загрузке отчёта</span> : <>
                     <span><i className="is-complete" /> есть</span>
                     <span><i className="is-partial" /> частично</span>
                     <span><i className="is-missing" /> нет данных еще</span>
+                    </>}
                   </div>
                   {coverageLoading ? <div className="products-cache-calendar-summary">Загружаем календарь данных…</div> : null}
                 </div>
@@ -6755,6 +6934,78 @@ function LiveStatusIsland({ replacementKey }: { replacementKey: string }) {
 }
 
 function ExportDropdownIsland({ replacementKey }: { replacementKey: string }) {
+  const { accessToken, cabinetMe, isAuthenticated } = useAuth()
+  const activeTab = useContext(ActiveParityTabContext)
+  const pnlMode = useContext(PnlReportModeContext)?.[0]
+  const pnlExport = useContext(PnlTableExportContext)
+  const abc = useAbcLiveState()
+  const [pending, setPending] = useState(false)
+  const inFlight = useRef<AbortController | null>(null)
+  const latest = useRef({ accessToken, cabinetMe, isAuthenticated, activeTab, pnlMode, abc })
+  latest.current = { accessToken, cabinetMe, isAuthenticated, activeTab, pnlMode, abc }
+  const accountId = resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId)?.marketplaceAccountId
+
+  useEffect(() => {
+    const cancel = () => { inFlight.current?.abort(); inFlight.current = null; setPending(false) }
+    window.addEventListener(REPORT_PERIOD_EVENT, cancel)
+    return () => { window.removeEventListener(REPORT_PERIOD_EVENT, cancel); cancel() }
+  }, [accessToken, cabinetMe?.organization.organizationId, accountId, isAuthenticated, activeTab, pnlMode])
+
+  function scope() {
+    const current = latest.current
+    const rollout = resolveCanonicalAbcPnlRollout(current.cabinetMe?.organization.organizationId)
+    const period = current.activeTab === 'abc' || current.activeTab === 'pnl' ? readReportPeriodState(current.activeTab) : null
+    // Auth identity is compared only in memory, never in the payload or filename.
+    return JSON.stringify([current.accessToken, current.isAuthenticated, rollout, current.activeTab, current.pnlMode, period?.fromIso, period?.toIso])
+  }
+
+  function selection(): ReportTableExportPayload {
+    const current = latest.current
+    const rollout = resolveCanonicalAbcPnlRollout(current.cabinetMe?.organization.organizationId)
+    if (!current.isAuthenticated || !current.accessToken || !rollout) throw new Error('Экспорт недоступен: войдите в аккаунт с загруженным canonical-отчётом.')
+    if (current.activeTab === 'pnl' && current.pnlMode === 'financial' && pnlExport?.current) return pnlExport.current()
+    if (current.activeTab !== 'abc') throw new Error('Экспорт доступен для загруженных ABC и финансового P&L. Выберите соответствующий отчёт.')
+    const state = current.abc
+    if (state.loading || state.error || state.authExpired || state.accessDenied) throw new Error('Дождитесь успешной загрузки ABC и повторите экспорт.')
+    const period = readReportPeriodState('abc')
+    const snapshot = window.__vellaAbcRowsSnapshot?.()
+    if (!snapshot) throw new Error('Таблица ABC ещё не готова к экспорту.')
+    return {
+      reportKind: 'abc', marketplaceAccountId: rollout.marketplaceAccountId, dateFrom: period.fromIso, dateTo: period.toIso,
+      source: reportTableSource(state.report?.canonical, rollout.marketplaceAccountId, period, JSON.stringify({ filters: snapshot.filter ?? {}, sort: snapshot.sort ?? [] })),
+      headers: ABC_TABLE_COLUMNS.map(column => column.column === 'net' ? 'До внутренних расходов' : column.column === 'abc' ? 'Класс продаж' : column.label),
+      rows: buildAbcTableRows(abcRawRows(state.report), state.rows, snapshot, ABC_TABLE_COLUMNS.map(column => column.column)),
+    }
+  }
+
+  async function exportTable() {
+    if (inFlight.current) return
+    const controller = new AbortController()
+    const requestScope = scope()
+    inFlight.current = controller
+    setPending(true)
+    try {
+      const payload = selection()
+      if (controller.signal.aborted || requestScope !== scope()) return
+      const blob = await downloadReportTableXlsx({ accessToken: latest.current.accessToken!, payload, signal: controller.signal })
+      if (controller.signal.aborted || requestScope !== scope()) return
+      selection() // Revalidate the loaded owner as well as auth/period/mode before download.
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      try {
+        anchor.href = url
+        anchor.download = `wb-${payload.reportKind}-${payload.dateFrom}-${payload.dateTo}.xlsx`
+        document.body.append(anchor)
+        anchor.click()
+      } finally { anchor.remove(); URL.revokeObjectURL(url) }
+      window.showToast?.(`Скачана копия таблицы: ${payload.rows.length} строк. Прибыль предварительная.`, 'info')
+    } catch (error) {
+      if (!controller.signal.aborted && requestScope === scope()) window.showToast?.(error instanceof Error ? error.message : 'Не удалось выгрузить XLSX.', 'warn')
+    } finally {
+      if (inFlight.current === controller) { inFlight.current = null; setPending(false) }
+    }
+  }
+  if (activeTab === 'report-rules') return null
   return (
     <div
       key={replacementKey}
@@ -6777,17 +7028,21 @@ function ExportDropdownIsland({ replacementKey }: { replacementKey: string }) {
         Экспорт
       </button>
       <div className="dd-menu">
-        <div
+        <button
+          type="button"
           className="dd-item"
+          style={{ width: '100%', border: 0, textAlign: 'left', fontFamily: 'inherit' }}
+          title="Копия всех строк текущей таблицы с фильтрами; прибыль предварительная"
+          disabled={pending}
           data-vella-react-handlers="onclick"
-          onClick={() => window.showToast?.('XLSX будет сформирован по текущим фильтрам', 'info')}
+          onClick={() => void exportTable()}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
             <polyline points="14 2 14 8 20 8" />
           </svg>
-          Экспорт XLSX
-        </div>
+          {pending ? 'Формируем XLSX…' : 'Экспорт XLSX'}
+        </button>
         <div
           className="dd-item"
           data-export-action="price-import"
@@ -6804,7 +7059,7 @@ function ExportDropdownIsland({ replacementKey }: { replacementKey: string }) {
           className="dd-item"
           data-export-action="report-history"
           data-vella-react-handlers="onclick"
-          onClick={() => window.showToast?.('История выгрузок: последний отчёт сформирован сегодня в 08:16', 'info')}
+          onClick={() => window.showToast?.('История выгрузок пока недоступна', 'info')}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 12a9 9 0 101.8-5.4" />
@@ -7326,7 +7581,7 @@ function DigestBalancePanelIsland({
           )
         })}
       </svg>
-      <div className="balance-empty" id="digestBalanceEmpty">{!state.loading && !points.length ? (state.error ?? 'За выбранный период нет продаж, заказов и возвратов.') : ''}</div>
+      <div className={`balance-empty${!state.loading && !points.length ? ' visible' : ''}`} id="digestBalanceEmpty">{!state.loading && !points.length ? (state.error ?? 'За выбранный период нет продаж, заказов и возвратов.') : ''}</div>
     </div>
   )
 }
@@ -7795,8 +8050,13 @@ export function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }
   const state = useAbcLiveState()
   if (state.authExpired || state.loading || !state.report || !abcHasReportRows(state)) return null
   const rawRows = abcRawRows(state.report)
-  const salesKopecks = abcLiveRowsComposite(rawRows, 'salesComposite', 'kopecks')
-  const profitKopecks = abcBackendSummaryNumber(state.report, 'profitKopecks') || abcLiveRowsKopecks(rawRows, 'netTotalKopecks')
+  const isCanonical = !!state.report.canonical
+  const salesKopecks = isCanonical
+    ? state.report.canonicalSummary?.revenueKopecks ?? null
+    : abcLiveRowsComposite(rawRows, 'salesComposite', 'kopecks')
+  const profitKopecks = isCanonical
+    ? state.report.canonicalSummary?.profitBeforeInternalExpensesKopecks ?? null
+    : abcBackendSummaryNumber(state.report, 'profitKopecks') || abcLiveRowsKopecks(rawRows, 'netTotalKopecks')
   const ordersCount = abcBackendSummaryNumber(state.report, 'ordersCount') || abcLiveRowsComposite(rawRows, 'ordersComposite', 'units')
   const baskets = rawRows.reduce((sum, row) => sum + (asAbcNumber(row.baskets) ?? 0), 0)
   const blockers = Array.isArray(state.report?.blockerIds) ? state.report.blockerIds : []
@@ -7806,26 +8066,32 @@ export function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }
   const stats: AbcKpiStat[] = [
     {
       ...ABC_KPI_STATS[0],
+      label: isCanonical ? 'Продажи / до внутренних расходов' : ABC_KPI_STATS[0].label,
+      help: isCanonical ? 'Вторая сумма — прибыль до внутренних расходов компании. Налог 7,5% применяется с 1 сентября 2026 года.' : ABC_KPI_STATS[0].help,
       value: `${formatAbcKopecks(salesKopecks)} / ${formatAbcKopecks(profitKopecks)}`,
       delta: statusText,
-      deltaClass: state.error ? 'down' : state.loading ? 'neutral' : profitKopecks < 0 ? 'down' : 'up',
+      deltaClass: state.error ? 'down' : state.loading || profitKopecks === null ? 'neutral' : profitKopecks < 0 ? 'down' : 'up',
     },
     {
       ...ABC_KPI_STATS[1],
+      label: isCanonical ? 'До внутренних расходов' : ABC_KPI_STATS[1].label,
+      help: isCanonical ? 'Чистая прибыль появится после подтверждения внутренних расходов за выбранный период.' : ABC_KPI_STATS[1].help,
       value: formatAbcKopecks(profitKopecks),
       delta: `${rawRows.length.toLocaleString('ru-RU')} товаров в отчете`,
-      deltaClass: profitKopecks < 0 ? 'down' : 'up',
+      deltaClass: profitKopecks === null ? 'neutral' : profitKopecks < 0 ? 'down' : 'up',
     },
     {
       ...ABC_KPI_STATS[2],
-      value: `${Math.round(baskets).toLocaleString('ru-RU')} / ${Math.round(ordersCount).toLocaleString('ru-RU')}`,
-      delta: hasEmptyPeriodActivity ? 'нет заказов и продаж за период' : 'корзины / заказы',
+      value: isCanonical ? '— / —' : `${Math.round(baskets).toLocaleString('ru-RU')} / ${Math.round(ordersCount).toLocaleString('ru-RU')}`,
+      delta: isCanonical ? 'нет в canonical ABC/P&L' : hasEmptyPeriodActivity ? 'нет заказов и продаж за период' : 'корзины / заказы',
       deltaClass: 'neutral',
     },
     {
       ...ABC_KPI_STATS[3],
+      label: isCanonical ? 'Строки с blockers' : ABC_KPI_STATS[3].label,
+      help: isCanonical ? 'Количество строк, где canonical контракт сохранил хотя бы один blocker ID.' : ABC_KPI_STATS[3].help,
       value: attentionCount.toLocaleString('ru-RU'),
-      delta: 'по активным правилам алгоритма',
+      delta: isCanonical ? 'по canonical blocker IDs' : 'по активным правилам алгоритма',
       deltaClass: attentionCount > 0 ? 'down' : 'up',
     },
   ]
@@ -7852,8 +8118,22 @@ export function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }
 }
 
 function AbcSourceStateStripIsland({ replacementKey }: { replacementKey: string }) {
-  void replacementKey
-  return null
+  const state = useAbcLiveState()
+  const canonical = state.report?.canonical
+  if (!canonical) return null
+  const partial = canonical.state === 'partial'
+  return (
+    <div key={replacementKey} className="report-source-strip report-source-compact" data-vella-island="abc-canonical-source-state">
+      <div className={`source-state-card ${partial ? 'partial' : 'fresh'}`}>
+        <div>
+          <div className="source-state-kicker">canonical ABC/P&amp;L</div>
+          <div className="source-state-title">{partial ? 'Canonical расчет частичный' : `Canonical: ${canonical.state}`}</div>
+          <div className="source-state-meta">{canonical.formulaVersion} · реклама: {canonical.advertisingSource ?? 'нет источника'} / {canonical.advertisingEvidenceStatus ?? 'нет evidence'}{canonical.blockerIds.length ? ` · ${canonical.blockerIds.join(' · ')}` : ''}</div>
+        </div>
+        <span className={`source-state-action report-tag ${partial ? 'warn' : 'good'}`}>{canonical.blockerIds.length ? `${canonical.blockerIds.length} blockers` : 'готово'}</span>
+      </div>
+    </div>
+  )
 }
 
 function AbcToolbarIsland({ replacementKey }: { replacementKey: string }) {
@@ -8002,6 +8282,9 @@ function applyRnpReportFilter(tab: HTMLElement) {
   const filter = getRnpActiveChip(tab, '[data-rnp-filter]', 'all')
   const managerSelect = Array.from(tab.querySelectorAll<HTMLSelectElement>('select.adv-select')).find((select) => /менеджер/i.test(select.options?.[0]?.textContent ?? ''))
   const manager = managerSelect?.value || 'all'
+  window.dispatchEvent(new CustomEvent('vella:report-render-filter', { detail: {
+    tabId: tab.id, active: Boolean(query || group !== 'sku' || filter !== 'all' || manager !== 'all'),
+  } }))
   tab.querySelectorAll<HTMLElement>('tbody tr[data-report-row="rnp"]').forEach((row) => {
     const searchText = normalizeRnpFilterText(row.dataset.search || row.textContent)
     const tags = normalizeRnpFilterText(row.dataset.reportTags).split('|').filter(Boolean)
@@ -8110,10 +8393,15 @@ function PnlToolbarIsland({
   replacementKey,
   mode,
   onModeChange,
+  query, onQueryChange, manager, onManagerChange,
 }: {
   replacementKey: string
   mode: PnlReportMode
   onModeChange: (mode: PnlReportMode) => void
+  query: string
+  onQueryChange: (query: string) => void
+  manager: string
+  onManagerChange: (manager: string) => void
 }) {
   const chips: Array<{ label: string; mode: PnlReportMode }> = [
     { label: 'Операционный 1С', mode: 'operational' },
@@ -8125,7 +8413,7 @@ function PnlToolbarIsland({
       className="toolbar"
       data-vella-island="pnl-toolbar"
       data-vella-island-status="explicit-jsx"
-      data-vella-runtime-binding="applyGenericReportFilter"
+      data-vella-runtime-binding="react-pnl-filter"
       data-vella-event-owner="react"
     >
       <div className="search">
@@ -8138,7 +8426,8 @@ function PnlToolbarIsland({
           placeholder={mode === 'operational' ? 'Статья 1С, назначение или сумма...' : 'SKU для финансового разбора...'}
           data-demo-search-bound="1"
           data-vella-react-handlers="oninput"
-          onInput={(event) => applyGenericReportFilterFromElement(event.currentTarget)}
+          value={query}
+          onInput={(event) => onQueryChange(event.currentTarget.value)}
         />
       </div>
       <div className="chips">
@@ -8148,10 +8437,7 @@ function PnlToolbarIsland({
             className={mode === chip.mode ? 'chip active' : 'chip'}
             data-demo-chip-bound="1"
             data-vella-react-handlers="onclick"
-            onClick={(event) => {
-              activateGenericReportChip(event.currentTarget)
-              onModeChange(chip.mode)
-            }}
+            onClick={() => onModeChange(chip.mode)}
           >
             {chip.label}
           </div>
@@ -8161,10 +8447,10 @@ function PnlToolbarIsland({
         <select
           className="adv-select"
           style={{ width: 'auto' }}
-          defaultValue="all"
+          value={manager}
           data-demo-select-bound="1"
           data-vella-react-handlers="onchange"
-          onChange={updateGenericReportSelect}
+          onChange={(event) => onManagerChange(event.currentTarget.value)}
         >
           <option value="all">Все менеджеры</option>
           <option value="mine">Мои SKU</option>
@@ -8656,9 +8942,7 @@ function wbReportProductPhotoUrl(nmId?: number | string | null) {
 }
 
 function resolveReportProductPhoto(cachedPhotoUrl: string | null, nmId?: number | string | null) {
-  const computedPhotoUrl = wbReportProductPhotoUrl(nmId)
-  if (cachedPhotoUrl && !/\/\/basket-\d+\.wbbasket\.ru\//i.test(cachedPhotoUrl)) return cachedPhotoUrl
-  return computedPhotoUrl || cachedPhotoUrl
+  return cachedPhotoUrl || wbReportProductPhotoUrl(nmId)
 }
 
 function ReportProductCell({
@@ -8675,7 +8959,7 @@ function ReportProductCell({
   return (
     <div className="report-product-cell">
       {photoUrl ? (
-        <img className="report-product-photo" src={photoUrl} alt="" loading="lazy" />
+        <img className="report-product-photo" src={photoUrl} alt="" loading="lazy" onError={event => window.repairWbProductImage?.(event.currentTarget)} />
       ) : (
         <div className="report-product-photo report-product-photo-empty" aria-hidden="true" />
       )}
@@ -9453,7 +9737,7 @@ async function loadLatestReportCache<T>(
     if (latest) return latest
     if (attempt < 2) await backgroundReportPollDelay(options.signal)
   }
-  return null
+  throw new ApiError('Готовый отчёт за выбранный период ещё недоступен. Фоновая загрузка может продолжаться — попробуйте открыть отчёт позже.', 409)
 }
 
 function removeLegacyReportTableFallbacks(tabId: 'rnp' | 'pnl' | 'ads' | 'stock' | 'week') {
@@ -9606,6 +9890,18 @@ type PnlBackendMeta = {
 }
 
 type PnlBackendRow = {
+  acceptanceKopecks?: number | null
+  penaltyKopecks?: number | null
+  deductionKopecks?: number | null
+  financeOtherExpensesKopecks?: number | null
+  compensationKopecks?: number | null
+  acquiringKopecks?: number | null
+  financeExpensesKopecks?: number | null
+  settlementProfitKopecks?: number | null
+  otherExpensesKopecks?: number | null
+  profitBeforeAdsAndLoyaltyKopecks?: number | null
+  profitBeforeLoyaltyKopecks?: number | null
+  loyaltyNetCostKopecks?: number | null
   label?: string | null
   category?: string | null
   articleId?: string | null
@@ -9623,10 +9919,14 @@ type PnlBackendRow = {
   overheadKopecks?: number | null
   returnsPenaltyKopecks?: number | null
   netProfitKopecks?: number | null
+  profitAfterLoyaltyKopecks?: number | null
+  profitBeforeInternalExpensesKopecks?: number | null
+  internalExpensesKopecks?: number | null
   marginPct?: number | null
   sourceStatus?: string | null
   confidence?: string | null
   comment?: string | null
+  blockerIds?: string[] | null
 }
 
 type PnlCashFlowRow = {
@@ -9637,7 +9937,7 @@ type PnlCashFlowRow = {
 }
 
 type PnlCashFlowPayload = {
-  status?: 'ready' | 'pending' | 'processing' | string | null
+  status?: 'ready' | 'pending' | 'processing' | 'disabled' | string | null
   job_id?: string | null
   data?: {
     job_id?: string | null
@@ -9668,6 +9968,16 @@ type PnlBackendReport = {
   rows?: PnlBackendRow[] | null
   cashFlow?: PnlCashFlowPayload | null
   reportJob?: PnlReportJobPayload | null
+  blockerIds?: string[] | null
+  canonical?: CanonicalCompatibilityMeta | null
+  canonicalSummary?: CanonicalAbcPnlPage['summary'] | null
+}
+
+const ONE_C_DISABLED_TITLE = 'Операционные расходы недоступны'
+const ONE_C_DISABLED_MESSAGE = 'Интеграция с 1С отключена. Данные расходов за выбранный период не получены.'
+
+function isOneCDisabledReport(report: { cashFlow?: PnlCashFlowPayload | null; blockerIds?: string[] | null } | null) {
+  return report?.cashFlow?.status === 'disabled' || report?.blockerIds?.includes('ONE_C_DISABLED') === true
 }
 
 type PnlLiveState =
@@ -9747,11 +10057,21 @@ function PnlLiveSourceStripIsland({
   period: Pick<ProductsAnalyticsPeriodState, 'fromIso' | 'toIso'>
   source: BackgroundReportSource
 }) {
-  void replacementKey
-  void state
-  void period
-  void source
-  return null
+  if (state.status !== 'ready' || !state.report.canonical) return null
+  const canonical = state.report.canonical
+  const partial = canonical.state === 'partial'
+  return (
+    <div key={replacementKey} className="report-source-strip report-source-compact" data-vella-island="pnl-canonical-source-state">
+      <div className={`source-state-card ${partial ? 'partial' : 'fresh'}`}>
+        <div>
+          <div className="source-state-kicker">canonical WB finance</div>
+          <div className="source-state-title">{partial ? 'Canonical P&L частичный' : `Canonical P&L: ${canonical.state}`}</div>
+          <div className="source-state-meta">{period.fromIso} — {period.toIso} · {canonical.formulaVersion} · реклама: {canonical.advertisingSource ?? 'нет источника'} / {canonical.advertisingEvidenceStatus ?? 'нет evidence'}{canonical.blockerIds.length ? ` · ${canonical.blockerIds.join(' · ')}` : ''}</div>
+        </div>
+        <span className={`source-state-action report-tag ${partial ? 'warn' : 'good'}`}>{canonical.blockerIds.length ? `${canonical.blockerIds.length} blockers` : source}</span>
+      </div>
+    </div>
+  )
 }
 
 function FinanceOneCWaitingIsland({
@@ -10167,12 +10487,31 @@ function ReportProgressPanelIsland({
   )
 }
 
-function PnlLiveWorkbenchIsland({ replacementKey, state }: { replacementKey: string; state: PnlLiveState }) {
+function PnlLiveWorkbenchIsland({ replacementKey, state, rows }: { replacementKey: string; state: PnlLiveState; rows: PnlBackendRow[] }) {
   const report = state.status === 'ready' ? state.report : {}
-  const rows = getPnlRows(report)
-  const revenue = getPnlKpiValue(report, 'revenue') ?? formatPnlKopecks(sumPnlRows(rows, 'revenueKopecks'))
-  const netProfit = getPnlKpiValue(report, 'net_profit') ?? formatPnlKopecks(sumPnlRows(rows, 'netProfitKopecks'))
-  const margin = getPnlKpiValue(report, 'margin_pct') ?? formatPnlPercent(rows.length ? sumPnlRows(rows, 'netProfitKopecks') / Math.max(sumPnlRows(rows, 'revenueKopecks'), 1) * 100 : null)
+  const isCanonical = !!report.canonical
+  const total = (...fields: Array<keyof PnlBackendRow>) => {
+    let sum = 0
+    for (const row of rows) {
+      for (const field of fields) {
+        const value = asPnlNumber(row[field])
+        if (value === null) return null
+        sum += value
+      }
+    }
+    return sum
+  }
+  const revenueKopecks = total('revenueKopecks')
+  const profitKopecks = total(isCanonical ? 'profitBeforeInternalExpensesKopecks' : 'netProfitKopecks')
+  const revenue = formatPnlKopecks(revenueKopecks)
+  const displayedProfit = formatPnlKopecks(profitKopecks)
+  const margin = isCanonical
+    ? 'нет данных'
+    : formatPnlPercent(profitKopecks !== null && revenueKopecks !== null && revenueKopecks !== 0 ? profitKopecks / revenueKopecks * 100 : null)
+  const profitLabel = isCanonical ? 'До внутренних расходов' : 'Прибыль / маржа'
+  const profitTip = isCanonical
+    ? 'Продажи за вычетом возвратов минус комиссия, логистика, хранение, приёмка, реклама, штрафы, налог и себестоимость. Внутренние расходы компании вычитаются отдельно.'
+    : 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы. Маржа = прибыль / выручка * 100%.'
   const flowItems = state.status === 'error'
     ? [
         ['Выручка', 'нет данных', 'pnl-flow-item', 'Выкупили на сумму за выбранный период. Это база для расчета прибыли.'],
@@ -10180,15 +10519,15 @@ function PnlLiveWorkbenchIsland({ replacementKey, state }: { replacementKey: str
         ['Комиссия', 'нет данных', 'pnl-flow-item cost', 'Комиссия WB по категории товара. Вычитается из выручки.'],
         ['Логистика', 'нет данных', 'pnl-flow-item cost', 'Логистика WB: доставка, возвраты и связанные логистические удержания, если источник их отдал.'],
         ['Хранение/штрафы', 'нет данных', 'pnl-flow-item cost', 'Хранение WB и штрафы/удержания, которые уменьшают прибыль.'],
-        ['Прибыль / маржа', 'нет данных', 'pnl-flow-item profit', 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы. Маржа = прибыль / выручка * 100%.'],
+        [profitLabel, 'нет данных', 'pnl-flow-item profit', profitTip],
       ]
     : [
         ['Выручка', state.status === 'loading' ? 'загрузка' : revenue, 'pnl-flow-item', 'Выкупили на сумму за выбранный период. Это база для расчета прибыли.'],
-        ['Себестоимость', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(sumPnlRows(rows, 'cogsKopecks')), 'pnl-flow-item cost', 'Закупка, печать, упаковка или другая себестоимость SKU из настроек.'],
-        ['Комиссия', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(sumPnlRows(rows, 'commissionKopecks')), 'pnl-flow-item cost', 'Комиссия WB по категории товара. Вычитается из выручки.'],
-        ['Логистика', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(sumPnlRows(rows, 'logisticsKopecks')), 'pnl-flow-item cost', 'Логистика WB: доставка, возвраты и связанные логистические удержания, если источник их отдал.'],
-        ['Хранение/штрафы', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(sumPnlRows(rows, 'storageKopecks') + sumPnlRows(rows, 'returnsPenaltyKopecks')), 'pnl-flow-item cost', 'Хранение WB и штрафы/удержания, которые уменьшают прибыль.'],
-        ['Прибыль / маржа', state.status === 'loading' ? 'загрузка' : `${netProfit} · ${margin}`, 'pnl-flow-item profit', 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы. Маржа = прибыль / выручка * 100%.'],
+        ['Себестоимость', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(total('cogsKopecks')), 'pnl-flow-item cost', 'Закупка, печать, упаковка или другая себестоимость SKU из настроек.'],
+        ['Комиссия', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(total('commissionKopecks')), 'pnl-flow-item cost', 'Комиссия WB по категории товара. Вычитается из выручки.'],
+        ['Логистика', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(total('logisticsKopecks')), 'pnl-flow-item cost', 'Логистика WB: доставка, возвраты и связанные логистические удержания, если источник их отдал.'],
+        ['Хранение/штрафы', state.status === 'loading' ? 'загрузка' : formatPnlKopecks(total('storageKopecks', 'returnsPenaltyKopecks')), 'pnl-flow-item cost', 'Хранение WB и штрафы/удержания, которые уменьшают прибыль.'],
+        [profitLabel, state.status === 'loading' ? 'загрузка' : isCanonical ? displayedProfit : `${displayedProfit} · ${margin}`, 'pnl-flow-item profit', profitTip],
       ]
   return (
     <div
@@ -10197,6 +10536,7 @@ function PnlLiveWorkbenchIsland({ replacementKey, state }: { replacementKey: str
       data-vella-island="pnl-live-workbench"
       data-vella-island-status="explicit-jsx"
     >
+      <div>Итоги по строкам таблицы · позиций: {rows.length}</div>
       <div className="pnl-flow" aria-label="Разложение прибыли">
         {flowItems.map(([label, value, className, tip]) => (
           <div className={className} key={label}>
@@ -10204,6 +10544,65 @@ function PnlLiveWorkbenchIsland({ replacementKey, state }: { replacementKey: str
             <b>{value}</b>
           </div>
         ))}
+      </div>
+      {isCanonical ? (
+        <details className="pnl-source pnl-profit-breakdown">
+          <style>{`
+            .pnl-profit-breakdown { display: block; min-width: 0; }
+            .pnl-profit-breakdown summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
+            .pnl-profit-breakdown-wrap { overflow-x: auto; max-width: 100%; }
+            .pnl-profit-breakdown table { width: 100%; min-width: 600px; table-layout: fixed; }
+            .pnl-profit-breakdown thead th:first-child { width: 30%; }
+            .pnl-profit-breakdown thead th:nth-child(2) { width: 18%; }
+            .pnl-profit-breakdown thead th:last-child { width: 52%; }
+            .pnl-profit-breakdown th, .pnl-profit-breakdown td { white-space: normal; overflow-wrap: anywhere; }
+            .pnl-profit-breakdown .num { white-space: nowrap; }
+            @media (max-width: 720px) { .pnl-profit-breakdown { display: none; } }
+          `}</style>
+          <summary>Полный состав расчёта</summary>
+          <p>Суммы по всем выбранным строкам, до пагинации, в рублях с копейками. Пропуск хотя бы в одной строке означает «нет данных».</p>
+          <div className="pnl-profit-breakdown-wrap" tabIndex={0} role="region" aria-label="Прокрутка состава прибыли">
+            <table aria-label="Состав прибыли по выбранным строкам">
+              <thead><tr><th scope="col">Составляющая</th><th scope="col">Сумма</th><th scope="col">Участие в расчёте</th></tr></thead>
+              <tbody>{([
+                ['revenueKopecks', 'Выручка', 'Финансовые продажи за вычетом возвратов.'],
+                ['cogsKopecks', 'Себестоимость', 'Датированная себестоимость; вычитается из выручки.'],
+                ['commissionKopecks', 'Комиссия WB', 'Входит в расходы WB.'],
+                ['logisticsKopecks', 'Логистика', 'Входит в расходы WB.'],
+                ['storageKopecks', 'Хранение', 'Входит в расходы WB.'],
+                ['acceptanceKopecks', 'Приёмка', 'Входит в расходы WB.'],
+                ['penaltyKopecks', 'Штрафы', 'Входят в расходы WB.'],
+                ['deductionKopecks', 'Удержания без рекламы', 'Входят в расходы WB; продвижение не вычитается повторно.'],
+                ['financeOtherExpensesKopecks', 'Прочие расходы WB', 'Входят в расходы WB. Не внутренние расходы бизнеса.'],
+                ['acquiringKopecks', 'Эквайринг', 'Входит в расходы WB.'],
+                ['compensationKopecks', 'Компенсации WB', 'Уменьшают расходы WB; повторно к прибыли не прибавляются.'],
+                ['financeExpensesKopecks', 'Расходы WB, всего', 'Сумма перечисленных WB-расходов минус компенсации. Детали и итог не вычитаются одновременно.'],
+                ['settlementProfitKopecks', 'Промежуточная прибыль WB', 'Выручка − себестоимость − расходы WB. До налога, прочих расходов, рекламы и лояльности.'],
+                ['taxKopecks', 'Налог', 'Сумма из действующей политики API. Ставка и база не выводятся из этого значения.'],
+                ['otherExpensesKopecks', 'Прочие расходы по политике', 'Не доказывают полноту внутренних расходов бизнеса: нужны источник, период и распределение.'],
+                ['profitBeforeAdsAndLoyaltyKopecks', 'До рекламы и лояльности', 'Промежуточная прибыль WB − налог − прочие расходы по политике.'],
+                ['adSpendKopecks', 'Реклама', 'Вычитается один раз; нераспределённая реклама аккаунта показана отдельно.'],
+                ['profitBeforeLoyaltyKopecks', 'До лояльности', 'Результат до рекламы и лояльности − реклама.'],
+                ['loyaltyNetCostKopecks', 'Расходы на лояльность', 'Итог API по версии формулы; может быть отрицательным.'],
+                ['profitAfterLoyaltyKopecks', 'После лояльности, предварительно', 'Результат до лояльности − расходы на лояльность. Не финальная чистая прибыль.'],
+                ['profitBeforeInternalExpensesKopecks', 'До внутренних расходов', 'Продажи − комиссия − логистика − хранение − приёмка − реклама − штрафы − налог − себестоимость. Налог 7,5% с 1 сентября 2026 года.'],
+                ['internalExpensesKopecks', 'Внутренние расходы компании', 'Подтверждённые расходы выбранного периода с применимым правилом распределения.'],
+                ['netProfitKopecks', 'Чистая прибыль', 'Не подменяется промежуточным результатом. Пока API не подтверждает итог, значение неизвестно.'],
+              ] satisfies Array<[keyof PnlBackendRow, string, string]>).map(([field, label, explanation]) => {
+                const amount = rows.length ? total(field) : null
+                return <tr key={field}><th scope="row">{label}</th><td className="num">{amount === null || !Number.isSafeInteger(amount) ? 'нет данных' : `${(amount / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`}</td><td>{explanation}</td></tr>
+              })}</tbody>
+            </table>
+          </div>
+        </details>
+      ) : null}
+      <div className="pnl-source" data-vella-island="pnl-account-summary">
+        <b>Весь аккаунт · без фильтров</b>
+        <span>
+          Выручка: {isCanonical ? formatPnlKopecks(report.canonicalSummary?.revenueKopecks) : getPnlKpiValue(report, 'revenue')}
+          {' · '}{isCanonical ? 'До внутренних расходов' : 'Прибыль'}: {isCanonical ? formatPnlKopecks(report.canonicalSummary?.profitBeforeInternalExpensesKopecks) : getPnlKpiValue(report, 'net_profit')}
+          {isCanonical ? <> · Нераспределённая реклама: {formatPnlKopecks(report.canonicalSummary?.unattributedAdvertisingSpendKopecks)} (не распределяется по строкам)</> : null}
+        </span>
       </div>
     </div>
   )
@@ -10334,6 +10733,7 @@ type ExpensesBackendReport = {
   rows?: ExpensesBackendRow[] | null
   cashFlow?: PnlCashFlowPayload | null
   reportJob?: PnlReportJobPayload | null
+  blockerIds?: string[] | null
 }
 
 type ExpenseFinanceDrawerKind = 'ddsRule' | 'allocation' | 'review'
@@ -10624,11 +11024,30 @@ function ExpensesSourceStripIsland({ replacementKey, state }: { replacementKey: 
 
 const REPORT_TABLE_RENDER_BATCH = 50
 
-function useReportTableRenderLimit(rowCount: number) {
+function useReportTableRenderLimit(rowCount: number, tabId?: 'stock' | 'rnp' | 'week') {
   const [limit, setLimit] = useState(REPORT_TABLE_RENDER_BATCH)
-  useEffect(() => setLimit(REPORT_TABLE_RENDER_BATCH), [rowCount])
+  const [filtersActive, setFiltersActive] = useState(false)
+  useEffect(() => setLimit(REPORT_TABLE_RENDER_BATCH), [rowCount, filtersActive])
+  useLayoutEffect(() => {
+    if (!tabId) return
+    const read = (event: Event) => {
+      const detail = (event as CustomEvent<{ tabId: string; active: boolean }>).detail
+      if (detail?.tabId === `tab-${tabId}`) setFiltersActive(detail.active)
+    }
+    window.addEventListener('vella:report-render-filter', read)
+    return () => window.removeEventListener('vella:report-render-filter', read)
+  }, [tabId])
+  useLayoutEffect(() => {
+    if (!tabId) return
+    const tab = document.getElementById(`tab-${tabId}`)
+    if (!tab) return
+    // Legacy predicates own filtering. Reapply before paint after mounting the
+    // requested rows so search/chips also see items beyond the initial window.
+    if (tabId === 'rnp') applyRnpReportFilter(tab)
+    else window.applyGenericReportFilter?.(tab)
+  }, [tabId, rowCount, filtersActive, limit])
   return {
-    limit,
+    limit: filtersActive ? rowCount : limit,
     loadMore: () => setLimit((current) => current + REPORT_TABLE_RENDER_BATCH),
   }
 }
@@ -10646,7 +11065,7 @@ function ReportTableMoreRow({ colSpan, shown, total, onMore }: { colSpan: number
   )
 }
 
-function ExpensesTableShellIsland({ replacementKey, state }: { replacementKey: string; state: ExpensesLiveState }) {
+export function ExpensesTableShellIsland({ replacementKey, state }: { replacementKey: string; state: ExpensesLiveState }) {
   const rows = state.status === 'ready' ? getExpensesRows(state.report) : []
   const renderWindow = useReportTableRenderLimit(rows.length)
   const visibleRows = rows.slice(0, renderWindow.limit)
@@ -10845,22 +11264,27 @@ function ExpensesReportActiveIsland({ replacementKey }: { replacementKey: string
   }, [state])
 
   const expensesRows = state.status === 'ready' ? getExpensesRows(state.report) : []
-  const expensesHasRows = state.status === 'ready' && expensesRows.length > 0
+  const expensesSourceDisabled = state.status === 'ready' && isOneCDisabledReport(state.report)
+  const expensesHasRows = state.status === 'ready' && !expensesSourceDisabled && expensesRows.length > 0
   const expensesStateVariant: 'loading' | 'empty' | 'error' = state.status === 'loading'
     ? 'loading'
     : state.status === 'error'
       ? 'error'
       : 'empty'
-  const expensesStateTitle = state.status === 'loading'
-    ? 'Ждем расходы из 1С'
-    : state.status === 'error'
-      ? 'Расходы не загрузились'
-      : 'За выбранный период нет расходов'
-  const expensesStateMessage = state.status === 'loading'
-    ? 'Отчет появится автоматически, когда 1С пришлет данные за выбранный период.'
-    : state.status === 'error'
-      ? cleanReportStateMessage(state.message)
-      : 'Попробуйте выбрать другой период или проверьте, были ли в 1С расходные статьи за эти даты.'
+  const expensesStateTitle = expensesSourceDisabled
+    ? ONE_C_DISABLED_TITLE
+    : state.status === 'loading'
+      ? 'Ждем расходы из 1С'
+      : state.status === 'error'
+        ? 'Расходы не загрузились'
+        : 'За выбранный период нет расходов'
+  const expensesStateMessage = expensesSourceDisabled
+    ? ONE_C_DISABLED_MESSAGE
+    : state.status === 'loading'
+      ? 'Отчет появится автоматически, когда 1С пришлет данные за выбранный период.'
+      : state.status === 'error'
+        ? cleanReportStateMessage(state.message)
+        : 'Попробуйте выбрать другой период или проверьте, были ли в 1С расходные статьи за эти даты.'
 
   return (
     <div
@@ -11103,7 +11527,7 @@ function StockLiveSourceStripIsland({ replacementKey, state }: { replacementKey:
 function StockTableShellIsland({ replacementKey, state }: { replacementKey: string; state: StockLiveState }) {
   const report = state.status === 'ready' ? state.report : null
   const rows = getStockRows(report)
-  const renderWindow = useReportTableRenderLimit(rows.length)
+  const renderWindow = useReportTableRenderLimit(rows.length, 'stock')
   const visibleRows = rows.slice(0, renderWindow.limit)
   if (state.status !== 'ready' || rows.length === 0) return null
   return (
@@ -11147,7 +11571,15 @@ function StockTableShellIsland({ replacementKey, state }: { replacementKey: stri
           data-vella-row-count={rows.length}
         >
           {visibleRows.map((row, index) => (
-            <tr key={`${row.nmId ?? row.sku ?? 'stock'}-${row.warehouseName ?? 'warehouses'}-${index}`} data-report-row="stock">
+            <tr
+              key={`${row.nmId ?? row.sku ?? 'stock'}-${row.warehouseName ?? 'warehouses'}-${index}`}
+              data-report-row="stock"
+              data-days-to-oos={typeof row.daysToOos === 'number' && Number.isFinite(row.daysToOos) ? row.daysToOos : undefined}
+              data-available-units={typeof row.availableUnits === 'number' && Number.isFinite(row.availableUnits) ? row.availableUnits : undefined}
+              data-ktr={typeof row.ktrIndex === 'number' && Number.isFinite(row.ktrIndex) ? row.ktrIndex : undefined}
+              data-warehouse={row.warehouseName ?? undefined}
+              data-decision={row.decision ?? undefined}
+            >
               <td className="report-sticky">
                 <ReportProductCell
                   photoUrl={stockProductPhoto(row)}
@@ -11714,12 +12146,43 @@ function AdsLiveSummaryGridIsland({ replacementKey, state }: { replacementKey: s
   )
 }
 
+function adsRowSearchText(row: AdsBackendRow, index: number, runtimeProduct = adsRuntimeProduct(row)) {
+  return [
+    adsProductTitle(row, index, runtimeProduct),
+    adsRowString(row, ['brandName', 'brand_name']) || adsRuntimeString(runtimeProduct, ['brandName', 'brand_name', 'brand']),
+    adsRowString(row, ['categoryName', 'category_name']) || adsRuntimeString(runtimeProduct, ['size', 'categoryName', 'subjectName', 'category']),
+    row.campaignName, row.campaignId, row.campaignType, row.paymentType, row.sku, row.nmId, row.recommendationReason,
+  ].filter(Boolean).join(' ')
+}
+
 function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string; state: AdsLiveState }) {
   const report = state.status === 'ready' ? state.report : {}
-  const rows = state.status === 'ready' ? adsRows(report) : []
-  const renderWindow = useReportTableRenderLimit(rows.length)
-  const visibleRows = rows.slice(0, renderWindow.limit)
-  if (state.status !== 'ready' || rows.length === 0) return null
+  const sourceRows = Array.isArray(report.rows) ? report.rows : null
+  const [filter, setFilter] = useState({ query: '', chip: 'все строки' })
+  useEffect(() => {
+    const tab = document.getElementById('tab-ads')
+    if (!tab) return
+    const read = () => {
+      const next = {
+        query: tab.querySelector<HTMLInputElement>('.search input')?.value.trim().toLowerCase() || '',
+        chip: tab.querySelector('.chips .chip.active')?.textContent?.trim().toLowerCase() || 'все строки',
+      }
+      setFilter(current => current.query === next.query && current.chip === next.chip ? current : next)
+    }
+    tab.addEventListener('vella:ads-filter-updated', read)
+    read()
+    return () => tab.removeEventListener('vella:ads-filter-updated', read)
+  }, [])
+  const rows = useMemo(() => (sourceRows ?? []).map((row, index) => ({ row, index })).filter(({ row, index }) => {
+    const queryMatches = !filter.query || adsRowSearchText(row, index).toLowerCase().includes(filter.query)
+    const chipMatches = filter.chip === 'все строки' || adsTypeTags(row).split('|').includes(filter.chip)
+    return queryMatches && chipMatches
+  }), [sourceRows, filter])
+  const [pagination, setPagination] = useState({ sourceRows, filter, limit: REPORT_TABLE_RENDER_BATCH })
+  const changed = pagination.sourceRows !== sourceRows || pagination.filter !== filter
+  if (changed) setPagination({ sourceRows, filter, limit: REPORT_TABLE_RENDER_BATCH })
+  const visibleRows = rows.slice(0, changed ? REPORT_TABLE_RENDER_BATCH : pagination.limit)
+  if (state.status !== 'ready' || !sourceRows?.length) return null
   return (
     <div
       key={replacementKey}
@@ -11761,8 +12224,8 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
             <ReportHeaderCell label="Комментарий" tip="Пояснение к строке: что именно стоит проверить в кабинете WB." />
           </tr>
         </thead>
-        <tbody data-vella-island="ads-live-table-body" data-vella-island-status="explicit-jsx" data-vella-row-count={rows.length}>
-          {visibleRows.map((row, index) => {
+        <tbody data-vella-island="ads-live-table-body" data-vella-island-status="explicit-jsx" data-vella-row-count={sourceRows.length}>
+          {visibleRows.map(({ row, index }) => {
             const [attributionLabel, attributionClass] = adsAttributionLabel(row.attributionLevel)
             const [recommendationLabel, recommendationClass] = adsRecommendationLabel(row.recommendation, row.unallocatedSpend)
             const rowHasSku = adsRowHasSku(row)
@@ -11780,18 +12243,7 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
             const campaignType = row.campaignType && String(row.campaignType).toLowerCase() !== 'unknown' ? row.campaignType : '—'
             const runtimeProduct = adsRuntimeProduct(row)
             const productTitle = adsProductTitle(row, index, runtimeProduct)
-            const searchText = [
-              productTitle,
-              adsRowString(row, ['brandName', 'brand_name']) || adsRuntimeString(runtimeProduct, ['brandName', 'brand_name', 'brand']),
-              adsRowString(row, ['categoryName', 'category_name']) || adsRuntimeString(runtimeProduct, ['size', 'categoryName', 'subjectName', 'category']),
-              row.campaignName,
-              row.campaignId,
-              row.campaignType,
-              row.paymentType,
-              row.sku,
-              row.nmId,
-              row.recommendationReason,
-            ].filter(Boolean).join(' ')
+            const searchText = adsRowSearchText(row, index, runtimeProduct)
             return (
               <tr
                 key={`${row.campaignId ?? 'campaign'}-${row.sku ?? 'row'}-${index}`}
@@ -11836,7 +12288,18 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
               </tr>
             )
           })}
-          <ReportTableMoreRow colSpan={21} shown={visibleRows.length} total={rows.length} onMore={renderWindow.loadMore} />
+          {rows.length === 0 ? (
+            <tr data-report-empty="ads-filter">
+              <td colSpan={21}>
+                <div className="report-empty-note visible">
+                  <b>Нет позиций по выбранным фильтрам</b><br />
+                  <span>Измените поиск или фильтр кампаний.</span><br />
+                  <button className="btn btn-default btn-sm" type="button" onClick={event => window.resetGenericReportFilters?.(event.currentTarget)}>Сбросить фильтры</button>
+                </div>
+              </td>
+            </tr>
+          ) : null}
+          <ReportTableMoreRow colSpan={21} shown={visibleRows.length} total={rows.length} onMore={() => setPagination(current => ({ ...current, limit: current.limit + REPORT_TABLE_RENDER_BATCH }))} />
         </tbody>
       </table>
     </div>
@@ -11892,7 +12355,7 @@ function RnpDebugPanelIsland({ replacementKey, state = { status: 'loading' } as 
 
 function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as RnpLiveState }: { replacementKey: string; state?: RnpLiveState }) {
   const rows = state.status === 'ready' ? getRnpRows(state.report) : []
-  const renderWindow = useReportTableRenderLimit(rows.length)
+  const renderWindow = useReportTableRenderLimit(rows.length, 'rnp')
   const visibleRows = rows.slice(0, renderWindow.limit)
   if (state.status !== 'ready' || rows.length === 0) return null
   const showCartConversion = rows.some((row) => asAdsNumber(row.atcrPct) != null)
@@ -12027,12 +12490,13 @@ function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as 
   )
 }
 
-function PnlLiveTableShellIsland({ replacementKey, state, mode = 'financial' }: { replacementKey: string; state: PnlLiveState; mode?: PnlReportMode }) {
-  const rows = state.status === 'ready' ? getPnlRows(state.report) : []
+function PnlLiveTableShellIsland({ replacementKey, state, rows, mode = 'financial' }: { replacementKey: string; state: PnlLiveState; rows: PnlBackendRow[]; mode?: PnlReportMode }) {
+  const allRows = state.status === 'ready' ? getPnlRows(state.report) : []
   const renderWindow = useReportTableRenderLimit(rows.length)
   const visibleRows = rows.slice(0, renderWindow.limit)
   const showOneCColumns = mode === 'operational'
-  if (state.status !== 'ready' || rows.length === 0) return null
+  const isCanonical = state.status === 'ready' && !!state.report.canonical
+  if (state.status !== 'ready' || allRows.length === 0) return null
   return (
     <div
       key={replacementKey}
@@ -12061,8 +12525,8 @@ function PnlLiveTableShellIsland({ replacementKey, state, mode = 'financial' }: 
             <ReportHeaderCell className="num" label="Реклама" tip="Расход рекламы, связанный с товаром или кампанией. Уменьшает прибыль." />
             <ReportHeaderCell className="num" label="Налог" tip="Налог по настройкам организации. Вычитается при расчете чистой прибыли." />
             {showOneCColumns ? <ReportHeaderCell className="num" label="Опер. расходы" tip="Операционные расходы из 1С или настроек распределения. Например зарплата, аренда, сервисы." /> : null}
-            <ReportHeaderCell className="num" label="Прибыль" tip="Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы." />
-            <ReportHeaderCell className="num" label="Маржа" tip="Маржа = прибыль / выручка * 100%. Показывает, какая доля выручки остается после расходов." />
+            <ReportHeaderCell className="num" label={isCanonical ? 'До внутренних расходов' : 'Прибыль'} tip={isCanonical ? 'Прибыль по утверждённой формуле до внутренних расходов компании. Налог 7,5% с 1 сентября 2026 года.' : 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы.'} />
+            <ReportHeaderCell className="num" label={isCanonical ? 'Финальная маржа' : 'Маржа'} tip={isCanonical ? 'Не рассчитывается, пока финальная P&L-формула заблокирована.' : 'Маржа = прибыль / выручка * 100%. Показывает, какая доля выручки остается после расходов.'} />
             <ReportHeaderCell label="Статус" tip="Насколько строка готова к использованию: данные подтверждены, рассчитаны оперативно или требуют проверки." />
             <ReportHeaderCell label="Комментарий" tip="Пояснение к строке: почему сумма такая, чего не хватает или что нужно проверить." />
           </tr>
@@ -12095,13 +12559,14 @@ function PnlLiveTableShellIsland({ replacementKey, state, mode = 'financial' }: 
               <td className="num">{formatPnlKopecks(row.adSpendKopecks)}</td>
               <td className="num">{formatPnlKopecks(row.taxKopecks)}</td>
               {showOneCColumns ? <td className="num">{formatPnlKopecks(row.overheadKopecks)}</td> : null}
-              <td className="num">{formatPnlKopecks(row.netProfitKopecks)}</td>
+              <td className="num">{formatPnlKopecks(isCanonical ? row.profitBeforeInternalExpensesKopecks : row.netProfitKopecks)}</td>
               <td className="num">{formatPnlPercent(row.marginPct)}</td>
-              <td>{row.sourceStatus || row.confidence ? 'готово' : 'данные загружены'}</td>
+              <td>{isCanonical ? canonicalPnlRowStatus(row) : row.sourceStatus === 'blocked' || row.confidence === 'blocked' ? 'требует проверки' : row.sourceStatus === 'partial' || row.confidence === 'partial' ? 'частично' : row.sourceStatus === 'ready' ? 'готово' : row.sourceStatus ?? 'данные загружены'}</td>
               <td>{row.comment ?? ''}</td>
             </tr>
             )
           })}
+          {rows.length === 0 ? <tr><td colSpan={showOneCColumns ? 14 : 13}>Нет позиций по выбранным фильтрам</td></tr> : null}
           <ReportTableMoreRow colSpan={showOneCColumns ? 14 : 13} shown={visibleRows.length} total={rows.length} onMore={renderWindow.loadMore} />
         </tbody>
       </table>
@@ -12111,7 +12576,7 @@ function PnlLiveTableShellIsland({ replacementKey, state, mode = 'financial' }: 
 
 function WeekTableShellIsland({ replacementKey, state }: { replacementKey: string; state: WeekLiveState }) {
   const rows = state.status === 'ready' ? getWeekRows(state.report) : []
-  const renderWindow = useReportTableRenderLimit(rows.length)
+  const renderWindow = useReportTableRenderLimit(rows.length, 'week')
   const visibleRows = rows.slice(0, renderWindow.limit)
   if (state.status !== 'ready' || rows.length === 0) return null
   return (
@@ -12148,7 +12613,7 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
         </thead>
         <tbody data-vella-island="week-table-body" data-vella-island-status="explicit-jsx" data-vella-row-count={rows.length}>
           {visibleRows.map((row, index) => (
-            <tr key={`${row.sku ?? 'sku'}-${index}`} data-report-row="week">
+            <tr key={`${row.sku ?? 'sku'}-${index}`} data-report-row="week" data-product-status={row.productStatus ?? undefined}>
               <td className="report-sticky">
                 <ReportProductCell
                   photoUrl={weekProductPhoto(row)}
@@ -12232,7 +12697,7 @@ function WeekTableScrollStyles() {
   )
 }
 
-function RnpReportIsland({ replacementKey }: { replacementKey: string }) {
+export function RnpReportIsland({ replacementKey }: { replacementKey: string }) {
   return (
     <PeriodReportGate replacementKey={replacementKey} surface="rnp">
       <RnpReportActiveIsland replacementKey={replacementKey} />
@@ -12241,13 +12706,30 @@ function RnpReportIsland({ replacementKey }: { replacementKey: string }) {
 }
 
 function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
-  const { accessToken } = useAuth()
+  const { accessToken, cabinetMe } = useAuth()
   const activeTab = useContext(ActiveParityTabContext)
   const rnpReportActive = shouldLoadPeriodSurface(activeTab, 'rnp')
-  const [state, setState] = useState<RnpLiveState>({ status: 'loading' })
+  const [publishedState, setPublishedState] = useState<ScopedReportState<RnpLiveState> | null>(null)
   const [periodState, setPeriodState] = useState(() => readReportPeriodState('rnp'))
   const periodFromIso = periodState.fromIso
   const periodToIso = periodState.toIso
+  // Keep session material in component memory only, as in the P&L consumer.
+  const requestScope = JSON.stringify([accessToken, cabinetMe?.organization.organizationId, periodFromIso, periodToIso])
+  const activeScope = useRef(requestScope)
+  useLayoutEffect(() => { activeScope.current = requestScope }, [requestScope])
+  const state = selectScopedReportState<RnpLiveState>(requestScope, publishedState, { status: 'loading' })
+  const setState = useCallback((next: RnpLiveState | ((current: RnpLiveState) => RnpLiveState)) => {
+    if (activeScope.current !== requestScope) return
+    setPublishedState(current => {
+      if (activeScope.current !== requestScope) return current
+      return {
+        scope: requestScope,
+        state: typeof next === 'function'
+          ? next(selectScopedReportState<RnpLiveState>(requestScope, current, { status: 'loading' }))
+          : next,
+      }
+    })
+  }, [requestScope])
   const rnpJob = state.status === 'ready'
     ? describePnlReportJob(state.report.reportJob ?? null)
     : state.job ?? null
@@ -12301,7 +12783,7 @@ function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       cancelled = true
       controller.abort()
     }
-  }, [accessToken, periodFromIso, periodToIso, rnpReportActive])
+  }, [accessToken, periodFromIso, periodToIso, rnpReportActive, requestScope, setState])
 
   useEffect(() => {
     const render = (event: Event) => {
@@ -12356,7 +12838,7 @@ function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       cancelled = true
       if (timer !== null) window.clearTimeout(timer)
     }
-  }, [accessToken, periodFromIso, periodToIso, rnpRefreshRunning, rnpReportActive, state.status])
+  }, [accessToken, periodFromIso, periodToIso, rnpRefreshRunning, rnpReportActive, state.status, requestScope, setState])
 
   useEffect(() => {
     const root = document.getElementById('tab-rnp')
@@ -12586,36 +13068,69 @@ function PnlReportIsland({ replacementKey }: { replacementKey: string }) {
 }
 
 function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
-  const { accessToken } = useAuth()
+  const { accessToken, cabinetMe } = useAuth()
+  const canonicalRollout = useMemo(
+    () => resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId),
+    [cabinetMe?.organization.organizationId],
+  )
   const activeTab = useContext(ActiveParityTabContext)
   const pnlReportActive = shouldLoadPeriodSurface(activeTab, 'pnl')
-  const [state, setState] = useState<PnlLiveState>({ status: 'loading' })
+  const [publishedState, setPublishedState] = useState<ScopedReportState<PnlLiveState> | null>(null)
   const [periodState, setPeriodState] = useState(() => readReportPeriodState('pnl'))
-  // 1C is out of scope and disabled on the backend, so the operational P&L has
-  // no source of data and only ever renders its "ждём 1С" placeholder.  Open on
-  // the WB financial report instead; the toggle still exposes both.
-  const [pnlMode, setPnlMode] = useState<PnlReportMode>('financial')
+  const [pnlMode, setPnlMode] = useContext(PnlReportModeContext)!
+  const [query, setQuery] = useState('')
+  const [manager, setManager] = useState('all')
   const periodFromIso = periodState.fromIso
   const periodToIso = periodState.toIso
   const pnlSource: BackgroundReportSource = pnlMode === 'operational' ? 'operational' : 'financial'
   const isOperationalPnl = pnlMode === 'operational'
+  const canonicalPnlEnabled = shouldUseCanonicalAbcPnl(canonicalRollout, 'pnl', pnlMode)
+  // Session material stays in component memory only; never log or persist this key.
+  const requestScope = JSON.stringify([
+    accessToken, cabinetMe?.organization.organizationId, canonicalRollout?.marketplaceAccountId,
+    canonicalPnlEnabled, periodFromIso, periodToIso, pnlSource,
+  ])
+  const state = selectScopedReportState<PnlLiveState>(requestScope, publishedState, { status: 'loading' })
+  const pnlRows = state.status === 'ready' ? getPnlRows(state.report) : []
+  const selectedRows = useMemo(() => filterPnlTableRows(pnlRows, query, manager), [pnlRows, query, manager])
+  const pnlExport = useContext(PnlTableExportContext)
+  useLayoutEffect(() => {
+    if (!pnlExport) return
+    const select = (): ReportTableExportPayload => {
+      if (!accessToken || !canonicalRollout || !canonicalPnlEnabled || activeTab !== 'pnl' || state.status !== 'ready') throw new Error('Дождитесь загрузки финансового canonical P&L и повторите экспорт.')
+      const period = readReportPeriodState('pnl')
+      return {
+        reportKind: 'pnl', marketplaceAccountId: canonicalRollout.marketplaceAccountId, dateFrom: period.fromIso, dateTo: period.toIso,
+        source: reportTableSource(state.report.canonical, canonicalRollout.marketplaceAccountId, period, JSON.stringify({ query, manager })),
+        headers: PNL_TABLE_EXPORT_HEADERS,
+        rows: buildPnlTableRows(selectedRows),
+      }
+    }
+    pnlExport.current = select
+    return () => { if (pnlExport.current === select) pnlExport.current = null }
+  }, [accessToken, activeTab, canonicalPnlEnabled, canonicalRollout, manager, pnlExport, query, selectedRows, state])
+  const operationalSourceDisabled = isOperationalPnl && state.status === 'ready' && isOneCDisabledReport(state.report)
   const operationalCashFlowReady = isOperationalPnl && state.status === 'ready' && state.report.cashFlow?.status === 'ready'
   const operationalWaitingJob = state.status === 'ready'
     ? describePnlReportJob(state.report.reportJob ?? { state: operationalCashFlowReady ? 'completed' : 'waiting_1c', stage: operationalCashFlowReady ? 'completed' : 'waiting_1c', label: operationalCashFlowReady ? '1С ДДС готова' : 'Ждём 1С ДДС', percent: operationalCashFlowReady ? 100 : 20 })
     : state.job
-  const pnlRows = state.status === 'ready' ? getPnlRows(state.report) : []
   const pnlHasRows = state.status === 'ready' && pnlRows.length > 0
+  const canonicalState = state.status === 'ready' ? state.report.canonical?.state : null
+  const accessDenied = state.status === 'error' && state.message.startsWith('Нет доступа')
   const pnlStateVariant = state.status === 'loading' ? 'loading' : state.status === 'error' ? 'error' : 'empty'
   const pnlStateTitle = state.status === 'loading'
     ? 'Загружаем P&L'
     : state.status === 'error'
-      ? 'Не удалось загрузить P&L'
-      : 'За выбранный период нет данных'
+      ? accessDenied ? 'Нет доступа к P&L' : 'Не удалось загрузить P&L'
+      : canonicalState === 'future' ? 'Выбран будущий период'
+        : canonicalState === 'missing' ? 'Canonical snapshot еще не создан'
+          : 'За выбранный период нет данных'
+  const canonicalEmptyMessage = canonicalAbcPnlEmptyMessage('pnl', canonicalState)
   const pnlStateMessage = state.status === 'loading'
     ? 'Собираем выручку, расходы, комиссии и прибыль. Таблица появится автоматически, когда отчет будет готов.'
     : state.status === 'error'
       ? cleanReportStateMessage(state.message) || 'Попробуйте обновить данные или выбрать другой период.'
-      : 'Мы не нашли финансовых строк за этот период. Попробуйте изменить даты или обновить данные отчета.'
+      : canonicalEmptyMessage ?? 'Мы не нашли финансовых строк за этот период. Попробуйте изменить даты или обновить данные отчета.'
 
   useEffect(() => {
     if (!pnlReportActive) return
@@ -12623,17 +13138,27 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
     const controller = new AbortController()
 
     async function loadPnlReportCache() {
+      const setState = (next: PnlLiveState) => {
+        if (!cancelled) setPublishedState({ scope: requestScope, state: next })
+      }
       if (!accessToken) {
         setState({ status: 'error', message: 'Сессия истекла. Войдите снова, чтобы открыть P&L.' })
         return
       }
       try {
-        const latest = await loadLatestReportCache<PnlBackendReport>('pnl', 'pnl', accessToken, 'sku', { fromIso: periodFromIso, toIso: periodToIso }, pnlSource, {
-          signal: controller.signal,
-          onJob: (job) => {
-            if (!cancelled) setState({ status: 'loading', job })
-          },
-        })
+        const latest: PnlBackendReport | null = canonicalPnlEnabled && canonicalRollout
+          ? adaptCanonicalPnlReport(await fetchCanonicalAbcPnl({
+              accessToken,
+              marketplaceAccountId: canonicalRollout.marketplaceAccountId,
+              period: { fromIso: periodFromIso, toIso: periodToIso },
+              signal: controller.signal,
+            }))
+          : await loadLatestReportCache<PnlBackendReport>('pnl', 'pnl', accessToken, 'sku', { fromIso: periodFromIso, toIso: periodToIso }, pnlSource, {
+              signal: controller.signal,
+              onJob: (job) => {
+                if (!cancelled) setState({ status: 'loading', job })
+              },
+            })
         if (latest && !cancelled) {
           setState({ status: 'ready', report: latest })
           return
@@ -12641,7 +13166,9 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
         if (!cancelled) setState({ status: 'ready', report: { rows: [] } })
       } catch (error) {
         if (cancelled || isReportLoadAbort(error)) return
-        const message = error instanceof ApiError ? error.message : 'Не удалось получить P&L из кэша'
+        const message = canonicalPnlEnabled && error instanceof ApiError && error.status === 403
+          ? 'Нет доступа к canonical ABC/P&L для выбранного аккаунта.'
+          : error instanceof ApiError ? error.message : 'Не удалось получить P&L из кэша'
         setState({ status: 'error', message })
       }
     }
@@ -12651,7 +13178,7 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       cancelled = true
       controller.abort()
     }
-  }, [accessToken, periodFromIso, periodToIso, pnlReportActive, pnlSource])
+  }, [accessToken, canonicalPnlEnabled, canonicalRollout, periodFromIso, periodToIso, pnlReportActive, pnlSource, requestScope])
 
   useEffect(() => {
     const render = (event: Event) => {
@@ -12927,14 +13454,29 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       <PnlToolbarIsland
         replacementKey={`${replacementKey}-toolbar`}
         mode={pnlMode}
-        onModeChange={(mode) => {
-          setPnlMode(mode)
-          setState({ status: 'loading' })
-        }}
+        onModeChange={setPnlMode}
+        query={query} onQueryChange={setQuery}
+        manager={manager} onManagerChange={setManager}
       />
       <PnlLiveSourceStripIsland replacementKey={`${replacementKey}-source`} state={state} period={periodState} source={pnlSource} />
       {isOperationalPnl ? (
-        operationalCashFlowReady ? (
+        operationalSourceDisabled ? (
+          <ReportDataStateIsland
+            replacementKey={`${replacementKey}-disabled-1c`}
+            tabId="pnl"
+            variant="empty"
+            title={ONE_C_DISABLED_TITLE}
+            message={ONE_C_DISABLED_MESSAGE}
+          />
+        ) : state.status === 'error' ? (
+          <ReportDataStateIsland
+            replacementKey={`${replacementKey}-state`}
+            tabId="pnl"
+            variant="error"
+            title={pnlStateTitle}
+            message={pnlStateMessage}
+          />
+        ) : operationalCashFlowReady ? (
           <>
             <PnlLiveCostPanelIsland replacementKey={`${replacementKey}-op-cost`} state={state} />
             <PnlLiveStatusGridIsland replacementKey={`${replacementKey}-status-grid`} state={state} />
@@ -12951,8 +13493,8 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       ) : (
         pnlHasRows ? (
           <>
-            <PnlLiveWorkbenchIsland replacementKey={`${replacementKey}-workbench`} state={state} />
-            <PnlLiveTableShellIsland replacementKey={`${replacementKey}-table`} state={state} mode="financial" />
+            <PnlLiveWorkbenchIsland replacementKey={`${replacementKey}-workbench`} state={state} rows={selectedRows} />
+            <PnlLiveTableShellIsland replacementKey={`${replacementKey}-table`} state={state} rows={selectedRows} mode="financial" />
           </>
         ) : (
           <ReportDataStateIsland
@@ -13556,6 +14098,7 @@ function WeekReportActiveIsland({ replacementKey }: { replacementKey: string }) 
 function AbcHelpRowIsland({ replacementKey }: { replacementKey: string }) {
   const state = useAbcLiveState()
   if (state.authExpired || state.loading || !state.report || !abcHasReportRows(state)) return null
+  const isCanonical = !!state.report.canonical
   return (
     <div
       key={replacementKey}
@@ -13565,15 +14108,21 @@ function AbcHelpRowIsland({ replacementKey }: { replacementKey: string }) {
       data-vella-runtime-binding="showHelp"
     >
       <div className="abc-help-row-copy">
-        <b>ABC-код</b>
-        <span className="abc-help-codes">
-          <span className="abc-badge aa">AA</span>
-          <span className="abc-badge ab">AB</span>
-          <span className="abc-badge ba">BA</span>
-          <span className="abc-badge bc">BC</span>
-          <span className="abc-badge cc">CC</span>
-        </span>
-        <span>1-я буква — продажи, 2-я — чистая прибыль. Порог фиксирован: 20/30/50.</span>
+        <b>{isCanonical ? 'Класс продаж' : 'ABC-код'}</b>
+        {isCanonical ? (
+          <span>Canonical API отдает только класс продаж A/B/C. Класс прибыли и итоговый ABC-код не рассчитаны; «·—» показывает отсутствующую вторую букву.</span>
+        ) : (
+          <>
+            <span className="abc-help-codes">
+              <span className="abc-badge aa">AA</span>
+              <span className="abc-badge ab">AB</span>
+              <span className="abc-badge ba">BA</span>
+              <span className="abc-badge bc">BC</span>
+              <span className="abc-badge cc">CC</span>
+            </span>
+            <span>1-я буква — продажи, 2-я — чистая прибыль. Порог фиксирован: 20/30/50.</span>
+          </>
+        )}
       </div>
       <button
         className="btn btn-default btn-sm"
@@ -13591,9 +14140,14 @@ function AbcProfitStatusPanelIsland({ replacementKey }: { replacementKey: string
   const state = useAbcLiveState()
   if (state.authExpired || state.loading || !state.report || !abcHasReportRows(state)) return null
   const rawRows = abcRawRows(state.report)
+  const isCanonical = !!state.report.canonical
+  if (isCanonical) return null
   const groups = ['Локомотивы', 'Новинки', 'Средний', 'Неликвид', 'Ликвидация'].map((label) => {
     const rows = rawRows.filter((row) => abcStatusGroupLabel(row.productStatus) === label)
-    const profit = abcLiveRowsKopecks(rows, 'netTotalKopecks')
+    const values = rows.map((row) => asAbcNumber(isCanonical ? row.profitBeforeInternalExpensesKopecks : row.netTotalKopecks))
+    const profit = isCanonical && values.some((value) => value === null)
+      ? null
+      : values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
     return { label, rows, profit }
   })
 
@@ -13607,7 +14161,7 @@ function AbcProfitStatusPanelIsland({ replacementKey }: { replacementKey: string
     >
       <div className="report-chart-head" style={{ marginBottom: '10px' }}>
         <div>
-          <div className="report-card-title">Чистая прибыль по статусам</div>
+          <div className="report-card-title">{isCanonical ? 'До внутренних расходов по статусам' : 'Чистая прибыль по статусам'}</div>
           <div className="report-card-note">
             {state.error ? 'Нет данных для среза' : 'Срез рассчитан по товарам в таблице'}
           </div>
@@ -13619,11 +14173,11 @@ function AbcProfitStatusPanelIsland({ replacementKey }: { replacementKey: string
           <div className="profit-status-card" key={group.label}>
             <div className="profit-status-title">{group.label}</div>
             <div className="profit-status-val">
-              <span className={group.profit < 0 ? 'metric-down' : 'metric-up'}>
+              <span className={group.profit === null ? '' : group.profit < 0 ? 'metric-down' : 'metric-up'}>
               {formatAbcKopecks(group.profit)}
               </span>
             </div>
-            <div className={group.profit < 0 ? 'profit-status-delta metric-down' : 'profit-status-delta metric-up'}>
+            <div className={group.profit !== null && group.profit < 0 ? 'profit-status-delta metric-down' : 'profit-status-delta metric-up'}>
               {`${group.rows.length.toLocaleString('ru-RU')} товаров`}
             </div>
           </div>
@@ -13638,6 +14192,8 @@ function SortArrow() {
 }
 
 function AbcTableHeaderIsland({ replacementKey }: { replacementKey: string }) {
+  const state = useAbcLiveState()
+  const isCanonical = !!state.report?.canonical
   return (
     <thead
       key={replacementKey}
@@ -13655,7 +14211,7 @@ function AbcTableHeaderIsland({ replacementKey }: { replacementKey: string }) {
             data-vella-column={`abc-${column.column}`}
             data-vella-ux-delta="explicit-abc-sort-key"
           >
-            {column.label} <span className="stat-tip abc-header-help" data-tip={column.help}>?</span> <SortArrow />
+            {isCanonical && column.column === 'net' ? 'До внутренних расходов' : isCanonical && column.column === 'abc' ? 'Класс продаж' : column.label} <span className="stat-tip abc-header-help" data-tip={isCanonical && column.column === 'net' ? 'Продажи за вычетом возвратов минус комиссия, логистика, хранение, приёмка, реклама, штрафы, налог и себестоимость.' : isCanonical && column.column === 'abc' ? 'Класс продаж A/B/C. Класс прибыли пока не рассчитан.' : column.help}>?</span> <SortArrow />
           </th>
         ))}
       </tr>
@@ -13679,7 +14235,7 @@ function useAbcRowsSnapshot() {
 
   useEffect(() => {
     const id = window.setTimeout(() => {
-      window.applyAbcFilter?.()
+      updateAbcSummaryFromRows(snapshot.rows.map((item) => item.row), snapshot.filter ?? {})
       window.initTooltips?.()
       window.enhanceA11yLabels?.()
     }, 0)
@@ -13691,8 +14247,21 @@ function useAbcRowsSnapshot() {
 
 function AbcTableBodyIsland({ replacementKey }: { replacementKey: string }) {
   const snapshot = useAbcRowsSnapshot()
-  const [renderLimit, setRenderLimit] = useState(REPORT_TABLE_RENDER_BATCH)
-  useEffect(() => setRenderLimit(REPORT_TABLE_RENDER_BATCH), [snapshot.count])
+  const auth = useContext(AuthContext)
+  const period = readReportPeriodState('abc')
+  const view = JSON.stringify([
+    currentScopedAbcLiveState().scope, auth?.accessToken, auth?.isAuthenticated,
+    auth?.cabinetMe?.organization.organizationId, auth?.cabinetMe?.user.userId,
+    period.fromIso, period.toIso, snapshot.filter, snapshot.sort,
+  ])
+  const sourceRows = window.__vellaAbcLiveRows
+  const [pagination, setPagination] = useState(() => ({ view, sourceRows, rows: snapshot.rows, limit: REPORT_TABLE_RENDER_BATCH }))
+  const changed = pagination.view !== view || pagination.sourceRows !== sourceRows
+    || pagination.rows.length !== snapshot.rows.length
+    || snapshot.rows.some((item, index) => item.row !== pagination.rows[index]?.row || item.originalIndex !== pagination.rows[index]?.originalIndex)
+  // Reset only the display window, not publications: mutable cells and summaries must still refresh.
+  const renderLimit = changed ? REPORT_TABLE_RENDER_BATCH : pagination.limit
+  if (changed) setPagination({ view, sourceRows, rows: snapshot.rows, limit: REPORT_TABLE_RENDER_BATCH })
   const visibleRows = snapshot.rows.slice(0, renderLimit)
   const showStatusRow = snapshot.rows.length === 0
 
@@ -13723,7 +14292,7 @@ function AbcTableBodyIsland({ replacementKey }: { replacementKey: string }) {
       {!showStatusRow && visibleRows.length < snapshot.rows.length ? (
         <tr data-vella-island="abc-table-more-row" data-vella-island-status="explicit-jsx">
           <td colSpan={ABC_TABLE_COLUMNS.length} style={{ padding: 14, textAlign: 'center' }}>
-            <button className="btn btn-default btn-sm" onClick={() => setRenderLimit((limit) => limit + REPORT_TABLE_RENDER_BATCH)}>
+            <button className="btn btn-default btn-sm" onClick={() => setPagination((current) => ({ ...current, limit: current.limit + REPORT_TABLE_RENDER_BATCH }))}>
               Показать ещё {Math.min(REPORT_TABLE_RENDER_BATCH, snapshot.rows.length - visibleRows.length)} · {visibleRows.length} из {snapshot.rows.length}
             </button>
           </td>
@@ -14305,7 +14874,7 @@ function ProductDrawerPricingStatusIsland({ replacementKey }: { replacementKey: 
             ) : null}
           </div>
           <div className="d-grid" style={{ marginBottom: 10 }}>
-            <div className="d-row"><span className="d-label">Стратегия</span><span className="d-val">{strategyName || '— нет —'}</span></div>
+            <div className="d-row"><span className="d-label">Стратегия</span><span className="d-val">{strategyName || 'Не назначена'}</span></div>
             <div className="d-row"><span className="d-label">Текущая цена</span><span className="d-val">{formatDrawerKopecks(status.current.priceKopecks)}</span></div>
             <div className="d-row"><span className="d-label">P_MIN / P_MAX</span><span className="d-val">{formatDrawerKopecks(status.current.pMinKopecks)} / {formatDrawerKopecks(status.current.pMaxKopecks)}</span></div>
             <div className="d-row"><span className="d-label">Маржа</span><span className="d-val">{status.current.marginPct == null ? '—' : `${Math.round(status.current.marginPct)}%`}</span></div>
@@ -14878,7 +15447,7 @@ function ProductDrawerAlgoStrategyIsland({ replacementKey }: { replacementKey: s
   const tplId = product?.tpl || 'cust'
   const color = product?.strategyColor || TPL_COLOR_BY_ID[tplId] || '#64748B'
   const strategyName = drawerAssignedStrategyName(null, product)
-  const label = strategyName || '— нет —'
+  const label = strategyName || 'Не назначена'
   const description = strategyName
     ? product?.strategyDescription || 'Стратегия назначена вручную или через XLSX'
     : 'Назначьте стратегию в таблице или массово через «Применить стратегию»'
@@ -16321,11 +16890,11 @@ function legacyNotificationFromBackend(item: BackendNotificationEvent) {
 }
 
 const REVIEWS_KPIS = [
-  ['Неотвеченные', 'Отзывы WB без опубликованного ответа', 'reviewsKpiOpen', '—', '', 'после загрузки backend', 'neutral', ''],
-  ['Требуют проверки', 'AI подготовил черновик, но нужен человек', 'reviewsKpiQueue', '—', 'alert', 'по правилам backend', 'neutral', ''],
-  ['Автоответы сегодня', 'Запланированные и отправленные безопасные ответы', 'reviewsKpiAuto', '—', '', 'draft-only режим', 'neutral', ''],
-  ['Заблокировано', 'Низкая оценка, стоп-слово, конкурент, цена или компенсация', 'reviewsKpiBlocked', '—', '', 'по ответу backend', 'neutral', ''],
-  ['Среднее время', 'От создания отзыва до ответа', 'reviewsKpiAvgTime', '—', '', 'нет данных', 'neutral', ''],
+  ['Неотвеченные', 'Отзывы без опубликованного ответа по текущим фильтрам', 'reviewsKpiOpen', '—', ''],
+  ['Требуют проверки', 'Отзывы и черновики, требующие внимания, по текущим фильтрам', 'reviewsKpiQueue', '—', 'alert'],
+  ['Готовые черновики', 'Подготовленные ответы, которые ещё не опубликованы, по текущим фильтрам', 'reviewsKpiAuto', '—', ''],
+  ['Заблокировано', 'Заблокированные отзывы и ошибки по текущим фильтрам', 'reviewsKpiBlocked', '—', ''],
+  ['Среднее время', 'От создания отзыва до ответа', 'reviewsKpiAvgTime', '—', ''],
 ] as const
 
 const REVIEW_CHIPS = [
@@ -16421,6 +16990,8 @@ type AbcRowsSnapshot = {
     html: string
   }>
   count: number
+  filter?: AbcFilterState
+  sort?: AbcSortStackItem[]
 }
 
 type ThresholdPreviewSnapshot = {
@@ -17071,11 +17642,10 @@ export function ReportRulesIsland({ replacementKey }: { replacementKey: string }
           data-vella-island-status="explicit-jsx"
         >
           <div className="settings-card" id="thr-profile">
-            <div className="card-title">Профиль правил <span className="card-title-help">Глобальные пороги отчётов и автоматики</span></div>
+            <div className="card-title">Профиль правил</div>
             <div className="threshold-profile-head">
               <div>
                 <div className="threshold-profile-title" id="thresholdProfileTitle">{draft.name}</div>
-                <div className="threshold-profile-meta" id="thresholdProfileMeta">версия {draft.version} · {draft.preset} · {draft.createdAt ? new Date(draft.createdAt).toLocaleString('ru-RU') : 'профиль по умолчанию'}</div>
               </div>
               <span className={`report-tag ${canWrite ? 'ok' : 'neutral'}`}>{canWrite ? 'действует' : 'только просмотр'}</span>
             </div>
@@ -17097,10 +17667,6 @@ export function ReportRulesIsland({ replacementKey }: { replacementKey: string }
                   {label}
                 </button>
               ))}
-            </div>
-            <div className="threshold-warning">
-              <span>!</span>
-              <div>Пороги меняют классификацию, статусы правил, алерты и отбор в автоматику. Сохранение не запускает мгновенное массовое изменение цен: репрайсер и ликвидация используют правила со следующего планового цикла.</div>
             </div>
           </div>
 
@@ -17262,7 +17828,7 @@ function ThresholdPreviewModalIsland({ replacementKey }: { replacementKey: strin
   const snapshot = useThresholdPreviewSnapshot()
 
   return (
-    <div
+    <dialog
       key={replacementKey}
       className="modal-overlay"
       id="m-thresholdPreview"
@@ -17330,7 +17896,7 @@ function ThresholdPreviewModalIsland({ replacementKey }: { replacementKey: strin
           <button className="btn btn-primary" data-vella-react-handlers="onclick" onClick={() => window.applyThresholdProfile?.()}>Применить профиль</button>
         </div>
       </div>
-    </div>
+    </dialog>
   )
 }
 
@@ -18055,7 +18621,7 @@ function AvitoOverviewReportShellIsland() {
         </table>
       </div>
       {selectedItem ? (
-        <div
+        <dialog ref={openReactModal} data-vella-react-modal="" onCancel={(event) => { event.preventDefault(); setSelectedItemId('') }}
           className="modal-overlay open avito-overview-item-modal"
           data-vella-island="avito-overview-item-modal"
           data-vella-island-status="explicit-jsx"
@@ -18090,7 +18656,7 @@ function AvitoOverviewReportShellIsland() {
               <button className="btn btn-primary" type="button" onClick={() => setSelectedItemId('')}>Закрыть</button>
             </div>
           </div>
-        </div>
+        </dialog>
       ) : null}
     </div>
   )
@@ -19541,7 +20107,10 @@ function AvitoListingsIsland({
     }
 
     const controller = new AbortController()
-    setAvitoListingsLiveState({ loading: true, error: null, data: window.__vellaAvitoListingsLiveState?.data ?? null })
+    // The previous response and its selected detail belong to the old request.
+    // Do not expose them under newly applied dates while replacement data loads.
+    window.__vellaSetAvitoListingsState?.({ selectedKey: '' })
+    setAvitoListingsLiveState({ loading: true, error: null, data: null })
     void loadLiveAvitoListings(
       accessToken,
       { dateFrom: state.dateFrom, dateTo: state.dateTo, pageSize: Number(state.pageSize) || 100, forceRefresh: state.forceRefresh },
@@ -19900,7 +20469,7 @@ function AvitoRepricerToolbarIsland({ replacementKey }: { replacementKey: string
   )
 }
 
-function AvitoRepricerSettingsPanel({
+export function AvitoRepricerSettingsPanel({
   accessToken,
   refreshKey,
 }: {
@@ -20053,8 +20622,8 @@ function AvitoRepricerSettingsPanel({
         </section>
       )}
       {scheduleOpen ? (
-        <div className="modal-overlay open" role="presentation" onMouseDown={() => !settingsSaving && setScheduleOpen(false)}>
-          <div className="modal avito-schedule-modal" role="dialog" aria-modal="true" aria-label="Настройка времени запуска репрайсера Авито" onMouseDown={(event) => event.stopPropagation()}>
+        <dialog ref={openReactModal} data-vella-react-modal="" aria-label="Настройка времени запуска репрайсера Авито" onCancel={(event) => { event.preventDefault(); !settingsSaving && setScheduleOpen(false) }} className="modal-overlay open" onMouseDown={() => !settingsSaving && setScheduleOpen(false)}>
+          <div className="modal avito-schedule-modal" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-head">
               <div>
                 <div className="modal-title">Время запуска репрайсера</div>
@@ -20100,7 +20669,7 @@ function AvitoRepricerSettingsPanel({
               </button>
             </div>
           </div>
-        </div>
+        </dialog>
       ) : null}
     </>
   )
@@ -20115,8 +20684,8 @@ function AvitoRepricerPriceHistoryModal({
 }) {
   const row = state.row
   return (
-    <div className="modal-overlay open avito-price-history-overlay" role="presentation" onMouseDown={onClose}>
-      <div className="modal xl avito-price-history-modal" role="dialog" aria-modal="true" aria-label="История цены Авито" onMouseDown={(event) => event.stopPropagation()}>
+    <dialog ref={openReactModal} data-vella-react-modal="" aria-label="История цены Авито" onCancel={(event) => { event.preventDefault(); onClose() }} className="modal-overlay open avito-price-history-overlay" onMouseDown={onClose}>
+      <div className="modal xl avito-price-history-modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="avito-history-title">
             {row.imageUrl ? <img className="avito-row-photo" src={row.imageUrl} alt="" loading="lazy" /> : <div className="avito-row-photo avito-row-photo-empty">AV</div>}
@@ -20177,7 +20746,7 @@ function AvitoRepricerPriceHistoryModal({
           <button className="btn btn-default" type="button" onClick={onClose}>Закрыть</button>
         </div>
       </div>
-    </div>
+    </dialog>
   )
 }
 
@@ -21135,7 +21704,7 @@ function avitoPickingStatusClass(status: string) {
   return 'ok'
 }
 
-function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
+export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
   const location = useLocation()
   const { accessToken } = useAuth()
   const isAvitoOrdersRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'orders-avito'
@@ -21610,7 +22179,13 @@ function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: 
           .vella-html-parity-root .avito-order-detail-list { grid-template-columns: 1fr; }
         }
       `}</style>
-      {!hasExtensionRows ? (
+      {!hasExtensionRows && (live.loading || sourceError) ? (
+        live.loading ? (
+          <AvitoDataState kind="loading" title="Загружаем лист подбора" subtitle="Собираем заказы и товары Авито." />
+        ) : (
+          <AvitoDataState kind="error" title="Не удалось загрузить заказы" subtitle="Проверьте подключение Авито и обновите данные." />
+        )
+      ) : !hasExtensionRows ? (
         <section className="avito-orders-extension-empty" aria-label="Подключение расширения Avito Orders">
           <div className="avito-orders-extension-card">
             <div className="avito-orders-extension-title">
@@ -21759,7 +22334,6 @@ function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: 
                     <th>Возврат</th>
                     <th>Стикер</th>
                     <th>Баркод</th>
-                    <th>КИЗ</th>
                     <th>QR/штрихкод Авито</th>
                     <th>Статус</th>
                   </tr>
@@ -21780,13 +22354,12 @@ function AvitoOrdersIsland({ replacementKey, sourceElement }: { replacementKey: 
                       <td>{avitoOrderReturnBadge(item)}</td>
                       <td><button className="btn btn-default btn-sm" type="button" onClick={(event) => { event.stopPropagation(); openStickerDesigner({ key, order, item, index }) }}>Стикеры</button><span className="orders-picking-muted">{order.trackNumber || 'трек не указан'}</span></td>
                       <td>{avitoPickingCell(order.trackNumber)}</td>
-                      <td>{avitoPickingCell(null)}</td>
                       <td>{avitoPickingCell(item.itemId || order.trackNumber)}</td>
                       <td><span className={`orders-status ${avitoPickingStatusClass(order.status)}`}>{avitoOrderStatusLabel(order.status)}</span></td>
                     </tr>
                   )) : (
                     <tr className="avito-orders-empty-row">
-                      <td colSpan={16}>
+                      <td colSpan={15}>
                         {live.loading ? (
                           <AvitoDataState kind="loading" title="Загружаем лист подбора" subtitle="Собираем заказы и товары Авито." />
                         ) : sourceError ? (
@@ -22766,7 +23339,11 @@ function AvitoStatsShellIsland({
   )
 }
 
-function AvitoStatsIsland({
+export function AvitoStatsIsland(props: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
+  return canonicalAvitoStatisticsEnabled ? <CanonicalAvitoStatisticsPage /> : <LegacyAvitoStatsIsland {...props} />
+}
+
+function LegacyAvitoStatsIsland({
   replacementKey,
   sourceElement,
 }: {
@@ -22873,7 +23450,7 @@ function NotificationModeSwitchIsland() {
   )
 }
 
-function NotificationsToolbarIsland() {
+export function NotificationsToolbarIsland() {
   const location = useLocation()
   const isAvitoNotificationsRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'avito-notifications'
   if (isAvitoNotificationsRoute) {
@@ -23247,6 +23824,17 @@ function NotificationsTableShellIsland({ loading = false, error = null }: { load
 }
 
 function NotificationsIsland({ replacementKey }: { replacementKey: string }) {
+  const location = useLocation()
+  const tab = resolveParityRouteTarget(location.pathname, location.search).tab
+  if (canonicalNotificationsEnabled && tab !== 'avito-notifications') return (
+    <div key={replacementKey} className={`tab-content ${tab === 'notifications' ? 'active' : ''}`} id="tab-notifications" data-vella-island="notifications" data-vella-island-status="explicit-jsx">
+      {tab === 'notifications' ? <CanonicalNotificationsIsland /> : null}
+    </div>
+  )
+  return <LegacyNotificationsIsland replacementKey={replacementKey} />
+}
+
+function LegacyNotificationsIsland({ replacementKey }: { replacementKey: string }) {
   const { accessToken } = useAuth()
   const location = useLocation()
   const [notificationsLoading, setNotificationsLoading] = useState(true)
@@ -23519,7 +24107,10 @@ function SettingsProfileIsland({ replacementKey }: { replacementKey: string }) {
     setWbTokenLoading(true)
     setWbTokenError(null)
 
-    void loadSettingsSnapshot(accessToken, cabinetMe)
+    const request = WB_ACCOUNT_PRODUCTS_ENABLED
+      ? apiData<UserAvitoCredentialsView>('/api/v1/cabinet/avito-credentials', { headers: authorizationHeaders(accessToken) }).then((avitoCredentials) => ({ wbToken: EMPTY_WB_TOKEN_VIEW, avitoCredentials }))
+      : loadSettingsSnapshot(accessToken, cabinetMe)
+    void request
       .then((snapshot) => {
         if (cancelled) return
         setWbToken(snapshot.wbToken)
@@ -23707,6 +24298,8 @@ function SettingsProfileIsland({ replacementKey }: { replacementKey: string }) {
                     <div className="profile-input-wrap"><input className="profile-input has-status" id="settingsProfileWorkspace" defaultValue="Огни" readOnly /><span className="profile-input-status">workspace</span></div>
                   </div>
                 </div>
+                {canonicalNotificationsEnabled && isProfileRoute ? <CanonicalNotificationPreferencesForm /> : null}
+                {WB_ACCOUNT_PRODUCTS_ENABLED ? (isProfileRoute ? <WbConnection /> : null) : (
                 <div className="profile-token-card">
                   <div className="profile-token-head">
                     <div>
@@ -23786,6 +24379,7 @@ function SettingsProfileIsland({ replacementKey }: { replacementKey: string }) {
                     </button>
                   </div>
                 </div>
+                )}
                 <div className="profile-token-card">
                   <div className="profile-token-head">
                     <div>
@@ -24695,7 +25289,7 @@ function SettingsAccessIsland({ replacementKey }: { replacementKey: string }) {
         </div>
       </aside>
 
-      <div
+      <dialog
         className="modal-overlay"
 	        id="settingsInviteModal"
 	        data-vella-island="settings-access-invite-modal"
@@ -24735,7 +25329,7 @@ function SettingsAccessIsland({ replacementKey }: { replacementKey: string }) {
             <button className="btn btn-primary" type="button" data-vella-react-handlers="onclick" onClick={() => window.createSettingsInvite?.()}>Создать пользователя</button>
           </div>
         </div>
-      </div>
+      </dialog>
     </div>
   )
 }
@@ -24854,11 +25448,10 @@ function ReviewsKpiStripIsland() {
           100% { transform: translateX(260%); }
         }
       `}</style>
-      {REVIEWS_KPIS.map(([label, tip, valueId, value, statClass, delta, deltaClass]) => (
+      {REVIEWS_KPIS.map(([label, tip, valueId, value, statClass]) => (
         <div className={statClass ? `stat ${statClass}` : 'stat'} key={label}>
           <div className="stat-label">{label} <span className="stat-tip" data-tip={tip}>i</span></div>
           <div className="stat-val" {...(valueId ? { id: valueId } : {})}>{value}</div>
-          <div className={`stat-delta ${deltaClass}`}>{delta}</div>
         </div>
       ))}
     </div>
@@ -25169,7 +25762,7 @@ function filteredReactReviews(reviews: VellaReview[]) {
 }
 
 function reviewsQueue(reviews: VellaReview[]) {
-  return reviews.filter((review) => ['pending_review', 'blocked', 'error'].includes(review.status))
+  return reviews.filter((review) => ['pending_review', 'blocked', 'error', 'new'].includes(review.status))
 }
 
 function exportBackendReviewsCsv(reviews: VellaReview[]) {
@@ -25212,19 +25805,6 @@ function handleReviewRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, revie
   window.openReviewDrawer?.(reviewId)
 }
 
-function reviewsBackendStateMessage(loadState: NonNullable<Window['__vellaReviewsLoadState']>, reviewsCount: number, error: string) {
-  if (loadState.status === 'syncing') return 'Запущен backend sync, после завершения очередь обновится автоматически.'
-  if (loadState.status === 'loading') return 'Читаем /api/v1/wb-reviews/feedbacks.'
-  if (error) return error
-  if (reviewsCount > 0) return `${reviewsCount} отзывов загружено из backend.`
-
-  const syncStatus = loadState.syncStatus
-  if (!syncStatus?.lastRunAt) return 'Кэш отзывов пустой. Нажмите Обновить, чтобы запустить WB sync.'
-  if (syncStatus.status === 'failed') return `Последний WB sync упал: ${syncStatus.lastError || 'ошибка без текста'}`
-  if (syncStatus.lastSyncedCount === 0) return 'Последний WB sync завершился, но WB вернул 0 отзывов. Проверьте токен Feedbacks API и режим isAnswered.'
-  return 'В backend есть отзывы, но текущие фильтры страницы скрыли все строки.'
-}
-
 function ReviewsShellIsland() {
   const [renderTick, setRenderTick] = useState(0)
 
@@ -25239,11 +25819,9 @@ function ReviewsShellIsland() {
   const reviews = (window.__vellaReviewsData ?? []) as VellaReview[]
   const loadState = window.__vellaReviewsLoadState ?? { status: 'idle' as const }
   const rows = useMemo(() => filteredReactReviews(reviews), [reviews, renderTick])
-  const queue = useMemo(() => reviewsQueue(reviews), [reviews, renderTick])
+  const queue = useMemo(() => reviewsQueue(rows), [rows])
   const isLoading = loadState.status === 'loading' || loadState.status === 'syncing'
-  const isSyncing = loadState.status === 'syncing'
   const error = loadState.status === 'error' ? loadState.error : ''
-  const backendStateMessage = reviewsBackendStateMessage(loadState, reviews.length, error ?? '')
 
   return (
     <div
@@ -25251,19 +25829,6 @@ function ReviewsShellIsland() {
       data-vella-island="reviews-shell"
       data-vella-island-status="explicit-jsx"
     >
-      <div className="reviews-intro">
-        <div className={`reviews-backend-state ${isSyncing ? 'syncing' : loadState.status}`}>
-          <div>
-            <div className="reviews-card-title">
-              {isSyncing ? 'Синхронизируем отзывы WB' : loadState.status === 'loading' ? 'Загружаем отзывы' : error ? 'Backend вернул ошибку' : 'Источник: backend'}
-            </div>
-            <div className="review-muted">
-              {backendStateMessage}
-            </div>
-          </div>
-          {isLoading ? <div className="reviews-progress"><span></span></div> : null}
-        </div>
-      </div>
       <div className="reviews-intro">
         <aside className="reviews-queue">
           <div className="reviews-card-head">
@@ -25372,7 +25937,7 @@ function ReviewsShellIsland() {
               ))}
               {isLoading ? (
                 <tr>
-                  <td colSpan={7}><div className="review-muted">Загружаем отзывы из backend…</div></td>
+                  <td colSpan={7}><div className="review-muted">Загружаем отзывы…</div></td>
                 </tr>
               ) : null}
             </tbody>
@@ -25401,6 +25966,7 @@ function ReviewsIsland({ replacementKey }: { replacementKey: string }) {
       <ReviewsKpiStripIsland />
       <ReviewsToolbarIsland />
       <ReviewsShellIsland />
+      {canonicalReviewsEnabled ? <CanonicalReviewDrawer /> : null}
     </div>
   )
 }
@@ -26136,7 +26702,7 @@ function AvitoReviewsIsland({ replacementKey }: { replacementKey: string }) {
         </>
       ) : null}
       {settingsOpen ? (
-        <div className="modal-overlay open avito-reviews-ai-settings" onClick={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false) }}>
+        <dialog ref={openReactModal} data-vella-react-modal="" onCancel={(event) => { event.preventDefault(); setSettingsOpen(false) }} className="modal-overlay open avito-reviews-ai-settings" onClick={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false) }}>
           <div className="modal lg">
             <div className="modal-head">
               <h2>Настройки AI отзывов Авито</h2>
@@ -26207,7 +26773,7 @@ function AvitoReviewsIsland({ replacementKey }: { replacementKey: string }) {
               <button className="btn btn-primary" type="button" onClick={() => void saveAiPrompt()} disabled={savingPrompt}>{savingPrompt ? 'Сохраняем…' : 'Сохранить настройки'}</button>
             </div>
           </div>
-        </div>
+        </dialog>
       ) : null}
     </div>
   )
@@ -26222,8 +26788,6 @@ const PRODUCT_SECTION_SPECS = [
   ['#tableWrap', 'products-table-shell'],
   ['#emptyState', 'products-empty-state'],
   ['#apiErrorState', 'products-api-error-state'],
-  ['.pagination', 'products-pagination'],
-  ['#bulkBar', 'products-bulk-bar'],
 ] as const
 
 function compactTableHtml(html: string) {
@@ -26507,11 +27071,17 @@ function ProductsKpiStripIsland() {
   const hasPeriodKpiSnapshot = Boolean(window.__vellaProductsSummary) || productsForKpi().length > 0
   const loading = Boolean(window.__vellaProductsLoading) && !hasPeriodKpiSnapshot
   const unavailable = Boolean(window.__vellaProductsKpiUnavailable)
+  const basketsPartial = window.__vellaProductsSummary?.totalBasketsState === 'partial' || productsForKpi().some(product => product.basketsState === 'partial')
+  const summaryScope = window.__vellaProductsCacheMeta?.summaryScope === 'filtered_skus'
+    ? 'Все товары по фильтру; дополнительные нераспределённые расходы кабинета не включены'
+    : productsQueryHasKpiFilters(productsQueryFromRuntime())
+      ? 'Сводка каталога · фильтры применены только к таблице'
+      : 'Весь каталог, не только текущая страница'
   const kpi = computeProductsKpiSnapshot()
   const revenueValue = kpi.revenueAvailable ? `${formatProductsInteger(kpi.revenue)} ₽` : '—'
-  const marginValue = kpi.marginAvailable ? `${formatProductsInteger(kpi.marginRub)} ₽` : '—'
-  const cogsValue = kpi.revenueAvailable ? `${formatProductsInteger(kpi.cogsRub)} ₽` : '—'
-  const expensesValue = kpi.revenueAvailable ? `${formatProductsInteger(kpi.expensesRub)} ₽` : '—'
+  const marginValue = kpi.marginAvailable && kpi.marginRub != null ? `${formatProductsInteger(kpi.marginRub)} ₽` : '—'
+  const cogsValue = kpi.revenueAvailable && window.__vellaProductsSummary?.cogsKopecks !== null ? `${formatProductsInteger(kpi.cogsRub)} ₽` : '—'
+  const expensesValue = kpi.revenueAvailable && window.__vellaProductsSummary?.expensesKopecks !== null ? `${formatProductsInteger(kpi.expensesRub)} ₽` : '—'
   const ordersValue = formatProductsInteger(kpi.ordersUnits)
   const salesValue = kpi.revenueAvailable ? formatProductsInteger(kpi.salesUnits) : '—'
   const returnsValue = formatProductsInteger(kpi.returnsUnits)
@@ -26520,22 +27090,38 @@ function ProductsKpiStripIsland() {
     ? `${formatProductsInteger(kpi.adSkuCount)} товаров · ${formatProductsInteger(window.__vellaProductsCacheMeta?.adsCampaignCount ?? 0)} камп.`
     : 'реклама ещё не загружена'
   const revenueDelta = kpi.revenueAvailable ? 'продажи из финансового отчёта' : 'финансы ещё не загружены'
-  const marginDelta = kpi.marginAvailable ? 'выручка − себестоимость − расходы' : 'финансы ещё не загружены'
+  const factTaxMissing = window.__vellaProductsSummary?.factTaxState === 'missing'
+    || (!window.__vellaProductsSummary?.factTaxState && productsForKpi().some(product => product.factTaxState === 'missing'))
+  const marginDelta = factTaxMissing ? 'налог за период не подтверждён'
+    : kpi.marginAvailable ? 'расчёт репрайсера с корректировками' : 'расчёт недоступен'
+  const ratioRevenue = window.__vellaProductsSummary?.revenueKopecks ?? kpi.revenue * 100
+  const ratioMargin = kpi.marginRub == null ? null : window.__vellaProductsSummary?.marginKopecks ?? kpi.marginRub * 100
+  const marginRatioValue = kpi.revenueAvailable && kpi.marginAvailable && ratioMargin != null && ratioRevenue !== 0 && window.__vellaProductsSummary?.avgMarginPct !== null
+    ? `${(ratioMargin / ratioRevenue * 100).toFixed(1)}%` : '—'
   const items = [
-    ['Выручка за период', 'WB FBS, до выплат комиссии, по выбранному периоду', 'kpiRevenue', revenueValue, revenueDelta],
-    ['Средняя маржа %', 'Среднее по товарам в продаже за выбранный период', 'kpiMargin', `${kpi.avgMargin.toFixed(1)}%`, 'маржа ₽ / выручка'],
-    ['Маржа ₽', 'Сумма чистой маржи по товарам в таблице', 'kpiMarginRub', marginValue, marginDelta],
-    ['Продажи по себестоимости', 'Себестоимость проданных товаров: себестоимость × продажи', 'kpiCogs', cogsValue, 'себестоимость × продажи'],
+    ['Выручка за период', 'WB retailAmount: продажи минус возвраты за выбранный период, до вычета расходов', 'kpiRevenue', revenueValue, revenueDelta],
+    ['Маржа / выручка, %', 'Маржа репрайсера ÷ выручка × 100; отношение общих сумм за период', 'kpiMargin', marginRatioValue, 'отношение сумм за период'],
+    ['Маржа репрайсера, ₽', 'Выручка WB + корректировка за единицу из настроек × продажи за вычетом возвратов − себестоимость − расходы − налог по подтверждённой политике за период. Не итоговая прибыль бизнеса.', 'kpiMarginRub', marginValue, marginDelta],
+    ['Продажи по себестоимости', 'Себестоимость из настроек SKU × (продажи − возвраты)', 'kpiCogs', cogsValue, 'с учётом возвратов'],
     ['Расходы ₽', 'Комиссия, логистика, хранение, приёмка, штрафы, удержания, эквайринг, реклама и прочие расходы', 'kpiExpenses', expensesValue, 'финансы и реклама'],
     ['Реклама ₽', 'Расход рекламы за выбранный период', 'kpiAdsSpend', adsValue, adsDelta],
     ['Заказы, шт', 'Количество заказов за выбранный период', 'kpiOrdersUnits', ordersValue, 'заказы покупателей'],
-    ['Продажи, шт', 'Количество продаж; возвраты показаны отдельно', 'kpiSalesUnits', salesValue, 'проданные товары'],
+    ['Продажи нетто, шт', 'Продажи минус возвраты за выбранный период', 'kpiSalesUnits', salesValue, 'продажи − возвраты'],
     ['Возвраты, шт', 'Количество возвратов за выбранный период', 'kpiReturnsUnits', returnsValue, 'возвраты покупателей'],
     ['Цен изменено за период', 'Сколько товаров обновили цену в выбранном периоде', 'kpiPriceChanges', formatProductsInteger(kpi.priceChanges), 'история изменений', true],
-    ['Корзины за период', 'Добавлений в корзину за выбранный период. Главный сигнал для репрайсера — важнее продаж.', 'kpiBaskets', formatProductsInteger(kpi.totalBaskets), 'сигнал спроса'],
+    ['Корзины за период', 'Добавления в корзину за выбранный период.', 'kpiBaskets', formatProductsInteger(kpi.totalBaskets), basketsPartial ? 'загружена часть периода' : 'сигнал спроса'],
     ['Товаров в продаже', 'Товары с остатком и активной ценой', 'kpiInSale', formatProductsInteger(kpi.inSale), 'активные товары'],
     ['% участия в акциях', 'Доля товаров из загруженного файла акции', 'kpiPromoShare', `${formatProductsInteger(kpi.promoShare)}%`, 'акции WB'],
   ] as const
+
+  const cards = items.map(([label, tip, id, value, delta, clickable]) => (
+    <div className="stat" key={id}>
+      <div className="stat-label">{label} <button type="button" className="stat-tip" data-tip={tip} aria-label={`${label}: ${tip}`}>i</button></div>
+      {clickable ? <button type="button" className="stat-val products-kpi-link" id={id} onClick={() => window.goSubtab?.('history')} aria-label="Открыть историю изменений цен">{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</button>
+        : <div className="stat-val" id={id}>{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</div>}
+      <div className="stat-delta neutral">{delta}</div>
+    </div>
+  ))
 
   const toggleCollapsed = () => {
     setCollapsed((value) => {
@@ -26559,26 +27145,16 @@ function ProductsKpiStripIsland() {
   return (
     <div className="products-kpi-summary" data-vella-island="products-kpi-strip" data-vella-island-status="explicit-jsx">
       <div className="products-kpi-summary-actions">
-        <span>Сводка за выбранный период</span>
+        <span>Сводка за выбранный период · {summaryScope}</span>
         <button className="btn btn-ghost btn-sm" type="button" data-vella-react-handlers="onclick" onClick={toggleCollapsed}>
           Скрыть сводку
         </button>
       </div>
-      <div className="stats repricer-kpis">
-        {items.map(([label, tip, id, value, delta, clickable]) => (
-          <div
-            className={clickable ? 'stat clickable' : 'stat'}
-            data-vella-react-handlers={clickable ? 'onclick' : undefined}
-            onClick={clickable ? () => window.goSubtab?.('history') : undefined}
-            data-tip={clickable ? 'Открыть историю изменений' : undefined}
-            key={id}
-          >
-            <div className="stat-label">{label} <span className="stat-tip" data-tip={tip}>i</span></div>
-            <div className="stat-val" id={id}>{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</div>
-            <div className="stat-delta neutral">{delta}</div>
-          </div>
-        ))}
-      </div>
+      <div className="stats repricer-kpis">{cards.slice(0, 5)}</div>
+      <details className="products-kpi-more">
+        <summary>Дополнительные показатели</summary>
+        <div className="stats repricer-kpis">{cards.slice(5)}</div>
+      </details>
     </div>
   )
 }
@@ -26738,1367 +27314,46 @@ function TemplatesStrategyGridIsland() {
   )
 }
 
-function formatProductsBackendTime(value: string | null | undefined) {
-  if (!value) return ''
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function formatProductsSyncDuration(seconds: number | null | undefined) {
-  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return null
-  if (seconds < 60) return `${Math.ceil(seconds)} сек`
-  const minutes = Math.ceil(seconds / 60)
-  if (minutes < 120) return `${minutes} мин`
-  return `${Math.round((minutes / 60) * 10) / 10} ч`
-}
-
-function formatProductsSyncCadence(minutes: number | null | undefined) {
-  if (minutes == null || !Number.isFinite(minutes) || minutes <= 0) return 'один раз'
-  if (minutes < 60) return `каждые ${minutes} мин`
-  if (minutes % 60 === 0) return `каждые ${minutes / 60} ч`
-  return `каждые ${Math.round((minutes / 60) * 10) / 10} ч`
-}
-
-function syncPlanStateLabel(state: string | null | undefined, due?: boolean) {
-  if (state === 'running') return 'идет сейчас'
-  if (state === 'completed') return 'завершено'
-  if (state === 'partial') return 'частично'
-  if (state === 'due' || due) return 'готово к запуску'
-  if (state === 'scheduled') return 'по расписанию'
-  if (state === 'pending') return 'ожидает'
-  return state || 'нет данных'
-}
-
-type ProductsSyncPlanRow = NonNullable<LiveRepricerSyncStatus['syncPlan']>[number]
-type ProductsSyncSourceReadiness = NonNullable<ProductsSyncPlanRow['sourceReadiness']>[number]
-
-function syncReadinessReasonLabel(item: ProductsSyncSourceReadiness) {
-  const source = item.source
-  const requiredDays = Number(item.requiredDays ?? 0)
-  const dailyDays = Number(item.dailyAggregatesDays ?? 0)
-  if (item.ready) return 'данные есть'
-  if (item.reason === 'baskets_daily_detail_missing') {
-    const status = String(item.dailyDetailStatus || '')
-    if (status === 'deferred') {
-      return `дневная детализация корзин не запускалась в этом обновлении${requiredDays ? `: ${formatProductsInteger(dailyDays)}/${formatProductsInteger(requiredDays)} дней` : ''}`
-    }
-    if (status === 'partial') {
-      return `дневная детализация корзин остановилась не до конца${requiredDays ? `: ${formatProductsInteger(dailyDays)}/${formatProductsInteger(requiredDays)} дней` : ''}`
-    }
-    return `нет дневной детализации корзин${requiredDays ? `: ${formatProductsInteger(dailyDays)}/${formatProductsInteger(requiredDays)} дней` : ''}`
-  }
-
-  if (item.reason === 'range_not_covered') return 'сохранённые данные не покрывают период этапа'
-  if (item.reason === 'goods_cache_empty') return 'каталог товаров пустой'
-  if (item.reason === 'content_cache_empty') return 'карточки не загружены'
-  if (item.reason === 'stocks_cache_empty') return 'остатки не загружены'
-  if (item.reason === 'promotions_cache_empty') return 'акции не загружены'
-  if (item.reason === 'cache_missing') return 'сохранённые данные не найдены'
-  return item.reason || `нет данных ${source}`
-}
-
-function syncReadinessDetailLabel(item: ProductsSyncSourceReadiness) {
-  if (item.source !== 'baskets' || item.reason !== 'baskets_daily_detail_missing') return null
-  const status = String(item.dailyDetailStatus || '')
-  const completed = item.dailyDetailRequestsCompleted != null ? Number(item.dailyDetailRequestsCompleted) : null
-  const total = item.dailyDetailRequestsTotal != null ? Number(item.dailyDetailRequestsTotal) : null
-  const requestLabel = Number.isFinite(completed) && Number.isFinite(total) && total
-    ? `Запросы daily: ${formatProductsInteger(completed || 0)}/${formatProductsInteger(total)}.`
-    : null
-  const time =
-    item.dailyDetailFailedAt ||
-    item.dailyDetailPausedAt ||
-    item.dailyDetailPartialAt ||
-    item.dailyDetailDeferredAt ||
-    item.dailyDetailPreservedAt ||
-    item.dailyDetailFetchedAt
-  const timeLabel = time ? `Последнее событие: ${formatProductsBackendTime(time)}.` : null
-  const statusLabel = status === 'deferred'
-    ? 'В этом запуске WB обновил только общий итог корзин. Daily-детализация должна идти в холодной загрузке или отдельном refresh daily.'
-    : status === 'partial'
-      ? 'Daily-детализация была начата, но не дошла до полного покрытия периода.'
-      : null
-  const errorLabel = item.dailyDetailError ? `Ошибка: ${String(item.dailyDetailError).replace(/;\s*URL:\s*\S+/g, '')}` : null
-  return [statusLabel, requestLabel, errorLabel, timeLabel].filter(Boolean).join(' ')
-}
-
-function syncReadinessMetaLabel(item: ProductsSyncSourceReadiness) {
-  const parts: string[] = []
-  if (item.count != null) parts.push(`${formatProductsInteger(Number(item.count))} записей`)
-  if (item.dateFrom && item.dateTo) parts.push(`${formatProductsPeriodDate(item.dateFrom)} — ${formatProductsPeriodDate(item.dateTo)}`)
-  if (item.source === 'baskets' && item.requiredDays) {
-    parts.push(`дни: ${formatProductsInteger(Number(item.dailyAggregatesDays ?? 0))}/${formatProductsInteger(Number(item.requiredDays))}`)
-  }
-  if (item.dailyDetailStatus) parts.push(`детализация: ${item.dailyDetailStatus}`)
-  if (item.fetchedAt) parts.push(`обновлено ${formatProductsBackendTime(item.fetchedAt)}`)
-  return parts.join(' · ')
-}
-
-function syncProfileRangeLabel(profile: { dateFrom?: string | null; dateTo?: string | null; periodDays?: number | null }) {
-  const fromLabel = profile.dateFrom ? formatProductsPeriodDate(profile.dateFrom) : ''
-  const toLabel = profile.dateTo ? formatProductsPeriodDate(profile.dateTo) : ''
-  const daysLabel = profile.periodDays ? `${profile.periodDays} дн` : null
-  if (fromLabel && toLabel && daysLabel) return `с ${fromLabel} по ${toLabel} · ${daysLabel}`
-  if (daysLabel) return daysLabel
-  return null
-}
-
-function syncStepMessageText(step: { message?: string | null; error?: string | null; phase?: string | null; retryAfterSeconds?: number | null } | undefined, status: string) {
-  const raw = String(step?.message || step?.error || '')
-  const retryAfter = Number(step?.retryAfterSeconds ?? 0)
-  const lower = raw.toLocaleLowerCase('ru-RU')
-  if (step?.phase === 'rate_limit' || lower.includes('global limiter') || lower.includes('rate limit') || lower.includes('too many requests')) {
-    const waitLabel = retryAfter > 0 ? ` · повтор через ${Math.ceil(retryAfter)} сек` : ''
-    return `WB ограничил частоту запросов${waitLabel}. Ждём слот и продолжаем автоматически.`
-  }
-  if (status === 'pending') return 'Ожидает свободный слот'
-  if (status === 'idle') return 'Не запускался в текущем окне'
-  if (status === 'ok' || status === 'skipped') return 'Этап завершён'
-  if (!raw) return 'Обновляется'
-  return raw.replace(/;\s*URL:\s*\S+/g, '')
-}
-
-function syncStepStateLabel(status: string, phase?: string | null) {
-  if (phase === 'rate_limit') return 'ждём лимит'
-  if (status === 'running') return 'идёт сейчас'
-  if (status === 'pending' || status === 'queued') return 'в очереди'
-  if (status === 'ok') return 'готово'
-  if (status === 'skipped') return 'пропущено'
-  if (status === 'error') return 'ошибка'
-  return status || 'ожидает'
-}
-
-function formatProductsTraceDuration(value?: number) {
-  const ms = Number(value ?? 0)
-  if (!Number.isFinite(ms) || ms <= 0) return '0 мс'
-  if (ms < 1000) return `${Math.round(ms)} мс`
-  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} сек`
-}
-
-function productsTraceMetaLabel(meta?: Record<string, unknown>) {
-  if (!meta || !Object.keys(meta).length) return null
-  const label = Object.entries(meta)
-    .map(([key, value]) => {
-      if (value === null || value === undefined || value === '') return null
-      if (typeof value === 'boolean') return `${key}: ${value ? 'да' : 'нет'}`
-      if (typeof value === 'number') return `${key}: ${formatProductsInteger(value)}`
-      return `${key}: ${String(value)}`
-    })
-    .filter(Boolean)
-    .join(' · ')
-  return label.length > 180 ? `${label.slice(0, 177)}...` : label
-}
-
 type ProductsLoadTraceEntry = LiveRepricerLoadTrace & {
   sequence: number
   receivedAt: string
 }
 
-type ProductsWorkerStatusLite = {
-  mode?: {
-    schedulerEnabled?: boolean
-    executeIntervalMinutes?: number
-    workerAutoApplyPricesEnabled?: boolean
-  } | null
-  timing?: {
-    nextRunAt?: string | null
-    secondsUntilNextRun?: number | null
-    lastSchedulerRunAt?: string | null
-  } | null
-  pendingApprovals?: unknown[]
-}
-
-function useProductsLoadTraceHistory() {
-  const [traces, setTraces] = useState<ProductsLoadTraceEntry[]>(window.__vellaProductsLoadTraces ?? [])
-  useEffect(() => {
-    const update = () => setTraces([...(window.__vellaProductsLoadTraces ?? [])])
-    window.addEventListener('vella:products-trace-updated', update)
-    update()
-    return () => window.removeEventListener('vella:products-trace-updated', update)
-  }, [])
-  return traces
-}
-
-function ProductsLoadTraceDebugWindow({ traces, embedded = false }: { traces: ProductsLoadTraceEntry[]; embedded?: boolean }) {
-  const [open, setOpen] = useState(false)
-  const latest = traces[0]
-  const latestSlowest = latest
-    ? [...(latest.steps ?? [])].sort((left, right) => Number(right.durationMs ?? 0) - Number(left.durationMs ?? 0))[0]
-    : null
-  const clear = () => {
-    window.__vellaProductsLoadTrace = undefined
-    window.__vellaProductsLoadTraces = []
-    window.dispatchEvent(new CustomEvent('vella:products-trace-updated'))
-    setOpen(false)
-  }
-  const content = (
-    <div className={embedded ? 'products-load-debug-window embedded' : 'products-load-debug-window'} role="dialog" aria-label="Трейсбек загрузки SKU">
-      <div className="products-load-debug-head">
-        <div>
-          <span>Трейсбек загрузки SKU</span>
-          <strong>{traces.length ? `${traces.length} последних ответов backend` : 'Пока нет замеров загрузки'}</strong>
-        </div>
-        {!embedded ? (
-          <button className="products-load-debug-close" type="button" onClick={() => setOpen(false)} aria-label="Закрыть">
-            <X size={14} />
-          </button>
-        ) : null}
-      </div>
-      <div className="products-load-debug-actions">
-        <span>{latest ? `Последний: ${formatProductsTraceDuration(latest.totalMs)} · ${formatProductsBackendTime(latest.receivedAt)}` : 'Trace еще не приходил'}</span>
-        <button type="button" onClick={clear} disabled={!traces.length}>Очистить</button>
-      </div>
-      <div className="products-load-debug-list">
-        {traces.length ? traces.map((trace) => {
-          const steps = trace.steps ?? []
-          const slowest = [...steps].sort((left, right) => Number(right.durationMs ?? 0) - Number(left.durationMs ?? 0))[0]
-          return (
-            <section className="products-load-debug-card" key={`${trace.sequence}-${trace.startedAt ?? trace.receivedAt}`}>
-              <div className="products-load-debug-card-head">
-                <div>
-                  <b>#{trace.sequence} · {trace.kind || 'wb-repricer-sku'}</b>
-                  <span>{formatProductsBackendTime(trace.receivedAt)} · backend start {trace.startedAt ? formatProductsBackendTime(trace.startedAt) : 'нет'}</span>
-                </div>
-                <strong>{formatProductsTraceDuration(trace.totalMs)}</strong>
-              </div>
-              {slowest ? (
-                <div className="products-load-debug-slowest">
-                  Самый долгий этап: {slowest.name} · {formatProductsTraceDuration(slowest.durationMs)}
-                </div>
-              ) : null}
-              <div className="products-load-debug-steps">
-                {steps.map((step, index) => {
-                  const metaLabel = productsTraceMetaLabel(step.meta)
-                  return (
-                    <div className="products-load-debug-step" key={`${trace.sequence}-${step.name}-${index}`}>
-                      <span>{index + 1}. {step.name}</span>
-                      <b>{formatProductsTraceDuration(step.durationMs)}</b>
-                      <em>{formatProductsTraceDuration(step.elapsedMs)} всего</em>
-                      {metaLabel ? <small title={metaLabel}>{metaLabel}</small> : null}
-                    </div>
-                  )
-                })}
-              </div>
-            </section>
-          )
-        }) : (
-          <div className="products-sync-diagnostics-empty">Замеры появятся после загрузки таблицы товаров.</div>
-        )}
-      </div>
-    </div>
-  )
-  if (embedded) return content
-  return (
-    <>
-      <button
-        className="btn btn-default btn-sm products-load-debug-open"
-        type="button"
-        data-vella-react-handlers="onclick"
-        disabled={!traces.length}
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        title={latestSlowest ? `Самый долгий этап: ${latestSlowest.name}` : 'Открыть трассировку загрузки SKU'}
-      >
-        Трейсбек загрузки
-        {latest ? <span>{formatProductsTraceDuration(latest.totalMs)}</span> : null}
-      </button>
-      {open ? content : null}
-    </>
-  )
-}
-
-function ProductsSyncPortal({ children }: { children: ReactNode }) {
-  if (typeof document === 'undefined') return null
-  return createPortal(
-    <div className="vella-html-parity-root products-sync-portal-root">{children}</div>,
-    document.body,
-  )
-}
-
 function ProductsBackendCacheControlsIsland() {
-  useProductsUiTick()
   const { accessToken } = useAuth()
-  const [loading, setLoading] = useState<
-    'refresh' | 'content' | 'promotions' | 'stocks' | 'period-stats' | 'finance' | 'ads' | 'baskets' | 'all-sources' | 'cold-full-sync' | 'report-snapshots' | 'nomenclature-export' | 'nomenclature-import' | null
-  >(null)
-  const [nomenclatureProgress, setNomenclatureProgress] = useState<{ label: string; pct: number } | null>(null)
-  const [syncDetailsOpen, setSyncDetailsOpen] = useState(false)
-  const [syncPlanOpen, setSyncPlanOpen] = useState(false)
-  const [syncProfileDiagnostics, setSyncProfileDiagnostics] = useState<ProductsSyncPlanRow | null>(null)
-  const [syncStatus, setSyncStatus] = useState<LiveRepricerSyncStatus | null>(null)
-  const [workerStatus, setWorkerStatus] = useState<ProductsWorkerStatusLite | null>(null)
-  const [retryingSyncStep, setRetryingSyncStep] = useState<string | null>(null)
-  const [cacheVersion, setCacheVersion] = useState(0)
-  const [periodState, setPeriodState] = useState(readProductsPeriodState)
-  const productsLoadTraces = useProductsLoadTraceHistory()
-  const [basketsDetailStatus, setBasketsDetailStatus] = useState<LiveBasketsDetailStatus | null>(null)
-  const [basketsDetailRetrying, setBasketsDetailRetrying] = useState(false)
-  const periodLabel = periodState.label
-  const nomenclatureInputRef = useRef<HTMLInputElement | null>(null)
-  const syncWasRunningRef = useRef(false)
-  const basketsDetailGenerationRef = useRef(0)
-  const startBasketsDetailRef = useRef<((range: ProductsAnalyticsPeriodState, options?: { force?: boolean; manual?: boolean }) => void) | null>(null)
-  const cache = window.__vellaProductsCacheMeta
-  const syncRunning = Boolean(syncStatus?.running || syncStatus?.state === 'queued' || syncStatus?.state === 'starting')
-  const periodEmpty = Boolean(window.__vellaProductsPeriodEmpty)
-  const controlsDisabled = loading !== null || syncRunning || periodEmpty
-
-  async function pollSyncStatus(signal?: AbortSignal) {
-    if (!accessToken) {
-      setSyncStatus(null)
-      return null
-    }
-    const status = await loadLiveRepricerSyncStatus(accessToken, signal)
-    if (!signal?.aborted) setSyncStatus(status)
-    return status
-  }
-
-  async function pollWorkerStatus(signal?: AbortSignal) {
-    if (!accessToken) {
-      setWorkerStatus(null)
-      return null
-    }
-    const status = await sharedStatusRequest('worker-status-4', 10_000, () =>
-      apiRequest<ProductsWorkerStatusLite>('/api/v1/wb-repricer/worker/status?limit=4', {
-        headers: authorizationHeaders(accessToken),
-        cache: 'no-store',
-      }),
-    )
-    if (!signal?.aborted) setWorkerStatus(status)
-    return status
-  }
-
-  useEffect(() => {
-    if (!accessToken) {
-      setSyncStatus(null)
-      return
-    }
-    const controller = new AbortController()
-    let disposed = false
-    let timer: number | undefined
-
-    const tick = async () => {
-      try {
-        const status = await pollSyncStatus(controller.signal)
-        if (disposed || controller.signal.aborted) return
-        const active = Boolean(status?.running || status?.state === 'queued' || status?.state === 'starting')
-        timer = window.setTimeout(tick, active ? 3000 : 15000)
-      } catch (error) {
-        if (disposed || controller.signal.aborted) return
-        timer = window.setTimeout(tick, 15000)
-      }
-    }
-
-    void tick()
-    return () => {
-      disposed = true
-      controller.abort()
-      if (timer !== undefined) window.clearTimeout(timer)
-    }
-  }, [accessToken])
-
-  useEffect(() => {
-    if (!accessToken) {
-      setWorkerStatus(null)
-      return
-    }
-    const controller = new AbortController()
-    let disposed = false
-    let timer: number | undefined
-
-    const tick = async () => {
-      try {
-        await pollWorkerStatus(controller.signal)
-      } catch {
-        if (disposed || controller.signal.aborted) return
-      }
-      if (!disposed && !controller.signal.aborted) timer = window.setTimeout(tick, 15000)
-    }
-
-    void tick()
-    return () => {
-      disposed = true
-      controller.abort()
-      if (timer !== undefined) window.clearTimeout(timer)
-    }
-  }, [accessToken])
-
-  function sourceLabel(source: RepricerSource | string, rangeLabel = periodLabel) {
-    return source === 'content'
-      ? 'Карточки'
-      : source === 'promotions'
-        ? 'Акции'
-        : source === 'stocks'
-          ? 'Остатки'
-          : source === 'goods'
-            ? 'Товары'
-          : source === 'finance'
-            ? `Финансы · ${rangeLabel}`
-            : source === 'ads'
-              ? `Реклама · ${rangeLabel}`
-              : source === 'baskets'
-                ? `Корзины · ${rangeLabel}`
-                : source === 'period-stats'
-                  ? `Период · ${rangeLabel}`
-                  : source === 'report-snapshots'
-                    ? 'Снапшоты отчетов'
-                  : String(source)
-  }
-
-  async function retryFailedSyncStep(source: string) {
-    if (retryingSyncStep || (source !== 'stocks' && source !== 'baskets')) return
-    if (!accessToken) {
-      window.showToast?.('Нужна авторизация для повтора этапа', 'warn')
-      return
-    }
-    setRetryingSyncStep(source)
-    setSyncDetailsOpen(true)
-    try {
-      const status = await retryLiveRepricerSyncStep(accessToken, source)
-      setSyncStatus(status)
-      window.showToast?.('Повторяем этап WB sync', 'info')
-    } catch (error) {
-      window.showToast?.(error instanceof Error ? error.message : 'Не удалось повторить этап WB sync', 'warn')
-    } finally {
-      setRetryingSyncStep(null)
-      void pollSyncStatus()
-    }
-  }
-
-  async function runColdFullSyncFromEmptyState() {
-    if (!accessToken) {
-      window.showToast?.('Нужна авторизация для запуска синхронизации', 'warn')
-      return
-    }
-    if (loading !== null || syncRunning) return
-    setLoading('cold-full-sync')
-    try {
-      const status = await startLiveRepricerColdFullSync(accessToken)
-      setSyncStatus(status)
-      setSyncPlanOpen(true)
-      window.showToast?.('Синхронизация WB запущена', 'success')
-      void pollSyncStatus()
-    } catch (error) {
-      window.showToast?.(error instanceof Error ? error.message : 'Не удалось запустить синхронизацию WB', 'warn')
-    } finally {
-      setLoading(null)
-    }
-  }
-
-  async function runNomenclatureExport() {
-    if (!accessToken) {
-      window.showToast?.('Нужна авторизация для выгрузки номенклатуры', 'warn')
-      return
-    }
-    if (loading !== null || syncRunning) return
-    setLoading('nomenclature-export')
-    try {
-      const result = await downloadLiveRepricerNomenclatureXlsx(accessToken)
-      const url = window.URL.createObjectURL(result.blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = result.filename
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      window.URL.revokeObjectURL(url)
-      window.showToast?.('Номенклатура выгружена в XLSX', 'success')
-    } catch (error) {
-      window.showToast?.(error instanceof Error ? error.message : 'Не удалось выгрузить номенклатуру', 'warn')
-    } finally {
-      setLoading(null)
-    }
-  }
-
-  async function runNomenclatureImport(file: File) {
-    if (!accessToken) {
-      window.showToast?.('Нужна авторизация для загрузки номенклатуры', 'warn')
-      return
-    }
-    if (loading !== null || syncRunning) return
-    setLoading('nomenclature-import')
-    setNomenclatureProgress({ label: 'Читаем XLSX', pct: 18 })
-    try {
-      setNomenclatureProgress({ label: 'Применяем стратегии и цены', pct: 52 })
-      const result = await uploadLiveRepricerNomenclatureXlsx(accessToken, file)
-      setNomenclatureProgress({ label: 'Обновляем таблицу', pct: 82 })
-      const loaded = await window.__vellaLoadLiveRepricerProducts?.()
-      window.__vellaProductsCacheMeta = loaded?.cache ?? window.__vellaProductsCacheMeta
-      setCacheVersion((version) => version + 1)
-      setNomenclatureProgress({ label: 'Готово', pct: 100 })
-      const warning = result.unmatchedCount || result.errorCount
-        ? ` · не найдено ${result.unmatchedCount}, ошибок ${result.errorCount}`
-        : ''
-      window.showToast?.(`Загрузка номенклатуры: применено ${result.appliedCount} из ${result.rowsParsed}${warning}`, result.errorCount ? 'warn' : 'success')
-    } catch (error) {
-      window.showToast?.(error instanceof Error ? error.message : 'Не удалось загрузить номенклатуру', 'warn')
-    } finally {
-      window.setTimeout(() => setNomenclatureProgress(null), 700)
-      setLoading(null)
-      if (nomenclatureInputRef.current) nomenclatureInputRef.current.value = ''
-    }
-  }
-
   useEffect(() => {
     if (!accessToken) return
-    if (syncRunning) {
-      syncWasRunningRef.current = true
-      return
-    }
-    if (!syncWasRunningRef.current || !syncStatus?.finishedAt) return
-    syncWasRunningRef.current = false
-    const steps = syncStatus.steps ?? []
-    const failedSteps = steps.filter((step) => step.status === 'error')
-    const financeFailed = failedSteps.some((step) => step.source === 'finance')
-    const financeOkStep = steps.find((step) => step.source === 'finance' && step.status === 'ok')
-    const firstError = failedSteps[0]?.error
-    const shouldReload = syncStatus.state === 'completed' || steps.some((step) => step.status === 'ok')
-    const reload = () => {
-      if (!shouldReload) return Promise.resolve(null)
-      window.__vellaProductsListState = { ...(window.__vellaProductsListState ?? {}), page: 1 }
-      return Promise.resolve(window.__vellaLoadLiveRepricerProducts?.()).then((loaded) => {
-        window.__vellaProductsCacheMeta = loaded?.cache ?? window.__vellaProductsCacheMeta
-        setCacheVersion((version) => version + 1)
-        window.dispatchEvent(new CustomEvent('vella:products-cache-coverage-invalidated'))
-        return loaded
-      })
-    }
-    void reload().then(() => {
-      if (syncStatus.state === 'completed') {
-        if (financeOkStep && Number(financeOkStep.count ?? 0) === 0) {
-          window.showToast?.(`Финансы: WB вернул 0 строк за период ${periodLabel}. Таблица перезагружена.`, 'warn')
-          return
-        }
-        window.showToast?.('Финансы обновлены, таблица перезагружена', 'success')
-        return
-      }
-      if (financeFailed) {
-        window.showToast?.(`Финансы не обновились: ${firstError || 'ошибка WB'}. Показаны старые данные.`, 'warn')
-        return
-      }
-      window.showToast?.(`Обновление WB частичное: ${firstError || 'часть источников не обновилась'}`, 'warn')
-    })
-  }, [accessToken, syncRunning, syncStatus?.finishedAt, syncStatus?.state, syncStatus?.steps])
-
-  useEffect(() => {
-    const render = () => setPeriodState(readProductsPeriodState())
-    window.addEventListener('vella:products-period-updated', render)
-    render()
-    return () => window.removeEventListener('vella:products-period-updated', render)
-  }, [])
-
-  useEffect(() => {
-    if (!accessToken) {
-      setBasketsDetailStatus(null)
-      setBasketsDetailRetrying(false)
-      startBasketsDetailRef.current = null
-      return
-    }
-    let controller: AbortController | null = null
-
-    const wait = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) => {
-      const timer = window.setTimeout(resolve, ms)
-      signal.addEventListener('abort', () => {
-        window.clearTimeout(timer)
-        resolve()
-      }, { once: true })
-    })
-
-    const poll = async (runId: string, generation: number, signal: AbortSignal) => {
-      while (!signal.aborted && generation === basketsDetailGenerationRef.current) {
-        const status = await loadLiveBasketsDetailStatus(accessToken, runId, signal)
-        if (signal.aborted || generation !== basketsDetailGenerationRef.current) return status
-        setBasketsDetailStatus(status)
-        if (status.state === 'completed' || status.state === 'failed') return status
-        await wait(2500, signal)
-      }
-      return null
-    }
-
-    const reloadCompletedRange = async (generation: number) => {
-      if (generation !== basketsDetailGenerationRef.current) return
-      resetLiveRepricerParityCache()
-      const loaded = await window.__vellaLoadLiveRepricerProducts?.()
-      if (generation !== basketsDetailGenerationRef.current) return
-      window.__vellaProductsCacheMeta = loaded?.cache ?? window.__vellaProductsCacheMeta
-      setCacheVersion((version) => version + 1)
-      window.dispatchEvent(new CustomEvent('vella:secondary-report-rows-updated'))
-      void window.__vellaLoadLiveDigestReport?.()
-      void window.__vellaLoadLiveAbcReport?.()
-    }
-
-    const startForRange = async (
-      range: ProductsAnalyticsPeriodState,
-      generation: number,
-      signal: AbortSignal,
-      options: { force?: boolean; manual?: boolean } = {},
-    ) => {
+    const controller = new AbortController()
+    let timer: number | undefined
+    let wasRunning = false
+    const poll = async () => {
+      let running = false
       try {
-        const started = await startLiveBasketsDetail(accessToken, { dateFrom: range.fromIso, dateTo: range.toIso, force: options.force }, signal)
-        if (signal.aborted || generation !== basketsDetailGenerationRef.current) return
-        setBasketsDetailStatus(started)
-        const terminal = started.state === 'completed' || started.state === 'failed'
-          ? started
-          : await poll(started.runId, generation, signal)
-        if (terminal?.state === 'completed') await reloadCompletedRange(generation)
-        if (terminal?.state === 'completed' && options.manual && generation === basketsDetailGenerationRef.current) {
-          const failedCount = terminal.failedChunks?.length ?? 0
-          window.showToast?.(failedCount ? `Повтор завершен, не догрузилось частей: ${failedCount}` : 'Повтор корзин по дням завершен', failedCount ? 'warn' : 'success')
+        const status = await loadLiveRepricerSyncStatus(accessToken, controller.signal)
+        if (controller.signal.aborted) return
+        running = Boolean(status?.running || status?.state === 'queued' || status?.state === 'starting')
+        window.__vellaProductsFullSyncRunning = running
+        if (wasRunning && !running && status?.finishedAt
+          && (status.state === 'completed' || status.steps?.some(step => step.status === 'ok'))) {
+          resetLiveRepricerParityCache(accessToken)
+          await window.__vellaLoadLiveRepricerProducts?.()
+          if (!controller.signal.aborted) window.dispatchEvent(new CustomEvent('vella:products-cache-coverage-invalidated'))
         }
-        if (terminal?.state === 'failed' && generation === basketsDetailGenerationRef.current) {
-          window.showToast?.(terminal.error || 'Не удалось загрузить детализацию корзин', 'warn')
-        }
-      } catch (error) {
-        if (signal.aborted || generation !== basketsDetailGenerationRef.current) return
-        const details = error instanceof ApiError ? error.details as { activeRunId?: string } | undefined : undefined
-        if (error instanceof ApiError && error.status === 409 && error.code === 'BASKETS_DETAIL_ALREADY_RUNNING' && details?.activeRunId) {
-          const active = await poll(details.activeRunId, generation, signal)
-          if (!signal.aborted && generation === basketsDetailGenerationRef.current && active && (active.state === 'completed' || active.state === 'failed')) {
-            await startForRange(range, generation, signal, options)
-          }
-          return
-        }
-        window.showToast?.(error instanceof Error ? error.message : 'Не удалось запустить детализацию корзин', 'warn')
+        wasRunning = running
+      } catch {
+        // The next status poll retries without replacing the loaded table.
       } finally {
-        if (options.manual && generation === basketsDetailGenerationRef.current) {
-          setBasketsDetailRetrying(false)
-        }
+        if (!controller.signal.aborted) timer = window.setTimeout(poll, running ? 3000 : 15000)
       }
     }
-
-    const requestStart = (range: ProductsAnalyticsPeriodState, options: { force?: boolean; manual?: boolean } = {}) => {
-      controller?.abort()
-      controller = new AbortController()
-      const generation = basketsDetailGenerationRef.current + 1
-      basketsDetailGenerationRef.current = generation
-      setBasketsDetailRetrying(Boolean(options.manual))
-      setBasketsDetailStatus(null)
-      void startForRange(range, generation, controller.signal, options)
-    }
-
-    startBasketsDetailRef.current = requestStart
-
+    void poll()
     return () => {
-      if (startBasketsDetailRef.current === requestStart) startBasketsDetailRef.current = null
-      controller?.abort()
+      controller.abort()
+      window.clearTimeout(timer)
+      window.__vellaProductsFullSyncRunning = false
     }
   }, [accessToken])
-
-  function retryBasketsDetailManually() {
-    if (!accessToken) {
-      window.showToast?.('Нужна авторизация для повтора корзин по дням', 'warn')
-      return
-    }
-    if (basketsDetailRetrying) return
-    const start = startBasketsDetailRef.current
-    if (!start) {
-      window.showToast?.('Повтор корзин по дням пока недоступен', 'warn')
-      return
-    }
-    start(readProductsPeriodState(), { force: true, manual: true })
-  }
-
-  const basketsDetailRunning = basketsDetailStatus?.state === 'queued' || basketsDetailStatus?.state === 'running'
-  const basketsDetailPct = Math.max(0, Math.min(100, Number(basketsDetailStatus?.progressPercent ?? 0)))
-  const basketsDetailDayLabel = basketsDetailStatus?.day
-    ? new Date(`${basketsDetailStatus.day}T00:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
-    : null
-
-  useEffect(() => {
-    window.__vellaBasketsDetailRefreshing = basketsDetailRunning
-    window.renderTable?.()
-    window.dispatchEvent(new CustomEvent('vella:products-rows-updated'))
-    return () => {
-      if (window.__vellaBasketsDetailRefreshing === basketsDetailRunning) {
-        window.__vellaBasketsDetailRefreshing = false
-        window.renderTable?.()
-        window.dispatchEvent(new CustomEvent('vella:products-rows-updated'))
-      }
-    }
-  }, [basketsDetailRunning])
-
-  const syncSteps = syncStatus?.steps ?? []
-  const syncOperationPeriodLabel = syncProfileRangeLabel({
-    dateFrom: syncStatus?.dateFrom,
-    dateTo: syncStatus?.dateTo,
-    periodDays: syncStatus?.periodDays,
-  }) ?? periodLabel
-  const syncDone = syncSteps.filter((step) => step.status !== 'running').length
-  const syncTotal = Math.max(syncStatus?.sources?.length ?? 0, syncSteps.length)
-  const syncCurrent = syncStatus?.currentSource ?? syncSteps.find((step) => step.status === 'running')?.source ?? null
-  const syncProgressPct = syncRunning && syncTotal > 0 ? Math.max(4, Math.min(100, Math.round((syncDone / syncTotal) * 100))) : 100
-  const syncSources = Array.from(new Set([
-    ...((syncStatus?.sources?.length ? syncStatus.sources : []) ?? []),
-    ...syncSteps.map((step) => step.source),
-  ].filter(Boolean)))
-  const syncSourceSet = new Set(syncSources)
-  const syncFailedSteps = syncSteps.filter((step) => step.status === 'error')
-  const syncDetailSources = syncSources.length ? syncSources : [...PRODUCT_FULL_SYNC_SOURCES]
-  const syncDetailRows = syncDetailSources.map((source) => {
-    const step = syncSteps.find((item) => item.source === source)
-    const status = step?.status ?? (syncRunning ? 'pending' : 'idle')
-    const fallbackPercent = status === 'ok' || status === 'skipped' || status === 'error' ? 100 : status === 'running' ? 5 : 0
-    const progressPercent = Math.max(0, Math.min(100, Number(step?.progressPercent ?? fallbackPercent)))
-    const progressCount = step?.progressTotal != null
-      ? `${formatProductsInteger(step.progressCurrent ?? 0)}/${formatProductsInteger(step.progressTotal)}`
-      : null
-    return { source, step, status, progressPercent, progressCount }
-  })
-  const activeSyncDetailRow = syncDetailRows.find((row) => row.status === 'running')
-    ?? syncDetailRows.find((row) => row.status === 'pending' || row.status === 'queued')
-    ?? syncDetailRows.find((row) => row.status === 'error')
-    ?? syncDetailRows[0]
-  const activeSyncStepLabel = activeSyncDetailRow
-    ? sourceLabel(activeSyncDetailRow.source, syncOperationPeriodLabel)
-    : syncRunning
-      ? 'Готовим запуск WB'
-      : 'WB sync готов'
-  const activeSyncStepMessage = syncStepMessageText(activeSyncDetailRow?.step, activeSyncDetailRow?.status ?? 'idle')
-  const activeSyncStepState = syncStepStateLabel(activeSyncDetailRow?.status ?? 'idle', activeSyncDetailRow?.step?.phase)
-  const syncPlanRows = syncStatus?.syncPlan ?? []
-  const activeSyncPlanRow = syncPlanRows.find((item) => item.running)
-  const coldSyncPlanRows = syncPlanRows.filter((item) => item.group === 'onboarding')
-  const maintenanceSyncPlanRows = syncPlanRows.filter((item) => item.group !== 'onboarding')
-  const nextSyncPlanRow = [...syncPlanRows]
-    .filter((item) => !item.running && item.nextRunAt)
-    .sort((left, right) => new Date(left.nextRunAt || '').getTime() - new Date(right.nextRunAt || '').getTime())[0]
-  const coldSyncRunning = syncRunning && (
-    syncStatus?.windowKind === 'onboarding'
-    || syncStatus?.windowKind === 'backfill'
-    || syncStatus?.trigger === 'manual-onboarding'
-    || syncStatus?.syncProfile === 'onboarding-full'
-    || String(syncStatus?.syncProfile || '').startsWith('onboarding-')
-    || String(syncStatus?.syncProfile || '').startsWith('backfill-')
-  )
-  const syncIsFinanceRefresh = syncSourceSet.size > 0
-    && Array.from(syncSourceSet).every((source) => source === 'finance')
-  const syncIsFullRefresh = syncSourceSet.size === 0
-    || PRODUCT_FULL_SYNC_SOURCES.every((source) => syncSourceSet.has(source))
-    || syncStatus?.trigger === 'scheduler'
-  const syncScopeLabel = syncIsFinanceRefresh
-    ? 'Финансы'
-    : syncIsFullRefresh
-      ? 'Полный фоновый sync'
-      : 'Источник WB'
-  const syncProcessKindLabel = coldSyncRunning
-    ? 'Холодный запуск'
-    : syncRunning
-      ? 'Регулярное обновление'
-      : syncScopeLabel
-  const syncWindowLabel = syncStatus?.windowKind === 'incremental'
-    ? 'короткое окно'
-    : syncStatus?.windowKind === 'nightly'
-      ? 'сверка 30 дней'
-      : syncStatus?.windowKind === 'onboarding'
-        ? 'первичная загрузка'
-        : syncStatus?.windowKind === 'backfill'
-          ? 'исторический backfill'
-          : syncStatus?.windowKind === 'manual'
-            ? 'ручное окно'
-            : syncStatus?.windowKind || null
-  const syncProfileLabel = syncStatus?.syncProfileLabel || syncStatus?.syncProfile || null
-  const syncWindowMeta = syncProfileLabel || syncWindowLabel
-    ? `${syncProcessKindLabel}: ${syncProfileLabel || syncScopeLabel}${syncWindowLabel ? ` · ${syncWindowLabel}` : ''}`
-    : activeSyncPlanRow?.syncProfileLabel
-      ? `${activeSyncPlanRow.syncProfileLabel} · ${syncPlanStateLabel(activeSyncPlanRow.state, activeSyncPlanRow.due)}`
-      : nextSyncPlanRow?.syncProfileLabel
-        ? `Следующий sync: ${nextSyncPlanRow.syncProfileLabel} · ${formatProductsBackendTime(nextSyncPlanRow.nextRunAt)}`
-    : null
-  const syncResultTitle = syncSteps
-    .map((step) => {
-      const label = sourceLabel(step.source, syncOperationPeriodLabel)
-      if (step.status === 'ok') return `${label}: ${step.count ?? 'ok'}`
-      if (step.status === 'skipped') return `${label}: пропуск${step.reason ? ` (${step.reason})` : ''}`
-      if (step.status === 'error') return `${label}: ошибка${step.error ? ` (${step.error})` : ''}`
-      return `${label}: ${step.status}`
-    })
-    .join(' · ')
-  const syncResultStateLabel = syncStatus?.state === 'completed'
-    ? 'обновлено'
-    : syncFailedSteps.length
-      ? 'ошибка'
-      : syncStatus?.state
-  const syncResultLabel = !syncRunning && syncStatus?.finishedAt && syncSteps.length
-    ? `Последняя попытка ${syncScopeLabel}: ${syncResultStateLabel} · ${syncResultTitle}`
-    : null
-  const syncWaitingForFirstStep = syncRunning && syncSteps.length === 0
-  const syncLabel = syncRunning
-    ? `${syncProcessKindLabel}: ${syncWaitingForFirstStep ? 'ожидает старт фоновой задачи' : syncCurrent ? sourceLabel(syncCurrent, syncOperationPeriodLabel) : 'обновление'}${syncTotal ? ` · ${syncDone}/${syncTotal}` : ''}`
-    : null
-  const totalSku = Number(cache?.totalCached ?? 0)
-  const basketsMatched = Number(cache?.basketsMatchedNmIds ?? 0)
-  const basketsRequested = Number(cache?.basketsRequestedNmIds ?? totalSku)
-  const financeMatched = Number(cache?.financeMatchedNmIds ?? 0)
-  const financeTotal = Number(cache?.financeCachedGoodsNmIds ?? totalSku)
-  const selectedRangeHasWorkingData = totalSku > 0 && !periodEmpty
-  const selectedRangeHasFinance = financeTotal > 0 && financeMatched > 0
-  const selectedRangeHasBaskets = basketsRequested > 0 && basketsMatched > 0
-  const coldFinishedCount = coldSyncPlanRows.filter((item) => item.state === 'completed').length
-  const coldPartialCount = coldSyncPlanRows.filter((item) => item.state === 'partial').length
-  const coldQueued = coldSyncPlanRows.some((item) => item.state === 'queued')
-  const coldWaitingCount = coldSyncPlanRows.filter((item) => item.state === 'pending' || item.state === 'queued').length
-  const coldVisualFinishedCount = coldFinishedCount
-  const coldTotalCount = Math.max(coldSyncPlanRows.length, 1)
-  const coldProgressPct = coldSyncRunning
-    ? Math.max(8, Math.min(96, Math.round((coldVisualFinishedCount / coldTotalCount) * 100)))
-    : Math.min(100, Math.round((coldVisualFinishedCount / coldTotalCount) * 100))
-  const coldCurrentProfile = coldSyncPlanRows.find((item) => item.running)
-    ?? coldSyncPlanRows.find((item) => item.state === 'queued')
-    ?? coldSyncPlanRows.find((item) => item.state !== 'completed')
-    ?? coldSyncPlanRows[coldSyncPlanRows.length - 1]
-  const productsDataLoading = Boolean(window.__vellaProductsLoading || syncRunning || coldCurrentProfile?.running || coldQueued)
-  const coldUnifiedTotal = Math.max(coldSyncPlanRows.length, 1)
-  const coldUnifiedProgressUnits = coldSyncPlanRows.reduce((sum, profile) => {
-    if (profile.state === 'completed') return sum + 1
-    if (profile.running) return sum + Math.max(0.08, Math.min(0.96, syncProgressPct / 100))
-    if (profile.state === 'partial') return sum + 0.66
-    if (profile.state === 'queued') return sum + 0.08
-    return sum
-  }, 0)
-  const unifiedSyncPct = coldSyncPlanRows.length
-    ? Math.max(syncRunning ? 6 : 0, Math.min(100, Math.round((coldUnifiedProgressUnits / coldUnifiedTotal) * 100)))
-    : syncRunning
-      ? syncProgressPct
-      : selectedRangeHasWorkingData
-        ? 100
-        : 0
-  const coldSummaryLabel = coldSyncRunning
-    ? 'идет полный сбор данных'
-    : productsDataLoading
-      ? 'идет загрузка данных'
-    : coldVisualFinishedCount >= coldSyncPlanRows.length && coldSyncPlanRows.length > 0
-      ? 'все этапы завершены'
-      : coldPartialCount > 0
-        ? 'часть этапов требует проверки'
-      : selectedRangeHasWorkingData
-        ? 'основные данные готовы'
-        : coldQueued
-          ? 'ожидает очередь'
-          : 'ещё не завершено'
-  const syncHeroStage = syncRunning
-    ? `Сейчас: ${activeSyncStepLabel}`
-    : coldSummaryLabel
-  const coldSummaryMeta = selectedRangeHasWorkingData
-    ? `${periodLabel}: ${formatProductsInteger(totalSku)} товаров${selectedRangeHasFinance ? ' · финансы есть' : ''}${selectedRangeHasBaskets ? ' · корзины есть' : ''}`
-    : 'после подключения токена или ручного полного запуска'
-  const activeMaintenanceRow = maintenanceSyncPlanRows.find((item) => item.running)
-  const nextMaintenanceRow = maintenanceSyncPlanRows
-    .filter((item) => !item.running && item.nextRunAt)
-    .sort((left, right) => new Date(left.nextRunAt || '').getTime() - new Date(right.nextRunAt || '').getTime())[0]
-  const maintenanceFocusRow = activeMaintenanceRow ?? nextMaintenanceRow ?? maintenanceSyncPlanRows[0]
-  const maintenanceStatusLabel = activeMaintenanceRow
-    ? `Сейчас: ${activeMaintenanceRow.syncProfileLabel || activeMaintenanceRow.syncProfile}`
-    : nextMaintenanceRow
-      ? `Следующее: ${nextMaintenanceRow.syncProfileLabel || nextMaintenanceRow.syncProfile}`
-      : 'Периодика ожидает расписание'
-  const maintenanceMetaLabel = activeMaintenanceRow
-    ? (syncCurrent ? `${sourceLabel(syncCurrent, syncOperationPeriodLabel)}${syncRunning ? ` · ${syncProgressPct}%` : ''}` : syncRunning ? `${syncProgressPct}%` : 'выполняется')
-    : nextMaintenanceRow?.nextRunAt
-      ? `${formatProductsBackendTime(nextMaintenanceRow.nextRunAt)}${nextMaintenanceRow.dueInSeconds ? ` · через ${formatProductsSyncDuration(nextMaintenanceRow.dueInSeconds)}` : ''}`
-      : 'после первого успешного запуска'
-  const coldHasError = coldSyncPlanRows.some((item) => item.state === 'partial' || item.state === 'error')
-  const syncHeroTitle = coldHasError
-    ? 'Нужна проверка'
-    : productsDataLoading
-      ? 'Обновляем данные'
-      : selectedRangeHasWorkingData
-        ? 'Данные готовы'
-        : 'Данных пока нет'
-  const coldStatusTone = coldHasError ? 'is-error' : productsDataLoading ? 'is-running' : coldVisualFinishedCount >= coldSyncPlanRows.length && coldSyncPlanRows.length > 0 ? 'is-complete' : 'is-waiting'
-  const coldStatusTitle = coldHasError
-    ? 'Нужна проверка'
-    : productsDataLoading
-      ? 'Сбор данных идет'
-      : coldVisualFinishedCount >= coldSyncPlanRows.length && coldSyncPlanRows.length > 0
-        ? 'Все этапы готовы'
-        : coldQueued
-          ? 'В очереди'
-          : 'Ещё не завершено'
-  const coldStatusMeta = coldHasError
-    ? 'Один из этапов не закрылся.'
-    : coldSyncRunning
-      ? `${coldVisualFinishedCount}/${coldSyncPlanRows.length || 3} этапов готово`
-      : `${coldVisualFinishedCount}/${coldSyncPlanRows.length || 3} этапов готово`
-  const lastAttemptAt = syncStatus?.finishedAt || syncStatus?.startedAt || syncStatus?.updatedAt || cache?.financeFetchedAt || cache?.latestFetchedAt
-  const lastAttemptLabel = lastAttemptAt ? formatProductsBackendTime(lastAttemptAt) : 'ещё не запускался'
-  const syncHeroMeta = syncRunning
-    ? `${syncOperationPeriodLabel} · ${Math.round(unifiedSyncPct)}% общего прогресса`
-    : productsDataLoading
-      ? `Ждем ответ WB и обновляем таблицу за ${periodLabel}`
-    : selectedRangeHasWorkingData
-      ? `${formatProductsInteger(totalSku)} товаров · обновлено ${lastAttemptLabel}`
-      : 'Запустится фоновая загрузка после подключения и расписания.'
-  const workerSecondsUntilNext = workerStatus?.timing?.nextRunAt
-    ? Math.max(0, Math.floor((new Date(workerStatus.timing.nextRunAt).getTime() - Date.now()) / 1000))
-    : workerStatus?.timing?.secondsUntilNextRun ?? null
-  const workerTimerLabel = workerSecondsUntilNext == null
-    ? 'ожидает расписание'
-    : workerSecondsUntilNext <= 0
-      ? 'скоро'
-      : formatProductsSyncDuration(workerSecondsUntilNext)
-  const workerIntervalLabel = workerStatus?.mode?.executeIntervalMinutes
-    ? formatProductsSyncCadence(workerStatus.mode.executeIntervalMinutes)
-    : 'по расписанию'
-  const pendingApprovalsCount = workerStatus?.pendingApprovals?.length ?? 0
-  const syncDiagnosticsLabel = syncStatus
-    ? `org ${syncStatus.organizationId ?? '?'} · user token ${syncStatus.diagnostics?.userTokenPresent ? 'есть' : 'нет'} · org token ${syncStatus.diagnostics?.organizationTokenPresent ? 'есть' : 'нет'} · cache ${formatProductsInteger(Number(syncStatus.diagnostics?.cachedGoodsCount ?? 0))} SKU`
-    : null
-  const syncStateText = syncRunning
-    ? (syncLabel || `${syncProcessKindLabel} идёт`)
-    : syncStatus?.stale || syncStatus?.state === 'stale'
-      ? 'WB sync завис'
-    : syncResultLabel
-      ? `${syncScopeLabel}: ${syncResultStateLabel}`
-      : 'WB sync готов'
-  window.__vellaProductsFullSyncRunning = syncRunning
-  const diagnosticSources = syncProfileDiagnostics?.sourceReadiness ?? []
-  const diagnosticReadyCount = diagnosticSources.filter((item) => item.ready).length
-
-  return (
-    <div className={`toolbar ${periodEmpty ? 'products-period-empty-toolbar' : ''}`} data-vella-island="products-backend-cache-controls" data-cache-version={cacheVersion}>
-      <div className="toolbar-left">
-        <div className="products-sync-panel">
-          <div className="products-sync-user-card">
-            <div
-              className="products-sync-ring"
-              style={{ '--sync-progress': `${unifiedSyncPct}%` } as CSSProperties}
-              role="progressbar"
-              aria-label={`Общий прогресс синхронизации WB: ${unifiedSyncPct}%`}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={unifiedSyncPct}
-            >
-              <b>{unifiedSyncPct}%</b>
-              <span>готово</span>
-            </div>
-            <div className="products-sync-user-copy">
-              <span className="products-sync-eyebrow">Данные WB</span>
-              <strong>{syncHeroTitle}</strong>
-              <p>{syncHeroStage}</p>
-              <small>{syncHeroMeta}</small>
-            </div>
-            <div className="products-worker-timer-card">
-              <span>Следующий пересчёт цен</span>
-              <strong>{workerTimerLabel}</strong>
-              <small>{workerIntervalLabel}{pendingApprovalsCount ? ` · ${pendingApprovalsCount} ждут решения` : ''}</small>
-            </div>
-          </div>
-          <div className={`products-cold-sync-strip ${coldStatusTone}`}>
-            <div className="products-cold-sync-head">
-              <div>
-                <span>Этапы данных</span>
-                <strong>{coldStatusTitle}</strong>
-                <small>{coldStatusMeta}</small>
-              </div>
-              <div className="products-cold-sync-head-actions">
-                <b>{unifiedSyncPct}%</b>
-                <button
-                  className="btn btn-default btn-sm"
-                  type="button"
-                  data-vella-react-handlers="onclick"
-                  onClick={() => setSyncPlanOpen((value) => !value)}
-                >
-                  {syncPlanOpen ? 'Скрыть' : 'Подробнее'}
-                </button>
-              </div>
-            </div>
-            {syncPlanOpen ? <div className="products-cold-sync-road" aria-label="Этапы загрузки данных">
-              {(coldSyncPlanRows.length ? coldSyncPlanRows : [
-                { syncProfile: 'onboarding-7', syncProfileLabel: '7 дней', state: selectedRangeHasWorkingData ? 'completed' : 'pending' },
-                { syncProfile: 'onboarding-30', syncProfileLabel: '30 дней', state: selectedRangeHasWorkingData ? 'completed' : 'pending' },
-                { syncProfile: 'onboarding-history', syncProfileLabel: 'История', state: 'pending' },
-              ] as ProductsSyncPlanRow[]).map((profile, index) => {
-                const state = profile.running ? 'running' : profile.state || 'pending'
-                // "partial" means the window is still filling in; the backend
-                // sends it with error=null.  Reporting it as a failure made a
-                // healthy stage look broken.
-                const isError = state === 'error' || state === 'failed'
-                const isPartial = state === 'partial'
-                const isDone = state === 'completed'
-                const isRunning = state === 'running' || state === 'queued'
-                return (
-                  <button
-                    className={`products-cold-sync-step ${isDone ? 'is-done' : isRunning ? 'is-running' : isError ? 'is-error' : 'is-waiting'}`}
-                    type="button"
-                    data-vella-react-handlers="onclick"
-                    onClick={() => setSyncProfileDiagnostics(profile)}
-                    key={profile.syncProfile || index}
-                  >
-                    <i>{isDone ? <CheckCircle2 size={13} /> : isError || isPartial ? <AlertTriangle size={13} /> : index + 1}</i>
-                    <b>{profile.syncProfileLabel || (profile.periodDays ? `${profile.periodDays} дней` : `Этап ${index + 1}`)}</b>
-                    <span>{isDone ? 'готово' : isRunning ? 'идёт' : isError ? 'ошибка' : isPartial ? 'частично' : 'ожидает'}</span>
-                  </button>
-                )
-              })}
-            </div> : null}
-          </div>
-          {syncDetailsOpen ? (
-            <ProductsSyncPortal>
-              <div
-                className="products-sync-diagnostics-overlay products-sync-debug-overlay"
-                role="presentation"
-                onMouseDown={(event) => {
-                  if (event.target === event.currentTarget) setSyncDetailsOpen(false)
-                }}
-              >
-                <div
-                  className="products-sync-debug-modal"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label="Диагностика загрузки WB"
-                  onMouseDown={(event) => event.stopPropagation()}
-                >
-                <div className="products-sync-diagnostics-head">
-                  <div>
-                    <span>Диагностика загрузки</span>
-                    <strong>Подробный статус WB sync и загрузки товаров</strong>
-                    <small>{syncWindowMeta || syncStateText}{syncDiagnosticsLabel ? ` · ${syncDiagnosticsLabel}` : ''}</small>
-                  </div>
-                  <button type="button" onClick={() => setSyncDetailsOpen(false)} aria-label="Закрыть диагностику">
-                    <X size={15} />
-                  </button>
-                </div>
-                <div className="products-sync-details" id="products-sync-details">
-              {syncPlanRows.length ? (
-                <div className="products-sync-center" aria-label="Статус WB синхронизации">
-                  {syncRunning || syncSteps.length ? (
-                    <section className={`products-sync-center-section is-current is-${activeSyncDetailRow?.status ?? 'idle'}`}>
-                      <div className="products-sync-now-layout">
-                        <div className="products-sync-now-copy">
-                          <span>Сейчас выполняется</span>
-                          <strong>{activeSyncStepLabel}</strong>
-                          <p>{activeSyncStepMessage}</p>
-                        </div>
-                        <div className="products-sync-now-meter">
-                          <b>{syncRunning ? `${Math.round(activeSyncDetailRow?.progressPercent ?? syncProgressPct)}%` : syncResultStateLabel}</b>
-                          <span>{activeSyncStepState}</span>
-                        </div>
-                      </div>
-                      <div
-                        className="products-sync-center-track is-current"
-                        role="progressbar"
-                        aria-label={`Текущая операция WB: ${Math.round(activeSyncDetailRow?.progressPercent ?? syncProgressPct)}%`}
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={Math.round(activeSyncDetailRow?.progressPercent ?? syncProgressPct)}
-                      >
-                        <i style={{ width: `${Math.round(activeSyncDetailRow?.progressPercent ?? syncProgressPct)}%` }} />
-                      </div>
-                    </section>
-                  ) : null}
-
-                  <section className="products-sync-center-section">
-                    <div className="products-sync-center-head">
-                      <div>
-                        <span>Холодный запуск</span>
-                        <strong>{coldSummaryLabel}</strong>
-                      </div>
-                      <b>{coldVisualFinishedCount}/{coldSyncPlanRows.length || 3}</b>
-                    </div>
-                    <div
-                      className="products-sync-center-track"
-                      role="progressbar"
-                      aria-label={`Холодный запуск WB: ${coldProgressPct}%`}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={coldProgressPct}
-                    >
-                      <i style={{ width: `${coldProgressPct}%` }} />
-                    </div>
-                    <div className="products-sync-center-meta">
-                      <span>{coldSummaryMeta}{coldWaitingCount > 0 && selectedRangeHasWorkingData ? ' · история этапов неполная' : ''}</span>
-                      {coldCurrentProfile ? <span>Фокус: {coldCurrentProfile.syncProfileLabel || coldCurrentProfile.syncProfile}</span> : null}
-                    </div>
-                    <div className="products-sync-stage-list">
-                      {coldSyncPlanRows.map((profile, index) => {
-                        const profileRange = syncProfileRangeLabel(profile)
-                        const state = profile.state || 'pending'
-                        return (
-                          <button
-                            className={`products-sync-stage is-${state}`}
-                            key={profile.syncProfile}
-                            type="button"
-                            data-vella-react-handlers="onclick"
-                            onClick={() => setSyncProfileDiagnostics(profile)}
-                          >
-                            <i>{index + 1}</i>
-                            <b>{profile.syncProfileLabel || (profile.periodDays ? `${profile.periodDays} дн` : profile.syncProfile)}</b>
-                            <span>{syncPlanStateLabel(state, profile.due)}</span>
-                            {profileRange ? <small>{profileRange}</small> : null}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </section>
-
-                  <section className="products-sync-center-section is-maintenance">
-                    <div className="products-sync-center-head">
-                      <div>
-                        <span>Периодика и сверка</span>
-                        <strong>{maintenanceStatusLabel}</strong>
-                      </div>
-                      <b>{activeMaintenanceRow ? `${syncProgressPct}%` : 'расписание'}</b>
-                    </div>
-                    <div
-                      className="products-sync-center-track is-maintenance"
-                      role="progressbar"
-                      aria-label={`Регулярные обновления WB: ${activeMaintenanceRow ? syncProgressPct : 100}%`}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={activeMaintenanceRow ? syncProgressPct : 100}
-                    >
-                      <i style={{ width: `${activeMaintenanceRow ? syncProgressPct : 100}%` }} />
-                    </div>
-                    <div className="products-sync-center-meta">
-                      <span>{maintenanceMetaLabel}</span>
-                      {maintenanceFocusRow ? <span>{syncProfileRangeLabel(maintenanceFocusRow) || formatProductsSyncCadence(maintenanceFocusRow.cadenceMinutes)}</span> : null}
-                    </div>
-                    <div className="products-sync-stage-list is-compact">
-                      {maintenanceSyncPlanRows.map((profile) => {
-                        const nextRun = profile.nextRunAt ? formatProductsBackendTime(profile.nextRunAt) : null
-                        const dueIn = formatProductsSyncDuration(profile.dueInSeconds)
-                        const state = profile.running ? 'running' : profile.state || 'scheduled'
-                        return (
-                          <div className={`products-sync-stage is-${state}`} key={profile.syncProfile}>
-                            <b>{profile.syncProfileLabel || profile.syncProfile}</b>
-                            <span>{profile.running ? 'выполняется сейчас' : nextRun ? `${nextRun}${dueIn ? ` · через ${dueIn}` : ''}` : syncPlanStateLabel(profile.state, profile.due)}</span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </section>
-
-                  {syncRunning || syncSteps.length ? (
-                    <section className="products-sync-center-section is-sources">
-                      <div className="products-sync-center-head">
-                        <div>
-                          <span>Источники текущего окна</span>
-                          <strong>{syncRunning ? (syncLabel || 'WB sync идет') : syncResultLabel || 'Последняя попытка'}</strong>
-                        </div>
-                        <b>{syncRunning ? `${syncDone}/${syncTotal || PRODUCT_FULL_SYNC_SOURCES.length}` : syncResultStateLabel}</b>
-                      </div>
-                      <div className="products-sync-current-steps">
-                        {syncDetailRows.map(({ source, step, status, progressPercent, progressCount }) => (
-                          <div className={`products-sync-current-step is-${status}`} key={source}>
-                            <span>{sourceLabel(source, syncOperationPeriodLabel)}</span>
-                            <b>{progressCount ? `${progressCount} · ` : ''}{Math.round(progressPercent)}%</b>
-                            <em title={syncStepMessageText(step, status)}>
-                              {syncStepMessageText(step, status)}
-                            </em>
-                            {status === 'error' && (source === 'stocks' || source === 'baskets') ? (
-                              <button
-                                type="button"
-                                className="products-sync-step-retry"
-                                disabled={retryingSyncStep === source}
-                                onClick={() => void retryFailedSyncStep(source)}
-                              >
-                                {retryingSyncStep === source ? 'Повторяем...' : 'Повторить'}
-                              </button>
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-                  ) : null}
-                </div>
-              ) : null}
-                </div>
-                <ProductsLoadTraceDebugWindow traces={productsLoadTraces} embedded />
-                </div>
-              </div>
-            </ProductsSyncPortal>
-          ) : null}
-          {basketsDetailStatus ? (
-            <div className={`products-sync-detail-row products-baskets-detail-progress is-${basketsDetailStatus.state}`} role="status" aria-live="polite">
-              <div className="products-sync-detail-heading">
-                <strong>{basketsDetailRunning ? 'Загружаем корзины по выбранным дням' : basketsDetailStatus.state === 'completed' ? 'Корзины по дням загружены' : 'Ошибка детализации корзин'}</strong>
-                <div className="products-sync-detail-actions">
-                  <span>{basketsDetailStatus.requestsCompleted}/{basketsDetailStatus.requestsTotal} · {Math.round(basketsDetailPct)}%</span>
-                  <button
-                    className="products-sync-step-retry"
-                    type="button"
-                    data-vella-react-handlers="onclick"
-                    disabled={basketsDetailRetrying}
-                    onClick={retryBasketsDetailManually}
-                  >
-                    {basketsDetailRetrying ? 'Повторяем...' : basketsDetailRunning ? 'Перезапустить' : 'Повторить'}
-                  </button>
-                </div>
-              </div>
-              <div
-                className="products-sync-detail-track"
-                role="progressbar"
-                aria-label={`Корзины по дням: ${Math.round(basketsDetailPct)}%`}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.round(basketsDetailPct)}
-              >
-                <i style={{ width: `${basketsDetailPct}%` }} />
-              </div>
-              <div className="products-sync-detail-copy">
-                <span>
-                  {basketsDetailDayLabel
-                    ? `${basketsDetailDayLabel}${basketsDetailStatus.dayIndex && basketsDetailStatus.daysTotal ? ` · день ${basketsDetailStatus.dayIndex}/${basketsDetailStatus.daysTotal}` : ''}`
-                    : `Период ${basketsDetailStatus.dateFrom} — ${basketsDetailStatus.dateTo}`}
-                </span>
-                {basketsDetailStatus.batch && basketsDetailStatus.batchesTotal ? <small>Пачка SKU {basketsDetailStatus.batch}/{basketsDetailStatus.batchesTotal}</small> : null}
-                {basketsDetailStatus.warning ? <small className="is-error">{basketsDetailStatus.warning}</small> : null}
-                {basketsDetailStatus.failedChunks?.length ? <small className="is-error">Не догрузилось частей: {basketsDetailStatus.failedChunks.length}</small> : null}
-                {basketsDetailStatus.error ? <small className="is-error">{basketsDetailStatus.error}</small> : null}
-              </div>
-            </div>
-          ) : null}
-        </div>
-      </div>
-      <div className="toolbar-right">
-        <button
-          className="btn btn-default btn-sm"
-          type="button"
-          data-tip="Скачать все SKU с текущими настройками repricer в XLSX"
-          data-vella-react-handlers="onclick"
-          disabled={controlsDisabled}
-          onClick={() => void runNomenclatureExport()}
-        >
-          <FileSpreadsheet size={14} />
-          {loading === 'nomenclature-export' ? 'Выгружаем...' : 'Выгрузить XLSX'}
-        </button>
-        <input
-          ref={nomenclatureInputRef}
-          type="file"
-          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          hidden
-          data-vella-react-handlers="onchange"
-          onChange={(event) => {
-            const file = event.currentTarget.files?.[0]
-            if (file) void runNomenclatureImport(file)
-          }}
-        />
-        <button
-          className="btn btn-default btn-sm"
-          type="button"
-          data-tip="Загрузить XLSX и обновить стратегии, MinPrice и MaxPrice"
-          data-vella-react-handlers="onclick"
-          disabled={controlsDisabled}
-          onClick={() => nomenclatureInputRef.current?.click()}
-        >
-          <Upload size={14} />
-          {loading === 'nomenclature-import' ? 'Загружаем...' : 'Загрузить XLSX'}
-        </button>
-        {nomenclatureProgress ? (
-          <div className="products-import-progress" role="status" aria-live="polite">
-            <span>{nomenclatureProgress.label}</span>
-            <i><em style={{ width: `${nomenclatureProgress.pct}%` }} /></i>
-          </div>
-        ) : null}
-        <button
-          className="btn btn-default btn-sm"
-          type="button"
-          data-tip="Открыть подробный статус синхронизации, worker и загрузки товаров"
-          data-vella-react-handlers="onclick"
-          onClick={() => setSyncDetailsOpen(true)}
-        >
-          Статус и диагностика
-        </button>
-      </div>
-      {periodEmpty ? (
-        <div className="products-period-empty-callout" role="status" aria-live="polite">
-          <div className="products-period-empty-copy">
-            <span>Выбранный период</span>
-            <strong>{syncRunning ? 'Идет синхронизация с WB' : 'Данных за этот период пока нет'}</strong>
-            <p>
-              {syncRunning
-                ? `За ${periodLabel} данные еще собираются: WB корзины, заказы, финансы и реклама подтягиваются в фоне. Дождитесь завершения, страница обновится автоматически.`
-                : `За ${periodLabel} в кэше нет WB корзин, заказов, финансов и рекламы. Запустите полную синхронизацию, чтобы заполнить страницу актуальными данными.`}
-            </p>
-          </div>
-          <div className="products-period-empty-actions">
-            <span className="status s-warm">{syncRunning ? 'Синхронизация уже запущена' : 'Ожидаем ближайшее обновление'}</span>
-            <button
-              className="btn btn-primary products-period-empty-sync-button"
-              type="button"
-              data-vella-react-handlers="onclick"
-              disabled={!accessToken || loading === 'cold-full-sync' || syncRunning}
-              onClick={() => void runColdFullSyncFromEmptyState()}
-            >
-              {loading === 'cold-full-sync' ? 'Запускаем…' : 'Запустить синхронизацию'}
-            </button>
-            <button
-              className="btn btn-default products-period-empty-sync-button"
-              type="button"
-              data-vella-react-handlers="onclick"
-              onClick={() => setSyncDetailsOpen(true)}
-            >
-              Подробности загрузки
-            </button>
-          </div>
-        </div>
-      ) : null}
-      {syncProfileDiagnostics ? (
-        <ProductsSyncPortal>
-          <div
-            className="products-sync-diagnostics-overlay"
-            role="presentation"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) setSyncProfileDiagnostics(null)
-            }}
-          >
-            <div
-              className="products-sync-diagnostics-modal"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Диагностика этапа холодной загрузки"
-              onMouseDown={(event) => event.stopPropagation()}
-            >
-            <div className="products-sync-diagnostics-head">
-              <div>
-                <span>Диагностика этапа</span>
-                <strong>{syncProfileDiagnostics.syncProfileLabel || syncProfileDiagnostics.syncProfile}</strong>
-                <small>
-                  {syncProfileRangeLabel(syncProfileDiagnostics) || 'период не задан'}
-                  {' · '}
-                  {syncPlanStateLabel(syncProfileDiagnostics.state, syncProfileDiagnostics.due)}
-                  {syncProfileDiagnostics.cacheReady ? ' · cache готов' : ' · cache неполный'}
-                </small>
-              </div>
-              <button type="button" onClick={() => setSyncProfileDiagnostics(null)} aria-label="Закрыть диагностику">
-                <X size={15} />
-              </button>
-            </div>
-            <div className="products-sync-diagnostics-summary">
-              <b>{diagnosticReadyCount}/{diagnosticSources.length || syncProfileDiagnostics.sources?.length || 0}</b>
-              <span>
-                {syncProfileDiagnostics.cacheReady
-                  ? 'Все источники профиля покрывают окно.'
-                  : 'Этап нельзя считать завершенным, пока все обязательные источники не готовы.'}
-              </span>
-            </div>
-            <div className="products-sync-diagnostics-list">
-              {diagnosticSources.length ? diagnosticSources.map((item) => (
-                <div className={`products-sync-diagnostics-source is-${item.ready ? 'ready' : 'missing'}`} key={`${syncProfileDiagnostics.syncProfile}-${item.source}`}>
-                  <i>{item.ready ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}</i>
-                  <div>
-                    <b>{sourceLabel(item.source, syncProfileRangeLabel(syncProfileDiagnostics) || periodLabel)}</b>
-                    <span>{syncReadinessReasonLabel(item)}</span>
-                    {syncReadinessDetailLabel(item) ? <em>{syncReadinessDetailLabel(item)}</em> : null}
-                    {syncReadinessMetaLabel(item) ? <small>{syncReadinessMetaLabel(item)}</small> : null}
-                  </div>
-                </div>
-              )) : (
-                <div className="products-sync-diagnostics-empty">Backend пока не вернул детализацию источников для этого этапа.</div>
-              )}
-            </div>
-            </div>
-          </div>
-        </ProductsSyncPortal>
-      ) : null}
-    </div>
-  )
+  return null
 }
 
 function ProductsBulkStrategyMenuIsland() {
@@ -28133,60 +27388,6 @@ function ProductsBulkStrategyMenuIsland() {
           </div>
         )
       })}
-    </div>
-  )
-}
-
-function ProductsPaginationIsland() {
-  const [tick, setTick] = useState(0)
-  useEffect(() => {
-    const render = () => setTick((value) => value + 1)
-    window.addEventListener('vella:products-pagination-updated', render)
-    window.addEventListener('vella:products-rows-updated', render)
-    render()
-    return () => {
-      window.removeEventListener('vella:products-pagination-updated', render)
-      window.removeEventListener('vella:products-rows-updated', render)
-    }
-  }, [])
-  void tick
-  const cache = window.__vellaProductsCacheMeta
-  const state = window.__vellaProductsListState ?? { page: 1, pageSize: PRODUCTS_TABLE_RENDER_LIMIT }
-  const visibleRows = visibleProductsRowCount()
-  const page = Math.max(1, Number(state.page ?? 1))
-  const pageSize = Math.max(25, Number(state.pageSize ?? cache?.listItemsLimit ?? PRODUCTS_TABLE_RENDER_LIMIT))
-  const rawTotal = Number(cache?.listTotalFiltered ?? cache?.totalCached ?? visibleRows)
-  const total = Number.isFinite(rawTotal) && rawTotal > 0 ? rawTotal : visibleRows
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  const start = total && visibleRows ? (page - 1) * pageSize + 1 : 0
-  const end = total && visibleRows ? Math.min(total, start + visibleRows - 1) : 0
-  const goPage = (nextPage: number) => {
-    window.__vellaProductsListState = { ...state, page: Math.max(1, Math.min(totalPages, nextPage)), pageSize }
-    window.__vellaLoadLiveRepricerProducts?.()
-  }
-  const setPageSize = (nextSize: number) => {
-    window.__vellaProductsListState = { ...state, page: 1, pageSize: nextSize }
-    window.__vellaLoadLiveRepricerProducts?.()
-  }
-
-  return (
-    <div className="pagination" data-vella-island="products-pagination" data-vella-island-status="explicit-jsx">
-      <span className="page-info">Показано <b>{start}–{end}</b> из <b>{total}</b></span>
-      <div className="spacer" />
-      <span style={{ fontSize: 12, color: 'var(--gray-500)' }}>Строк на странице:</span>
-      <select className="per-page-sel" value={pageSize} data-vella-react-handlers="onchange" onChange={(event) => setPageSize(Number(event.currentTarget.value))}>
-        <option value={50}>50</option>
-        <option value={100}>100</option>
-        <option value={150}>150</option>
-        <option value={300}>300</option>
-        <option value={500}>500</option>
-      </select>
-      <div className="page-jump">
-        <button className="page-btn" type="button" disabled={page <= 1} data-vella-react-handlers="onclick" onClick={() => goPage(page - 1)}>‹</button>
-        <button className="page-btn active" type="button">{page}</button>
-        <span style={{ color: 'var(--gray-400)' }}>из {totalPages}</span>
-        <button className="page-btn" type="button" disabled={page >= totalPages} data-vella-react-handlers="onclick" onClick={() => goPage(page + 1)}>›</button>
-      </div>
     </div>
   )
 }
@@ -28726,6 +27927,17 @@ function selectedRepricerArticleIds() {
   return Array.from(selected)
 }
 
+function openReactModal(dialog: HTMLDialogElement | null) {
+  if (!dialog) return
+  const opener = document.activeElement
+  dialog.showModal()
+  window.syncHiddenA11y?.()
+  return () => {
+    dialog.close()
+    if (opener instanceof HTMLElement && opener.isConnected) opener.focus()
+  }
+}
+
 function ProductsSkuGroupModalIsland({ accessToken }: { accessToken: string }) {
   const [open, setOpen] = useState(false)
   const [articleIds, setArticleIds] = useState<string[]>([])
@@ -28805,16 +28017,15 @@ function ProductsSkuGroupModalIsland({ accessToken }: { accessToken: string }) {
   }
 
   return (
-    <div
+    <dialog ref={openReactModal} data-vella-react-modal="" aria-label="Группа SKU" onCancel={(event) => { event.preventDefault(); setOpen(false) }}
       className="modal-overlay open"
       data-vella-island="products-sku-group-modal"
       data-vella-island-status="explicit-jsx"
-      role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) setOpen(false)
       }}
     >
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Группа SKU" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-icon brand"><FolderPlus size={22} /></div>
           <div>
@@ -28885,7 +28096,7 @@ function ProductsSkuGroupModalIsland({ accessToken }: { accessToken: string }) {
           </button>
         </div>
       </div>
-    </div>
+    </dialog>
   )
 }
 
@@ -29067,13 +28278,6 @@ const productsTableShellReplacements: HtmlReactReplacement[] = [
   },
 ]
 
-const productsPaginationReplacements: HtmlReactReplacement[] = [
-  {
-    selector: '.pagination',
-    render: () => <ProductsPaginationIsland />,
-  },
-]
-
 function ProductSourceSectionIsland({
   replacementKey,
   sourceElement,
@@ -29100,10 +28304,6 @@ function ProductSourceSectionIsland({
 
   if (islandName === 'products-advanced-filters') {
     return <ProductsAdvancedFiltersIsland sourceElement={section} />
-  }
-
-  if (islandName === 'products-pagination') {
-    return <ProductsPaginationIsland />
   }
 
   if (islandName === 'products-table-shell') {
@@ -29140,8 +28340,6 @@ function ProductSourceSectionIsland({
         `${replacementKey}-${islandName}-content`,
         islandName === 'products-table-shell'
           ? productsTableShellReplacements
-          : islandName === 'products-pagination'
-            ? productsPaginationReplacements
           : islandName === 'products-toolbar'
             ? productsToolbarReplacements
           : islandName === 'products-bulk-bar'
@@ -29154,6 +28352,9 @@ function ProductSourceSectionIsland({
 
 function ProductsIsland({ replacementKey, sourceElement }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
   useProductsUiTick()
+  const location = useLocation()
+  const liveProductsActive = isCanonicalProductsRoute(location.pathname) || resolveParityRouteTarget(location.pathname, location.search).tab === 'products'
+  if (WB_ACCOUNT_PRODUCTS_ENABLED) return <div key={replacementKey} className={`tab-content ${liveProductsActive ? 'active' : ''}`} id="tab-products" data-vella-island="products" data-vella-island-status="explicit-jsx">{liveProductsActive ? <WbProducts /> : null}</div>
   return (
     <div
       key={replacementKey}
@@ -29172,6 +28373,15 @@ function ProductsIsland({ replacementKey, sourceElement }: { replacementKey: str
           islandName={islandName}
         />
       ))}
+      <div className="products-table-footer">
+        <ProductSourceSectionIsland
+          replacementKey={replacementKey}
+          sourceElement={sourceElement}
+          selector="#bulkBar"
+          islandName="products-bulk-bar"
+        />
+        <ProductsStickyPaginationPanel />
+      </div>
     </div>
   )
 }
@@ -29603,6 +28813,7 @@ function nestedAlgorithmValue(source: Record<string, unknown>, key: string) {
 }
 
 function AlgorithmCardsIsland({ replacementKey, sourceElement }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
+  const { accessToken } = useAuth()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [html, setHtml] = useState(() => prepareAlgorithmCardsHtml(sourceElement))
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null)
@@ -29735,7 +28946,7 @@ function AlgorithmCardsIsland({ replacementKey, sourceElement }: { replacementKe
             const normalized = typeof response === 'object' && response !== null ? response as Record<string, unknown> : payload
             setSettings(normalized)
             setSavedAt(String(normalized.savedAt || new Date().toISOString()))
-            resetLiveRepricerParityCache()
+            resetLiveRepricerParityCache(accessToken)
             void window.__vellaLoadLiveRepricerProducts?.()
           })
           .catch((err) => {
@@ -29753,7 +28964,7 @@ function AlgorithmCardsIsland({ replacementKey, sourceElement }: { replacementKe
       root.removeEventListener('change', markDirty)
       root.removeEventListener('input', markDirty)
     }
-  }, [settings, html])
+  }, [accessToken, settings, html])
 
   useEffect(() => {
     const root = rootRef.current
@@ -29997,6 +29208,9 @@ async function loadProductsPageFromRuntime(
   page = window.__vellaProductsListState?.page ?? 1,
   signal?: AbortSignal,
 ) {
+  if (WB_ACCOUNT_PRODUCTS_ENABLED && (isCanonicalProductsRoute(window.location.pathname) || resolveParityRouteTarget(window.location.pathname, window.location.search).tab === 'products')) {
+    throw new ApiError('Откройте товары выбранного аккаунта WB. Старое чтение этого экрана отключено.', 409, 'WB_ACCOUNT_REQUIRED')
+  }
   const loadSeq = ++productsRuntimeLoadSeq
   const isLatestLoad = () => !signal?.aborted && loadSeq === productsRuntimeLoadSeq
   const requestedPage = Math.max(1, Number(page) || 1)
@@ -30023,10 +29237,11 @@ async function loadProductsPageFromRuntime(
     if (!isLatestLoad()) return firstPagePayload
     publishProductsLoadTrace(firstPagePayload.trace)
     window.__vellaProductsCacheMeta = firstPagePayload.cache
-    if (!firstPageHasKpiFilters) {
+    const updateKpiRows = !firstPageHasKpiFilters || firstPagePayload.cache?.summaryScope === 'filtered_skus'
+    if (updateKpiRows) {
       window.__vellaProductsSummary = firstPagePayload.summary
     }
-    applyLiveProductsToRuntime(firstPagePayload.products, { updateKpiRows: !firstPageHasKpiFilters })
+    applyLiveProductsToRuntime(firstPagePayload.products, { updateKpiRows })
     window.dispatchEvent(new CustomEvent('vella:products-pagination-updated'))
     loadProductsPriceChangesCountInBackground(
       accessToken,
@@ -30038,10 +29253,11 @@ async function loadProductsPageFromRuntime(
   }
 
   window.__vellaProductsCacheMeta = payload.cache
-  if (!queryHasKpiFilters) {
+  const updateKpiRows = !queryHasKpiFilters || payload.cache?.summaryScope === 'filtered_skus'
+  if (updateKpiRows) {
     window.__vellaProductsSummary = payload.summary
   }
-  applyLiveProductsToRuntime(payload.products, { updateKpiRows: !queryHasKpiFilters })
+  applyLiveProductsToRuntime(payload.products, { updateKpiRows })
   window.dispatchEvent(new CustomEvent('vella:products-pagination-updated'))
   loadProductsPriceChangesCountInBackground(
     accessToken,
@@ -31775,7 +30991,7 @@ function LiquidationIsland({ replacementKey }: { replacementKey: string }) {
     setError(null)
     try {
       const period = productsPeriodRequest()
-      await refreshLiveRepricerParityProducts(accessToken, 0, undefined, period)
+      await refreshLiveRepricerParityProducts(accessToken, 0)
       await Promise.all([
         refreshLiveRepricerSource(accessToken, 'stocks', undefined, period),
         refreshLiveRepricerSource(accessToken, 'baskets', undefined, period),
@@ -31920,6 +31136,8 @@ function AbcReportIsland({ replacementKey, sourceElement }: { replacementKey: st
   const hasRows = rawRows.length > 0 || state.rows.length > 0
   const isPending = !state.authExpired && !state.error && (!state.report || state.loading)
   const isEmpty = !state.authExpired && !isPending && !hasRows
+  const canonicalState = state.report?.canonical?.state
+  const canonicalEmptyMessage = canonicalAbcPnlEmptyMessage('abc', canonicalState)
   return (
     <div
       id="tab-abc"
@@ -32035,8 +31253,8 @@ function AbcReportIsland({ replacementKey, sourceElement }: { replacementKey: st
       ) : isEmpty ? (
         <div className="abc-state-card" role="status">
           <div className="abc-state-head">
-            <div className="abc-state-title">Данных за выбранный период пока нет</div>
-            <div className="abc-state-copy">{state.error || reportCacheMissingMessage(periodState)}</div>
+            <div className="abc-state-title">{state.accessDenied ? 'Нет доступа к отчету' : 'Данных за выбранный период пока нет'}</div>
+            <div className="abc-state-copy">{state.error || canonicalEmptyMessage || reportCacheMissingMessage(periodState)}</div>
           </div>
         </div>
       ) : (
@@ -32400,16 +31618,15 @@ function ApplyPricesModalIsland({ replacementKey }: { replacementKey: string }) 
   }
 
   return (
-    <div
+    <dialog ref={openReactModal} data-vella-react-modal="" aria-label="Применение цен" onCancel={(event) => { event.preventDefault(); close() }}
       key={replacementKey}
       className="modal-overlay open vella-apply-prices-modal"
       id="m-apply"
-      role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) close()
       }}
     >
-      <div className="modal lg" role="dialog" aria-modal="true" aria-label="Применение цен" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="modal lg" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-icon brand"><CheckCircle2 size={22} /></div>
           <h2>{articleIds.length ? `${isResult ? 'Результат применения' : 'Применить цены'} к ${articleIds.length} SKU` : 'Сначала выберите SKU'}</h2>
@@ -32485,7 +31702,7 @@ function ApplyPricesModalIsland({ replacementKey }: { replacementKey: string }) 
           ) : null}
         </div>
       </div>
-    </div>
+    </dialog>
   )
 }
 
@@ -32534,6 +31751,11 @@ function parseFirstHtmlElement(html: string) {
   const element = doc.querySelector('template')?.content.firstElementChild
   return element instanceof HTMLElement ? element : null
 }
+
+const redundantProductsCountReplacements: HtmlReactReplacement[] = [{
+  selector: '[data-tab="products"] > .nav-badge, [data-tab="products"] > .subtab-count',
+  render: () => null,
+}]
 
 const ShellSidebarIsland = memo(function ShellSidebarIsland({ html }: { html: string }) {
   const { pathname } = useLocation()
@@ -32602,7 +31824,7 @@ const ShellSidebarIsland = memo(function ShellSidebarIsland({ html }: { html: st
       data-vella-island="sidebar"
       data-vella-island-status="explicit-jsx"
     >
-      {htmlToReactFragment(sidebar.innerHTML, 'shell-sidebar-content')}
+      {htmlToReactFragment(sidebar.innerHTML, 'shell-sidebar-content', redundantProductsCountReplacements)}
     </aside>
   )
 })
@@ -32634,7 +31856,7 @@ const ShellSubtabsIsland = memo(function ShellSubtabsIsland({ html }: { html: st
       data-vella-island="subtabs"
       data-vella-island-status="explicit-jsx"
     >
-      {htmlToReactFragment(subtabs.innerHTML, 'shell-subtabs-content', shellReplacements)}
+      {htmlToReactFragment(subtabs.innerHTML, 'shell-subtabs-content', [...shellReplacements, ...redundantProductsCountReplacements])}
     </div>
   )
 })
@@ -33178,7 +32400,7 @@ function WorkStatusPageIsland({ replacementKey }: { replacementKey: string }) {
           return
         }
       }
-      resetLiveRepricerParityCache()
+      resetLiveRepricerParityCache(accessToken)
       window.dispatchEvent(new CustomEvent('vella:products-rows-updated'))
       window.dispatchEvent(new CustomEvent('vella:products-kpi-updated'))
       if (decision === 'reject') {
@@ -33231,7 +32453,7 @@ function WorkStatusPageIsland({ replacementKey }: { replacementKey: string }) {
           }
         : current)
       if (succeededIds.size) {
-        resetLiveRepricerParityCache()
+        resetLiveRepricerParityCache(accessToken)
         window.dispatchEvent(new CustomEvent('vella:products-rows-updated'))
         window.dispatchEvent(new CustomEvent('vella:products-kpi-updated'))
       }
@@ -33986,7 +33208,7 @@ function renderDrawerSkuOverride(product: DrawerParityProduct) {
   const multiplier = Math.max(0.01, 1 - spp / 100)
   const currentPrice = drawerNumber(product.price) ?? 0
   const calculatedPmin = drawerRubNumber(product.pmin, currentPrice) ?? 0
-  const pminBefore = Math.round(drawerRubNumber(product.pminBeforeSpp, currentPrice) ?? calculatedPmin)
+  const pminBefore = Math.round((drawerNumber(product.settings?.pMinKopecks) ?? 0) / 100)
   const pmaxBefore = Math.round(drawerRubNumber(product.pmaxBeforeSpp, currentPrice) ?? Math.max(currentPrice, pminBefore))
   const pminAfter = Math.round(pminBefore * multiplier)
   const pmaxAfter = Math.round(pmaxBefore * multiplier)
@@ -34575,6 +33797,9 @@ export function VellaHtmlParityPage() {
   const { accessToken, cabinetMe, logout, profile, sessions } = useAuth()
   const rootRef = useRef<HTMLDivElement>(null)
   const [sourceHtml, setSourceHtml] = useState<string | null>(null)
+  // 1C remains disabled; both the report loader and calendar start on WB finance.
+  const pnlModeState = useState<PnlReportMode>('financial')
+  const pnlTableExport = useRef<(() => ReportTableExportPayload) | null>(null)
   const shellSettingsSnapshotRef = useRef<SettingsShellSnapshot | null>(null)
   const shellSettingsLoadingRef = useRef(false)
   const [shellSettingsVersion, setShellSettingsVersion] = useState(0)
@@ -34582,7 +33807,11 @@ export function VellaHtmlParityPage() {
   const routeTarget = useMemo(() => resolveParityRouteTarget(location.pathname, location.search), [location.pathname, location.search])
   const [activeParityTab, setActiveParityTab] = useState(routeTarget.tab)
   const effectiveActiveParityTab = routeTarget.tab || activeParityTab
-  const productsTabActive = effectiveActiveParityTab === 'products' || isCanonicalProductsRoute(location.pathname)
+  const productsTabActive = !WB_ACCOUNT_PRODUCTS_ENABLED && (effectiveActiveParityTab === 'products' || isCanonicalProductsRoute(location.pathname))
+  const canonicalAbcPnlRollout = useMemo(
+    () => resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId),
+    [cabinetMe?.organization.organizationId],
+  )
 
   useEffect(() => {
     installLegacyHistoryNavigationBridge()
@@ -34719,7 +33948,6 @@ export function VellaHtmlParityPage() {
 	    installThresholdPreviewReactBridge()
 	    installTooltipUxGuard(root)
         installDigestLiveDataBridge(accessToken)
-        installAbcLiveDataBridge(accessToken)
         installAbcRowRendererBridge()
         window.enhanceReportsDemo?.()
         installAdsStickyIdentityColumns(root)
@@ -34750,60 +33978,20 @@ export function VellaHtmlParityPage() {
 
   useEffect(() => {
     installDigestLiveDataBridge(accessToken)
-    installAbcLiveDataBridge(accessToken)
+    installAbcLiveDataBridge(accessToken, canonicalAbcPnlRollout)
     if (effectiveActiveParityTab === 'digest') void window.__vellaLoadLiveDigestReport?.()
     if (effectiveActiveParityTab === 'abc') void window.__vellaLoadLiveAbcReport?.()
-  }, [accessToken, effectiveActiveParityTab])
+    return () => {
+      window.__vellaDigestLiveAbortController?.abort()
+      window.__vellaAbcLiveAbortController?.abort()
+    }
+  }, [accessToken, canonicalAbcPnlRollout, effectiveActiveParityTab])
 
   useEffect(() => {
     if (!runtime) return
-    window.__vellaLoadLiveRepricerStats = async () => {
-      if (!accessToken) {
-        renderLiveRepricerStatsError(new ApiError('AUTH_REQUIRED', 401))
-        return null
-      }
-      renderLiveRepricerStatsLoading()
-      const period = repricerStatsPeriodRequest()
-      const queryInput = document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')
-      try {
-        const baseQuery = {
-          ...period,
-          page: 1,
-          pageSize: REPRICER_STATS_PAGE_SIZE,
-          q: queryInput?.value?.trim() || undefined,
-        }
-        const payload = await loadLiveRepricerStats(accessToken, undefined, baseQuery)
-        applyRepricerStatsCachePeriod(payload)
-        renderLiveRepricerStats(payload)
-        const total = Number(payload.total || 0)
-        const maxRows = Math.min(total, REPRICER_STATS_MAX_ROWS)
-        const pageCount = Math.ceil(maxRows / REPRICER_STATS_PAGE_SIZE)
-        const mergedItems = [...(payload.items ?? [])]
-        for (let page = 2; page <= pageCount; page += 1) {
-          const pagePayload = await loadLiveRepricerStats(accessToken, undefined, {
-            ...baseQuery,
-            page,
-          })
-          mergedItems.push(...(pagePayload.items ?? []))
-          renderLiveRepricerStats({
-            ...payload,
-            ...pagePayload,
-            items: mergedItems.slice(0, REPRICER_STATS_MAX_ROWS),
-            itemsReturned: Math.min(mergedItems.length, REPRICER_STATS_MAX_ROWS),
-            summary: payload.summary,
-            total,
-          })
-        }
-        return payload
-      } catch (error) {
-        renderLiveRepricerStatsError(error)
-        throw error
-      }
-    }
-    if (effectiveActiveParityTab === 'repricer-stats') void window.__vellaLoadLiveRepricerStats()
-    return () => {
-      delete window.__vellaLoadLiveRepricerStats
-    }
+    const dispose = installRepricerStatsLiveBridge(accessToken)
+    if (effectiveActiveParityTab === 'repricer-stats') void window.__vellaLoadLiveRepricerStats?.()
+    return dispose
   }, [accessToken, effectiveActiveParityTab, runtime])
 
   useEffect(() => {
@@ -34853,11 +34041,14 @@ export function VellaHtmlParityPage() {
       settingsLoading: shellSettingsLoadingRef.current,
     })
     bindParityLogout(root, () => {
-      void logout()
+      void logout().catch(() => {
+        window.showToast?.('Не удалось выйти. Повторите попытку.', 'warn')
+      })
     })
   }, [logout, profile, runtime, sessions, shellSettingsVersion])
 
   useEffect(() => {
+    const controller = new AbortController()
     let productsSearchTimer: number | undefined
     const reloadProductsFirstPage = () => {
       window.__vellaProductsListState = { ...(window.__vellaProductsListState ?? {}), page: 1 }
@@ -34882,11 +34073,12 @@ export function VellaHtmlParityPage() {
       }
       prepareProductsBackendLoad()
       try {
-        const result = await loadProductsPageFromRuntime(accessToken, window.__vellaProductsListState?.page ?? 1)
+        const result = await loadProductsPageFromRuntime(accessToken, window.__vellaProductsListState?.page ?? 1, controller.signal)
+        controller.signal.throwIfAborted()
         finalizeProductsBackendLoad(result)
         return result
       } catch (error) {
-        showProductsBackendError(error)
+        if (!controller.signal.aborted) showProductsBackendError(error)
         throw error
       }
     }
@@ -34903,16 +34095,17 @@ export function VellaHtmlParityPage() {
         const result = await refreshLiveRepricerParityProducts(
           accessToken,
           offset,
-          undefined,
-          productsPeriodRequest(),
+          controller.signal,
         )
+        controller.signal.throwIfAborted()
         window.__vellaProductsCacheMeta = result.cache
         window.__vellaProductsListState = { ...(window.__vellaProductsListState ?? {}), page: 1 }
-        const loaded = await loadProductsPageFromRuntime(accessToken, 1)
+        const loaded = await loadProductsPageFromRuntime(accessToken, 1, controller.signal)
+        controller.signal.throwIfAborted()
         finalizeProductsBackendLoad(loaded)
         return { total: loaded.total, cache: loaded.cache ?? result.cache }
       } catch (error) {
-        showProductsBackendError(error)
+        if (!controller.signal.aborted) showProductsBackendError(error)
         throw error
       }
     }
@@ -34954,6 +34147,7 @@ export function VellaHtmlParityPage() {
       return result
     }
     return () => {
+      controller.abort()
       window.clearTimeout(productsSearchTimer)
       delete window.__vellaLoadLiveRepricerProducts
       delete window.__vellaRefreshLiveRepricerProducts
@@ -35039,7 +34233,7 @@ export function VellaHtmlParityPage() {
   }, [accessToken, productsTabActive, runtime])
 
   useEffect(() => {
-    if (!runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
+    if (WB_ACCOUNT_PRODUCTS_ENABLED || !runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
 
     const backendStrategyNameById = (window.__vellaBackendStrategiesSnapshot?.() ?? []).reduce<Record<string, string>>((acc, strategy) => {
       acc[strategy.id] = strategy.name
@@ -35502,7 +34696,7 @@ export function VellaHtmlParityPage() {
   }, [accessToken, location.pathname, runtime])
 
   useEffect(() => {
-    if (!runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
+    if (WB_ACCOUNT_PRODUCTS_ENABLED || !runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
 
     let disposed = false
     let installTimer: number | null = null
@@ -35954,10 +35148,11 @@ export function VellaHtmlParityPage() {
   }, [accessToken, location.pathname, runtime])
 
   useEffect(() => {
-    if (!runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
+    if (WB_ACCOUNT_PRODUCTS_ENABLED || !runtime || !accessToken || !isCanonicalProductsRoute(location.pathname)) return
 
     const originalApplyDrawerManagerAssignment = window.applyDrawerManagerAssignment
     const originalApplyBulkManagerAssignment = window.applyBulkManagerAssignment
+    let bulkManagerPending = false
 
     const reloadProducts = async (skuToReopen?: string | null) => {
       prepareProductsBackendLoad()
@@ -35996,6 +35191,7 @@ export function VellaHtmlParityPage() {
     }
 
     window.applyBulkManagerAssignment = () => {
+      if (bulkManagerPending) return
       const selected = Array.isArray(window.PRODUCTS)
         ? window.PRODUCTS
           .filter((product) => product?.sel && typeof product?.sku === 'string' && product.sku)
@@ -36014,16 +35210,25 @@ export function VellaHtmlParityPage() {
         reasonInput?.focus()
         return
       }
-      void Promise.all(articleIds.map((articleId) => updateLiveRepricerSkuManager(accessToken, articleId, nextManagerId, reason)))
-        .then(async () => {
-          window.closeModal?.('bulkAssignManager')
+      bulkManagerPending = true
+      const saveButton = document.querySelector<HTMLButtonElement>('#m-bulkAssignManager .btn-primary')
+      if (saveButton) saveButton.disabled = true
+      void Promise.allSettled(articleIds.map((articleId) => updateLiveRepricerSkuManager(accessToken, articleId, nextManagerId, reason)))
+        .then(async (results) => {
+          const failed = results.find(result => result.status === 'rejected')
+          if (failed?.status === 'rejected') throw failed.reason
           await reloadProducts()
+          window.closeModal?.('bulkAssignManager')
           window.clearSelection?.()
           window.showToast?.(`Ответственный сохранён для ${articleIds.length} SKU`, 'success')
         })
         .catch((error) => {
           console.warn('Failed to save bulk SKU manager assignment', error)
           window.showToast?.(error instanceof Error ? error.message : 'Не удалось сохранить массовое назначение', 'warn')
+        })
+        .finally(() => {
+          bulkManagerPending = false
+          if (saveButton) saveButton.disabled = false
         })
     }
 
@@ -36043,7 +35248,7 @@ export function VellaHtmlParityPage() {
   return (
     <>
       <style>{runtime.styleText}</style>
-      {accessToken && isCanonicalProductsRoute(location.pathname) ? <ProductsSkuGroupModalIsland accessToken={accessToken} /> : null}
+      {!WB_ACCOUNT_PRODUCTS_ENABLED && accessToken && isCanonicalProductsRoute(location.pathname) ? <ProductsSkuGroupModalIsland accessToken={accessToken} /> : null}
       <style>{`
         #toastContainer.toast-container {
           top: 62px !important;
@@ -36639,6 +35844,12 @@ export function VellaHtmlParityPage() {
         .vella-html-parity-root #subtabsContext [data-context-control="period"] {
           order: 2;
         }
+        .vella-html-parity-root .subtabs:has([data-module-panel="repricer"].active) {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .vella-html-parity-root .subtabs-scroll:has([data-module-panel="repricer"].active) {
+          display: none;
+        }
         @media (max-width: 1599px) {
           .vella-html-parity-root .subtabs {
             grid-template-columns: minmax(0, 1fr);
@@ -37128,6 +36339,26 @@ export function VellaHtmlParityPage() {
           padding: 10px 20px;
           background: var(--white);
           border-bottom: 1px solid var(--gray-100);
+        }
+        .vella-html-parity-root .products-kpi-more > summary {
+          cursor: pointer;
+          padding: 6px 20px 10px;
+          font-size: 12px;
+          color: var(--gray-600);
+        }
+        .vella-html-parity-root .products-kpi-summary > .repricer-kpis {
+          grid-template-columns: repeat(5, minmax(136px, 1fr));
+        }
+        .vella-html-parity-root .products-kpi-summary button.stat-tip {
+          border: 0;
+          padding: 0;
+        }
+        .vella-html-parity-root .products-kpi-link {
+          border: 0;
+          padding: 0;
+          background: none;
+          color: inherit;
+          cursor: pointer;
         }
         .vella-html-parity-root #tab-products .products-advanced-filters-panel {
           margin: 10px 20px 12px;
@@ -37715,75 +36946,32 @@ export function VellaHtmlParityPage() {
           overflow-wrap: anywhere;
         }
         .vella-html-parity-root .products-sync-panel {
-          width: min(100%, 1120px);
+          width: 100%;
           display: grid;
           grid-template-columns: minmax(0, 1fr);
           align-items: center;
-          gap: 12px;
-          padding: 12px;
-          border: 1px solid var(--gray-200);
-          border-radius: 14px;
-          background: var(--white);
-          box-shadow: 0 12px 28px rgba(15, 23, 42, 0.07);
+          gap: 8px;
+        }
+        .vella-html-parity-root .products-sync-summary {
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 8px 16px;
+        }
+        .vella-html-parity-root .products-sync-summary > div {
+          display: grid;
+          gap: 3px;
+          font-size: 13px;
+        }
+        .vella-html-parity-root .products-sync-summary small {
+          color: var(--gray-500);
+          font-size: 11px;
+        }
+        .vella-html-parity-root .products-sync-summary.is-error strong {
+          color: #C2410C;
         }
         .vella-html-parity-root .products-period-empty-toolbar .products-sync-panel {
           width: 100%;
-        }
-        .vella-html-parity-root .products-sync-user-card {
-          display: grid;
-          grid-template-columns: auto minmax(260px, 1fr) minmax(210px, .55fr);
-          gap: 16px;
-          align-items: center;
-          min-width: 0;
-        }
-        .vella-html-parity-root .products-sync-ring {
-          --sync-progress: 0%;
-          width: 86px;
-          height: 86px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          align-content: center;
-          background:
-            radial-gradient(circle at center, var(--white) 0 58%, transparent 59%),
-            conic-gradient(var(--brand) var(--sync-progress), #E5E7EB 0);
-          box-shadow: inset 0 0 0 1px rgba(148, 163, 184, .18);
-        }
-        .vella-html-parity-root .products-sync-ring b {
-          color: var(--gray-950);
-          font-size: 20px;
-          line-height: 1;
-          font-weight: 950;
-        }
-        .vella-html-parity-root .products-sync-ring span {
-          color: var(--gray-500);
-          font-size: 10px;
-          font-weight: 800;
-        }
-        .vella-html-parity-root .products-sync-user-copy {
-          display: grid;
-          gap: 3px;
-          min-width: 0;
-        }
-        .vella-html-parity-root .products-sync-user-copy strong {
-          color: var(--gray-950);
-          font-size: 18px;
-          line-height: 1.15;
-          font-weight: 950;
-        }
-        .vella-html-parity-root .products-sync-user-copy p,
-        .vella-html-parity-root .products-sync-user-copy small {
-          margin: 0;
-          min-width: 0;
-          color: var(--gray-500);
-          font-size: 12px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        .vella-html-parity-root .products-sync-user-copy p {
-          color: var(--gray-700);
-          font-weight: 800;
         }
         .vella-html-parity-root .products-worker-timer-card {
           min-width: 0;
@@ -39043,9 +38231,6 @@ export function VellaHtmlParityPage() {
             grid-template-columns: 1fr;
             align-items: stretch;
           }
-          .vella-html-parity-root .products-sync-user-card {
-            grid-template-columns: auto minmax(0, 1fr);
-          }
           .vella-html-parity-root .products-worker-timer-card {
             grid-column: 1 / -1;
           }
@@ -39068,9 +38253,6 @@ export function VellaHtmlParityPage() {
           }
         }
         @media (max-width: 760px) {
-          .vella-html-parity-root .products-sync-user-card {
-            grid-template-columns: 1fr;
-          }
           .vella-html-parity-root #tab-products .products-advanced-filter-grid,
           .vella-html-parity-root #tab-products .products-advanced-filter-grid .products-filter-popover-grid,
           .vella-html-parity-root #tab-products .products-legacy-advanced-filters .adv-grid {
@@ -39078,10 +38260,6 @@ export function VellaHtmlParityPage() {
           }
           .vella-html-parity-root #tab-products .products-advanced-filter-grid .products-filter-section-wide {
             grid-column: auto;
-          }
-          .vella-html-parity-root .products-sync-ring {
-            width: 74px;
-            height: 74px;
           }
           .vella-html-parity-root .products-sync-debug-modal {
             width: calc(100vw - 24px);
@@ -39274,8 +38452,8 @@ export function VellaHtmlParityPage() {
         .vella-html-parity-root #tab-ads table.report-mid thead th:nth-child(2) {
           box-shadow: 8px 0 14px rgba(15, 23, 42, 0.06), inset 0 -1px 0 var(--gray-200);
         }
-        .vella-html-parity-root #tab-products {
-          padding-bottom: 104px;
+        .vella-html-parity-root #tab-products.tab-content {
+          padding-bottom: 0;
           box-sizing: border-box;
           height: 100%;
           max-height: 100%;
@@ -39366,24 +38544,39 @@ export function VellaHtmlParityPage() {
             justify-content: stretch;
           }
         }
+        .vella-html-parity-root .products-table-footer {
+          position: sticky;
+          bottom: 0;
+          z-index: 40;
+          flex: 0 0 auto;
+          margin-top: auto;
+          background: var(--white);
+          border-top: 1px solid var(--gray-200);
+        }
+        .vella-html-parity-root .products-table-footer .bulk-bar {
+          position: relative;
+          inset: auto;
+          transform: none;
+          display: none;
+          width: 100%;
+          max-width: 100%;
+          border-radius: 0;
+          box-shadow: none;
+          flex-wrap: wrap;
+          white-space: normal;
+        }
+        .vella-html-parity-root .products-table-footer .bulk-bar.show {
+          display: flex;
+        }
         .vella-products-sticky-pagination {
-          position: fixed;
-          left: 252px;
-          right: 20px;
-          bottom: 16px;
-          z-index: 1800;
           min-height: 54px;
           display: flex;
+          flex-wrap: wrap;
           align-items: center;
           justify-content: center;
           gap: 12px;
           padding: 10px 12px;
-          border: 1px solid rgba(148, 163, 184, 0.24);
-          border-radius: 14px;
-          background: rgba(255, 255, 255, 0.78);
-          box-shadow: 0 18px 48px rgba(15, 23, 42, 0.16);
-          backdrop-filter: blur(18px) saturate(1.35);
-          -webkit-backdrop-filter: blur(18px) saturate(1.35);
+          background: var(--white);
         }
         .vella-html-parity-root #dOverlay.drawer-overlay {
           z-index: 3000;
@@ -39391,9 +38584,6 @@ export function VellaHtmlParityPage() {
         .vella-html-parity-root #dPanel.drawer,
         .vella-html-parity-root #reportCommentDrawer.drawer {
           z-index: 3010;
-        }
-        .vella-html-parity-root .sidebar.collapsed ~ .vella-products-sticky-pagination {
-          left: 80px;
         }
         .vella-products-sticky-pagination__meta {
           display: flex;
@@ -39521,11 +38711,18 @@ export function VellaHtmlParityPage() {
         }
         @media (max-width: 960px) {
           .vella-products-sticky-pagination {
-            left: 76px;
-            right: 10px;
-            bottom: 10px;
             justify-content: flex-start;
-            overflow-x: auto;
+          }
+        }
+        @media (max-width: 720px) {
+          .vella-html-parity-root .products-table-footer {
+            display: none;
+          }
+          .vella-html-parity-root .desktop-only-fallback {
+            min-height: 0;
+            height: 100%;
+            padding: 14px;
+            overflow: auto;
           }
         }
         .vella-apply-prices-modal {
@@ -39981,6 +39178,8 @@ export function VellaHtmlParityPage() {
           .ads-cache-refresh span { display: none; }
         }
       `}</style>
+      <PnlReportModeContext.Provider value={pnlModeState}>
+      <PnlTableExportContext.Provider value={pnlTableExport}>
       <ActiveParityTabContext.Provider value={effectiveActiveParityTab}>
         <div
           className={rootClassName}
@@ -39990,16 +39189,18 @@ export function VellaHtmlParityPage() {
           {runtime.shellIsland
             ? <VellaShellIsland shellIsland={runtime.shellIsland} mode={routeTarget.tab === 'work-status' ? 'work-status' : 'default'} />
             : htmlFragment(runtime.bodyHtml, 'body-fallback')}
-          {isCanonicalProductsRoute(location.pathname) ? <ProductsStickyPaginationPanel /> : null}
           <AdsCacheRefreshButton accessToken={accessToken} active={routeTarget.tab === 'ads'} />
         </div>
       </ActiveParityTabContext.Provider>
+      </PnlTableExportContext.Provider>
+      </PnlReportModeContext.Provider>
     </>
   )
 }
 
 declare global {
   interface Window {
+    repairWbProductImage?: (image: HTMLImageElement) => void
     _goSubtabSilent?: (key: string, options?: Record<string, unknown>) => void
     __vellaHistoryNavigationBridgeInstalled?: boolean
     __vellaOriginalPushState?: History['pushState']
@@ -40227,7 +39428,7 @@ declare global {
     __vellaLoadLiveRepricerStats?: () => Promise<LiveRepricerStatsResponse | null>
     __vellaRefreshLiveRepricerProducts?: (offset?: number) => Promise<{ total: number; cache?: { pagesCached: number; totalCached: number; nextOffset: number; pageLimit: number; latestFetchedAt?: string | null; listPage?: number; listItemsLimit?: number; listTotalFiltered?: number } }>
     __vellaRefreshLiveRepricerSource?: (source: 'content' | 'promotions' | 'stocks' | 'period-stats' | 'finance' | 'ads' | 'baskets', period?: number | LiveRepricerPeriodRequest) => Promise<{ source: string; count: number; requestedNmIds?: number; matchedNmIds?: number; cachedGoodsNmIds?: number; matchedCachedGoodsNmIds?: number; partial?: boolean; warning?: string } | null>
-    __vellaProductsCacheMeta?: { pagesCached: number; totalCached: number; nextOffset: number; pageLimit: number; latestFetchedAt?: string | null; periodDays?: number; dateFrom?: string | null; dateTo?: string | null; periodCacheSuffix?: string | null; stocksFetchedAt?: string | null; periodStatsFetchedAt?: string | null; financeFetchedAt?: string | null; financeCachedGoodsNmIds?: number | null; financeMatchedNmIds?: number | null; adsFetchedAt?: string | null; adsCount?: number | null; adsCampaignCount?: number | null; adsDateFrom?: string | null; adsDateTo?: string | null; adsSource?: string | null; adsSpendKopecks?: number | null; adsImpressions?: number | null; adsClicks?: number | null; adsCartAdds?: number | null; adsOrders?: number | null; adsRevenueKopecks?: number | null; adsLastStatus?: string | null; adsLastError?: string | null; adsLastFinishedAt?: string | null; basketsFetchedAt?: string | null; basketsRequestedNmIds?: number | null; basketsMatchedNmIds?: number | null; listPage?: number; listItemsLimit?: number; listTotalFiltered?: number }
+    __vellaProductsCacheMeta?: LiveRepricerProductsPayload['cache']
     __vellaProductsPeriodDays?: number
     __vellaProductsPeriodFromIso?: string
     __vellaProductsPeriodToIso?: string
@@ -40264,6 +39465,7 @@ declare global {
     __vellaAbcLiveAbortController?: AbortController
     __vellaAbcLiveError?: string
     __vellaAbcLiveAuthExpired?: boolean
+    __vellaAbcLiveAccessDenied?: boolean
     __vellaAbcLivePeriodListenerInstalled?: boolean
     __vellaLoadLiveAbcReport?: () => Promise<AbcReportRow[] | null>
     __vellaDigestLiveReport?: DigestResponse | null

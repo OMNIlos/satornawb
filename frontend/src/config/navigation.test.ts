@@ -8,6 +8,15 @@ function visibleIdsFor(role: Parameters<typeof visibleNavigationForRole>[0]) {
 }
 
 describe('navigation role visibility', () => {
+  it('keeps production orders and returns available without the removed marking workspace', () => {
+    for (const role of ['admin', 'production'] as const) {
+      const ids = visibleIdsFor(role)
+      expect(ids).toContain('orders')
+      expect(ids).toContain('orders-returns')
+      expect(ids).not.toContain('orders-kiz')
+    }
+    expect(findNavItemByPath('/orders/kiz')).toBeUndefined()
+  })
   it('keeps finance reports out of production navigation', () => {
     const pnl = findNavItemByPath('/wb/reports/pnl')
     const expenses = findNavItemByPath('/wb/reports/expenses')

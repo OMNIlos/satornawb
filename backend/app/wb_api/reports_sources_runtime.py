@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import hashlib
+import json
 import threading
 import time
 from typing import Any, Callable
@@ -11,6 +13,7 @@ from vella_wb_19_05.models import Confidence, SourceEvidence, SourceStatus, utc_
 from app.config import get_settings
 from app.wb_api.client import (
     RateLimitedWbApiClient,
+    WbApiError,
     WbApiRequest,
     WbApiResponseEnvelope,
     build_wb_analytics_client,
@@ -333,9 +336,12 @@ def _load_stock_report_wb_warehouses(
     sleeper: Callable[[float], None] | None = None,
 ) -> tuple[WbApiResponseEnvelope, list[dict[str, Any]]]:
     global _stock_report_last_request_at
-    page_limit = limit or STOCK_REPORT_PAGE_LIMIT
+    page_limit = STOCK_REPORT_PAGE_LIMIT if limit is None else limit
+    if type(page_limit) is not int or page_limit <= 0:
+        raise ValueError("stock report page limit must be a positive integer")
     offset = 0
     rows: list[dict[str, Any]] = []
+    accepted_full_pages: set[bytes] = set()
     final_envelope: WbApiResponseEnvelope | None = None
     sleep_fn = sleeper or time.sleep
 
@@ -371,10 +377,56 @@ def _load_stock_report_wb_warehouses(
         if not envelope.ok:
             return envelope, rows
 
-        page = _extract_items(_payload(envelope.data))
-        for item in page:
-            item.setdefault("stockType", stock_type)
-        rows.extend(page)
+        node = _payload(envelope.data)
+        if envelope.statusCode == 204 and node is None:
+            node = []
+        if isinstance(node, dict):
+            for key in ("items", "data", "rows", "report"):
+                if key in node:
+                    node = node[key]
+                    break
+            else:
+                node = [node] if "nmId" in node or "nmID" in node else None
+        # Filtering malformed elements would shorten a full page and falsely
+        # satisfy the terminal-page condition. Reject the whole page instead.
+        if (not isinstance(node, list) or len(node) > page_limit
+                or any(not isinstance(item, dict) for item in node)):
+            return envelope.model_copy(update={
+                "ok": False,
+                "error": WbApiError(
+                    statusCode=envelope.statusCode,
+                    code="STOCK_REPORT_INVALID_PAGE",
+                    message="Stock report page has an invalid response shape",
+                    retryable=False,
+                ),
+            }), rows
+        page = node
+        if len(page) == page_limit:
+            # An offset endpoint repeating a full page has not demonstrated
+            # progress. Compare row multisets, retaining duplicate multiplicity
+            # and ignoring only ordering/key ordering. Never double-count it.
+            try:
+                row_hashes = sorted(hashlib.sha256(json.dumps(
+                    item, sort_keys=True, separators=(",", ":"), allow_nan=False,
+                ).encode("utf-8")).digest() for item in page)
+            except (TypeError, ValueError):
+                return envelope.model_copy(update={
+                    "ok": False,
+                    "error": WbApiError(statusCode=envelope.statusCode,
+                        code="STOCK_REPORT_INVALID_PAGE",
+                        message="Stock report page is not valid JSON data", retryable=False),
+                }), rows
+            signature = hashlib.sha256(b"".join(row_hashes)).digest()
+            if signature in accepted_full_pages:
+                return envelope.model_copy(update={
+                    "ok": False,
+                    "error": WbApiError(statusCode=envelope.statusCode,
+                        code="STOCK_REPORT_PAGINATION_STALLED",
+                        message="Stock report repeated an accepted full page", retryable=False),
+                }), rows
+            accepted_full_pages.add(signature)
+        # Preserve raw provider payload for checksums/provenance.
+        rows.extend({"stockType": stock_type, **item} for item in page)
         if len(page) < page_limit:
             break
         offset += page_limit

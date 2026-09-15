@@ -2,22 +2,11 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const source = readFileSync(new URL('./VellaHtmlParityPage.tsx', import.meta.url), 'utf8')
-const rnpIsland = source.slice(source.indexOf('function RnpReportIsland'), source.indexOf('function PnlReportIsland'))
 const adsIsland = source.slice(source.indexOf('function AdsReportIsland'), source.indexOf('function useStockReportState'))
 
 describe('RNP period loading state', () => {
-  it('shows the loader immediately instead of retaining rows from the previous range', () => {
-    expect(rnpIsland).toContain("useState<RnpLiveState>({ status: 'loading' })")
-    expect(rnpIsland).toContain('ReportDataStateIsland')
-    expect(rnpIsland).not.toContain('setState(retainReadyReportWhileRefreshing)')
-  })
-
-  it('loads latest cache only for the currently selected range', () => {
-    expect(source).toContain("params.set('preset', 'custom')")
-    expect(source).toContain("params.set('from', period.fromIso)")
-    expect(source).toContain("params.set('to', period.toIso)")
-    expect(rnpIsland).toContain("loadLatestReportCache<RnpBackendReport>('rnp', 'rnp', authToken, 'sku', { fromIso: periodFromIso, toIso: periodToIso })")
-  })
+  // Period-scoped requests and immediate old-row hiding now run against the
+  // actual mounted component in rnpPeriodBrowser.test.ts, not source snippets.
 
   it('renders backend fetch diagnostics on the RNP page', () => {
     expect(source).toContain('function RnpDebugPanelIsland')
