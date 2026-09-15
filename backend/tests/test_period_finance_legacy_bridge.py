@@ -50,6 +50,13 @@ def test_daily_stitch_skips_only_known_duplicate_days(monkeypatch, known_dates):
         "aggregates": {"123": {"additionalPaymentKopecks": -200}},
         "dailyAggregates": {day: {"123": {"additionalPaymentKopecks": -100}} for day in (first, last)},
         "count": 1,
+        "fetchedAt": None,
+        "coverageState": "ok",
+        "coveredDays": 2,
+        "requestedDays": 2,
+        "missingDates": [],
+        "revenueBasis": "retailAmount",
+        "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
     }
     assert reads == (["finance_synthetic_0", "finance_synthetic_50"] if known_dates else list(payloads))
 

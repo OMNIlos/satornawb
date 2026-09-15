@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.main import create_app
 from app import repricer_bff as repricer_bff_module
@@ -964,7 +965,7 @@ def test_build_sku_row_prefers_sales_funnel_orders_when_available():
         use_demo_data=False,
         period_aggregate={"ordersUnits": 100, "buyoutPct": 10, "sppPct": 26, "sppSource": "supplier.orders.spp"},
         finance_aggregate={"salesUnits": 10, "returnsUnits": 1, "sellerRevenueKopecks": 1_223_000},
-        baskets_aggregate={"orderCount": 1763, "buyoutPct": 84.6},
+        baskets_aggregate={"orderCount": 1763, "buyoutPct": 84.6, "buyoutSource": "sales_funnel.conversions.buyoutPercent"},
         baskets_cache_loaded=True,
     )
 
@@ -1170,7 +1171,7 @@ def test_repricer_bff_frontend_strategy_catalog_and_sku_shape(monkeypatch):
     assert any(item["name"] == "Контроль оборачиваемости" for item in payload["items"])
 
 
-def test_repricer_sku_uses_article_subject_fallback_when_category_missing(monkeypatch):
+def test_repricer_sku_does_not_infer_category_from_article_when_category_missing(monkeypatch):
     monkeypatch.setattr(repricer_bff_module, "fetch_commission_tariffs", lambda *_args, **_kwargs: {})
     rows = repricer_bff_module.list_repricer_skus(
         wb_token="env-token",
@@ -1205,7 +1206,7 @@ def test_repricer_sku_uses_article_subject_fallback_when_category_missing(monkey
     )
 
     row = rows[0]
-    assert row["meta"]["subject"] == "Футболки"
+    assert row["meta"]["subject"] == "Товары"
     assert row["analytics"]["baseWbCommissionPct"] == 0.0
     assert row["analytics"]["commissionDisplayPct"] is None
     assert row["analytics"]["commissionSource"] == "tariffs.commission.missing"
@@ -5561,7 +5562,8 @@ def test_repricer_simulator_updates_wb_input_caches_and_runs_engine(monkeypatch)
         repricer_bff_module.SKU_SETTINGS_OVERRIDES.update(previous_settings)
 
 
-def test_repricer_simulator_allows_input_overrides_in_real_apply_mode_without_applying(monkeypatch):
+@pytest.mark.parametrize("tariff_available", [False, True])
+def test_repricer_simulator_allows_input_overrides_in_real_apply_mode_without_applying(monkeypatch, tariff_available):
     monkeypatch.setattr(
         repricer_execution_module,
         "_utc_now",
@@ -5605,6 +5607,9 @@ def test_repricer_simulator_allows_input_overrides_in_real_apply_mode_without_ap
     monkeypatch.setattr("app.routers.wb_repricer_bff.get_source_cache_fetched_at", lambda _organization_id, key: source_state.get(key, {}).get("fetchedAt"))
     monkeypatch.setattr("app.routers.wb_repricer_bff.compact_heavy_source_cache_rows", lambda _organization_id: None)
     monkeypatch.setattr("app.repricer_bff.fetch_commission_tariffs", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("app.repricer_bff.cached_commission_tariffs", lambda *_args, **_kwargs: {
+        "name:футболки": {"baseCommissionPct": 15, "sourceField": "tariffs.commission.kgvpMarketplace"},
+    } if tariff_available else {})
 
     def save_goods_page_stub(**kwargs):
         goods_state[:] = kwargs["goods"]
@@ -5678,7 +5683,9 @@ def test_repricer_simulator_allows_input_overrides_in_real_apply_mode_without_ap
         assert run_body["runMode"] == "preview_only"
         assert run_body["mode"]["simulatorRunApplyAllowed"] is False
         item = run_body["report"]["items"][0]
-        assert item["status"] == "executed"
+        assert item["status"] == ("executed" if tariff_available else "blocked")
+        if not tariff_available:
+            assert "commission_missing" in {detail["code"] for detail in item["blockerDetails"]}
         assert item["draftId"] is None
         assert item["jobId"] is None
         assert item["applyState"] is None
@@ -5826,7 +5833,21 @@ def test_algorithm_put_persists_minute_intervals(monkeypatch):
         repricer_bff_module.ALGORITHM_SETTINGS_STATE.update(previous_algorithm)
 
 
-def test_algorithm_economics_dual_write_is_scoped(monkeypatch):
+@pytest.mark.parametrize(
+    "previous_tax,payload,tax_changed",
+    [
+        (6, {"taxPct": 7.5}, True),
+        ("7.50", {"taxPct": 9}, True),
+        (7.5, {"taxPct": 0}, True),
+        (7.5, {"taxPct": "7.50"}, False),
+        (7.5, {"taxPct": 7.501}, False),
+        (7.5, {"taxPct": 7.5, "otherExpensePricePct": 6}, False),
+        (7.5, {"otherExpensePricePct": 6}, False),
+    ],
+)
+def test_algorithm_economics_dual_write_is_scoped(
+    monkeypatch, previous_tax, payload, tax_changed,
+):
     calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         "app.routers.wb_repricer_bff._hydrate_org_repricer_state",
@@ -5839,16 +5860,17 @@ def test_algorithm_economics_dual_write_is_scoped(monkeypatch):
     monkeypatch.setattr(
         "app.routers.wb_repricer_bff.EconomicsService.reconcile_legacy_organization",
         lambda _self, settings, **kwargs: calls.append(
-            {"settings": settings, **kwargs}
+            {"organization_id": _self.organization_id, "settings": settings, **kwargs}
         ),
     )
     previous_algorithm = dict(repricer_bff_module.ALGORITHM_SETTINGS_STATE)
     try:
+        repricer_bff_module.ALGORITHM_SETTINGS_STATE["taxPct"] = previous_tax
         api = client()
 
         economics = api.put(
             "/api/v1/wb-repricer/algorithm",
-            json={"taxPct": 7.5},
+            json=payload,
         )
         unrelated = api.put(
             "/api/v1/wb-repricer/algorithm",
@@ -5857,7 +5879,12 @@ def test_algorithm_economics_dual_write_is_scoped(monkeypatch):
 
         assert economics.status_code == unrelated.status_code == 200
         assert len(calls) == 1
-        assert calls[0]["settings"]["taxPct"] == 7.5
+        assert calls[0]["organization_id"] == 10
+        assert calls[0]["settings"]["taxPct"] == payload.get("taxPct", previous_tax)
+        assert calls[0].get("tax_value_state") == ("configured" if tax_changed else None)
+        assert calls[0].get("tax_evidence_status") == ("dated" if tax_changed else None)
+        for field in ("workerAutoApplyPricesEnabled", "nightMedianAutoApplyEnabled"):
+            assert economics.json().get(field) == previous_algorithm.get(field)
     finally:
         repricer_bff_module.ALGORITHM_SETTINGS_STATE.clear()
         repricer_bff_module.ALGORITHM_SETTINGS_STATE.update(previous_algorithm)

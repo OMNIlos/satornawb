@@ -33,15 +33,16 @@ from app.routers.finance_v2 import get_finance_actor
 
 PERIOD = Period(date(2026, 8, 17), date(2026, 8, 23))
 GLOBAL_BLOCKERS = {
-    "WB_PNL_CLASSIFICATION_NOT_CANONICAL",
+    "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
+    "WB_PNL_INTERNAL_EXPENSES_MISSING",
+    "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
 }
 
 
 def raw_advertising_bundle() -> dict[str, object]:
     bundle = json.loads(
         (
-            Path(__file__).parent
-            / "fixtures/wb_advertising_raw_sanitized.json"
+            Path(__file__).parent / "fixtures/wb_advertising_raw_sanitized.json"
         ).read_text()
     )
     date_from = PERIOD.date_from.isoformat()
@@ -294,6 +295,8 @@ def test_abc_pnl_v2_is_cache_only_and_reconciles(
     assert payload["summary"]["loyaltyNetCostKopecks"] == 875
     assert payload["summary"]["profitAfterLoyaltyKopecks"] == 73_337
     assert payload["summary"]["netProfitKopecks"] is None
+    assert payload["summary"]["profitBeforeInternalExpensesKopecks"] is None
+    assert payload["summary"]["internalExpensesKopecks"] is None
     assert payload["items"][0]["settlementProfitKopecks"] == 100_800
     assert payload["items"][0]["economicsValueState"] == "configured"
     assert payload["items"][0]["economicsEvidenceStatus"] == "dated"
@@ -305,20 +308,21 @@ def test_abc_pnl_v2_is_cache_only_and_reconciles(
     assert payload["items"][0]["loyaltyNetCostKopecks"] == 875
     assert payload["items"][0]["profitAfterLoyaltyKopecks"] == 73_337
     assert payload["items"][0]["netProfitKopecks"] is None
+    assert payload["items"][0]["profitBeforeInternalExpensesKopecks"] is None
+    assert payload["items"][0]["internalExpensesKopecks"] is None
     assert payload["items"][0]["profitClass"] is None
     assert payload["items"][0]["abcCode"] is None
     assert payload["meta"]["state"] == "partial"
-    assert (
-        payload["meta"]["formulaVersion"]
-        == "wb-abc-pnl-payable-v2"
-    )
+    assert payload["meta"]["formulaVersion"] == "wb-abc-pnl-payable-v2"
     assert payload["meta"]["costLedgerRevision"] == 1
     assert payload["meta"]["economicsRevision"] == 1
     assert payload["meta"]["advertisingSource"] == "ads_fullstats"
     assert len(payload["meta"]["advertisingSnapshotChecksum"]) == 64
     assert payload["meta"]["advertisingEvidenceStatus"] == "raw"
     assert payload["meta"]["blockerIds"] == [
-        "WB_PNL_CLASSIFICATION_NOT_CANONICAL"
+        "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
+        "WB_PNL_INTERNAL_EXPENSES_MISSING",
+        "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
     ]
     assert set(payload["meta"]["blockerIds"]) == GLOBAL_BLOCKERS
     assert payload["meta"]["snapshot"]["operationCount"] == 1

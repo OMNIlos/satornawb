@@ -8,6 +8,7 @@ import time
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
+from itertools import count
 from math import ceil, floor, isfinite
 from typing import Any, Callable, Literal
 from uuid import uuid4
@@ -16,7 +17,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
 from app.config import get_settings
-from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
+from app.repricer_cache.store import FINANCE_SCHEMA_VERSION, get_source_cache, save_source_cache
 from app.wb_api.client import (
     FakeWbApiClient,
     RateLimitedWbApiClient,
@@ -1551,7 +1552,7 @@ def _discount_pct(before_kopecks: int | None, after_kopecks: int | None) -> floa
 
 def _spp_pct_or_none(raw: Any) -> float | None:
     value = _number_or_none(raw)
-    if value is None or value < 0 or value > 100:
+    if value is None or not isfinite(value) or value < 0 or value > 100:
         return None
     return float(Decimal(str(value)).quantize(Decimal("1.00"), rounding=ROUND_HALF_UP))
 
@@ -1595,7 +1596,7 @@ def _resolve_spp_analytics(
     Prices API only gives seller prices plus WB Club fields, so clubDiscount
     and clubDiscountedPrice are not treated as SPP.
     """
-    wallet_pct = _wb_wallet_pct(good.get("walletPct") or good.get("clubDiscount"))
+    wallet_pct = _spp_pct_or_none(good.get("walletPct"))
     if discounted_price_kopecks <= 0:
         return None, None, None, wallet_pct
 
@@ -1616,7 +1617,10 @@ def _resolve_spp_analytics(
         )
     buyer_price_invalid = (
         buyer_price_no_wallet_kopecks is not None
-        and buyer_price_no_wallet_kopecks > discounted_price_kopecks
+        and (
+            buyer_price_no_wallet_kopecks > discounted_price_kopecks
+            or price_size.get("buyerPriceSellerKopecks") not in (None, discounted_price_kopecks)
+        )
     )
     if buyer_price_invalid:
         buyer_price_no_wallet_kopecks = None
@@ -1634,6 +1638,12 @@ def _resolve_spp_analytics(
     if buyer_price_with_wallet_kopecks is None:
         buyer_price_with_wallet_kopecks = _derive_wallet_buyer_price_kopecks(buyer_price_no_wallet_kopecks, wallet_pct)
     if buyer_price_invalid:
+        buyer_price_with_wallet_kopecks = None
+    if (
+        buyer_price_with_wallet_kopecks is not None
+        and buyer_price_no_wallet_kopecks is not None
+        and buyer_price_with_wallet_kopecks > buyer_price_no_wallet_kopecks
+    ):
         buyer_price_with_wallet_kopecks = None
     spp_pct = _seller_spp_pct(discounted_price_kopecks, buyer_price_no_wallet_kopecks)
     return buyer_price_no_wallet_kopecks, buyer_price_with_wallet_kopecks, spp_pct, wallet_pct
@@ -1718,16 +1728,8 @@ def _finalize_finance_commission(row: dict[str, Any]) -> None:
 
 
 def _tariff_base_commission_pct(row: dict[str, Any]) -> float | None:
-    value = _first_number(
-        row,
-        "kgvpMarketplace",
-        "kgvpSupplier",
-        "kgvpPickup",
-        "kgvpBooking",
-    )
-    if value is None or value <= 0 or value >= 100:
-        return None
-    return float(Decimal(str(value)).quantize(Decimal("1.00"), rounding=ROUND_HALF_UP))
+    # Do not substitute a different fulfilment model when this tariff is absent.
+    return _spp_pct_or_none(row.get("kgvpMarketplace"))
 
 
 def _commission_tariffs_index_from_rows(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -1755,9 +1757,15 @@ def fetch_commission_tariffs(
     wb_token: str | None = None,
     *,
     force: bool = False,
+    organization_id: int | None = None,
 ) -> dict[str, dict[str, Any]]:
-    cache_key = (scenario, _token_cache_key(wb_token))
+    cache_key = (scenario, f"org:{organization_id}" if organization_id is not None else _token_cache_key(wb_token))
     cached = COMMISSION_TARIFFS_CACHE.get(cache_key)
+    if cached is None and organization_id is not None:
+        persisted = get_source_cache(organization_id, "commission_tariffs", slim=True) or {}
+        fetched_at = _parse_iso(str(persisted.get("fetchedAt") or ""))
+        if fetched_at is not None and isinstance(persisted.get("index"), dict):
+            cached = (fetched_at, persisted["index"])
     now = _utc_now()
     if not force and cached is not None and now - cached[0] <= COMMISSION_TARIFFS_TTL:
         return cached[1]
@@ -1772,11 +1780,22 @@ def fetch_commission_tariffs(
     payload = envelope.data if isinstance(envelope.data, dict) else {}
     report = payload.get("report") if isinstance(payload, dict) else None
     index = _commission_tariffs_index_from_rows(report if isinstance(report, list) else [])
+    if not index:
+        return cached[1] if cached is not None else {}
+    for tariff in index.values():
+        tariff["fetchedAt"] = now.isoformat()
     COMMISSION_TARIFFS_CACHE[cache_key] = (now, index)
+    if organization_id is not None:
+        save_source_cache(organization_id, "commission_tariffs", {"index": index})
     return index
 
 
-def cached_commission_tariffs(scenario: str = "complete", wb_token: str | None = None) -> dict[str, dict[str, Any]]:
+def cached_commission_tariffs(
+    scenario: str = "complete", wb_token: str | None = None, *, organization_id: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    if organization_id is not None:
+        persisted = get_source_cache(organization_id, "commission_tariffs", slim=True) or {}
+        return persisted.get("index") if isinstance(persisted.get("index"), dict) else {}
     cached = COMMISSION_TARIFFS_CACHE.get((scenario, _token_cache_key(wb_token)))
     if cached is None:
         return {}
@@ -1793,7 +1812,7 @@ def _resolve_tariff_base_commission_pct(
     article_id: str,
     subject_id: int | None,
     subject: str,
-) -> tuple[float | None, str | None]:
+) -> tuple[float | None, str | None, str | None]:
     row = None
     if tariffs_index:
         if subject_id is not None:
@@ -1801,8 +1820,8 @@ def _resolve_tariff_base_commission_pct(
         if row is None:
             row = tariffs_index.get(f"name:{_normalize_subject_name(subject)}")
     if row is not None:
-        return _number_or_none(row.get("baseCommissionPct")), str(row.get("sourceField") or "tariffs.commission")
-    return None, None
+        return _number_or_none(row.get("baseCommissionPct")), str(row.get("sourceField") or "tariffs.commission"), row.get("fetchedAt")
+    return None, None, None
 
 
 def _basket_norm_garment_key(article_id: str) -> str:
@@ -2638,7 +2657,7 @@ def _fetch_content_cards(
     seen: set[int] = set()
     cards: list[dict[str, Any]] = []
 
-    for page_index in range(20):
+    for page_index in count():
         request_body: dict[str, Any] = {"settings": {"cursor": {"limit": 100}}}
         if cursor:
             request_body["settings"]["cursor"].update(cursor)
@@ -3034,7 +3053,8 @@ def fetch_period_stats_aggregates(
                 if sales_units > 0
                 else (round(orders_buyer_sum / orders_buyer_count) if orders_buyer_count > 0 else None)
             )
-            row["buyoutPct"] = round((sales_units / orders_units) * 100) if orders_units > 0 else None
+            # Sales and orders are independent event cohorts, not a conversion.
+            row["buyoutPct"] = None
             row.pop("ordersBuyerPriceKopecksSum", None)
             row.pop("ordersBuyerPriceCount", None)
             row["unitKeyedOrdersCount"] = len(row.pop("_orderUnitKeys", set()))
@@ -3068,9 +3088,8 @@ def _sales_funnel_metrics(source: dict[str, Any]) -> dict[str, Any]:
     conversions = source.get("conversions") or {}
     order_count = int(_first_number(source, "orderCount", "ordersCount", "orders") or 0)
     buyout_count = int(_first_number(source, "buyoutCount", "buyoutsCount", "buyouts") or 0)
-    buyout_pct = conversions.get("buyoutPercent")
-    if buyout_pct is None and order_count > 0 and buyout_count >= 0:
-        buyout_pct = round((buyout_count / order_count) * 100, 1)
+    buyout_pct = _spp_pct_or_none(conversions.get("buyoutPercent"))
+    cart_count = _first_number(source, "cartCount", "addToCartCount", "addToCart")
     impressions = _first_number(
         source,
         "viewCount",
@@ -3083,7 +3102,7 @@ def _sales_funnel_metrics(source: dict[str, Any]) -> dict[str, Any]:
         "impressionCount",
     )
     return {
-        "cartCount": int(_first_number(source, "cartCount", "addToCartCount", "addToCart") or 0),
+        "cartCount": int(cart_count) if cart_count is not None else None,
         "orderCount": order_count,
         "orderSumKopecks": _first_kopecks(source, "orderSum", "ordersSumRub", "ordersSum"),
         "openCount": int(_first_number(source, "openCount", "openCardCount", "openCard") or 0),
@@ -3091,6 +3110,7 @@ def _sales_funnel_metrics(source: dict[str, Any]) -> dict[str, Any]:
         "buyoutCount": buyout_count,
         "buyoutSumKopecks": _first_kopecks(source, "buyoutSum", "buyoutsSumRub", "buyoutsSum"),
         "buyoutPct": buyout_pct,
+        "buyoutSource": "sales_funnel.conversions.buyoutPercent" if buyout_pct is not None else None,
         "atcrPct": _first_number(conversions, "addToCartPercent"),
         "cartToOrderPct": _first_number(conversions, "cartToOrderPercent"),
         "localizationPct": _first_number(source, "localizationPercent"),
@@ -4629,6 +4649,8 @@ def _build_sku_row(
     active_promotion_labels_by_nm_id: dict[int, str] | None = None,
     subject_id: int | None = None,
     image_url: str | None = None,
+    buyer_price_source: str | None = None,
+    buyer_price_observed_at: str | None = None,
 ) -> dict[str, Any]:
     meta_overrides = _sku_meta_seed(article_id, use_demo_data)
     if meta_overrides["status"] == "warmup":
@@ -4643,6 +4665,8 @@ def _build_sku_row(
     )
     if local_price_override_active:
         price_kopecks = int(meta_overrides["currentPriceKopecks"])
+        if price_kopecks != discounted_price_kopecks:
+            buyer_price_kopecks = buyer_price_with_wallet_kopecks = spp_pct = None
     meta = {
         "articleId": article_id,
         "nmId": nm_id,
@@ -4726,7 +4750,7 @@ def _build_sku_row(
     other_expenses_kopecks = 0
     tax_kopecks = round(finance_seller_revenue_kopecks * float(settings.get("taxPct") or 0) / 100)
     acquiring_pct = float(ALGORITHM_SETTINGS_STATE["acquiringPct"])
-    tariff_base_commission_pct, commission_source = _resolve_tariff_base_commission_pct(
+    tariff_base_commission_pct, commission_source, tariff_fetched_at = _resolve_tariff_base_commission_pct(
         commission_tariffs_index,
         article_id=article_id,
         subject_id=subject_id,
@@ -4754,12 +4778,16 @@ def _build_sku_row(
         commission_reason = "WB tariffs did not return commission for this SKU category"
     effective_commission_pct = round(category_commission_pct + acquiring_pct, 2)
     commission_display_pct = round(effective_commission_pct, 1) if commission_state in {"ok", "fallback"} else None
-    buyout_pct_value = _number_or_none((baskets_aggregate or {}).get("buyoutPct"))
-    if buyout_pct_value is None:
-        buyout_pct_value = _number_or_none(period_aggregate.get("buyoutPct"))
-    if buyout_pct_value is None:
-        buyout_pct_value = 90.0 if not use_demo_data else (72.0 if current_status == "auto" else 61.0)
-    buyout_fraction = _pct_fraction(buyout_pct_value, default=90.0)
+    buyout_source = (baskets_aggregate or {}).get("buyoutSource")
+    buyout_pct_value = (
+        _spp_pct_or_none((baskets_aggregate or {}).get("buyoutPct"))
+        if buyout_source == "sales_funnel.conversions.buyoutPercent"
+        else None
+    )
+    if use_demo_data and buyout_pct_value is None:
+        buyout_pct_value = 72.0 if current_status == "auto" else 61.0
+        buyout_source = "demo"
+    buyout_fraction = buyout_pct_value / 100 if buyout_pct_value is not None else None
     delivery_to_client_kopecks = int(settings.get("deliveryToClientKopecks") or settings.get("logisticsKopecks") or 0)
     delivery_from_client_kopecks = int(settings.get("deliveryFromClientKopecks") or settings.get("returnLogisticsKopecks") or settings.get("logisticsKopecks") or 0)
     live_spp_pct = spp_pct if spp_pct is not None else _seller_spp_pct(price_kopecks, buyer_price_kopecks)
@@ -4770,7 +4798,7 @@ def _build_sku_row(
         else None
     )
     spp_source = "live_buyer_price" if live_spp_pct is not None else None
-    spp_observed_at = None
+    spp_observed_at = buyer_price_observed_at if live_spp_pct is not None else None
     if buyer_price_with_wallet_kopecks is None:
         buyer_price_with_wallet_kopecks = _derive_wallet_buyer_price_kopecks(buyer_price_kopecks, wb_wallet_pct)
     planning_spp_pct = (
@@ -4811,7 +4839,8 @@ def _build_sku_row(
         or planning_buyer_price_kopecks
         or meta["currentPriceKopecks"]
     )
-    if price_kopecks > 0:
+    planned_inputs_available = (tariff_base_commission_pct is not None and buyout_fraction is not None) or use_demo_data
+    if price_kopecks > 0 and planned_inputs_available:
         planned_unit_commission_kopecks = round(price_kopecks * category_commission_pct / 100)
         planned_unit_acquiring_kopecks = round(price_kopecks * acquiring_pct / 100)
         planned_unit_forward_logistics_kopecks = round(delivery_to_client_kopecks * buyout_fraction)
@@ -4960,10 +4989,10 @@ def _build_sku_row(
         if revenue_gross_kopecks > 0
         else price_kopecks * planned_sales_units
     )
-    planned_commission_kopecks = round(planned_seller_revenue_kopecks * category_commission_pct / 100)
+    planned_commission_kopecks = round(planned_seller_revenue_kopecks * category_commission_pct / 100) if tariff_base_commission_pct is not None or use_demo_data else None
     planned_acquiring_kopecks = round(planned_seller_revenue_kopecks * acquiring_pct / 100)
-    planned_forward_logistics_kopecks = round(delivery_to_client_kopecks * buyout_fraction * planned_sales_units)
-    planned_return_logistics_kopecks = round(delivery_from_client_kopecks * buyout_fraction * planned_sales_units)
+    planned_forward_logistics_kopecks = round(delivery_to_client_kopecks * buyout_fraction * planned_sales_units) if buyout_fraction is not None else None
+    planned_return_logistics_kopecks = round(delivery_from_client_kopecks * buyout_fraction * planned_sales_units) if buyout_fraction is not None else None
     planned_other_expenses_kopecks = (
         int(settings.get("otherExpensePerSaleKopecks") or 0) * planned_sales_units
         + round(planned_seller_revenue_kopecks * float(settings.get("otherExpensePricePct") or 0) / 100)
@@ -4979,7 +5008,7 @@ def _build_sku_row(
         - planned_other_expenses_kopecks
         - planned_tax_kopecks
         - cogs_total_kopecks
-    ) if planned_sales_units > 0 or finance_aggregate is not None or use_demo_data else None
+    ) if planned_inputs_available and (planned_sales_units > 0 or finance_aggregate is not None or use_demo_data) else None
     stock_units = (stock_aggregate or {}).get("wbStockUnits")
     has_stock_data = (stock_aggregate is not None and stock_units is not None) or (stocks_cache_loaded and nm_id is not None)
     if has_stock_data:
@@ -5044,8 +5073,15 @@ def _build_sku_row(
             "wbStockUnits": wb_stock_units,
             "stockState": "ok" if has_stock_data else ("fallback" if use_demo_data else "no_data"),
             "buyoutPct": buyout_pct_value,
+            "buyoutSource": buyout_source if buyout_pct_value is not None else None,
+            "buyoutState": "ok" if buyout_pct_value is not None else "no_data",
             "baskets": int((baskets_aggregate or {}).get("cartCount") or 0) if has_baskets_data else (meta["basketsLast7d"] if use_demo_data else None),
-            "basketsState": "ok" if has_baskets_data else ("fallback" if use_demo_data else "no_data"),
+            "basketsState": str((baskets_aggregate or {}).get("coverageState") or "ok") if has_baskets_data else ("fallback" if use_demo_data else "no_data"),
+            "basketsReason": (
+                f"Данные за {(baskets_aggregate or {}).get('coveredDays')} из {(baskets_aggregate or {}).get('requestedDays')} дней. Обновите выбранный период."
+                if (baskets_aggregate or {}).get("coverageState") == "partial"
+                else None
+            ),
             "ordersUnits": orders_units if orders_units > 0 else (max(1, meta["basketsLast7d"] - _stable_int(article_id, 1, 3)) if use_demo_data else 0),
             "cancelledOrdersUnits": int(period_aggregate.get("cancelledOrdersUnits") or 0),
             "ordersSource": orders_source if orders_units > 0 else ("fallback" if use_demo_data else None),
@@ -5069,6 +5105,8 @@ def _build_sku_row(
             "sellerDiscountedPriceKopecks": price_kopecks,
             "buyerPriceNoWalletKopecks": buyer_price_kopecks,
             "buyerPriceWithWalletKopecks": buyer_price_with_wallet_kopecks,
+            "buyerPriceSource": buyer_price_source if buyer_price_kopecks is not None else None,
+            "buyerPriceObservedAt": buyer_price_observed_at if buyer_price_kopecks is not None else None,
             "accountedBuyerPriceKopecks": accounted_buyer_price_kopecks,
             "marginBaseKopecks": margin_sales_base_kopecks,
             "avgPriceWithSppKopecks": funnel_avg_price_kopecks,
@@ -5089,6 +5127,7 @@ def _build_sku_row(
             "marginPct": margin_pct,
             "marginKopecks": unit_margin_kopecks,
             "marginMode": "planned_indeepa",
+            "plannedMarginState": "ok" if planned_inputs_available else "missing_inputs",
             "plannedMarginKopecks": unit_margin_kopecks,
             "plannedPeriodMarginKopecks": planned_period_margin_kopecks,
             "plannedRevenueBaseKopecks": planned_revenue_base_kopecks,
@@ -5108,6 +5147,7 @@ def _build_sku_row(
             "acquiringPct": acquiring_pct,
             "commissionDisplayPct": commission_display_pct,
             "commissionSource": commission_source,
+            "commissionTariffFetchedAt": tariff_fetched_at,
             "commissionState": commission_state,
             "commissionReason": commission_reason,
             "reportCommissionPct": report_commission_pct,
@@ -5229,6 +5269,7 @@ def list_repricer_skus(
     max_items: int | None = None,
     sort_by_demand: bool = True,
     allow_commission_tariff_fetch: bool = True,
+    organization_id: int | None = None,
 ) -> list[dict[str, Any]]:
     use_demo_data = _demo_repricer_data_enabled(wb_token)
     if cached_promotions is not None:
@@ -5269,9 +5310,9 @@ def list_repricer_skus(
             cards_by_nm[nm_id] = card
 
     commission_tariffs_index = (
-        fetch_commission_tariffs(scenario, wb_token=wb_token)
+        fetch_commission_tariffs(scenario, wb_token=wb_token, organization_id=organization_id)
         if allow_commission_tariff_fetch
-        else cached_commission_tariffs(scenario, wb_token=wb_token)
+        else cached_commission_tariffs(scenario, wb_token=wb_token, organization_id=organization_id)
     )
     rows: list[dict[str, Any]] = []
     for good in goods:
@@ -5279,7 +5320,7 @@ def list_repricer_skus(
         if not vendor_code:
             continue
         nm_id = int(good.get("nmID") or 0) or None
-        card = cards_by_vendor.get(vendor_code) or (cards_by_nm.get(nm_id) if nm_id is not None else None) or {}
+        card = (cards_by_nm.get(nm_id) if nm_id is not None else None) or cards_by_vendor.get(vendor_code) or {}
         sizes = good.get("sizes") or []
         price_size = sizes[0] if sizes else {}
         discounted_price_kopecks = wb_goods_price_to_kopecks(price_size.get("discountedPrice")) or wb_goods_price_to_kopecks(
@@ -5294,7 +5335,7 @@ def list_repricer_skus(
             card.get("object")
             or card.get("subjectName")
             or good.get("subjectName")
-            or _fallback_subject_for_article(vendor_code)
+            or (_fallback_subject_for_article(vendor_code) if use_demo_data else None)
             or "Товары"
         )
         subject_id = _int_or_none(
@@ -5343,6 +5384,8 @@ def list_repricer_skus(
                 list_view=list_view,
                 subject_id=subject_id,
                 image_url=image_url,
+                buyer_price_source=price_size.get("buyerPriceSource") or good.get("buyerPriceSource"),
+                buyer_price_observed_at=price_size.get("buyerPriceObservedAt") or good.get("buyerPriceObservedAt"),
             )
         )
     _apply_abc_codes(rows, use_demo_data=use_demo_data)
@@ -6638,7 +6681,7 @@ def _collect_period_statistics_timeseries(
             "revenueKopecks": int(bucket.get("revenueKopecks") or 0),
             "avgPriceWithSppKopecks": round(int(bucket.get("ordersBuyerPriceKopecksSum") or 0) / buyer_count) if buyer_count else None,
             "avgSellerPriceKopecks": round(int(bucket.get("ordersSellerPriceKopecksSum") or 0) / seller_count) if seller_count else None,
-            "buyoutPct": round((sales_units / orders_units) * 100, 1) if orders_units else None,
+            "buyoutPct": None,
         }
 
     return {
@@ -6661,17 +6704,14 @@ def _extract_sales_funnel_selected(products: list[Any], nm_id: int) -> dict[str,
             continue
         statistic = item.get("statistic") or {}
         selected = statistic.get("selected") or {}
-        conversions = selected.get("conversions") or {}
-        order_count = int(_first_number(selected, "orderCount", "ordersCount", "orders") or 0)
-        buyout_count = int(_first_number(selected, "buyoutCount", "buyoutsCount", "buyouts") or 0)
-        buyout_pct = conversions.get("buyoutPercent")
-        if buyout_pct is None and order_count > 0:
-            buyout_pct = round((buyout_count / order_count) * 100, 1)
+        metrics = _sales_funnel_metrics(selected)
         return {
             "openCount": int(_first_number(selected, "openCount", "openCardCount", "openCard") or 0),
-            "cartCount": int(_first_number(selected, "cartCount", "addToCartCount", "addToCart") or 0),
-            "funnelOrderCount": order_count,
-            "funnelBuyoutPct": buyout_pct,
+            "cartCount": metrics["cartCount"],
+            "funnelOrderCount": metrics["orderCount"],
+            "funnelBuyoutPct": metrics["buyoutPct"],
+            "buyoutPct": metrics["buyoutPct"],
+            "buyoutSource": metrics["buyoutSource"],
             "impressions": int(
                 selected.get("viewCount")
                 or selected.get("viewCountTotal")

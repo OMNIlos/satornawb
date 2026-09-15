@@ -6,7 +6,7 @@ import time
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
 
@@ -671,6 +671,24 @@ def get_source_cache_fetched_at(organization_id: int, source_key: str) -> str | 
             select(WbRepricerSourceCacheRow.fetched_at).where(
                 WbRepricerSourceCacheRow.organization_id == organization_id,
                 WbRepricerSourceCacheRow.source_key == source_key,
+            )
+        )
+        return row.isoformat() if row is not None else None
+
+    return _run_db(_db)
+
+
+def get_repricer_sources_revision(organization_id: int) -> str | None:
+    """Small metadata read; never deserialize period payloads to check freshness."""
+    def _db(session: Session) -> str | None:
+        row = session.scalar(
+            select(func.max(WbRepricerSourceCacheRow.fetched_at)).where(
+                WbRepricerSourceCacheRow.organization_id == organization_id,
+                or_(
+                    WbRepricerSourceCacheRow.source_key.in_(("content_cards", "commission_tariffs", "stocks", "promotions", "promotion_thresholds")),
+                    *(WbRepricerSourceCacheRow.source_key.like(f"{prefix}_%") for prefix in ("finance", "baskets", "period_stats", "ads")),
+                ),
+                ~WbRepricerSourceCacheRow.source_key.like("baskets_detail_%"),
             )
         )
         return row.isoformat() if row is not None else None

@@ -27,6 +27,25 @@ def isolated_cache_boundaries(monkeypatch):
     monkeypatch.setattr("app.repricer_cache.store._redis_delete", lambda *a, **kw: None)
 
 
+def test_source_revision_is_scoped_and_ignores_snapshot_and_sync_status(database, monkeypatch):
+    _, engine = database
+    LkOrganizationRow.__table__.create(engine)
+    WbRepricerSourceCacheRow.__table__.create(engine)
+    observed = datetime(2026, 9, 15, tzinfo=timezone.utc)
+    with Session(engine) as session:
+        session.add_all([LkOrganizationRow(organization_id=org, slug=f"synthetic-{org}", name="Synthetic") for org in (1, 2)])
+        session.commit()
+        session.add_all([
+            WbRepricerSourceCacheRow(organization_id=org, source_key=key, payload={}, fetched_at=observed + timedelta(minutes=offset))
+            for org, key, offset in ((1, "baskets_30", 0), (1, "commission_tariffs", 1), (2, "finance_30", 5),
+                                     (1, "sku_snapshot_30", 10), (1, "wb_sync_status", 10), (1, "baskets_detail_status", 10))
+        ])
+        session.commit()
+        monkeypatch.setattr(store, "_run_db", lambda fn: fn(session))
+        assert datetime.fromisoformat(store.get_repricer_sources_revision(1)) == observed + timedelta(minutes=1)
+        assert datetime.fromisoformat(store.get_repricer_sources_revision(2)) == observed + timedelta(minutes=5)
+
+
 @pytest.mark.parametrize("prefix,slim", [("baskets_", False), ("finance_", True)])
 @pytest.mark.parametrize("newest_metadata", [
     {},

@@ -116,6 +116,10 @@ def _view(
                 profitClass=row.profit_class,
                 abcCode=row.abc_code,
                 netProfitKopecks=row.net_profit_kopecks,
+                profitBeforeInternalExpensesKopecks=(
+                    row.profit_before_internal_expenses_kopecks
+                ),
+                internalExpensesKopecks=row.internal_expenses_kopecks,
                 blockerIds=list(row.blocker_ids),
             )
             for row in page.items
@@ -162,6 +166,10 @@ def _view(
             loyaltyNetCostKopecks=page.summary.loyalty_net_cost_kopecks,
             profitAfterLoyaltyKopecks=page.summary.profit_after_loyalty_kopecks,
             netProfitKopecks=page.summary.net_profit_kopecks,
+            profitBeforeInternalExpensesKopecks=(
+                page.summary.profit_before_internal_expenses_kopecks
+            ),
+            internalExpensesKopecks=page.summary.internal_expenses_kopecks,
         ),
         meta=AbcPnlMetaView(
             state=page.state,

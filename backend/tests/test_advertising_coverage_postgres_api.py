@@ -89,7 +89,9 @@ def test_postgres_http_daily_ads_coverage_and_corrected_versions(database, monke
             assert complete["meta"]["advertisingSource"] == "ads_fullstats"
             assert complete["meta"]["advertisingEvidenceStatus"] == "raw"
             assert complete["meta"]["blockerIds"] == [
-                "WB_PNL_CLASSIFICATION_NOT_CANONICAL"
+                "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
+                "WB_PNL_INTERNAL_EXPENSES_MISSING",
+                "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
             ]
             checksum = complete["meta"]["advertisingSnapshotChecksum"]
             assert len(checksum) == 64

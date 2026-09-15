@@ -27,6 +27,7 @@ from app.repricer_bff import (
     fetch_baskets_daily_detail,
     fetch_ads_spend_aggregates,
     fetch_catalog_goods_page,
+    fetch_commission_tariffs,
     fetch_finance_report_aggregates,
     fetch_period_stats_aggregates,
     fetch_stock_aggregates,
@@ -309,6 +310,9 @@ def _apply_external_spp_prices_to_goods(goods: list[dict[str, Any]], prices_by_n
         target_size["buyerPriceKopecks"] = buyer_price_kopecks
         target_size["buyerPrice"] = buyer_price_rubles
         target_size["clientPrice"] = buyer_price_rubles
+        target_size["buyerPriceSource"] = "41-spp"
+        target_size["buyerPriceObservedAt"] = _utc_now().isoformat()
+        target_size["buyerPriceSellerKopecks"] = seller_price_kopecks
         # Keep other source sizes intact; the legacy nm-level enrichment does
         # not establish buyer-price provenance for each individual offer.
         good["sizes"] = [target_size, *target_sizes[1:]]
@@ -982,6 +986,8 @@ def refresh_wb_data_sources(
     resolved_sources = _normalize_sources(sources)
     resolved_token_fingerprint = token_fingerprint or wb_token_fingerprint(wb_token)
     range_start, range_end, resolved_period_days = _normalize_period_range(period_days, date_from=date_from, date_to=date_to)
+    # Rolling yesterday-based ranges need the individual days from short syncs.
+    baskets_include_daily_detail = baskets_include_daily_detail or resolved_period_days <= 2
     period_suffix = _period_cache_suffix(period_days, date_from=date_from, date_to=date_to)
     status = initial_status if initial_status is not None else (
         begin_wb_sync(
@@ -1219,7 +1225,7 @@ def refresh_wb_data_sources(
                 from app import repricer_bff as repricer_bff_module
                 from app.routers.wb_repricer_bff import _build_repricer_sku_snapshot
 
-                repricer_bff_module.fetch_commission_tariffs(scenario, wb_token=wb_token, force=True)
+                repricer_bff_module.fetch_commission_tariffs(scenario, wb_token=wb_token, organization_id=organization_id)
                 snapshot = _build_repricer_sku_snapshot(
                     organization_id,
                     scenario,
@@ -1255,6 +1261,7 @@ def refresh_wb_data_sources(
         if "goods" in resolved_sources:
             step = start_step("goods")
             try:
+                fetch_commission_tariffs(scenario, wb_token=wb_token, organization_id=organization_id)
                 previous_goods = list_cached_goods(organization_id)
                 fetched_goods: list[dict[str, Any]] = []
                 total_saved = 0
@@ -1542,6 +1549,11 @@ def refresh_wb_data_sources(
                                 previous_chunks.append(chunk)
                                 existing_chunk_keys.add(chunk_key)
 
+                    # Refresh short rolling windows; retain checkpoints only when resuming a partial fetch.
+                    if resolved_period_days <= 2 and previous_baskets_cache.get("dailyDetailStatus") != "partial":
+                        previous_daily_aggregates = {}
+                        previous_chunks = []
+
                     def report_baskets_progress(progress: dict[str, Any]) -> None:
                         current = int(progress.get("processedNmIds") or 0)
                         total = int(progress.get("totalNmIds") or len(nm_ids))
@@ -1726,7 +1738,7 @@ def refresh_wb_data_sources(
                 from app import repricer_bff as repricer_bff_module
                 from app.routers.wb_repricer_bff import _build_repricer_sku_snapshot
 
-                repricer_bff_module.fetch_commission_tariffs(scenario, wb_token=wb_token, force=True)
+                repricer_bff_module.fetch_commission_tariffs(scenario, wb_token=wb_token, organization_id=organization_id)
                 snapshot = _build_repricer_sku_snapshot(
                     organization_id,
                     scenario,

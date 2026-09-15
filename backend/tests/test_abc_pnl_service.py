@@ -29,6 +29,9 @@ PERIOD = Period(date(2026, 8, 20), date(2026, 8, 21))
 GLOBAL_BLOCKERS = {
     "WB_PNL_ADS_NOT_CANONICAL",
     "WB_PNL_LOYALTY_NOT_CANONICAL",
+    "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
+    "WB_PNL_INTERNAL_EXPENSES_MISSING",
+    "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
 }
 
 
@@ -156,8 +159,7 @@ def raw_advertising_bundle(
 ) -> dict[str, object]:
     bundle = json.loads(
         (
-            Path(__file__).parent
-            / "fixtures/wb_advertising_raw_sanitized.json"
+            Path(__file__).parent / "fixtures/wb_advertising_raw_sanitized.json"
         ).read_text()
     )
     date_from = PERIOD.date_from.isoformat()
@@ -369,7 +371,11 @@ def test_v3_loyalty_evidence_builds_profit_after_loyalty(session: Session) -> No
     assert page.summary.profit_after_loyalty_kopecks == 4_500
     assert page.summary.net_profit_kopecks is None
     assert "WB_PNL_LOYALTY_NOT_CANONICAL" not in page.blocker_ids
-    assert page.blocker_ids == ("WB_PNL_CLASSIFICATION_NOT_CANONICAL",)
+    assert page.blocker_ids == (
+        "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
+        "WB_PNL_INTERNAL_EXPENSES_MISSING",
+        "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
+    )
     assert page.advertising_snapshot.source_kind == "ads_fullstats"
     assert page.advertising_snapshot.evidence_status == "raw"
     assert row.net_profit_kopecks is None
@@ -589,6 +595,8 @@ def test_exact_advertising_only_sku_joins_report_union(session: Session) -> None
     assert advertising_row.revenue_kopecks == 0
     assert advertising_row.advertising_spend_kopecks == 12_300
     assert advertising_row.profit_before_loyalty_kopecks == -12_300
+    assert advertising_row.profit_before_internal_expenses_kopecks is None
+    assert "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750" in advertising_row.blocker_ids
     assert page.summary.profit_before_loyalty_kopecks == 5_200
 
 
@@ -651,7 +659,12 @@ def test_unattributed_raw_spend_keeps_summary_but_not_row_profit(
     assert row.advertising_spend_kopecks is None
     assert row.profit_before_loyalty_kopecks is None
     assert row.profit_after_loyalty_kopecks is None
-    assert page.blocker_ids == ("WB_PNL_ADVERTISING_UNATTRIBUTED",)
+    assert page.blocker_ids == (
+        "WB_PNL_ADVERTISING_UNATTRIBUTED",
+        "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
+        "WB_PNL_INTERNAL_EXPENSES_MISSING",
+        "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
+    )
 
 
 def test_advertising_source_failure_propagates_without_guessing(
@@ -690,7 +703,12 @@ def test_advertising_source_failure_propagates_without_guessing(
     assert page.summary.unattributed_advertising_spend_kopecks is None
     assert row.advertising_spend_kopecks is None
     assert row.profit_before_loyalty_kopecks is None
-    assert page.blocker_ids == ("WB_ADS_SOURCE_METRIC_INCOMPLETE",)
+    assert page.blocker_ids == (
+        "WB_ADS_SOURCE_METRIC_INCOMPLETE",
+        "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
+        "WB_PNL_INTERNAL_EXPENSES_MISSING",
+        "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
+    )
     assert "WB_PNL_ADVERTISING_UNATTRIBUTED" not in page.blocker_ids
 
 
@@ -957,6 +975,42 @@ def test_mid_period_economics_change_uses_daily_basis(session: Session) -> None:
     assert row.profit_before_ads_and_loyalty_kopecks == 16_800
 
 
+def test_overhead_change_does_not_round_an_unchanged_tax_rate_twice(
+    session: Session,
+) -> None:
+    from app.modules.wb_reports.abc_pnl import WbAbcPnlService
+
+    economics = EconomicsService(session, 1)
+    for day, other in [(19, 500), (20, 600)]:
+        economics.set_organization_policy(
+            tax_basis_points=750,
+            other_expense_price_basis_points=other,
+            other_expense_per_sale_kopecks=0,
+            value_state="configured",
+            effective_from=datetime(2026, 8, day, 21, tzinfo=timezone.utc),
+            source="fixture",
+            source_reference=f"overhead-{day}",
+            evidence_status="dated",
+        )
+    FinanceService(session, 1, now=lambda: NOW).ingest_snapshot(
+        31,
+        PERIOD,
+        [
+            row
+            | dict(
+                docTypeName="Продажа", quantity=1, retailAmount="0.20", forPay="0.20"
+            )
+            for row in settlement_rows()
+        ],
+        observed_at=NOW,
+    )
+    page = WbAbcPnlService(session, 1, now=lambda: NOW).get_page(
+        31, PERIOD, limit=100, offset=0
+    )
+    assert page.items[0].revenue_kopecks == 40
+    assert page.items[0].tax_kopecks == page.summary.tax_kopecks == 3
+
+
 def test_assumed_or_missing_economics_remains_explicit(session: Session) -> None:
     from app.modules.wb_reports.abc_pnl import WbAbcPnlService
 
@@ -1037,3 +1091,123 @@ def test_basis_point_rounding_is_signed_half_even() -> None:
     assert _round_basis_points(3, 5_000) == 2
     assert _round_basis_points(-1, 5_000) == 0
     assert _round_basis_points(-3, 5_000) == -2
+
+
+@pytest.mark.parametrize(
+    "tax_basis_points,value_state,evidence_status,residual,deduction,confirmed_tax,expected",
+    [
+        (750, "configured", "dated", 0, 0, False, 24_800_000),
+        (750, "assumed", "undated", 0, 0, True, 24_800_000),
+        (750, "configured", "dated", 0, 333, False, None),
+        (750, "configured", "dated", 1_000, 0, False, 24_700_000),
+        (750, "configured", "dated", None, 0, False, None),
+        (600, "configured", "dated", 0, 0, False, None),
+        (750, "assumed", "dated", 0, 0, False, None),
+        (750, "configured", "undated", 0, 0, False, None),
+        (None, "missing", "dated", 0, 0, False, None),
+    ],
+)
+def test_approved_profit_uses_confirmed_policy_and_account_advertising_once(
+    session: Session,
+    tax_basis_points: int | None,
+    value_state: str,
+    evidence_status: str,
+    residual: int | None,
+    deduction: int,
+    confirmed_tax: bool,
+    expected: int | None,
+) -> None:
+    from app.modules.wb_reports.abc_pnl import WbAbcPnlService
+
+    CostsService(session, 1).set_cost(
+        catalog_sku_id=11,
+        amount_kopecks=40_000_000,
+        value_state="configured",
+        effective_from=datetime(2026, 8, 19, 21, tzinfo=timezone.utc),
+        source="fixture",
+        source_reference="approved-cost",
+        evidence_status="dated",
+    )
+    if tax_basis_points is not None:
+        EconomicsService(session, 1).set_organization_policy(
+            tax_basis_points=tax_basis_points,
+            other_expense_price_basis_points=500,
+            other_expense_per_sale_kopecks=0,
+            value_state=value_state,
+            effective_from=datetime(2026, 8, 19, 21, tzinfo=timezone.utc),
+            source="fixture",
+            source_reference="approved-tax",
+            evidence_status=evidence_status,
+            tax_value_state="configured" if confirmed_tax else None,
+            tax_evidence_status="dated" if confirmed_tax else None,
+        )
+    common = dict(
+        reportId=1001,
+        reportType=1,
+        nmId=101,
+        vendorCode="FBBT_101",
+        cashbackAmount="0",
+        cashbackDiscount="0",
+        cashbackCommissionChange="0",
+        saleDt="2026-08-20",
+        rrDate="2026-08-21",
+    )
+    FinanceService(session, 1, now=lambda: NOW).ingest_snapshot(
+        31,
+        PERIOD,
+        [
+            dict(
+                common,
+                rrdId=1,
+                docTypeName="Продажа",
+                quantity=1,
+                retailAmount="1000000.00",
+                forPay="850000.00",
+                deliveryService="70000.00",
+                paidStorage="10000.00",
+                paidAcceptance="5000.00",
+                penalty="2000.00",
+                deduction=str(deduction),
+            ),
+            dict(
+                common,
+                rrdId=2,
+                forPay="0",
+                bonusTypeName="WB Продвижение",
+                deduction="40000.00",
+            ),
+        ],
+        observed_at=NOW,
+    )
+    if residual is not None:
+        AdvertisingService(session, 1, now=lambda: NOW).ingest_raw_payload(
+            31,
+            PERIOD,
+            raw_advertising_bundle(spend_rubles=40_000, residual_rubles=residual),
+            source_reference="approved-advertising",
+            observed_at=NOW,
+        )
+
+    service = WbAbcPnlService(session, 1, now=lambda: NOW)
+    page = service.get_page(31, PERIOD, limit=1, offset=0)
+    row = page.items[0]
+    assert page.summary.profit_before_internal_expenses_kopecks == expected
+    assert row.profit_before_internal_expenses_kopecks == (
+        expected if not residual else None
+    )
+    assert row.deduction_kopecks == deduction * 100
+    assert ("WB_MANAGEMENT_OPERATIONS_UNRECONCILED" in row.blocker_ids) == (
+        deduction != 0
+    )
+    assert row.internal_expenses_kopecks is None
+    assert page.summary.internal_expenses_kopecks is None
+    assert row.net_profit_kopecks is None
+    assert page.summary.net_profit_kopecks is None
+    assert "WB_PNL_INTERNAL_EXPENSES_MISSING" in page.blocker_ids
+    tax_confirmed = confirmed_tax or (
+        tax_basis_points,
+        value_state,
+        evidence_status,
+    ) == (750, "configured", "dated")
+    assert ("WB_PNL_TAX_POLICY_NOT_CONFIRMED_750" in row.blocker_ids) != tax_confirmed
+    assert service.get_page(31, PERIOD, limit=1, offset=1).summary == page.summary

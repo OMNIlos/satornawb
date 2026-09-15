@@ -53,7 +53,9 @@ class AbcPnlRowView(BaseModel):
     salesClass: Literal["A", "B", "C"] | None
     profitClass: None
     abcCode: None
-    netProfitKopecks: None
+    netProfitKopecks: int | None
+    profitBeforeInternalExpensesKopecks: int | None
+    internalExpensesKopecks: int | None
     blockerIds: list[str]
 
 
@@ -89,7 +91,9 @@ class AbcPnlSummaryView(BaseModel):
     cashbackCommissionChangeKopecks: int | None
     loyaltyNetCostKopecks: int | None
     profitAfterLoyaltyKopecks: int | None
-    netProfitKopecks: None
+    netProfitKopecks: int | None
+    profitBeforeInternalExpensesKopecks: int | None
+    internalExpensesKopecks: int | None
 
 
 class AbcPnlMetaView(BaseModel):

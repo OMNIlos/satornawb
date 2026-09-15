@@ -1,4 +1,5 @@
 from copy import deepcopy
+from datetime import datetime, timezone
 
 import pytest
 
@@ -26,13 +27,17 @@ def test_catalog_price_enrichment_keeps_other_sizes_and_does_not_mutate_source()
     assert target["clubDiscount"] == 4
 
 
-def test_external_buyer_enrichment_does_not_delete_or_spread_to_other_sizes():
+def test_external_buyer_enrichment_does_not_delete_or_spread_to_other_sizes(monkeypatch):
+    observed = datetime(2026, 9, 15, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.repricer_sync._utc_now", lambda: observed)
     target=good()
     original=deepcopy(target)
     assert _apply_external_spp_prices_to_goods([target],{101:40000}) == 1
     assert target["sizes"][0] == {
         **original["sizes"][0],"buyerPriceNoWalletKopecks":40000,"buyerPriceNoWallet":400,
         "buyerPriceKopecks":40000,"buyerPrice":400,"clientPrice":400,
+        "buyerPriceSource":"41-spp","buyerPriceObservedAt":observed.isoformat(),
+        "buyerPriceSellerKopecks":50000,
     }
     assert target["sizes"][1:] == original["sizes"][1:]
 

@@ -283,15 +283,18 @@ def _economics_from_row(row: dict[str, Any]) -> DraftEconomicsInput:
     current_price = int(row.get("meta", {}).get("currentPriceKopecks") or analytics.get("basePriceKopecks") or 0)
     storage = _setting_int(settings, "storageCostPerSaleKopecks")
     tax_kopecks = round(current_price * _setting_float(settings, "taxPct") / 100) if current_price > 0 else 0
-    buyout_pct = float(analytics.get("buyoutPct") or 80)
-    buyout_pct = max(0.0, min(100.0, buyout_pct))
+    commission_pct = analytics.get("wbCommissionPct")
+    if analytics.get("commissionState") in {"fallback", "no_data"}:
+        commission_pct = None
+    elif commission_pct is None:
+        commission_pct = settings.get("wbCommissionPct")
     return DraftEconomicsInput(
         cogsKopecks=_setting_int(settings, "cogsKopecks"),
-        commissionPct=float(analytics.get("wbCommissionPct") if analytics.get("wbCommissionPct") is not None else settings.get("wbCommissionPct") or 0),
+        commissionPct=commission_pct,
         logisticsKopecks=_setting_int(settings, "logisticsKopecks") + _setting_int(settings, "otherExpensePerSaleKopecks"),
         storageKopecks=storage,
         taxKopecks=tax_kopecks,
-        buyoutPct=buyout_pct,
+        buyoutPct=analytics.get("buyoutPct"),
         stockUnits=int(stock_units) if stock_units is not None else 1,
         promoActive=analytics.get("promotionStatus") == "yes",
     )
@@ -2011,5 +2014,4 @@ def execute_all_assigned_skus(
         trigger=trigger,
         persist_run=persist_run,
     )
-
 
