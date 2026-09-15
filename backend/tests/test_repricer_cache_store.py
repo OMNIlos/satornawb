@@ -108,7 +108,8 @@ def test_covering_cache_keeps_payload_selection_without_whole_jsonb_cast(
             WbRepricerSourceCacheRow(organization_id=1, source_key=f"{prefix}newest", payload=payload,
                                     fetched_at=now, **newest_metadata),
         ]
-        invalid = [None, {}, {**payload, "dateFrom": None}, {**payload, "dateFrom": last},
+        invalid = [None, {}, [], [payload], 0, False, "not-an-object",
+                   {**payload, "dateFrom": None}, {**payload, "dateFrom": last},
                    {**payload, "dateTo": first},
                    *[{**payload, "dailyAggregates": value} for value in (None, {}, [], [{}], 0, False, "daily")]]
         rows.extend(WbRepricerSourceCacheRow(organization_id=1, source_key=f"{prefix}invalid_{index}",

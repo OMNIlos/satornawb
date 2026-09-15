@@ -69,6 +69,12 @@ EXTERNAL_SPP_BATCH_INTERVAL_SECONDS = 10.0
 logger = logging.getLogger(__name__)
 
 
+class ExternalSppRateLimited(RuntimeError):
+    def __init__(self, prices: dict[int, int]) -> None:
+        self.prices = prices
+        super().__init__("Источник цен ограничил запросы (HTTP 429)")
+
+
 def _good_article_id(good: dict[str, Any]) -> str:
     return str(good.get("vendorCode") or good.get("articleId") or "").strip()
 
@@ -265,6 +271,8 @@ def fetch_external_spp_prices(
                 params={"articles" if public_api else "nm": ";".join(str(item) for item in batch)},
                 headers=headers,
             )
+            if public_api and getattr(response, "status_code", None) == 429:
+                raise ExternalSppRateLimited(prices)
             response.raise_for_status()
             payload = response.json()
             rows = payload if public_api else payload.get("prices") if isinstance(payload, dict) else None
@@ -1274,6 +1282,7 @@ def refresh_wb_data_sources(
                 fetched_goods: list[dict[str, Any]] = []
                 total_saved = 0
                 external_spp_matched_count = 0
+                external_spp_rate_limit: ExternalSppRateLimited | None = None
                 wb_sync_price_change_count = 0
                 offset = 0
                 limit = 1000
@@ -1310,8 +1319,14 @@ def refresh_wb_data_sources(
                                 request="Цены WB · до 100 артикулов в запросе",
                             )
 
-                        external_spp_prices = fetch_external_spp_prices(page_nm_ids, progress_callback=report_spp_progress)
+                        external_spp_prices = (
+                            fetch_external_spp_prices(page_nm_ids, progress_callback=report_spp_progress)
+                            if external_spp_rate_limit is None else {}
+                        )
                         external_spp_matched_count += _apply_external_spp_prices_to_goods(goods, external_spp_prices)
+                    except ExternalSppRateLimited as exc:
+                        external_spp_rate_limit = exc
+                        external_spp_matched_count += _apply_external_spp_prices_to_goods(goods, exc.prices)
                     except Exception as exc:
                         logger.warning("External SPP price fetch failed org=%s offset=%s: %s", organization_id, offset, exc)
                     fetched_goods.extend([item for item in goods if isinstance(item, dict)])
@@ -1334,17 +1349,15 @@ def refresh_wb_data_sources(
                         break
                     offset += limit
                 new_warmup_count = _mark_new_goods_as_warmup(previous_goods, fetched_goods)
-                finish_step(
-                    step,
-                    _step_ok(
-                        "goods",
-                        count=total_saved,
-                        cache=cache,
-                        newWarmupCount=new_warmup_count,
-                        externalSppMatchedCount=external_spp_matched_count,
-                        wbSyncPriceChangeCount=wb_sync_price_change_count,
-                    ),
+                goods_result = _step_ok(
+                    "goods", count=total_saved, cache=cache, newWarmupCount=new_warmup_count,
+                    externalSppMatchedCount=external_spp_matched_count,
+                    wbSyncPriceChangeCount=wb_sync_price_change_count,
                 )
+                if external_spp_rate_limit is not None:
+                    goods_result.update(status="partial", error=str(external_spp_rate_limit),
+                                        externalSppStatus="rate_limited", externalSppHttpStatus=429)
+                finish_step(step, goods_result)
             except Exception as exc:
                 finish_step(step, _step_error("goods", exc))
 

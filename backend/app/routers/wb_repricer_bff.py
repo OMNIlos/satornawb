@@ -82,6 +82,7 @@ from app.repricer_sprint_b import (
     create_price_draft,
 )
 from app.repricer_sync import (
+    ExternalSppRateLimited,
     WbSyncAlreadyRunning,
     _apply_external_spp_prices_to_goods,
     _normalize_period_range,
@@ -4932,7 +4933,7 @@ def _retry_failed_wb_sync_step(
         status = get_source_cache(organization_id, "wb_sync_status", slim=False) or {}
         steps = [item for item in (status.get("steps") if isinstance(status.get("steps"), list) else []) if isinstance(item, dict)]
         has_running = any(item.get("status") == "running" for item in steps)
-        has_error = any(item.get("status") == "error" for item in steps)
+        has_error = any(item.get("status") in {"error", "partial"} for item in steps)
         status.update(
             {
                 "running": has_running,
@@ -5143,6 +5144,7 @@ def refresh_sku_list_page(
     previous_goods = list_cached_goods(actor.organization_id)
     total_saved = 0
     external_spp_matched_count = 0
+    external_spp_rate_limit: ExternalSppRateLimited | None = None
     wb_sync_price_change_count = 0
     next_offset = offset
     cache: dict[str, Any] = {}
@@ -5150,8 +5152,14 @@ def refresh_sku_list_page(
         page = fetch_catalog_goods_page(scenario, wb_token=wb_token, limit=limit, offset=next_offset)
         goods = page.get("goods") or []
         try:
-            external_spp_prices = fetch_external_spp_prices(_unique_nm_ids_from_goods(goods))
+            external_spp_prices = (
+                fetch_external_spp_prices(_unique_nm_ids_from_goods(goods))
+                if external_spp_rate_limit is None else {}
+            )
             external_spp_matched_count += _apply_external_spp_prices_to_goods(goods, external_spp_prices)
+        except ExternalSppRateLimited as exc:
+            external_spp_rate_limit = exc
+            external_spp_matched_count += _apply_external_spp_prices_to_goods(goods, exc.prices)
         except Exception as exc:
             logger.warning("External SPP price fetch failed during manual goods refresh org=%s offset=%s: %s", actor.organization_id, next_offset, exc)
         wb_sync_price_change_count += record_wb_sync_price_change_events(
@@ -5183,6 +5191,8 @@ def refresh_sku_list_page(
         "cache": cache,
         "externalSppMatchedCount": external_spp_matched_count,
         "wbSyncPriceChangeCount": wb_sync_price_change_count,
+        **({"partial": True, "externalSppStatus": "rate_limited", "externalSppHttpStatus": 429}
+           if external_spp_rate_limit is not None else {}),
     }
 
 

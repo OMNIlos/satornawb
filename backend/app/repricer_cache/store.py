@@ -6,7 +6,7 @@ import time
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import Text, column, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, aliased
 
@@ -637,13 +637,24 @@ def get_covering_source_cache(
             .offset(0)
             .subquery(),
         )
+        # Legacy metadata can disagree with the payload. Read its two bounds in
+        # one JSON pass, retaining payload authority and newest-first selection.
+        period = func.json_to_record(text(
+            "CASE WHEN json_typeof(payload) = 'object' THEN payload ELSE '{}'::json END"
+        )).table_valued(column("dateFrom", Text), column("dateTo", Text)).render_derived(
+            with_types=True,
+        ).lateral("period")
         row = session.scalar(
             select(candidates)
+            .join(period, text("true"))
             .where(
-                text("json_typeof(payload->'dailyAggregates') = 'object'"),
-                text("(payload->'dailyAggregates')::jsonb <> '{}'::jsonb"),
-                text("(payload->>'dateFrom') <= :date_from"),
-                text("(payload->>'dateTo') >= :date_to"),
+                # CASE prevents PostgreSQL pushing the large daily JSON check
+                # ahead of the range projection for non-covering rows.
+                text("""CASE WHEN period."dateFrom" <= :date_from
+                              AND period."dateTo" >= :date_to
+                         THEN json_typeof(payload->'dailyAggregates') = 'object'
+                              AND (payload->'dailyAggregates')::jsonb <> '{}'::jsonb
+                         ELSE false END"""),
             )
             .params(date_from=date_from.isoformat(), date_to=date_to.isoformat())
             .order_by(candidates.fetched_at.desc())
