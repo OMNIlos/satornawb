@@ -18612,7 +18612,7 @@ function AvitoOverviewReportShellIsland() {
         </table>
       </div>
       {selectedItem ? (
-        <div
+        <dialog ref={openReactModal} data-vella-react-modal="" onCancel={(event) => { event.preventDefault(); setSelectedItemId('') }}
           className="modal-overlay open avito-overview-item-modal"
           data-vella-island="avito-overview-item-modal"
           data-vella-island-status="explicit-jsx"
@@ -18647,7 +18647,7 @@ function AvitoOverviewReportShellIsland() {
               <button className="btn btn-primary" type="button" onClick={() => setSelectedItemId('')}>Закрыть</button>
             </div>
           </div>
-        </div>
+        </dialog>
       ) : null}
     </div>
   )
@@ -20613,8 +20613,8 @@ export function AvitoRepricerSettingsPanel({
         </section>
       )}
       {scheduleOpen ? (
-        <div className="modal-overlay open" role="presentation" onMouseDown={() => !settingsSaving && setScheduleOpen(false)}>
-          <div className="modal avito-schedule-modal" role="dialog" aria-modal="true" aria-label="Настройка времени запуска репрайсера Авито" onMouseDown={(event) => event.stopPropagation()}>
+        <dialog ref={openReactModal} data-vella-react-modal="" aria-label="Настройка времени запуска репрайсера Авито" onCancel={(event) => { event.preventDefault(); !settingsSaving && setScheduleOpen(false) }} className="modal-overlay open" onMouseDown={() => !settingsSaving && setScheduleOpen(false)}>
+          <div className="modal avito-schedule-modal" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-head">
               <div>
                 <div className="modal-title">Время запуска репрайсера</div>
@@ -20660,7 +20660,7 @@ export function AvitoRepricerSettingsPanel({
               </button>
             </div>
           </div>
-        </div>
+        </dialog>
       ) : null}
     </>
   )
@@ -20675,8 +20675,8 @@ function AvitoRepricerPriceHistoryModal({
 }) {
   const row = state.row
   return (
-    <div className="modal-overlay open avito-price-history-overlay" role="presentation" onMouseDown={onClose}>
-      <div className="modal xl avito-price-history-modal" role="dialog" aria-modal="true" aria-label="История цены Авито" onMouseDown={(event) => event.stopPropagation()}>
+    <dialog ref={openReactModal} data-vella-react-modal="" aria-label="История цены Авито" onCancel={(event) => { event.preventDefault(); onClose() }} className="modal-overlay open avito-price-history-overlay" onMouseDown={onClose}>
+      <div className="modal xl avito-price-history-modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="avito-history-title">
             {row.imageUrl ? <img className="avito-row-photo" src={row.imageUrl} alt="" loading="lazy" /> : <div className="avito-row-photo avito-row-photo-empty">AV</div>}
@@ -20737,7 +20737,7 @@ function AvitoRepricerPriceHistoryModal({
           <button className="btn btn-default" type="button" onClick={onClose}>Закрыть</button>
         </div>
       </div>
-    </div>
+    </dialog>
   )
 }
 
@@ -25280,7 +25280,7 @@ function SettingsAccessIsland({ replacementKey }: { replacementKey: string }) {
         </div>
       </aside>
 
-      <div
+      <dialog
         className="modal-overlay"
 	        id="settingsInviteModal"
 	        data-vella-island="settings-access-invite-modal"
@@ -25320,7 +25320,7 @@ function SettingsAccessIsland({ replacementKey }: { replacementKey: string }) {
             <button className="btn btn-primary" type="button" data-vella-react-handlers="onclick" onClick={() => window.createSettingsInvite?.()}>Создать пользователя</button>
           </div>
         </div>
-      </div>
+      </dialog>
     </div>
   )
 }
@@ -26693,7 +26693,7 @@ function AvitoReviewsIsland({ replacementKey }: { replacementKey: string }) {
         </>
       ) : null}
       {settingsOpen ? (
-        <div className="modal-overlay open avito-reviews-ai-settings" onClick={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false) }}>
+        <dialog ref={openReactModal} data-vella-react-modal="" onCancel={(event) => { event.preventDefault(); setSettingsOpen(false) }} className="modal-overlay open avito-reviews-ai-settings" onClick={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false) }}>
           <div className="modal lg">
             <div className="modal-head">
               <h2>Настройки AI отзывов Авито</h2>
@@ -26764,7 +26764,7 @@ function AvitoReviewsIsland({ replacementKey }: { replacementKey: string }) {
               <button className="btn btn-primary" type="button" onClick={() => void saveAiPrompt()} disabled={savingPrompt}>{savingPrompt ? 'Сохраняем…' : 'Сохранить настройки'}</button>
             </div>
           </div>
-        </div>
+        </dialog>
       ) : null}
     </div>
   )
@@ -27915,6 +27915,17 @@ function selectedRepricerArticleIds() {
   return Array.from(selected)
 }
 
+function openReactModal(dialog: HTMLDialogElement | null) {
+  if (!dialog) return
+  const opener = document.activeElement
+  dialog.showModal()
+  window.syncHiddenA11y?.()
+  return () => {
+    dialog.close()
+    if (opener instanceof HTMLElement && opener.isConnected) opener.focus()
+  }
+}
+
 function ProductsSkuGroupModalIsland({ accessToken }: { accessToken: string }) {
   const [open, setOpen] = useState(false)
   const [articleIds, setArticleIds] = useState<string[]>([])
@@ -27994,16 +28005,15 @@ function ProductsSkuGroupModalIsland({ accessToken }: { accessToken: string }) {
   }
 
   return (
-    <div
+    <dialog ref={openReactModal} data-vella-react-modal="" aria-label="Группа SKU" onCancel={(event) => { event.preventDefault(); setOpen(false) }}
       className="modal-overlay open"
       data-vella-island="products-sku-group-modal"
       data-vella-island-status="explicit-jsx"
-      role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) setOpen(false)
       }}
     >
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Группа SKU" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-icon brand"><FolderPlus size={22} /></div>
           <div>
@@ -28074,7 +28084,7 @@ function ProductsSkuGroupModalIsland({ accessToken }: { accessToken: string }) {
           </button>
         </div>
       </div>
-    </div>
+    </dialog>
   )
 }
 
@@ -31596,16 +31606,15 @@ function ApplyPricesModalIsland({ replacementKey }: { replacementKey: string }) 
   }
 
   return (
-    <div
+    <dialog ref={openReactModal} data-vella-react-modal="" aria-label="Применение цен" onCancel={(event) => { event.preventDefault(); close() }}
       key={replacementKey}
       className="modal-overlay open vella-apply-prices-modal"
       id="m-apply"
-      role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) close()
       }}
     >
-      <div className="modal lg" role="dialog" aria-modal="true" aria-label="Применение цен" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="modal lg" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-icon brand"><CheckCircle2 size={22} /></div>
           <h2>{articleIds.length ? `${isResult ? 'Результат применения' : 'Применить цены'} к ${articleIds.length} SKU` : 'Сначала выберите SKU'}</h2>
@@ -31681,7 +31690,7 @@ function ApplyPricesModalIsland({ replacementKey }: { replacementKey: string }) 
           ) : null}
         </div>
       </div>
-    </div>
+    </dialog>
   )
 }
 

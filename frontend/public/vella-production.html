@@ -14748,6 +14748,7 @@ function closeFloatingPopups() {
   if (typeof hideAvitoStatsChartTooltip === 'function') hideAvitoStatsChartTooltip();
 }
 function closeTopFloatingLayer() {
+  if (document.querySelector('dialog:modal')) return false;
   const openDd = document.querySelector('.dd.open');
   if (openDd) { openDd.classList.remove('open'); return true; }
   if (document.getElementById('calendarPopover')?.classList.contains('open')) { closeCalendarPopover(); return true; }
@@ -19681,6 +19682,7 @@ document.addEventListener('change', (event) => {
 });
 document.addEventListener('click', (event) => {
   if (event.target?.classList?.contains('modal-overlay') && event.target.classList.contains('open')) {
+    if (event.target.hasAttribute('data-vella-react-modal')) return;
     const modalName = event.target.id?.startsWith('m-') ? event.target.id.slice(2) : '';
     if (modalName) closeModal(modalName);
     return;
@@ -23288,17 +23290,17 @@ function ensureDesktopFallback(){
   mobileSelect.onchange = () => navItems.find(item => (item.dataset.tab || item.getAttribute('href')) === mobileSelect.value)?.click();
 }
 function syncHiddenA11y(){
-  document.querySelectorAll('.modal-overlay').forEach(el => {
+  document.querySelectorAll('.modal-overlay').forEach((el, index) => {
     const open = el.classList.contains('open');
     el.setAttribute('aria-hidden', open ? 'false' : 'true');
     if ('inert' in el) el.inert = !open;
     if (el instanceof HTMLDialogElement) {
-      const title = el.querySelector('h2');
-      if (title && !el.hasAttribute('aria-labelledby')) {
-        title.id ||= el.id + '-title';
+      const title = el.querySelector('h2, h3, .modal-title');
+      if (title && !el.hasAttribute('aria-labelledby') && !el.hasAttribute('aria-label')) {
+        title.id ||= (el.id || 'modal-' + index) + '-title';
         el.setAttribute('aria-labelledby', title.id);
       }
-      el.oncancel = event => {
+      if (!el.hasAttribute('data-vella-react-modal')) el.oncancel = event => {
         event.preventDefault();
         if (el.id.startsWith('m-')) closeModal(el.id.slice(2));
         else { el.classList.remove('open'); syncHiddenA11y(); }

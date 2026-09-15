@@ -1008,7 +1008,8 @@ describe('vella source of truth', () => {
 
   it('keeps QA hardening for mobile fallback, period validation, and modal stacking', async () => {
     const browser = await chromium.launch({ headless: true })
-    const page = await browser.newPage({ viewport: { width: 375, height: 812 } })
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 375, height: 812 } })
+    await page.route(/^https?:\/\//, route => route.abort())
     const source = pathToFileURL(join(root, 'public/vella-production.html')).toString()
 
     try {
