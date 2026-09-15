@@ -129,6 +129,7 @@ def test_period_reader_rejects_previous_withdrawal_semantics(monkeypatch, path, 
 @pytest.mark.parametrize("chunked", [False, True])
 @pytest.mark.parametrize("previous_version", [6, 7, 8])
 def test_sku_snapshot_reader_rejects_previous_monetary_payload(monkeypatch, chunked, previous_version):
+    monkeypatch.setattr(wb_repricer_bff, "legacy_finance_tax_revision", lambda _org: "tax")
     options = dict(period_suffix="2026-08-26_2026-09-01", include_promotions=False, include_content=False)
     key = wb_repricer_bff._repricer_sku_snapshot_key("complete", **options)
     old_key = wb_repricer_bff._repricer_sku_snapshot_key("complete", version=previous_version, **options)
@@ -140,6 +141,7 @@ def test_sku_snapshot_reader_rejects_previous_monetary_payload(monkeypatch, chun
     monkeypatch.setattr(wb_repricer_bff, "get_source_cache", lambda org, requested, **kw: entries.get((org, requested)))
     assert wb_repricer_bff._load_repricer_sku_snapshot_page(2, "complete", page=1, page_size=10, **options) is None
     current = {"version": wb_repricer_bff.SKU_LIST_SNAPSHOT_VERSION,
+               "stateRevision": wb_repricer_bff._repricer_view_state_revision(), "taxRevision": "tax", "total": 1,
                "items": [{"analytics": {"netProfitKopecks": 9000}}], "summary": {"marginKopecks": 9000}}
     if chunked:
         current.update(storage="chunked", chunkSize=150)

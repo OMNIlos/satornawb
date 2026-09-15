@@ -170,6 +170,49 @@ PLAN_FACT_BANDS = (
 )
 
 
+def settings_minimum_price_kopecks(settings: Mapping[str, Any]) -> int:
+    """Existing execution arithmetic, including its rounding and fallback rules."""
+    def number(key: str) -> float:
+        try:
+            return float(settings.get(key) if settings.get(key) is not None else 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def amount(key: str) -> int:
+        try:
+            return int(round(number(key)))
+        except (TypeError, ValueError):
+            return 0
+
+    try:
+        override = int(settings.get("pMinKopecks") or settings.get("pminKopecks") or 0)
+    except (TypeError, ValueError):
+        override = 0
+    if override > 0:
+        return override
+    base_cost = (
+        amount("cogsKopecks")
+        + amount("logisticsKopecks")
+        + amount("otherExpensePerSaleKopecks")
+        + amount("storageCostPerSaleKopecks")
+    )
+    pick_pack_pct = number("pickPackCostPercent")
+    if pick_pack_pct > 0:
+        base_cost += round(amount("cogsKopecks") * pick_pack_pct / 100)
+    fixed_margin = amount("minMarginKopecks")
+    variable_pct = (
+        number("wbCommissionPct")
+        + number("minMarginPct")
+        + number("taxPct")
+        + max(number("promoCostPercent"), number("otherExpensePricePct"))
+        + number("advertCostPercent")
+    )
+    denominator = 1 - variable_pct / 100
+    if denominator <= 0:
+        return max(1, base_cost + fixed_margin)
+    return max(1, int(round((base_cost + fixed_margin) / denominator)))
+
+
 @dataclass(frozen=True, slots=True)
 class LegacyCalculationService:
     context: CalculationContext
@@ -313,37 +356,7 @@ class LegacyCalculationService:
             return None
 
     def _settings_pmin_kopecks(self, settings: dict[str, Any]) -> int:
-        try:
-            override = int(
-                settings.get("pMinKopecks") or settings.get("pminKopecks") or 0
-            )
-        except (TypeError, ValueError):
-            override = 0
-        if override > 0:
-            return override
-        base_cost = (
-            self._setting_int(settings, "cogsKopecks")
-            + self._setting_int(settings, "logisticsKopecks")
-            + self._setting_int(settings, "otherExpensePerSaleKopecks")
-            + self._setting_int(settings, "storageCostPerSaleKopecks")
-        )
-        pick_pack_pct = self._setting_float(settings, "pickPackCostPercent")
-        if pick_pack_pct > 0:
-            base_cost += round(
-                self._setting_int(settings, "cogsKopecks") * pick_pack_pct / 100
-            )
-        fixed_margin = self._setting_int(settings, "minMarginKopecks")
-        variable_pct = (
-            self._setting_float(settings, "wbCommissionPct")
-            + self._setting_float(settings, "minMarginPct")
-            + self._setting_float(settings, "taxPct")
-            + self._effective_price_expense_pct(settings)
-            + self._setting_float(settings, "advertCostPercent")
-        )
-        denominator = 1 - variable_pct / 100
-        if denominator <= 0:
-            return max(1, base_cost + fixed_margin)
-        return max(1, int(round((base_cost + fixed_margin) / denominator)))
+        return settings_minimum_price_kopecks(settings)
 
     def _settings_pmax_kopecks(self, settings: dict[str, Any], old_price: int) -> int:
         p_max = self._setting_int(settings, "pMaxKopecks")

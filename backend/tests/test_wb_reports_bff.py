@@ -767,9 +767,11 @@ def test_week_over_week_job_endpoint_reuses_completed_cached_report(monkeypatch)
     from app import repricer_tasks
     from app.routers import wb_reports_bff
 
+    monkeypatch.setattr(wb_reports_bff, "legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
     delay_calls: list[tuple] = []
     saved: dict[str, dict] = {}
     cached = {
+        "taxRevision": "synthetic-confirmation",
         "completedAt": datetime.now(timezone.utc).isoformat(),
         "report": {
             "meta": {"id": "week-over-week"},
@@ -895,6 +897,7 @@ def test_week_over_week_job_endpoint_restarts_stale_running_job(monkeypatch):
 def test_week_over_week_get_returns_cached_payload_while_job_is_running(monkeypatch):
     from app.routers import wb_reports_bff
 
+    monkeypatch.setattr(wb_reports_bff, "legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
     actor = SimpleNamespace(organization_id=1, user_id="viewer")
     stale_cached_report = {
         "meta": {"id": "week-over-week"},
@@ -910,7 +913,7 @@ def test_week_over_week_get_returns_cached_payload_while_job_is_running(monkeypa
         wb_reports_bff,
         "get_source_cache",
         lambda _organization_id, key, slim=False: (
-            {"report": stale_cached_report, "completedAt": fresh_updated_at}
+            {"report": stale_cached_report, "completedAt": fresh_updated_at, "taxRevision": "synthetic-confirmation"}
             if key.startswith("reports_payload_week-over-week")
             else active_job
         ),
@@ -944,6 +947,7 @@ def test_week_over_week_get_returns_cached_payload_while_job_is_running(monkeypa
 def test_week_over_week_get_returns_completed_cached_job_payload(monkeypatch):
     from app.routers import wb_reports_bff
 
+    monkeypatch.setattr(wb_reports_bff, "legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
     actor = SimpleNamespace(organization_id=1, user_id="viewer")
     cached_report = {
         "meta": {"id": "week-over-week"},
@@ -968,7 +972,7 @@ def test_week_over_week_get_returns_completed_cached_job_payload(monkeypatch):
         wb_reports_bff,
         "get_source_cache",
         lambda _organization_id, key, **_kwargs: (
-            {"report": cached_report, "completedAt": completed_at}
+            {"report": cached_report, "completedAt": completed_at, "taxRevision": "synthetic-confirmation"}
             if key.startswith("reports_payload_week-over-week")
             else completed_job
             if key.startswith("reports_job_week-over-week")
@@ -1088,7 +1092,8 @@ def test_week_over_week_enriches_rows_from_period_stats():
     assert row["ordersComposite"]["units"] == 8
     assert row["salesComposite"]["units"] == 5
     assert row["salesComposite"]["kopecks"] == 1_000_000
-    assert row["netTotalKopecks"] == 250_000
+    assert row["netTotalKopecks"] == 0
+    assert "profitSource" not in row
     assert row["historySource"] == "repricer_period_stats"
 
 
@@ -1447,11 +1452,13 @@ def test_bff_digest_degrades_when_ads_token_is_missing(monkeypatch):
 def test_bff_stock_and_week_over_week_endpoints_return_rows(monkeypatch):
     from app.routers import wb_reports_bff
 
+    monkeypatch.setattr(wb_reports_bff, "legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
     date_from = date(2026, 7, 14)
     date_to = date(2026, 7, 20)
     params = {"preset": "custom", "from": str(date_from), "to": str(date_to)}
     wow_cache_key = "reports_payload_week-over-week_2026-07-14_2026-07-20_sku_operational"
     wow_cache = {
+        "taxRevision": "synthetic-confirmation",
         "completedAt": datetime.now(timezone.utc).isoformat(),
         "dateFrom": str(date_from),
         "dateTo": str(date_to),

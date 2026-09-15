@@ -696,6 +696,21 @@ def get_repricer_sources_revision(organization_id: int) -> str | None:
     return _run_db(_db)
 
 
+def get_source_cache_range_revision(
+    organization_id: int, source_key_prefix: str, *, date_from: date, date_to: date,
+) -> str | None:
+    """Detect source updates from metadata, including overlapping daily windows."""
+    def _db(session: Session) -> str | None:
+        fetched_at = session.scalar(select(func.max(WbRepricerSourceCacheRow.fetched_at)).where(
+            WbRepricerSourceCacheRow.organization_id == organization_id,
+            WbRepricerSourceCacheRow.source_key.like(f"{source_key_prefix}%"),
+            or_(WbRepricerSourceCacheRow.range_date_from.is_(None), WbRepricerSourceCacheRow.range_date_from <= date_to),
+            or_(WbRepricerSourceCacheRow.range_date_to.is_(None), WbRepricerSourceCacheRow.range_date_to >= date_from),
+        ))
+        return fetched_at.isoformat() if fetched_at is not None else None
+    return _run_db(_db)
+
+
 def get_source_cache_meta_fields(organization_id: int, source_key: str) -> dict[str, Any]:
     if _source_cache_redis_allowed(source_key, slim=True):
         cached = _redis_get_json(_source_cache_key(organization_id, source_key, slim=True))

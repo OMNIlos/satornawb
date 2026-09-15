@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
 from app.config import get_settings
+from app.modules.wb_repricing_calculation import settings_minimum_price_kopecks
 from app.repricer_cache.store import FINANCE_SCHEMA_VERSION, get_source_cache, save_source_cache
 from app.wb_api.client import (
     FakeWbApiClient,
@@ -486,6 +487,47 @@ def _finance_raw_expense_totals(raw_rows: list[dict[str, Any]]) -> dict[str, int
     return totals
 
 
+def project_finance_tax_diagnostics(
+    diagnostics: dict[str, Any], finance_taxes: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Resolve every diagnostic tax view from the same dated period index."""
+    result = deepcopy(diagnostics)
+    taxes = finance_taxes or {}
+    missing = {"taxKopecks": None, "factTaxState": "missing", "factTaxReason": "tax_context_missing"}
+    rows = result.get("skuSummaries") or []
+    entries = list(taxes.values()) + [missing for row in rows if str(row.get("nmId")) not in taxes]
+    reasons = {
+        str(entry.get("factTaxReason") or "tax_context_missing") for entry in entries
+        if entry.get("factTaxState") != "configured" or type(entry.get("taxKopecks")) is not int
+    }
+    if not entries:
+        reasons.add("tax_context_missing")
+    total_tax = None if reasons else sum(entry["taxKopecks"] for entry in entries)
+    result["tax"] = {
+        **(result.get("tax") or {}), "taxPct": None, "taxKopecks": total_tax,
+        "factTaxState": "missing" if reasons else "configured",
+        "factTaxReason": sorted(reasons)[0] if reasons else None,
+        "source": "dated_economics",
+    }
+    totals = result.setdefault("totals", {})
+    totals["taxKopecks"] = total_tax
+    expenses = totals.get("expensesWithoutTaxKopecks")
+    totals["expensesIfTaxIncludedKopecks"] = expenses + total_tax if type(expenses) is int and total_tax is not None else None
+    for row in rows:
+        tax = taxes.get(str(row.get("nmId"))) or missing
+        amount = tax.get("taxKopecks") if tax.get("factTaxState") == "configured" else None
+        amount = amount if type(amount) is int else None
+        expenses = row.get("expensesWithoutTaxKopecks")
+        row.update(
+            taxPct=None, taxKopecks=amount,
+            factTaxState="configured" if amount is not None else "missing",
+            factTaxReason=None if amount is not None else tax.get("factTaxReason") or "tax_context_missing",
+            expensesIfTaxIncludedKopecks=expenses + amount if type(expenses) is int and amount is not None else None,
+            marginDeltaFromTaxRemovalKopecks=amount,
+        )
+    return result
+
+
 def build_finance_diagnostics_from_aggregates(
     aggregates: dict[str, dict[str, Any]],
     *,
@@ -493,16 +535,14 @@ def build_finance_diagnostics_from_aggregates(
     requested_fields: list[str] | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
+    finance_taxes: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    tax_pct = float(_number_or_none(ALGORITHM_SETTINGS_STATE.get("taxPct")) or 0)
     totals = {
         "sellerRevenueKopecks": 0,
         "buyerRevenueKopecks": 0,
         "salesUnits": 0,
         "returnsUnits": 0,
-        "taxKopecks": 0,
         "expensesWithoutTaxKopecks": 0,
-        "expensesIfTaxIncludedKopecks": 0,
         "commissionKopecks": 0,
         "logisticsKopecks": 0,
         "penaltyKopecks": 0,
@@ -526,10 +566,8 @@ def build_finance_diagnostics_from_aggregates(
     for nm_id, row in sorted(aggregates.items(), key=lambda item: str(item[0])):
         seller_revenue_kopecks = _finance_int(row.get("sellerRevenueKopecks"))
         buyer_revenue_kopecks = _finance_int(row.get("buyerRevenueKopecks"))
-        tax_kopecks = round(seller_revenue_kopecks * tax_pct / 100)
         expense = _finance_expense_diagnostic(row)
         expenses_without_tax_kopecks = int(expense["expensesWithoutTaxKopecks"])
-        expenses_if_tax_included_kopecks = expenses_without_tax_kopecks + tax_kopecks
         summary = {
             "nmId": nm_id,
             "rowsCount": _finance_int(row.get("rowsCount")),
@@ -538,13 +576,9 @@ def build_finance_diagnostics_from_aggregates(
             "sellerRevenueKopecks": seller_revenue_kopecks,
             "buyerRevenueKopecks": buyer_revenue_kopecks,
             "taxBaseKopecks": seller_revenue_kopecks,
-            "taxPct": tax_pct,
-            "taxKopecks": tax_kopecks,
             "taxIncludedInExpenses": False,
             "taxIncludedInNetProfit": True,
             "expensesWithoutTaxKopecks": expenses_without_tax_kopecks,
-            "expensesIfTaxIncludedKopecks": expenses_if_tax_included_kopecks,
-            "marginDeltaFromTaxRemovalKopecks": tax_kopecks,
             **expense,
             "penaltyChargedKopecks": _finance_int(row.get("penaltyChargedKopecks")),
             "penaltyReturnedKopecks": _finance_int(row.get("penaltyReturnedKopecks")),
@@ -556,9 +590,7 @@ def build_finance_diagnostics_from_aggregates(
         totals["buyerRevenueKopecks"] += buyer_revenue_kopecks
         totals["salesUnits"] += _finance_int(row.get("salesUnits"))
         totals["returnsUnits"] += _finance_int(row.get("returnsUnits"))
-        totals["taxKopecks"] += tax_kopecks
         totals["expensesWithoutTaxKopecks"] += expenses_without_tax_kopecks
-        totals["expensesIfTaxIncludedKopecks"] += expenses_if_tax_included_kopecks
         totals["commissionKopecks"] += _finance_int(row.get("commissionKopecks"))
         totals["logisticsKopecks"] += _finance_int(row.get("logisticsKopecks"))
         totals["penaltyKopecks"] += _finance_int(row.get("penaltyKopecks"))
@@ -618,7 +650,7 @@ def build_finance_diagnostics_from_aggregates(
         raw_rows=raw_rows,
         requested_fields=requested_fields,
     )
-    return {
+    return project_finance_tax_diagnostics({
         "state": "ok" if raw_rows is not None else "aggregate_only",
         "dateFrom": date_from.date().isoformat() if date_from else None,
         "dateTo": date_to.date().isoformat() if date_to else None,
@@ -632,9 +664,7 @@ def build_finance_diagnostics_from_aggregates(
         "paidAcceptanceNonzeroRows": storage_acceptance.get("paidAcceptanceNonzeroRows"),
         "paidAcceptanceSum": storage_acceptance.get("paidAcceptanceSum"),
         "tax": {
-            "taxPct": tax_pct,
             "taxBase": "sellerRevenueKopecks",
-            "taxKopecks": totals["taxKopecks"],
             "taxIncludedInExpenses": False,
             "taxIncludedInNetProfit": True,
             "note": "Налог учитывается в netProfit/margin и показывается отдельно от расходов WB.",
@@ -664,7 +694,7 @@ def build_finance_diagnostics_from_aggregates(
         "adjustmentRowsTotal": adjustment_rows_total,
         "adjustmentRowsStored": len(stored_adjustment_rows),
         "adjustmentRowsTruncated": adjustment_rows_total > len(stored_adjustment_rows),
-    }
+    }, finance_taxes)
 
 
 def _utc_now() -> datetime:
@@ -1298,6 +1328,15 @@ def _settings_pmin_override_kopecks(settings: dict[str, Any]) -> int | None:
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def _effective_pmin(row: dict[str, Any]) -> tuple[int, Literal["explicit", "calculated"]]:
+    settings = row.get("settings") or {}
+    strategy_id = (row.get("strategy") or {}).get("id") or (row.get("meta") or {}).get("activeStrategyId")
+    if strategy_id == "illiquid":
+        return _illiquid_floor_kopecks(row), "calculated"
+    source = "explicit" if _settings_pmin_override_kopecks(settings) is not None else "calculated"
+    return settings_minimum_price_kopecks(settings), source
 
 
 def _liquidation_pmin_kopecks(row: dict[str, Any], min_margin_pct: float | None = None) -> int:
@@ -3086,7 +3125,7 @@ def _nm_ids_from_goods(goods: list[dict[str, Any]]) -> list[int]:
 
 def _sales_funnel_metrics(source: dict[str, Any]) -> dict[str, Any]:
     conversions = source.get("conversions") or {}
-    order_count = int(_first_number(source, "orderCount", "ordersCount", "orders") or 0)
+    order_count = _first_number(source, "orderCount", "ordersCount", "orders")
     buyout_count = int(_first_number(source, "buyoutCount", "buyoutsCount", "buyouts") or 0)
     buyout_pct = _spp_pct_or_none(conversions.get("buyoutPercent"))
     cart_count = _first_number(source, "cartCount", "addToCartCount", "addToCart")
@@ -3103,7 +3142,7 @@ def _sales_funnel_metrics(source: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "cartCount": int(cart_count) if cart_count is not None else None,
-        "orderCount": order_count,
+        "orderCount": int(order_count) if order_count is not None else None,
         "orderSumKopecks": _first_kopecks(source, "orderSum", "ordersSumRub", "ordersSum"),
         "openCount": int(_first_number(source, "openCount", "openCardCount", "openCard") or 0),
         "impressions": int(impressions) if impressions is not None else None,
@@ -4597,7 +4636,7 @@ def _wb_public_photo_url(nm_id: int | None) -> str | None:
 def _extract_wb_media_url(payload: dict[str, Any] | None, nm_id: int | None = None) -> str | None:
     if not isinstance(payload, dict):
         return _wb_public_photo_url(nm_id)
-    for key in ("photoUrl", "imageUrl", "previewUrl", "bigPhoto", "smallPhoto"):
+    for key in ("photoUrl", "imageUrl", "previewUrl", "bigPhoto", "smallPhoto", "c246x328", "c516x688", "square", "tm", "big"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -4640,6 +4679,7 @@ def _build_sku_row(
     previous_period_aggregate: dict[str, Any] | None = None,
     period_days: int | None = None,
     finance_aggregate: dict[str, Any] | None = None,
+    finance_tax: dict[str, Any] | None = None,
     ads_aggregate: dict[str, Any] | None = None,
     commission_tariffs_index: dict[str, dict[str, Any]] | None = None,
     baskets_aggregate: dict[str, Any] | None = None,
@@ -4708,17 +4748,20 @@ def _build_sku_row(
     )
     net_sales_units = sales_units - returns_units
     period_orders_units = int(period_aggregate.get("ordersUnits") or 0)
-    baskets_order_count = int((baskets_aggregate or {}).get("orderCount") or 0)
+    baskets_order_count_raw = (baskets_aggregate or {}).get("orderCount")
+    baskets_order_count = int(baskets_order_count_raw) if baskets_order_count_raw is not None else None
+    if baskets_order_count is not None and baskets_order_count < 0:
+        baskets_order_count = None
     baskets_order_sum_kopecks = int((baskets_aggregate or {}).get("orderSumKopecks") or 0)
     funnel_avg_price_kopecks = (
         round(baskets_order_sum_kopecks / baskets_order_count)
-        if baskets_order_sum_kopecks > 0 and baskets_order_count > 0
+        if baskets_order_sum_kopecks > 0 and baskets_order_count is not None and baskets_order_count > 0
         else None
     )
     previous_baskets = (baskets_aggregate or {}).get("previous") if isinstance((baskets_aggregate or {}).get("previous"), dict) else {}
     previous_orders_units = int(previous_period_aggregate.get("ordersUnits") or previous_baskets.get("orderCount") or 0)
     finance_units_floor = max(0, sales_units + returns_units)
-    if baskets_order_count > 0:
+    if baskets_order_count is not None:
         orders_units = baskets_order_count
         orders_source = "sales_funnel.orderCount"
     elif period_orders_units > 0:
@@ -4748,7 +4791,9 @@ def _build_sku_row(
         or 0
     )
     other_expenses_kopecks = 0
-    tax_kopecks = round(finance_seller_revenue_kopecks * float(settings.get("taxPct") or 0) / 100)
+    fact_tax_state = "configured" if (finance_tax or {}).get("factTaxState") == "configured" and type((finance_tax or {}).get("taxKopecks")) is int else "missing"
+    fact_tax_reason = None if fact_tax_state == "configured" else (finance_tax or {}).get("factTaxReason") or "tax_context_missing"
+    tax_kopecks = finance_tax["taxKopecks"] if fact_tax_state == "configured" else None
     acquiring_pct = float(ALGORITHM_SETTINGS_STATE["acquiringPct"])
     tariff_base_commission_pct, commission_source, tariff_fetched_at = _resolve_tariff_base_commission_pct(
         commission_tariffs_index,
@@ -4928,7 +4973,7 @@ def _build_sku_row(
             - cogs_total_kopecks
             - expenses_kopecks
             - tax_kopecks
-        )
+        ) if tax_kopecks is not None else None
     else:
         revenue_gross_kopecks = 0
         buyer_revenue_kopecks = 0
@@ -4957,7 +5002,8 @@ def _build_sku_row(
         acquiring_kopecks = 0 if use_demo_data else None
         payable_kopecks = 0 if use_demo_data else None
         ad_spend_kopecks = 0 if use_demo_data else None
-        tax_kopecks = 0 if use_demo_data else None
+        tax_kopecks = None
+        fact_tax_state, fact_tax_reason = "missing", "finance_missing"
         ad_impressions = 0 if use_demo_data else None
         ad_clicks = 0 if use_demo_data else None
         ad_cart_adds = 0 if use_demo_data else None
@@ -4976,7 +5022,7 @@ def _build_sku_row(
             + int(other_expenses_kopecks or 0)
             - int(additional_payment_kopecks or 0)
         ) if use_demo_data else None
-        net_profit_kopecks = round((unit_margin_kopecks or 0) * max(1, sales_units)) if use_demo_data else None
+        net_profit_kopecks = None
         report_commission_pct = None
     planned_sales_units = max(0, sales_units)
     planned_revenue_base_kopecks = (
@@ -5082,13 +5128,13 @@ def _build_sku_row(
                 if (baskets_aggregate or {}).get("coverageState") == "partial"
                 else None
             ),
-            "ordersUnits": orders_units if orders_units > 0 else (max(1, meta["basketsLast7d"] - _stable_int(article_id, 1, 3)) if use_demo_data else 0),
+            "ordersUnits": orders_units if orders_source is not None or not use_demo_data else max(1, meta["basketsLast7d"] - _stable_int(article_id, 1, 3)),
             "cancelledOrdersUnits": int(period_aggregate.get("cancelledOrdersUnits") or 0),
-            "ordersSource": orders_source if orders_units > 0 else ("fallback" if use_demo_data else None),
+            "ordersSource": orders_source or ("fallback" if use_demo_data else None),
             "periodDays": period_days,
             "hourlyOrders": deepcopy(period_aggregate.get("hourlyOrders") or []),
             "todayHourlyOrders": deepcopy(period_aggregate.get("todayHourlyOrders") or []),
-            "funnelOrderCount": baskets_order_count if baskets_order_count > 0 else None,
+            "funnelOrderCount": baskets_order_count,
             "previousPeriod": {
                 "baskets": int(previous_baskets.get("cartCount") or 0) if previous_baskets else None,
                 "ordersUnits": previous_orders_units if (previous_period_aggregate or previous_baskets) else None,
@@ -5182,6 +5228,8 @@ def _build_sku_row(
             "adRevenueKopecks": ad_revenue_kopecks,
             "otherExpensesKopecks": other_expenses_kopecks if finance_aggregate is not None or use_demo_data else None,
             "taxKopecks": tax_kopecks if finance_aggregate is not None or use_demo_data else None,
+            "factTaxState": fact_tax_state,
+            "factTaxReason": fact_tax_reason,
             "workReturnKopecks": work_return_kopecks if finance_aggregate is not None or use_demo_data else None,
             "taxPct": settings.get("taxPct"),
             "expensesKopecks": expenses_kopecks if finance_aggregate is not None or use_demo_data else None,
@@ -5193,6 +5241,7 @@ def _build_sku_row(
         "auditEvents": audit_events,
         "cachedAt": None,
     }
+    settings["effectivePMinKopecks"], settings["effectivePMinSource"] = _effective_pmin(row)
     return row
 
 
@@ -5261,6 +5310,7 @@ def list_repricer_skus(
     stocks_cache_loaded: bool = False,
     cached_period_stats: dict[str, dict[str, Any]] | None = None,
     cached_finance_aggregates: dict[str, dict[str, Any]] | None = None,
+    cached_finance_taxes: dict[str, dict[str, Any]] | None = None,
     cached_ads_aggregates: dict[str, dict[str, Any]] | None = None,
     cached_baskets_aggregates: dict[str, dict[str, Any]] | None = None,
     baskets_cache_loaded: bool = False,
@@ -5377,6 +5427,7 @@ def list_repricer_skus(
                 previous_period_aggregate=((cached_baskets_aggregates or {}).get(str(nm_id)) or {}).get("previous") if nm_id is not None else None,
                 period_days=period_days,
                 finance_aggregate=(cached_finance_aggregates or {}).get(str(nm_id)) if nm_id is not None else None,
+                finance_tax=(cached_finance_taxes or {}).get(str(nm_id)) if nm_id is not None else None,
                 ads_aggregate=(cached_ads_aggregates or {}).get(str(nm_id)) if nm_id is not None else None,
                 commission_tariffs_index=commission_tariffs_index,
                 baskets_aggregate=(cached_baskets_aggregates or {}).get(str(nm_id)) if nm_id is not None else None,

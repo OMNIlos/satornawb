@@ -40,6 +40,7 @@ from app.repricer_cache.store import (
 )
 from app.repricer_bff import _extract_wb_media_url
 from app.repricer_persistence.store import load_algorithm_settings, load_runtime_state
+from app.platform.economics.legacy_tax import legacy_finance_tax_revision
 from app.wb_ads_cache.store import get_ads_report_cache, save_ads_history_snapshots, save_ads_report_cache
 from app.wb_api.ads_runtime import AdsAttributionRow, AdsAttributionSnapshot
 from app.wb_api.client import (
@@ -70,7 +71,7 @@ from app.wb_sync_plan import historical_sync_as_of
 
 router = APIRouter(tags=["wb-reports-bff"])
 
-DIGEST_REPORT_PAYLOAD_VERSION = "v13"
+DIGEST_REPORT_PAYLOAD_VERSION = "v14"
 
 ReportId = Literal["digest", "abc", "rnp", "pnl", "expenses", "ads", "stock", "week-over-week"]
 ReportGroupBy = Literal["sku", "manager", "brand", "category", "status", "warehouse", "campaign"]
@@ -646,23 +647,8 @@ def _ads_by_nm(ads_snapshot: Any | None) -> dict[int, dict[str, int]]:
 
 
 def _profit_by_nm(snapshot: Any, ads_by_nm: dict[int, dict[str, int]]) -> dict[int, dict[str, int | float | None]]:
-    result: dict[int, dict[str, int | float | None]] = {}
-    for nm_id, revenue in getattr(snapshot, "revenue_by_nm_kopecks", {}).items():
-        seller_payout = int(getattr(snapshot, "seller_payout_by_nm_kopecks", {}).get(nm_id, 0) or 0)
-        costs = sum(
-            int(getattr(snapshot, field, {}).get(nm_id, 0) or 0)
-            for field in (
-                "commission_cost_by_nm_kopecks",
-                "logistics_cost_by_nm_kopecks",
-                "penalties_cost_by_nm_kopecks",
-                "acceptance_cost_by_nm_kopecks",
-                "storage_cost_by_nm_kopecks",
-            )
-        )
-        ad_spend = int(ads_by_nm.get(nm_id, {}).get("ad_spend", 0) or 0)
-        profit = seller_payout - costs - ad_spend
-        result[nm_id] = {"profit": profit, "margin": round(profit / revenue * 100, 2) if revenue else None}
-    return result
+    # Raw WB streams do not carry dated tax or SKU cost evidence; ABC supplies factual profit.
+    return {nm_id: {"profit": None, "margin": None} for nm_id in getattr(snapshot, "revenue_by_nm_kopecks", {})}
 
 
 def _catalog_meta_by_nm(organization_id: int | None) -> dict[int, dict[str, Any]]:
@@ -2139,6 +2125,15 @@ def _week_row_key(row: dict[str, Any]) -> str:
     return str(row.get("nmId") or row.get("sku") or row.get("label") or "").strip()
 
 
+def _abc_row_profit(row: dict[str, Any]) -> int | None:
+    if row.get("factTaxState") == "missing":
+        return None
+    for key in ("netTotalKopecks", "profitKopecks"):
+        if key in row:
+            return _int_value(row[key]) if row[key] is not None else None
+    return None if row.get("factTaxState") else 0
+
+
 def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     previous_by_key = {_week_row_key(row): row for row in previous_rows or [] if _week_row_key(row)}
     result: list[dict[str, Any]] = []
@@ -2155,8 +2150,8 @@ def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dic
         previous_baskets = _int_value(previous.get("baskets")) if previous else None
         margin = _float_value(row.get("marginPct"))
         previous_margin = _float_value(previous.get("marginPct")) if previous else None
-        profit = _int_value(row.get("netTotalKopecks") or row.get("profitKopecks"))
-        previous_profit = _int_value(previous.get("netTotalKopecks") or previous.get("profitKopecks")) if previous else None
+        profit = _abc_row_profit(row)
+        previous_profit = _abc_row_profit(previous) if previous else None
         price = _int_value(row.get("priceWithSppKopecks") or row.get("priceKopecks"))
         previous_price = _int_value(previous.get("priceWithSppKopecks") or previous.get("priceKopecks")) if previous else None
         stock_units = _int_value(row.get("wbStockUnits"))
@@ -2175,6 +2170,9 @@ def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dic
                 "baskets": {"units": baskets, "kopecks": None, "deltaPct": _delta_pct(baskets, previous_baskets)},
                 "marginPct": {"percent": margin, "deltaPct": _delta_pct(margin, previous_margin)},
                 "profit": {"kopecks": profit, "deltaPct": _delta_pct(profit, previous_profit)},
+                "factTaxState": row.get("factTaxState"),
+                "factTaxReason": row.get("factTaxReason"),
+                "previousFactTaxReason": previous.get("factTaxReason"),
                 "price": {"kopecks": price, "deltaPct": _delta_pct(price, previous_price)},
                 "wasOutOfStock": stock_units <= 0,
                 "stockAvailability7d": availability,
@@ -2294,7 +2292,7 @@ def _week_rows_with_period_stats(rows: list[dict[str, Any]], period_stats: dict[
 
         profit = _int_value(enriched.get("netTotalKopecks") or enriched.get("profitKopecks"))
         margin = _float_value(enriched.get("marginPct"))
-        if profit == 0 and margin is not None and margin != 0 and sales_kopecks > 0:
+        if not enriched.get("factTaxState") and "netTotalKopecks" not in enriched and "profitKopecks" not in enriched and profit == 0 and margin is not None and margin != 0 and sales_kopecks > 0:
             enriched["netTotalKopecks"] = int(round(sales_kopecks * margin / 100))
             enriched["profitSource"] = "margin_estimate"
             changed = True
@@ -2665,9 +2663,16 @@ def _repricer_row_to_abc_row(row: dict[str, Any]) -> dict[str, Any]:
     settings = row.get("settings") if isinstance(row.get("settings"), dict) else {}
     orders_units = _int_value(analytics.get("ordersUnits"))
     orders_kopecks = _int_value(analytics.get("revenueKopecks"))
-    sales_units = _int_value(analytics.get("salesUnits"))
-    sales_kopecks = _int_value(analytics.get("sellerRevenueKopecks") or analytics.get("revenueKopecks"))
-    net_profit_kopecks = _int_value(analytics.get("netProfitKopecks") or analytics.get("factNetProfitKopecks"))
+    sales_units = _int_value(analytics.get("salesUnits")) - _int_value(analytics.get("returnsUnits"))
+    sales_kopecks = _int_value(analytics["sellerRevenueKopecks"] if "sellerRevenueKopecks" in analytics else analytics.get("revenueKopecks"))
+    fact_tax_state = analytics.get("factTaxState")
+    if fact_tax_state:
+        raw_profit = analytics.get("factNetProfitKopecks") if "factNetProfitKopecks" in analytics else analytics.get("netProfitKopecks")
+        net_profit_kopecks = _int_value(raw_profit) if fact_tax_state == "configured" and raw_profit is not None else None
+        margin_pct = round(net_profit_kopecks / sales_kopecks * 100, 2) if net_profit_kopecks is not None and sales_kopecks > 0 else None
+    else:
+        net_profit_kopecks = _int_value(analytics.get("netProfitKopecks") or analytics.get("factNetProfitKopecks"))
+        margin_pct = _float_value(analytics.get("marginPct"))
     return {
         "sku": str(meta.get("articleId") or meta.get("vendorCode") or row.get("articleId") or ""),
         "nmId": meta.get("nmId"),
@@ -2686,7 +2691,10 @@ def _repricer_row_to_abc_row(row: dict[str, Any]) -> dict[str, Any]:
         "ordersComposite": {"units": orders_units, "kopecks": orders_kopecks, "deltaPct": None},
         "salesComposite": {"units": sales_units, "kopecks": sales_kopecks, "deltaPct": None},
         "netTotalKopecks": net_profit_kopecks,
-        "marginPct": _float_value(analytics.get("marginPct")),
+        "marginPct": margin_pct,
+        "taxKopecks": analytics.get("taxKopecks"),
+        "factTaxState": fact_tax_state,
+        "factTaxReason": analytics.get("factTaxReason"),
         "adSpendKopecks": _int_value(analytics.get("adSpendKopecks")),
         "wbStockUnits": _int_value(analytics.get("wbStockUnits")),
         "buyoutPct": _float_value(analytics.get("buyoutPct")),
@@ -2712,7 +2720,7 @@ def _abc_filtered_summary_from_rows(rows: list[dict[str, Any]], *, source_status
         ]
     sales_kopecks = complete_sum(composites("salesComposite", "kopecks"))
     profit_kopecks = complete_sum([
-        row.get("netTotalKopecks") if row.get("netTotalKopecks") is not None else row.get("profitKopecks")
+        _abc_row_profit(row)
         for row in rows
         if isinstance(row, dict)
     ])
@@ -2841,9 +2849,9 @@ def _map_abc_to_report_response(payload: Any, date_range: dict[str, str]) -> dic
             "title": "Чистая прибыль по SKU",
             "valueLabel": "Чистая прибыль, коп",
             "points": [
-                {"label": str(row.get("sku") or row.get("label") or index + 1), "value": int(row.get("netTotalKopecks") if row.get("netTotalKopecks") is not None else row.get("profitKopecks"))}
+                {"label": str(row.get("sku") or row.get("label") or index + 1), "value": _abc_row_profit(row)}
                 for index, row in enumerate(abc_rows[:20])
-                if isinstance(row, dict) and (row.get("netTotalKopecks") is not None or row.get("profitKopecks") is not None)
+                if isinstance(row, dict) and _abc_row_profit(row) is not None
             ],
         },
         "columns": _abc_report_columns(),
@@ -2877,13 +2885,13 @@ def _map_pnl_to_report_response(payload: Any, date_range: dict[str, str], cash_f
         "filters": {"dateRange": date_range, "groupBy": payload.groupBy},
         "kpis": [
             _kpi("revenue", "Выручка", str(payload.totals.revenueKopecks or 0)),
-            _kpi("net_profit", "Чистая прибыль", "—" if cash_flow_disabled else str(payload.totals.netProfitKopecks or 0)),
-            _kpi("margin_pct", "Маржа", "—" if cash_flow_disabled else f"{payload.totals.marginPct or 0}%"),
+            _kpi("net_profit", "Чистая прибыль", "—" if cash_flow_disabled or payload.totals.netProfitKopecks is None else str(payload.totals.netProfitKopecks)),
+            _kpi("margin_pct", "Маржа", "—" if cash_flow_disabled or payload.totals.marginPct is None else f"{payload.totals.marginPct}%"),
         ],
         "chart": {
             "title": "Маржа по строкам",
             "valueLabel": "Маржа, %",
-            "points": [] if cash_flow_disabled else [{"label": row.label, "value": row.marginPct or 0} for row in payload.rows],
+            "points": [] if cash_flow_disabled else [{"label": row.label, "value": row.marginPct} for row in payload.rows if row.marginPct is not None],
         },
         "columns": [
             {"key": "label", "label": "SKU"},
@@ -3236,12 +3244,14 @@ def _build_digest_payload(
     total_sales_revenue = _int_value(summary["buyerRevenueKopecks"]) if "buyerRevenueKopecks" in summary else (_int_value(funnel_totals.get("buyoutSumKopecks")) if has_funnel else sum(item["sales_revenue"] for item in aggregates.values()))
     total_returns = _int_value(summary["returnsUnits"]) if "returnsUnits" in summary else (_int_value(funnel_totals.get("cancelCount")) if has_funnel else sum(item["returns_qty"] for item in aggregates.values()))
     total_ad_spend = _int_value(summary["adSpendKopecks"]) if "adSpendKopecks" in summary else ads_snapshot.totals.get("ad_spend_kopecks", 0)
-    margin_profit = _int_value(summary["marginKopecks"]) if "marginKopecks" in summary else _preliminary_margin_kopecks(source_snapshot)
+    margin_profit = (_int_value(summary["marginKopecks"]) if summary["marginKopecks"] is not None else None) if "marginKopecks" in summary else _preliminary_margin_kopecks(source_snapshot)
     margin_hint = (
-        "Прибыль после себестоимости, расходов WB, рекламы и налога по настройкам SKU."
+        "Прибыль после себестоимости, расходов WB, рекламы и подтверждённого налога за период."
         if summary
         else "Предварительная прибыль после удержаний WB. Формула: seller payout - комиссии WB - логистика - штрафы - приемка - хранение."
     )
+    if margin_profit is None:
+        margin_hint = "Прибыль неизвестна: налог за выбранный период не подтверждён."
     stock_rows = [_stock_row_to_digest_payload(row) for row in source_snapshot.stocks]
     alerts = []
     for row in stock_rows:
@@ -3315,7 +3325,7 @@ def _build_digest_payload(
             _kpi(
                 "margin_profit",
                 "Марж. прибыль",
-                str(margin_profit),
+                str(margin_profit) if margin_profit is not None else "—",
                 margin_hint,
             ),
             _kpi("oos_risk", "OOS риск", f"{oos_count} SKU", "Товары с нулевым доступным остатком: остаток WB + возвраты от клиента = 0. Такие позиции могут перестать продаваться, пока не появится доступный остаток."),
@@ -3380,12 +3390,12 @@ BACKGROUND_REPORT_JOB_STALE_AFTER = timedelta(minutes=15)
 BACKGROUND_REPORT_QUEUED_STALE_AFTER = timedelta(seconds=30)
 DIGEST_CACHE_TTL = timedelta(hours=24)
 REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
-ABC_REPORT_PAYLOAD_VERSION = "v18"
-PNL_REPORT_PAYLOAD_VERSION = "v5"
+ABC_REPORT_PAYLOAD_VERSION = "v19"
+PNL_REPORT_PAYLOAD_VERSION = "v6"
 EXPENSES_REPORT_PAYLOAD_VERSION = "v1"
 RNP_REPORT_PAYLOAD_VERSION = "v3"
 STOCK_REPORT_PAYLOAD_VERSION = "v5"
-WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v3"
+WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v4"
 
 
 def _abc_economics_version(organization_id: int) -> str:
@@ -3544,9 +3554,21 @@ def _rnp_report_cache_has_funnel_signal(cache: dict[str, Any]) -> bool:
     return not (funnel_rows == 0 and (ads_rows > 0 or has_ads_only_rows))
 
 
+def _report_tax_unavailable(report: dict[str, Any]) -> bool:
+    return "tax_policy_unavailable" in (report.get("blockerIds") or []) or any(
+        row.get(key) == "tax_policy_unavailable"
+        for row in report.get("rows") or [] if isinstance(row, dict)
+        for key in ("factTaxReason", "previousFactTaxReason")
+    )
+
+
 def _report_payload_cache_is_usable(report_id: str, cache: dict[str, Any], *, organization_id: int | None = None) -> bool:
     if not _report_payload_cache_is_fresh(cache):
         return False
+    if report_id in {"abc", "pnl", "week-over-week"} and organization_id is not None:
+        tax_revision = legacy_finance_tax_revision(organization_id)
+        if tax_revision == "unavailable" or cache.get("taxRevision") != tax_revision or _report_tax_unavailable(cache.get("report") or {}):
+            return False
     if report_id == "rnp" and not _rnp_report_cache_has_funnel_signal(cache):
         return False
     if report_id == "rnp":
@@ -3615,6 +3637,8 @@ def _save_exact_report_payload_cache(
         "dateTo": date_to.isoformat(),
         "completedAt": _utc_now_iso(),
     }
+    if report_id in {"abc", "pnl", "week-over-week"}:
+        cache["taxRevision"] = "unavailable" if _report_tax_unavailable(report) else legacy_finance_tax_revision(organization_id)
     save_source_cache(
         organization_id,
         _report_cache_key(report_id, date_from, date_to, group_by, source, organization_id=organization_id, finance_allowed=finance_allowed),
@@ -4884,15 +4908,15 @@ def get_reports_by_id(
                 _kpi("sku_count", "SKU", str(filtered_summary.get("skuCount") or 0)),
                 _kpi("orders", "Заказы", str(filtered_summary.get("ordersCount") or 0)),
                 _kpi("orders_revenue", "Выручка", str(filtered_summary.get("ordersKopecks") or 0)),
-                _kpi("profit", "Прибыль", str(filtered_summary.get("profitKopecks") or 0)),
+                _kpi("profit", "Прибыль", "—" if filtered_summary.get("profitKopecks") is None else str(filtered_summary["profitKopecks"])),
             ],
             "chart": {
                 "title": "Чистая прибыль по SKU",
                 "valueLabel": "Чистая прибыль, коп",
                 "points": [
-                    {"label": str(row.get("sku") or row.get("label") or index + 1), "value": int(row.get("netTotalKopecks") or row.get("profitKopecks") or 0)}
+                    {"label": str(row.get("sku") or row.get("label") or index + 1), "value": _abc_row_profit(row)}
                     for index, row in enumerate(abc_rows[:20])
-                    if isinstance(row, dict)
+                    if isinstance(row, dict) and _abc_row_profit(row) is not None
                 ],
             },
             "columns": _abc_report_columns(),

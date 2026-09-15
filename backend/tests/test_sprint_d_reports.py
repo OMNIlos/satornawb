@@ -17,6 +17,19 @@ def client() -> TestClient:
     return TestClient(create_app())
 
 
+@pytest.fixture(autouse=True)
+def confirmed_tax(monkeypatch):
+    """These source/expense fixtures use explicit synthetic tax; dated policy has its own SQL tests."""
+    amounts = {}
+    monkeypatch.setattr(wb_reports_sprint_d, "legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
+    monkeypatch.setattr("app.routers.wb_reports_bff.legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
+    monkeypatch.setattr(wb_reports_sprint_d, "get_legacy_finance_taxes", lambda org, cache, period: {
+        str(nm): {"taxKopecks": amounts.get(str(nm), 0), "factTaxState": "configured", "factTaxReason": None}
+        for nm in cache.get("aggregates", {})
+    })
+    return amounts
+
+
 def _isolate_pnl_source_cache(monkeypatch):
     """Synthetic cache inputs for legacy HTTP contracts; no live source or disk I/O."""
     def cached_source(_organization_id, source_key, **_kwargs):
@@ -276,7 +289,8 @@ def test_viewer_sees_all_financial_sections_except_monthly_company_costs(monkeyp
     assert export.json()["exportState"] == "ready"
 
 
-def test_pnl_uses_repricer_finance_cache_before_legacy_runtime(monkeypatch):
+def test_pnl_uses_repricer_finance_cache_before_legacy_runtime(monkeypatch, confirmed_tax):
+    confirmed_tax["123456"] = 12_000
     monkeypatch.setattr("app.wb_reports_sprint_d.list_source_cache_ranges_by_prefix", lambda *_args, **_kwargs: [])
     monkeypatch.setattr("app.wb_reports_sprint_d.save_source_cache", lambda *_args, **_kwargs: None)
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
@@ -489,7 +503,8 @@ def test_pnl_finance_cache_normalizes_negative_revenue_rows(monkeypatch):
     )
 
     row = payload.rows[0]
-    assert row.revenueKopecks == 0
+    assert row.revenueKopecks == -139_000
+    assert row.marginPct is None
     assert row.taxKopecks == 0
     assert row.overheadKopecks == 0
     assert row.commissionKopecks == 0
@@ -785,7 +800,8 @@ def test_abc_report_prefers_sales_funnel_orders_and_buyouts_for_portal_metrics(m
     assert report.filteredSummary.ordersKopecks == 4_000_000
 
 
-def test_abc_report_net_profit_uses_full_finance_formula(monkeypatch):
+def test_abc_report_net_profit_uses_full_finance_formula(monkeypatch, confirmed_tax):
+    confirmed_tax["111"] = 60_000
     def fake_get_source_cache(_organization_id: int, source_key: str, *, slim: bool = False):
         if source_key == "finance_2026-06-01_2026-06-30":
             return {

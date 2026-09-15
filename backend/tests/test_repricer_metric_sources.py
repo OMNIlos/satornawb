@@ -16,6 +16,67 @@ def _row(**kwargs):
     )
 
 
+@pytest.mark.parametrize("field", ["orderCount", "ordersCount", "orders"])
+@pytest.mark.parametrize("period_orders", [100, 0])
+def test_measured_zero_funnel_orders_keeps_priority_and_provenance(field, period_orders):
+    funnel = bff._sales_funnel_metrics({field: 0, "cartCount": 5})
+    row = _row(
+        baskets_aggregate=funnel, baskets_cache_loaded=True,
+        period_aggregate={"ordersUnits": period_orders},
+        finance_aggregate={"salesUnits": 10, "returnsUnits": 1},
+    )
+    assert row["analytics"]["ordersUnits"] == 0
+    assert row["analytics"]["ordersSource"] == "sales_funnel.orderCount"
+    assert row["analytics"]["funnelOrderCount"] == 0
+    assert router._repricer_stats_metrics(row)["orders"] == 0
+    assert router._repricer_list_summary([row])["ordersUnits"] == 0
+
+
+@pytest.mark.parametrize("selected", [{"cartCount": 5}, {"orderCount": None, "cartCount": 5}])
+@pytest.mark.parametrize("period_orders,expected,source", [
+    (100, 100, "supplier.orders"), (0, 11, "finance_sales_fallback"),
+])
+def test_missing_funnel_orders_retains_existing_fallback(selected, period_orders, expected, source):
+    funnel = bff._sales_funnel_metrics(selected)
+    assert funnel["orderCount"] is None
+    row = _row(
+        baskets_aggregate=funnel, baskets_cache_loaded=True,
+        period_aggregate={"ordersUnits": period_orders},
+        finance_aggregate={"salesUnits": 10, "returnsUnits": 1},
+    )
+    assert row["analytics"]["ordersUnits"] == expected
+    assert row["analytics"]["ordersSource"] == source
+    assert row["analytics"]["funnelOrderCount"] is None
+
+
+def test_invalid_negative_funnel_orders_does_not_gain_priority():
+    row = _row(baskets_aggregate={"orderCount": -1}, period_aggregate={"ordersUnits": 7})
+    assert row["analytics"]["ordersUnits"] == 7
+    assert row["analytics"]["ordersSource"] == "supplier.orders"
+    assert row["analytics"]["funnelOrderCount"] is None
+
+
+@pytest.mark.parametrize("selected,expected", [
+    ({"orderCount": 0}, 0), ({"orderCount": 7}, 7),
+    ({"orderCount": None}, 100), ({}, 100),
+])
+def test_source_summary_respects_measured_funnel_orders(monkeypatch, selected, expected):
+    payloads = {
+        "baskets": {"aggregates": {"123": bff._sales_funnel_metrics(selected)}},
+        "period_stats": {"aggregates": {"123": {"ordersUnits": 100}}},
+        "finance": {"aggregates": {"123": {"salesUnits": 10, "returnsUnits": 1}}},
+    }
+    monkeypatch.setattr(router, "list_cached_goods", lambda _org: [{"nmID": 123, "vendorCode": "METRIC_TEST"}])
+    monkeypatch.setattr(router, "_period_source_cache", lambda _org, prefix, *_args, **_kwargs: payloads.get(prefix, {}))
+    monkeypatch.setattr(router, "get_source_cache", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(router, "_repricer_finance_taxes", lambda *_args, **_kwargs: {})
+    result = router._repricer_list_summary_from_source_caches(
+        2, resolved_period_days=30, period_suffix="2026-08-16_2026-09-14",
+        range_start=date(2026, 8, 16), range_end=date(2026, 9, 14),
+    )
+    assert result["ordersUnits"] == expected
+
+
 @pytest.mark.parametrize("value", [0, 100, 84.6])
 def test_buyout_uses_validated_wb_conversion_without_rescaling(value):
     metrics = bff._sales_funnel_metrics({
@@ -113,7 +174,9 @@ def test_strategy_assignment_read_hydrates_scope_and_uses_all_cached_rows(monkey
 
 
 def test_snapshot_rebuilds_after_basket_source_refresh(monkeypatch):
-    snapshot = {"version": router.SKU_LIST_SNAPSHOT_VERSION, "storage": "chunked", "sourceRevision": "old", "goodsRevision": "catalog"}
+    snapshot = {"version": router.SKU_LIST_SNAPSHOT_VERSION, "storage": "chunked", "sourceRevision": "old", "goodsRevision": "catalog",
+                "stateRevision": router._repricer_view_state_revision(), "taxRevision": "tax"}
+    monkeypatch.setattr(router, "legacy_finance_tax_revision", lambda _org: "tax")
     monkeypatch.setattr(router, "get_source_cache", lambda *_a, **_kw: deepcopy(snapshot))
     monkeypatch.setattr(router, "get_repricer_sources_revision", lambda org: "new")
     monkeypatch.setattr(router, "cached_goods_meta", lambda org: {"latestFetchedAt": "catalog"})

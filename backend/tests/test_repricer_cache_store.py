@@ -46,6 +46,41 @@ def test_source_revision_is_scoped_and_ignores_snapshot_and_sync_status(database
         assert datetime.fromisoformat(store.get_repricer_sources_revision(2)) == observed + timedelta(minutes=5)
 
 
+def test_period_source_revision_uses_only_tenant_overlapping_source_metadata(database, monkeypatch):
+    _, engine = database
+    LkOrganizationRow.__table__.create(engine)
+    WbRepricerSourceCacheRow.__table__.create(engine)
+    observed = datetime(2026, 9, 15, tzinfo=timezone.utc)
+    with Session(engine) as session:
+        session.add_all([LkOrganizationRow(organization_id=org, slug=f"synthetic-{org}", name="Synthetic") for org in (1, 2)])
+        session.commit()
+        session.add_all([
+            WbRepricerSourceCacheRow(
+                organization_id=org, source_key=key, payload={"neverLoaded": True},
+                range_date_from=first, range_date_to=last, fetched_at=observed + timedelta(minutes=offset),
+            )
+            for org, key, first, last, offset in (
+                (1, "ads_legacy", None, None, 0),
+                (1, "ads_2026-09-02", date(2026, 9, 2), date(2026, 9, 2), 1),
+                (1, "ads_later", date(2026, 9, 3), date(2026, 9, 3), 5),
+                (2, "ads_other_tenant", date(2026, 9, 1), date(2026, 9, 2), 10),
+                (1, "repricer_stats_ads_2", date(2026, 9, 1), date(2026, 9, 2), 20),
+            )
+        ])
+        session.commit()
+        monkeypatch.setattr(store, "_run_db", lambda fn: fn(session))
+        queries = []
+        def record_query(_conn, _cursor, statement, _params, _context, _many):
+            queries.append(statement)
+        event.listen(engine, "before_cursor_execute", record_query)
+        try:
+            actual = store.get_source_cache_range_revision(1, "ads_", date_from=date(2026, 9, 1), date_to=date(2026, 9, 2))
+        finally:
+            event.remove(engine, "before_cursor_execute", record_query)
+        assert datetime.fromisoformat(actual) == observed + timedelta(minutes=1)
+        assert len(queries) == 1 and "payload" not in queries[0]
+
+
 @pytest.mark.parametrize("prefix,slim", [("baskets_", False), ("finance_", True)])
 @pytest.mark.parametrize("newest_metadata", [
     {},
