@@ -1882,6 +1882,7 @@ def _repricer_list_cache_meta(
     date_to: date | None = None,
     require_full_sync_coverage: bool = True,
     period_cache_memo: dict[tuple[Any, ...], dict[str, Any]] | None = None,
+    period_caches: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     cache = cached_goods_meta(organization_id)
     range_start, range_end, resolved_period_days, period_suffix = _repricer_period_context(period_days, date_from, date_to)
@@ -1900,7 +1901,7 @@ def _repricer_list_cache_meta(
     )
     cache["promotionsFetchedAt"] = get_source_cache_meta_fields(organization_id, "promotions").get("fetchedAt")
     cache["stocksFetchedAt"] = get_source_cache_meta_fields(organization_id, "stocks").get("fetchedAt")
-    period_cache = _period_source_cache(
+    period_cache = period_caches.get("period_stats", {}) if period_caches is not None else _period_source_cache(
         organization_id,
         "period_stats",
         period_suffix,
@@ -1910,9 +1911,11 @@ def _repricer_list_cache_meta(
         require_full_sync_coverage=require_full_sync_coverage,
         memo=period_cache_memo,
     )
-    cache["periodStatsFetchedAt"] = period_cache.get("fetchedAt") or get_source_cache_meta_fields(organization_id, period_key).get("fetchedAt")
-    finance_meta = get_source_cache_meta_fields(organization_id, finance_key)
-    finance_cache = _period_source_cache(
+    cache["periodStatsFetchedAt"] = period_cache.get("fetchedAt") or (
+        get_source_cache_meta_fields(organization_id, period_key).get("fetchedAt") if period_caches is None else None
+    )
+    finance_meta = get_source_cache_meta_fields(organization_id, finance_key) if period_caches is None else {}
+    finance_cache = period_caches.get("finance", {}) if period_caches is not None else _period_source_cache(
         organization_id,
         "finance",
         period_suffix,
@@ -1927,8 +1930,8 @@ def _repricer_list_cache_meta(
     cache["financeFetchedAt"] = finance_cache.get("fetchedAt") or finance_meta.get("fetchedAt")
     cache["financeCachedGoodsNmIds"] = finance_cache.get("cachedGoodsNmIds") or finance_meta.get("cachedGoodsNmIds")
     cache["financeMatchedNmIds"] = finance_cache.get("matchedCachedGoodsNmIds") or finance_meta.get("matchedCachedGoodsNmIds")
-    ads_meta = get_source_cache_meta_fields(organization_id, ads_key)
-    ads_cache = _period_source_cache(
+    ads_meta = get_source_cache_meta_fields(organization_id, ads_key) if period_caches is None else {}
+    ads_cache = period_caches.get("ads", {}) if period_caches is not None else _period_source_cache(
         organization_id,
         "ads",
         period_suffix,
@@ -1955,8 +1958,8 @@ def _repricer_list_cache_meta(
     cache["adsLastStatus"] = ads_step.get("status") if ads_step else None
     cache["adsLastError"] = ads_step.get("error") if ads_step else None
     cache["adsLastFinishedAt"] = ads_step.get("finishedAt") if ads_step else None
-    baskets_meta = get_source_cache_meta_fields(organization_id, baskets_key)
-    baskets_cache = _period_source_cache(
+    baskets_meta = get_source_cache_meta_fields(organization_id, baskets_key) if period_caches is None else {}
+    baskets_cache = period_caches.get("baskets", {}) if period_caches is not None else _period_source_cache(
         organization_id,
         "baskets",
         period_suffix,
@@ -3611,19 +3614,17 @@ def _ensure_repricer_stats_period_caches(
         period_stats_payload = _period_source_cache(organization_id, "period_stats", period_suffix, resolved_period_days, range_start, range_end, slim=False, require_full_sync_coverage=False)
         aggregates = period_stats_payload.get("aggregates") if isinstance(period_stats_payload.get("aggregates"), dict) else {}
         if aggregates:
-            save_source_cache(
-                organization_id,
-                stats_period_key,
-                {
-                    **period_stats_payload,
-                    "aggregates": aggregates,
-                    "count": len(aggregates),
-                    "periodDays": resolved_period_days,
-                    "dateFrom": range_start.date().isoformat(),
-                    "dateTo": range_end.date().isoformat(),
-                    "source": "repricer_stats_cache_materialized",
-                },
-            )
+            period_cache = {
+                **period_stats_payload,
+                "aggregates": aggregates,
+                "count": len(aggregates),
+                "periodDays": resolved_period_days,
+                "dateFrom": range_start.date().isoformat(),
+                "dateTo": range_end.date().isoformat(),
+                "source": "repricer_stats_cache_materialized",
+            }
+            stored = save_source_cache(organization_id, stats_period_key, period_cache)
+            period_cache.setdefault("fetchedAt", stored.get("fetchedAt"))
             fetched_sources.append("period-stats")
         else:
             missing_sources.append("period-stats")
@@ -3651,19 +3652,17 @@ def _ensure_repricer_stats_period_caches(
         finance_aggregates = finance_payload.get("aggregates") if isinstance(finance_payload.get("aggregates"), dict) else {}
         if finance_aggregates:
             cached_goods_nm_ids = {str(nm_id) for nm_id in _nm_ids_from_goods(list_cached_goods(organization_id))}
-            save_source_cache(
-                organization_id,
-                stats_finance_key,
-                {
-                    **finance_payload,
-                    "periodDays": resolved_period_days,
-                    "dateFrom": range_start.date().isoformat(),
-                    "dateTo": range_end.date().isoformat(),
-                    "cachedGoodsNmIds": len(cached_goods_nm_ids),
-                    "matchedCachedGoodsNmIds": len(set(finance_aggregates.keys()) & cached_goods_nm_ids),
-                    "source": "repricer_stats_cache_materialized",
-                },
-            )
+            finance_cache = {
+                **finance_payload,
+                "periodDays": resolved_period_days,
+                "dateFrom": range_start.date().isoformat(),
+                "dateTo": range_end.date().isoformat(),
+                "cachedGoodsNmIds": len(cached_goods_nm_ids),
+                "matchedCachedGoodsNmIds": len(set(finance_aggregates.keys()) & cached_goods_nm_ids),
+                "source": "repricer_stats_cache_materialized",
+            }
+            stored = save_source_cache(organization_id, stats_finance_key, finance_cache)
+            finance_cache.setdefault("fetchedAt", stored.get("fetchedAt"))
             fetched_sources.append("finance")
         else:
             missing_sources.append("finance")
@@ -3675,17 +3674,15 @@ def _ensure_repricer_stats_period_caches(
         ads_payload = _period_source_cache(organization_id, "ads", period_suffix, resolved_period_days, range_start, range_end, slim=False, require_full_sync_coverage=False)
         ads_aggregates = ads_payload.get("aggregates") if isinstance(ads_payload.get("aggregates"), dict) else {}
         if ads_aggregates:
-            save_source_cache(
-                organization_id,
-                stats_ads_key,
-                {
-                    **ads_payload,
-                    "periodDays": resolved_period_days,
-                    "dateFrom": range_start.date().isoformat(),
-                    "dateTo": range_end.date().isoformat(),
-                    "source": "repricer_stats_cache_materialized",
-                },
-            )
+            ads_cache = {
+                **ads_payload,
+                "periodDays": resolved_period_days,
+                "dateFrom": range_start.date().isoformat(),
+                "dateTo": range_end.date().isoformat(),
+                "source": "repricer_stats_cache_materialized",
+            }
+            stored = save_source_cache(organization_id, stats_ads_key, ads_cache)
+            ads_cache.setdefault("fetchedAt", stored.get("fetchedAt"))
             fetched_sources.append("ads")
         else:
             missing_sources.append("ads")
@@ -3724,32 +3721,11 @@ def _ensure_repricer_stats_period_caches(
         "onDemandFetchedSources": fetched_sources,
         "onDemandFetched": bool(fetched_sources),
         "missingSources": missing_sources,
+        "caches": {
+            source: {**cache, "aggregates": dict(cache["aggregates"]) if isinstance(cache.get("aggregates"), dict) else {}} if cache else {}
+            for source, cache in (("period_stats", period_cache), ("finance", finance_cache), ("ads", ads_cache), ("baskets", baskets_cache))
+        },
     }
-
-
-def _repricer_stats_caches(
-    organization_id: int,
-    period_suffix: str,
-    *,
-    range_start: datetime,
-    range_end: datetime,
-) -> dict[str, dict[str, Any]]:
-    keys = {
-        "period_stats": f"repricer_stats_period_stats_{period_suffix}",
-        "finance": f"repricer_stats_finance_{period_suffix}",
-        "ads": f"repricer_stats_ads_{period_suffix}",
-        "baskets": f"repricer_stats_baskets_{period_suffix}",
-    }
-    result: dict[str, dict[str, Any]] = {}
-    for source, key in keys.items():
-        cache = get_source_cache(organization_id, key, slim=True) or {}
-        if source == "finance":
-            cache = _compatible_period_source_cache(source, cache)
-        if cache and not _cache_matches_range(cache, range_start, range_end):
-            cache = {}
-        aggregates = cache.get("aggregates") if isinstance(cache.get("aggregates"), dict) else {}
-        result[source] = {**cache, "aggregates": dict(aggregates)} if cache else {}
-    return result
 
 
 def _simulator_patch_payload(raw: dict[str, Any] | None) -> RepricerSimulatorPatchRequest:
@@ -3906,12 +3882,7 @@ def get_repricer_stats(
         or (brand and brand != "all")
         or (manager and manager != "all")
     )
-    stats_caches = _repricer_stats_caches(
-        organization_id,
-        _period_suffix,
-        range_start=_range_start,
-        range_end=_range_end,
-    )
+    stats_caches = stats_fetch_meta["caches"]
     goods = list_cached_goods(organization_id)
     content_cache = get_source_cache(organization_id, "content_cards", slim=True) or {}
     promotions_cache = get_source_cache(organization_id, "promotions", slim=True) or {}
@@ -3957,6 +3928,7 @@ def get_repricer_stats(
         date_from=_range_start.date(),
         date_to=_range_end.date(),
         require_full_sync_coverage=False,
+        period_caches=stats_caches,
     )
     period_meta = stats_caches["period_stats"]
     finance_meta = stats_caches["finance"]

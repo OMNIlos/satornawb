@@ -407,3 +407,51 @@ def test_stats_cache_rejects_wrong_tenant_and_malformed_range(stats_runtime):
     assert payload["summary"]["baskets"] is None
     assert payload["cache"]["basketsFetchedAt"] is None
     assert payload["cache"]["statsSourceStatus"] != "ready"
+
+
+@pytest.mark.parametrize("params", [{"page": 2, "pageSize": 25}, {"q": "STATS_01"}, {"topMode": "true"}])
+def test_stats_reuses_materialized_sources_for_metadata_and_pagination(stats_runtime, monkeypatch, params):
+    goods, _storage, request = stats_runtime
+    goods[:] = [_good(index) for index in range(1, 27)]
+    request(baskets=_source_payload({str(good["nmID"]): {"cartCount": 1} for good in goods[:25]}))
+    resolve = wb_repricer_bff_router._period_source_cache
+    read = wb_repricer_bff_router.get_source_cache
+    cache_reads = []
+    def fresh_baskets_only(org, prefix, *args, **kwargs):
+        assert prefix == "baskets", "prepared period sources must not be resolved again for metadata"
+        return resolve(org, prefix, *args, **kwargs)
+    def read_once(org, key, **kwargs):
+        if key.startswith("repricer_stats_"):
+            assert (org, key) not in cache_reads, "materialized source was deserialized twice"
+            cache_reads.append((org, key))
+        return read(org, key, **kwargs)
+    monkeypatch.setattr(wb_repricer_bff_router, "_period_source_cache", fresh_baskets_only)
+    monkeypatch.setattr(wb_repricer_bff_router, "get_source_cache", read_once)
+    monkeypatch.setattr(wb_repricer_bff_router, "get_covering_source_cache", _fail("prepared cache must not scan covering history"))
+    payload = request(baskets=None, params=params)
+    assert len(cache_reads) == 4
+    assert (payload["dateFrom"], payload["dateTo"], payload["periodDays"]) == (DATE_FROM, DATE_TO, 7)
+    assert payload["summary"]["skuCount"] == (1 if params.get("q") else 26)
+    assert payload["summary"]["baskets"] == (1 if params.get("q") else None)
+    assert payload["itemsReturned"] == (1 if params.get("q") or params.get("page") == 2 else 26)
+
+
+def test_list_metadata_preserves_default_resolution_and_accepts_prepared_sources(stats_runtime, monkeypatch):
+    _goods, storage, request = stats_runtime
+    request(baskets=_source_payload({"10001": {"cartCount": 7}}, coverageState="partial", coveredDays=6,
+                                    missingDates=[DATE_TO]))
+    sources = {prefix: deepcopy(storage[1, f"{prefix}_{SUFFIX}"]) for prefix in ("period_stats", "finance", "ads", "baskets")}
+    calls = []
+    def resolve(org, prefix, *_args, **_kwargs):
+        assert org == 1
+        calls.append(prefix)
+        return sources[prefix]
+    monkeypatch.setattr(wb_repricer_bff_router, "_period_source_cache", resolve)
+    kwargs = dict(include_content=True, date_from=date.fromisoformat(DATE_FROM), date_to=date.fromisoformat(DATE_TO),
+                  require_full_sync_coverage=False)
+    expected = wb_repricer_bff_router._repricer_list_cache_meta(1, 7, **kwargs)
+    assert calls == ["period_stats", "finance", "ads", "baskets"]
+    monkeypatch.setattr(wb_repricer_bff_router, "_period_source_cache", _fail("prepared metadata must not resolve original sources"))
+    actual = wb_repricer_bff_router._repricer_list_cache_meta(1, 7, period_caches=sources, **kwargs)
+    assert actual == expected
+    assert (actual["basketsCoverageState"], actual["basketsCoveredDays"], actual["basketsMissingDates"]) == ("partial", 6, [DATE_TO])
