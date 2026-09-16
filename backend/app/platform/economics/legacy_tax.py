@@ -13,6 +13,8 @@ from app.platform.catalog.orm import CatalogSkuRow, MarketplaceOfferRow, Marketp
 from app.platform.catalog.service import CatalogService
 from app.platform.economics.orm import CatalogEconomicsOverrideVersionRow, OrganizationEconomicsVersionRow
 from app.platform.economics.policies import EconomicsService
+from app.platform.economics.costs import CostsService
+from app.platform.economics.orm import CatalogCostVersionRow
 from app.platform.integrations.orm import MarketplaceAccountRow
 from app.platform.period import Period
 from app.repricer_cache.store import finance_cache_uses_current_revenue_basis
@@ -43,6 +45,7 @@ def _prepare_read(session: Any, organization_id: int) -> None:
 
 def get_legacy_finance_taxes(
     organization_id: int, finance_cache: dict[str, Any], period: Period,
+    *, include_costs: bool = False,
 ) -> dict[str, dict[str, Any]]:
     source = finance_cache.get("aggregates")
     aggregates = {str(key): value for key, value in source.items() if isinstance(value, dict)} if isinstance(source, dict) else {}
@@ -77,6 +80,10 @@ def get_legacy_finance_taxes(
             policies = EconomicsService(session, organization_id).get_policies_for_points([
                 (sku_id, instant) for sku_id in set(mapping.values()) for instant in instants.values()
             ])
+            costs = CostsService(session, organization_id).get_costs_for_points([
+                (sku_id, point) for sku_id in set(mapping.values()) for instant in instants.values()
+                for point in (instant, instant - timedelta(days=1) + timedelta(microseconds=1))
+            ]) if include_costs else {}
             for key, fact in aggregates.items():
                 nm_id = nm_ids.get(key)
                 sku_id = mapping.get(nm_id)
@@ -118,6 +125,33 @@ def get_legacy_finance_taxes(
                     "taxKopecks": sum(_round_basis_points(amount, rate) for rate, amount in grouped.items()),
                     "factTaxState": "configured", "factTaxReason": None,
                 }
+                if include_costs:
+                    points = [(instants[day], row) for day, row in entries] if has_daily else [
+                        (instants[dates[0]], fact)
+                    ]
+                    values = [costs.get((sku_id, instant)) for instant, _ in points]
+                    confirmed = all(value is not None and value.value_state == "configured"
+                                    and value.evidence_status == "dated" and type(value.amount_kopecks) is int
+                                    for value in values)
+                    # Daily units cannot be split around an intraday edit.
+                    # Confirm only if the version was already active at day start.
+                    confirmed = confirmed and all(
+                        (opening := costs.get((sku_id, instant - timedelta(days=1) + timedelta(microseconds=1)))) is not None
+                        and opening.cost_version_id == value.cost_version_id
+                        for value, (instant, _) in zip(values, points)
+                    )
+                    if not has_daily:
+                        all_values = [costs.get((sku_id, instant)) for instant in instants.values()]
+                        confirmed = confirmed and all(value is not None and value.value_state == "configured"
+                            and value.evidence_status == "dated" and value.amount_kopecks == values[0].amount_kopecks
+                            for value in all_values)
+                    confirmed = confirmed and all(type(row.get(field)) is int
+                        for _, row in points for field in ("salesUnits", "returnsUnits"))
+                    result[key].update(
+                        settlementCogsKopecks=sum(value.amount_kopecks * (row["salesUnits"] - row["returnsUnits"])
+                            for value, (_, row) in zip(values, points)) if confirmed else None,
+                        settlementCogsReason=None if confirmed else "dated_cost_missing_or_daily_basis_incomplete",
+                    )
             session.rollback()
     except SQLAlchemyError:
         return {key: _missing("tax_policy_unavailable") for key in aggregates}
@@ -126,7 +160,7 @@ def get_legacy_finance_taxes(
 
 def legacy_finance_tax_revision(organization_id: int) -> str:
     """One metadata query; no financial payload or credentials are read."""
-    models = (OrganizationEconomicsVersionRow, CatalogEconomicsOverrideVersionRow,
+    models = (OrganizationEconomicsVersionRow, CatalogEconomicsOverrideVersionRow, CatalogCostVersionRow,
               CatalogSkuRow, MarketplaceAccountRow, MarketplaceProductRow, MarketplaceOfferRow)
     statements = []
     for model in models:

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -169,6 +169,10 @@ class CostsService:
             raise CostValidationError("source and source_reference are required")
         effective_at = _aware_utc(effective_from)
         self._sku(catalog_sku_id)
+        self.session.scalar(select(CatalogSkuRow).where(
+            CatalogSkuRow.organization_id == self.organization_id,
+            CatalogSkuRow.catalog_sku_id == catalog_sku_id,
+        ).with_for_update())
         if created_by_user_id is not None:
             if created_by_membership_id is not None:
                 raise CostValidationError("provide either created_by_user_id or created_by_membership_id")
@@ -248,6 +252,40 @@ class CostsService:
 
     def get_current_cost(self, catalog_sku_id: int) -> CostValue:
         return self.get_cost_at(catalog_sku_id, self.now())
+
+    def set_current_cost(
+        self, *, catalog_sku_id: int, amount_kopecks: int,
+        expected_cost_version_id: int | None, source_reference: str,
+        created_by_user_id: str,
+    ) -> CostValue:
+        """Interactive edit: server time, optimistic version and retry-safe identity.
+
+        Lock the SKU, not the cost row: a first write has no cost row to lock.
+        All interactive writers use this transaction boundary. Historical import
+        remains a separate operation and must not be triggered by the editor.
+        """
+        if self.session.get_bind().dialect.name == "sqlite":
+            connection = self.session.connection()
+            if not connection.connection.driver_connection.in_transaction:
+                self.session.execute(text("BEGIN IMMEDIATE"))
+        self._sku(catalog_sku_id)
+        self.session.scalar(select(CatalogSkuRow).where(
+            CatalogSkuRow.organization_id == self.organization_id,
+            CatalogSkuRow.catalog_sku_id == catalog_sku_id,
+        ).with_for_update())
+        existing = self._by_reference("manual-current", source_reference)
+        effective_at = _db_utc(existing.effective_from) if existing else self.now()
+        if existing is None:
+            current = self.get_cost_at(catalog_sku_id, effective_at)
+            if current.cost_version_id != expected_cost_version_id:
+                raise CostConflictError("cost version changed; reload before saving")
+        return self.set_cost(
+            catalog_sku_id=catalog_sku_id, amount_kopecks=amount_kopecks,
+            value_state="configured", effective_from=effective_at,
+            source="manual-current", source_reference=source_reference,
+            evidence_status="dated", supersedes_cost_version_id=expected_cost_version_id,
+            created_by_user_id=created_by_user_id,
+        )
 
     def get_costs_at(self, catalog_sku_ids: list[int], at: datetime) -> dict[int, CostValue]:
         for sku_id in catalog_sku_ids:

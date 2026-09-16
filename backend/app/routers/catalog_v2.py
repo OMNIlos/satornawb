@@ -27,7 +27,10 @@ from app.platform.economics.costs import (
     CostValue,
     CostsService,
 )
-from app.platform.economics.schemas import CostSetRequest, CostView
+from app.platform.economics.schemas import CostSetRequest, CostView, CurrentCostSetRequest
+from app.platform.catalog.orm import MarketplaceOfferRow
+from app.platform.identity.orm import IamMembershipRow
+from app.platform.integrations.orm import MarketplaceAccountRow
 from app.repricer_cache.orm import WbRepricerGoodsCacheRow
 from app.repricer_sync import (
     _good_buyer_price_no_wallet_kopecks,
@@ -275,6 +278,80 @@ def post_catalog_sku_cost(
             status_code=422, detail={"code": "INVALID_COST", "message": str(exc)}
         ) from exc
     return DataEnvelope(data=_cost_view(row, visible=True))
+
+
+@router.post("/api/v2/catalog/skus/{catalogSkuId}/current-cost", response_model=DataEnvelope[CostView])
+def post_catalog_sku_current_cost(
+    catalogSkuId: int,
+    payload: CurrentCostSetRequest,
+    actor: ActorContext = Depends(get_catalog_actor),
+    session: Session = Depends(get_db_session),
+) -> DataEnvelope[CostView]:
+    _require(actor, "catalog:read")
+    _require(actor, "costs:read")
+    _require(actor, "costs:write")
+    # A shared CatalogSku changes every linked offer, so require access to all
+    # affected accounts, not merely the account visible in the current table.
+    from app.infra.db import set_tenant_context
+    set_tenant_context(session, actor.organization_id)
+    membership = session.scalar(select(IamMembershipRow).where(
+        IamMembershipRow.organization_id == actor.organization_id,
+        IamMembershipRow.user_id == actor.user_id, IamMembershipRow.is_active.is_(True)))
+    if membership is None:
+        raise HTTPException(status_code=403, detail={"code": "NO_ACCESS"})
+    if membership.scope_mode != "all":
+        accounts = set(session.scalars(select(MarketplaceOfferRow.marketplace_account_id).where(
+            MarketplaceOfferRow.organization_id == actor.organization_id,
+            MarketplaceOfferRow.catalog_sku_id == catalogSkuId)).all())
+        if not accounts or not accounts.issubset(set(membership.allowed_account_ids or [])):
+            raise HTTPException(status_code=403, detail={"code": "NO_ACCESS"})
+    try:
+        row = CostsService(session, actor.organization_id).set_current_cost(
+            catalog_sku_id=catalogSkuId, amount_kopecks=payload.amountKopecks,
+            expected_cost_version_id=payload.expectedCostVersionId,
+            source_reference=payload.sourceReference, created_by_user_id=actor.user_id,
+        )
+    except CostNotFoundError as exc:
+        raise _not_found(exc) from exc
+    except CostConflictError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail={"code": "COST_VERSION_CONFLICT", "message": str(exc)}) from exc
+    except CostValidationError as exc:
+        session.rollback()
+        raise HTTPException(status_code=422, detail={"code": "INVALID_COST", "message": str(exc)}) from exc
+    return DataEnvelope(data=_cost_view(row, visible=True))
+
+
+@router.get("/api/v2/wb/products/{nmId}/current-cost")
+def get_wb_product_current_cost(
+    nmId: int, actor: ActorContext = Depends(get_catalog_actor),
+    session: Session = Depends(get_db_session),
+):
+    _require(actor, "catalog:read")
+    _require(actor, "costs:read")
+    from app.infra.db import set_tenant_context
+    set_tenant_context(session, actor.organization_id)
+    accounts = session.scalars(select(MarketplaceAccountRow.marketplace_account_id).where(
+        MarketplaceAccountRow.organization_id == actor.organization_id,
+        MarketplaceAccountRow.marketplace == "wb", MarketplaceAccountRow.status == "connected")).all()
+    # Legacy table has no explicit account identity. Never guess among accounts.
+    if len(accounts) != 1:
+        raise HTTPException(status_code=409, detail={"code": "COST_ACCOUNT_AMBIGUOUS", "message": "Требуется однозначный WB-аккаунт"})
+    membership = session.scalar(select(IamMembershipRow).where(
+        IamMembershipRow.organization_id == actor.organization_id,
+        IamMembershipRow.user_id == actor.user_id, IamMembershipRow.is_active.is_(True)))
+    if membership is None or (membership.scope_mode != "all" and accounts[0] not in (membership.allowed_account_ids or [])):
+        raise HTTPException(status_code=403, detail={"code": "NO_ACCESS"})
+    mapping, ambiguous = CatalogService(session, actor.organization_id).resolve_wb_product_skus(accounts[0], [nmId])
+    if nmId in ambiguous or nmId not in mapping:
+        raise HTTPException(status_code=409, detail={"code": "COST_MAPPING_AMBIGUOUS", "message": "Нет однозначного соответствия CatalogSku; проверьте варианты товара"})
+    sku_id = mapping[nmId]
+    linked = session.scalars(select(MarketplaceOfferRow.marketplace_product_id).where(
+        MarketplaceOfferRow.organization_id == actor.organization_id,
+        MarketplaceOfferRow.catalog_sku_id == sku_id)).all()
+    cost = CostsService(session, actor.organization_id).get_current_cost(sku_id)
+    return DataEnvelope(data={"catalogSkuId": sku_id, "linkedProductCount": len(set(linked)),
+        "canWrite": has_permission(actor, "costs:write"), "currentCost": _cost_view(cost, visible=True)})
 
 
 @router.get("/api/v2/wb/products", response_model=PaginatedEnvelope[WbProductView])

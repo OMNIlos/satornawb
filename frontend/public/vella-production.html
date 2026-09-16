@@ -7712,8 +7712,8 @@ body.avito-popup-open { overflow: hidden; }
 <table id="mainTable">
 <colgroup>
   <col style="width:36px"><col class="col-sku"><col style="width:108px"><col class="col-stat">
-  <col style="width:58px"><col style="width:74px"><col style="width:128px"><col class="col-price"><col style="width:110px"><col style="width:104px"><col style="width:70px">
-  <col class="col-mg"><col style="width:72px"><col class="col-bsk"><col class="col-ord"><col style="width:70px"><col class="col-stk"><col class="col-tpl"><col style="width:56px"><col style="width:240px">
+  <col style="width:58px"><col style="width:74px"><col style="width:128px"><col class="col-price"><col style="width:180px"><col style="width:110px"><col style="width:104px"><col style="width:70px">
+  <col style="width:72px"><col class="col-bsk"><col class="col-ord"><col style="width:70px"><col class="col-stk"><col class="col-tpl"><col style="width:56px"><col style="width:240px">
 </colgroup>
 <thead><tr>
   <th><div class="cb indet" id="cbAll" onclick="toggleAll()"></div></th>
@@ -7724,10 +7724,10 @@ body.avito-popup-open { overflow: hidden; }
   <th><div class="th-tip tc">Акция <span class="tip-i">?</span><div class="tip-box">Статус участия в акции WB по загруженному XLSX-файлу и ценам акции.</div></div></th>
   <th><div class="th-tip tc">Ответственный <span class="tip-i">?</span><div class="tip-box">Менеджер, закреплённый за SKU. План-факт считается по текущему закреплению товара.</div></div></th>
   <th class="num sorted" onclick="sortBy('price')">Цена до СПП <span class="sort-arrow">↓</span></th>
+  <th>Себестоимость, ₽/шт.</th>
   <th class="num">С СПП</th>
   <th class="num">С кошельком</th>
-  <th class="num">% СПП</th>
-  <th class="num"><div class="th-tip tc">Маржа <span class="tip-i">?</span><div class="tip-box">Маржинальность = (Цена − себестоимость − комиссия WB − логистика) / Цена × 100%</div></div></th>
+  <th class="num" title="Скидка постоянного покупателя; не включает скидку кошелька">% СПП</th>
   <th class="num">Комиссия</th>
   <th class="num" onclick="sortBy('bsk')"><div class="th-tip tc">Корзины <span class="tip-i">?</span><div class="tip-box">Добавлений в корзину за выбранный период. Алгоритм сравнивает с предыдущим периодом — главный сигнал для изменения цены.</div></div></th>
   <th class="num">Заказы</th>
@@ -12916,8 +12916,9 @@ function buyoutHTML(p){
 }
 function abcHTML(p){
   if (p.financeState === 'no_data' || !p.abcCode) return '<span class="abc-badge new" data-tip="ABC появится после загрузки финансового отчёта WB">нет данных</span>';
-  const code = (p.abcCode || 'CC').toUpperCase();
-  return '<span class="abc-badge ' + code.toLowerCase() + '" data-tip="1-я буква — продажи, 2-я — чистая прибыль">' + code + '</span>';
+  const code = String(p.abcCode).toUpperCase();
+  const partial = code.includes('—');
+  return '<span class="abc-badge ' + (partial ? 'new' : code.toLowerCase()) + '" data-tip="' + escapeHtml(p.abcReason || '1-я буква — продажи, 2-я — чистая прибыль') + '">' + escapeHtml(code) + '</span>';
 }
 function wbLinkHTML(p){
   return '<a class="wb-link" href="https://www.wildberries.ru/catalog/' + p.nmId + '/detail.aspx" target="_blank">' + p.nmId + '</a>';
@@ -13109,10 +13110,10 @@ function renderTable(){
       <td>${promoHTML(p)}</td>
       <td data-tip="Ответственный менеджер по закреплению SKU">${managerCellHTML(p)}</td>
       <td class="num">${priceCellHTML(p)}</td>
+      <td data-column-id="currentCost">Себестоимость недоступна</td>
       <td class="num">${avgPriceHTML(p)}</td>
       <td class="num">${walletPriceHTML(p)}</td>
       <td class="num">${sppHTML(p)}</td>
-      <td class="num">${marginHTML(p)}</td>
       <td class="num">${commissionHTML(p)}</td>
       <td class="num">${bskCellHTML(p)}</td>
       <td class="num">${ordersCellHTML(p)}</td>
@@ -13586,8 +13587,8 @@ function applyAdvancedFiltersSnapshot(filters){
 // =========================================================
 let sortField = 'demand', sortDir = 'desc';
 let productSortStack = [{ key: 'demand', dir: 'desc' }];
-const PRODUCT_SORT_KEYS = [null, 'sku', 'nmId', 'status', 'abc', 'promo', null, 'price', 'avgPriceSpp', 'priceWithWallet', 'spp', 'mg', 'commissionPct', 'bsk', 'ordersPeriod', 'buyout', 'stock', 'tpl', null, null];
-const PRODUCT_COLUMN_KEYS = ['select', 'sku', 'nmId', 'status', 'abc', 'promo', 'manager', 'price', 'avgPriceSpp', 'priceWithWallet', 'spp', 'mg', 'commissionPct', 'bsk', 'ordersPeriod', 'buyout', 'stock', 'tpl', 'actions', 'comment'];
+const PRODUCT_SORT_KEYS = [null, 'sku', 'nmId', 'status', 'abc', 'promo', null, 'price', null, 'avgPriceSpp', 'priceWithWallet', 'spp', 'commissionPct', 'bsk', 'ordersPeriod', 'buyout', 'stock', 'tpl', null, null];
+const PRODUCT_COLUMN_KEYS = ['select', 'sku', 'nmId', 'status', 'abc', 'promo', 'manager', 'price', 'currentCost', 'avgPriceSpp', 'priceWithWallet', 'spp', 'commissionPct', 'bsk', 'ordersPeriod', 'buyout', 'stock', 'tpl', 'actions', 'comment'];
 function productDemandScore(p){
   const orders = Number(p.ordersPeriod ?? 0);
   const baskets = Number(p.bsk ?? 0);
@@ -21238,7 +21239,7 @@ function renderReportCommentDrawer(sku) {
   const audit = document.getElementById('reportCommentAudit');
   if (audit) {
     audit.classList.add('report-comment-audit');
-    audit.innerHTML = `<div class="event-row"><div class="event-row-title">08.05, 16:50 · Авто · пересчёт отчётов</div><div class="event-row-meta"><span class="comment-source-badge">из ${escapeHtml(source)}</span>Система обновила ABC, РНП, рекламу и складской риск по ${escapeHtml(sku)}.</div></div><div class="event-row"><div class="event-row-title">08.05 · Ручное · комментарии</div><div class="event-row-meta">Журнал сохраняет автора, дату и источник отчёта.</div></div>`;
+    audit.innerHTML = '<div class="event-row"><div class="event-row-title">Общий журнал комментариев не подключён</div><div class="event-row-meta">Локальные заметки не являются сохранёнными событиями аудита.</div></div>';
   }
 }
 function renderDrawerComments(p = _currentDrawerProduct) {
@@ -21255,7 +21256,7 @@ function addReportComment() {
   const text = input?.value.trim();
   if (!sku || !text) return;
   const source = document.getElementById('reportCommentSource')?.textContent || 'отчёты';
-  REPORT_COMMENTS.push({ id:'rc-' + Date.now(), sku, author:'Мария', initials:'МФ', time:'08.05, сейчас', source, text });
+  REPORT_COMMENTS.push({ id:'rc-' + Date.now(), sku, author:'Локальная заметка', initials:'', time:new Date().toLocaleString('ru-RU'), source, text });
   input.value = '';
   renderReportCommentDrawer(sku);
   renderTable();
@@ -21269,7 +21270,7 @@ function addDrawerComment() {
   const input = document.getElementById('drawerCommentInput');
   const text = input?.value.trim();
   if (!p || !text) return;
-  REPORT_COMMENTS.push({ id:'rc-' + Date.now(), sku:p.sku, author:'Мария', initials:'МФ', time:'08.05, сейчас', source:'карточка SKU', text });
+  REPORT_COMMENTS.push({ id:'rc-' + Date.now(), sku:p.sku, author:'Локальная заметка', initials:'', time:new Date().toLocaleString('ru-RU'), source:'карточка SKU', text });
   input.value = '';
   renderDrawerComments(p);
   renderTable();

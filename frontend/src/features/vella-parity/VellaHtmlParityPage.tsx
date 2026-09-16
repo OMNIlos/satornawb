@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, FileSpreadsheet
 import QRCode from 'qrcode'
 import { AuthContext, useAuth } from '@/features/auth/authContext'
 import { WbConnection } from '@/features/wb-live/WbConnection'
+import { CurrentCostEditor } from '@/features/wb-repricer/CurrentCostEditor'
 import { WbBrowserPricesConnection } from '@/features/wb-repricer/WbBrowserPricesConnection'
 import { WbProducts } from '@/features/wb-live/WbProducts'
 import { CanonicalAvitoStatisticsPage, canonicalAvitoStatisticsEnabled } from '@/features/avito/CanonicalAvitoStatistics'
@@ -1629,6 +1630,7 @@ function computeProductsKpiSnapshot() {
   }
 
   const summaryRecord = summary as Record<string, unknown>
+  const settlement = summaryRecord.settlementFormulaVersion === 'wb-final-payout-cogs-tax-v1'
   const summaryRevenue = Math.round(productNumber(summaryRecord, 'revenueKopecks') / 100)
   const summaryMarginRub = Math.round(productNumber(summaryRecord, 'marginKopecks') / 100)
   const summaryCogsRub = Math.round(productNumber(summaryRecord, 'cogsKopecks') / 100)
@@ -1637,13 +1639,17 @@ function computeProductsKpiSnapshot() {
   const summaryAdSpendRub = Math.round(productNumber(summaryRecord, 'adSpendKopecks') / 100)
   const summaryAdRevenueRub = Math.round(productNumber(summaryRecord, 'adRevenueKopecks') / 100)
   const revenue = summaryRecord.revenueKopecks != null ? summaryRevenue : fallback.revenue
-  const marginRub = summaryRecord.factTaxState === 'missing' || summaryRecord.marginKopecks === null
+  const marginRub = settlement
+    ? Number.isSafeInteger(summaryRecord.settlementProfitKopecks) ? Number(summaryRecord.settlementProfitKopecks) / 100 : null
+    : summaryRecord.factTaxState === 'missing' || summaryRecord.marginKopecks === null
     ? null : summaryRecord.marginKopecks != null ? summaryMarginRub : fallback.marginRub
-  const cogsRub = summaryRecord.cogsKopecks != null ? summaryCogsRub : fallback.cogsRub
+  const cogsRub = settlement ? Number(summaryRecord.settlementCogsKopecks ?? 0) / 100 : summaryRecord.cogsKopecks != null ? summaryCogsRub : fallback.cogsRub
   const expensesRub = summaryRecord.expensesKopecks != null ? summaryExpensesRub : fallback.expensesRub
   const adSpendRub = hasSummaryAdSpend ? summaryAdSpendRub : fallback.adSpendRub
   const adRevenueRub = summaryRecord.adRevenueKopecks != null ? summaryAdRevenueRub : fallback.adRevenueRub
-  const avgMargin = summaryRecord.factTaxState === 'missing' || summaryRecord.avgMarginPct === null
+  const avgMargin = settlement
+    ? marginRub != null && Number(summaryRecord.revenueKopecks) !== 0 ? marginRub * 10000 / Number(summaryRecord.revenueKopecks) : null
+    : summaryRecord.factTaxState === 'missing' || summaryRecord.avgMarginPct === null
     ? null : summaryRecord.avgMarginPct != null ? productNumber(summaryRecord, 'avgMarginPct') : fallback.avgMargin
   const hasFinanceRows = productsForKpi().some((product) => String(product.financeState ?? 'no_data') !== 'no_data')
   const adsCacheLoaded = Boolean(window.__vellaProductsCacheMeta?.adsFetchedAt)
@@ -15781,6 +15787,7 @@ function ProductDrawerCommentsIsland({ replacementKey }: { replacementKey: strin
       data-vella-island-status="explicit-jsx"
     >
       <div className="d-section-title">История комментариев</div>
+      <p role="note">Внутренние заметки. Общее сохранение для сотрудников пока не подключено: записи ниже существуют только в этой вкладке и пропадут после перезагрузки.</p>
       <div className="report-comment-history" id="drawerCommentList" />
       <div className="report-comment-form">
         <textarea className="report-comment-input" id="drawerCommentInput" placeholder="Добавить комментарий менеджера..." />
@@ -15999,6 +16006,7 @@ function ReportCommentDrawerIsland({ replacementKey }: { replacementKey: string 
       </div>
       <div className="drawer-body">
         <div className="report-card-title" style={{ marginBottom: '10px' }}>История комментариев</div>
+        <p role="note">Внутренние заметки. Общее сохранение для сотрудников пока не подключено: записи ниже существуют только в этой вкладке и пропадут после перезагрузки.</p>
         <div className="event-list" id="reportCommentList" />
         <div className="report-card-title" style={{ margin: '18px 0 10px' }}>Журнал действий</div>
         <div className="event-list" id="reportCommentAudit" />
@@ -26796,7 +26804,7 @@ function compactTableHtml(html: string) {
   return html.replace(/>\s+</g, '><').trim()
 }
 
-const PRODUCTS_COLUMN_KEYS = ['select', 'sku', 'nmId', 'status', 'abc', 'promo', 'manager', 'price', 'avgPriceSpp', 'priceWithWallet', 'spp', 'mg', 'commissionPct', 'bsk', 'ordersPeriod', 'buyout', 'stock', 'tpl', 'actions', 'comment'] as const
+const PRODUCTS_COLUMN_KEYS = ['select', 'sku', 'nmId', 'status', 'abc', 'promo', 'manager', 'price', 'currentCost', 'avgPriceSpp', 'priceWithWallet', 'spp', 'commissionPct', 'bsk', 'ordersPeriod', 'buyout', 'stock', 'tpl', 'actions', 'comment'] as const
 
 function tableRowsFromHtml(html: string, keyPrefix: string): HtmlTableRowSnapshot[] {
   if (!html.trim()) return []
@@ -26840,6 +26848,15 @@ function rowsSnapshotFromHtml(html: string, keyPrefix: string, fallbackCount?: n
   }
 }
 
+function ProductCostCell({ row }: { row: HtmlTableRowSnapshot }) {
+  const { accessToken } = useAuth()
+  const sku = productsRowDataAttr(row, 'data-sku')
+  const product = (window.PRODUCTS as Array<{ sku: string; nmId?: number }> | undefined)?.find(item => item.sku === sku)
+  return <CurrentCostEditor nmId={Number(product?.nmId ?? 0)} onSaved={async () => {
+    if (accessToken) await loadProductsPageFromRuntime(accessToken, window.__vellaProductsListState?.page ?? 1)
+  }} />
+}
+
 function renderStructuredTableRows(rows: HtmlTableRowSnapshot[], keyPrefix: string) {
   return rows.map((row, index) => (
     <tr key={row.key} {...row.props}>
@@ -26850,7 +26867,7 @@ function renderStructuredTableRows(rows: HtmlTableRowSnapshot[], keyPrefix: stri
           </th>
         ) : (
           <td key={cell.key} {...cell.props}>
-            {htmlToReactFragment(cell.html, `${keyPrefix}-${index}-${cellIndex}`)}
+            {cell.props['data-column-id'] === 'currentCost' ? <ProductCostCell row={row} /> : htmlToReactFragment(cell.html, `${keyPrefix}-${index}-${cellIndex}`)}
           </td>
         )
       ))}
@@ -26970,7 +26987,7 @@ function ProductsTableBodyIsland({ sourceElement }: { replacementKey: string; so
         data-vella-row-count={0}
       >
         <tr className="vella-products-loading-row">
-          <td colSpan={20}>
+          <td colSpan={PRODUCTS_COLUMN_KEYS.length}>
             <div className="vella-products-loading-cell">
               <span className="vella-products-loading-spinner" />
               <span>Загружаем страницу товаров...</span>
@@ -27082,7 +27099,10 @@ function ProductsKpiStripIsland() {
   const kpi = computeProductsKpiSnapshot()
   const revenueValue = kpi.revenueAvailable ? `${formatProductsInteger(kpi.revenue)} ₽` : '—'
   const marginValue = kpi.marginAvailable && kpi.marginRub != null ? `${formatProductsInteger(kpi.marginRub)} ₽` : '—'
-  const cogsValue = kpi.revenueAvailable && window.__vellaProductsSummary?.cogsKopecks !== null ? `${formatProductsInteger(kpi.cogsRub)} ₽` : '—'
+  const cogsKnown = window.__vellaProductsSummary?.settlementFormulaVersion === 'wb-final-payout-cogs-tax-v1'
+    ? Number.isSafeInteger(window.__vellaProductsSummary?.settlementCogsKopecks)
+    : window.__vellaProductsSummary?.cogsKopecks !== null
+  const cogsValue = kpi.revenueAvailable && cogsKnown ? `${formatProductsInteger(kpi.cogsRub)} ₽` : '—'
   const expensesValue = kpi.revenueAvailable && window.__vellaProductsSummary?.expensesKopecks !== null ? `${formatProductsInteger(kpi.expensesRub)} ₽` : '—'
   const ordersValue = formatProductsInteger(kpi.ordersUnits)
   const salesValue = kpi.revenueAvailable ? formatProductsInteger(kpi.salesUnits) : '—'
@@ -27094,32 +27114,34 @@ function ProductsKpiStripIsland() {
   const revenueDelta = kpi.revenueAvailable ? 'продажи из финансового отчёта' : 'финансы ещё не загружены'
   const factTaxMissing = window.__vellaProductsSummary?.factTaxState === 'missing'
     || (!window.__vellaProductsSummary?.factTaxState && productsForKpi().some(product => product.factTaxState === 'missing'))
-  const marginDelta = factTaxMissing ? 'налог за период не подтверждён'
+  const settlement = window.__vellaProductsSummary?.settlementFormulaVersion === 'wb-final-payout-cogs-tax-v1'
+  const marginDelta = settlement ? kpi.marginAvailable ? 'после удержаний WB, себестоимости и налога' : 'не подтверждены выплата, распределение расходов, себестоимость или налог'
+    : factTaxMissing ? 'налог за период не подтверждён'
     : kpi.marginAvailable ? 'расчёт репрайсера с корректировками' : 'расчёт недоступен'
   const ratioRevenue = window.__vellaProductsSummary?.revenueKopecks ?? kpi.revenue * 100
-  const ratioMargin = kpi.marginRub == null ? null : window.__vellaProductsSummary?.marginKopecks ?? kpi.marginRub * 100
-  const marginRatioValue = kpi.revenueAvailable && kpi.marginAvailable && ratioMargin != null && ratioRevenue !== 0 && window.__vellaProductsSummary?.avgMarginPct !== null
+  const ratioMargin = settlement ? window.__vellaProductsSummary?.settlementProfitKopecks : kpi.marginRub == null ? null : window.__vellaProductsSummary?.marginKopecks ?? kpi.marginRub * 100
+  const marginRatioValue = kpi.revenueAvailable && kpi.marginAvailable && ratioMargin != null && ratioRevenue !== 0 && (settlement || window.__vellaProductsSummary?.avgMarginPct !== null)
     ? `${(ratioMargin / ratioRevenue * 100).toFixed(1)}%` : '—'
   const items = [
     ['Выручка за период', 'WB retailAmount: продажи минус возвраты за выбранный период, до вычета расходов', 'kpiRevenue', revenueValue, revenueDelta],
-    ['Маржа / выручка, %', 'Маржа репрайсера ÷ выручка × 100; отношение общих сумм за период', 'kpiMargin', marginRatioValue, 'отношение сумм за период'],
-    ['Маржа репрайсера, ₽', 'Выручка WB + корректировка за единицу из настроек × продажи за вычетом возвратов − себестоимость − расходы − налог по подтверждённой политике за период. Не итоговая прибыль бизнеса.', 'kpiMarginRub', marginValue, marginDelta],
-    ['Продажи по себестоимости', 'Себестоимость из настроек SKU × (продажи − возвраты)', 'kpiCogs', cogsValue, 'с учётом возвратов'],
+    [settlement ? 'Маржа, ₽ / %' : 'Маржа репрайсера, ₽ / %', settlement ? 'Окончательная выплата после удержаний WB − датированная себестоимость проданных товаров − налог от продаж. Расходы WB повторно не вычитаются. Процент от текущей выручки. Внутренние расходы компании сейчас исключены.' : 'Прежний расчёт: выручка WB + корректировка за единицу × продажи нетто − себестоимость − расходы − налог. Процент от текущей выручки. Новый контракт выплаты ещё не получен.', 'kpiMarginRub', marginValue, marginDelta],
+    ['Заказы, шт. / ₽', 'Количество из текущего источника заказов за выбранный период. Согласованная денежная сумма заказов не передаётся API; она не вычисляется по текущей цене.', 'kpiOrdersUnits', `${ordersValue} шт. / — ₽`, 'сумма заказов пока неизвестна'],
+    ['Продажи по себестоимости', settlement ? 'Датированная себестоимость × (продажи − возвраты) по дням периода' : 'Себестоимость из настроек SKU × (продажи − возвраты)', 'kpiCogs', cogsValue, 'с учётом возвратов'],
     ['Расходы ₽', 'Комиссия, логистика, хранение, приёмка, штрафы, удержания, эквайринг, реклама и прочие расходы', 'kpiExpenses', expensesValue, 'финансы и реклама'],
     ['Реклама ₽', 'Расход рекламы за выбранный период', 'kpiAdsSpend', adsValue, adsDelta],
-    ['Заказы, шт', 'Количество заказов за выбранный период', 'kpiOrdersUnits', ordersValue, 'заказы покупателей'],
     ['Продажи нетто, шт', 'Продажи минус возвраты за выбранный период', 'kpiSalesUnits', salesValue, 'продажи − возвраты'],
     ['Возвраты, шт', 'Количество возвратов за выбранный период', 'kpiReturnsUnits', returnsValue, 'возвраты покупателей'],
     ['Цен изменено за период', 'Сколько товаров обновили цену в выбранном периоде', 'kpiPriceChanges', formatProductsInteger(kpi.priceChanges), 'история изменений', true],
     ['Корзины за период', 'Добавления в корзину за выбранный период.', 'kpiBaskets', formatProductsInteger(kpi.totalBaskets), basketsPartial ? 'загружена часть периода' : 'сигнал спроса'],
-    ['Товаров в продаже', 'Товары с остатком и активной ценой', 'kpiInSale', formatProductsInteger(kpi.inSale), 'активные товары'],
+    ['Товаров в продаже', 'Текущее состояние: нужен доступный остаток и действующая положительная цена одного варианта. Существующий счётчик этого не подтверждает; полнота и свежесть ещё не проверены.', 'kpiInSale', '—', 'остаток и цена варианта не сверены'],
     ['% участия в акциях', 'Доля товаров из загруженного файла акции', 'kpiPromoShare', `${formatProductsInteger(kpi.promoShare)}%`, 'акции WB'],
   ] as const
 
   const cards = items.map(([label, tip, id, value, delta, clickable]) => (
     <div className="stat" key={id}>
       <div className="stat-label">{label} <button type="button" className="stat-tip" data-tip={tip} aria-label={`${label}: ${tip}`}>i</button></div>
-      {clickable ? <button type="button" className="stat-val products-kpi-link" id={id} onClick={() => window.goSubtab?.('history')} aria-label="Открыть историю изменений цен">{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</button>
+      {id === 'kpiMarginRub' ? <div className="stat-val"><span id="kpiMarginRub">{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</span> / <span id="kpiMargin">{loading || unavailable ? '—' : marginRatioValue}</span></div>
+        : clickable ? <button type="button" className="stat-val products-kpi-link" id={id} onClick={() => window.goSubtab?.('history')} aria-label="Открыть историю изменений цен">{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</button>
         : <div className="stat-val" id={id}>{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</div>}
       <div className="stat-delta neutral">{delta}</div>
     </div>
@@ -36672,34 +36694,23 @@ export function VellaHtmlParityPage() {
         body.density-compact .vella-html-parity-root #tab-products #mainTable td:nth-child(10) {
           min-width: 52px;
         }
-        body.density-compact .vella-html-parity-root #tab-products #mainTable th:nth-child(11),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable td:nth-child(11),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable th:nth-child(14),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable td:nth-child(14),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable th:nth-child(15),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable td:nth-child(15),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable th:nth-child(16),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable td:nth-child(16),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable th:nth-child(17),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable td:nth-child(17) {
+        body.density-compact .vella-html-parity-root #tab-products #mainTable [data-column-id="spp"],
+        body.density-compact .vella-html-parity-root #tab-products #mainTable [data-column-id="bsk"],
+        body.density-compact .vella-html-parity-root #tab-products #mainTable [data-column-id="ordersPeriod"],
+        body.density-compact .vella-html-parity-root #tab-products #mainTable [data-column-id="buyout"],
+        body.density-compact .vella-html-parity-root #tab-products #mainTable [data-column-id="stock"] {
           min-width: 34px;
         }
-        body.density-compact .vella-html-parity-root #tab-products #mainTable th:nth-child(12),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable td:nth-child(12),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable th:nth-child(13),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable td:nth-child(13) {
+        body.density-compact .vella-html-parity-root #tab-products #mainTable [data-column-id="commissionPct"] {
           min-width: 42px;
         }
-        body.density-compact .vella-html-parity-root #tab-products #mainTable th:nth-child(18),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable td:nth-child(18) {
+        body.density-compact .vella-html-parity-root #tab-products #mainTable [data-column-id="tpl"] {
           min-width: 46px;
         }
-        body.density-compact .vella-html-parity-root #tab-products #mainTable th:nth-child(19),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable td:nth-child(19) {
+        body.density-compact .vella-html-parity-root #tab-products #mainTable [data-column-id="actions"] {
           min-width: 48px;
         }
-        body.density-compact .vella-html-parity-root #tab-products #mainTable th:nth-child(20),
-        body.density-compact .vella-html-parity-root #tab-products #mainTable td:nth-child(20) {
+        body.density-compact .vella-html-parity-root #tab-products #mainTable [data-column-id="comment"] {
           min-width: 40px;
         }
         body.density-compact .vella-html-parity-root #tab-products #mainTable {

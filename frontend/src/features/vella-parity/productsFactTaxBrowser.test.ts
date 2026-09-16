@@ -17,6 +17,8 @@ it('keeps missing factual tax unknown and confirmed zero distinct from the curre
   if (!bundle || bundle.type !== 'chunk') throw new Error('Missing factual tax fixture bundle')
   const styles = artifacts.flatMap(output => output.type === 'asset' && output.fileName.endsWith('.css') ? [String(output.source)] : []).join('\n')
   const scenarios = [
+    { state: 'configured', summary: { settlementFormulaVersion: 'wb-final-payout-cogs-tax-v1', settlementProfitKopecks: 248000, marginKopecks: 999999, avgMarginPct: null }, expected: '2480₽', ratio: '24.8%', net: 0 },
+    { state: 'configured', summary: { settlementFormulaVersion: 'wb-final-payout-cogs-tax-v1', settlementProfitKopecks: null, marginKopecks: 999999 }, expected: '—', ratio: '—', net: 0 },
     { state: 'missing', summary: { factTaxState: 'missing', factTaxReason: 'tax_policy_unconfirmed', taxKopecks: null, marginKopecks: null, avgMarginPct: null }, expected: '—', ratio: '—', net: null },
     { state: 'missing', summary: undefined, expected: '—', ratio: '—', net: null },
     { state: 'configured', summary: undefined, expected: '0₽', ratio: '0.0%', net: 0 },
@@ -63,10 +65,11 @@ it('keeps missing factual tax unknown and confirmed zero distinct from the curre
       const compact = (value: string) => value.replace(/\s+/g, '')
       expect.soft(compact(await page.locator('#kpiMarginRub').innerText()), JSON.stringify(scenario)).toBe(scenario.expected)
       expect.soft(compact(await page.locator('#kpiMargin').innerText()), JSON.stringify(scenario)).toBe(scenario.ratio)
-      expect.soft(compact(await row.locator('[data-column-id="mg"]').innerText())).toBe('+10%+100₽')
+      expect(await row.locator('[data-column-id="mg"]').count()).toBe(0)
+      expect(await page.evaluate(() => (window.PRODUCTS as Array<{ mg?: number; mgRub?: number }>)?.[0]?.mgRub)).toBe(100)
       expect.soft(await page.evaluate(() => (window.PRODUCTS as Array<{ netSku?: number | null }>)?.[0]?.netSku)).toBe(scenario.net)
       if (scenario.state === 'missing') {
-        expect.soft(await page.locator('#kpiMarginRub').locator('..').innerText()).toContain('налог за период не подтверждён')
+        expect.soft(await page.locator('#kpiMarginRub').locator('xpath=ancestor::div[contains(@class,"stat")][2]').innerText()).toContain('налог за период не подтверждён')
       }
       expect(unexpected).toEqual([])
       expect(errors).toEqual([])

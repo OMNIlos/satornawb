@@ -117,6 +117,10 @@ export type LiveRepricerSkuRow = {
   }
   analytics?: {
     abcCode?: string
+    abcPolicyVersion?: string
+    abcReason?: string | null
+    settlementFormulaVersion?: string
+    settlementProfitKopecks?: number | null
     promotionStatus?: 'yes' | 'no'
     promotionStatusText?: string | null
     promotionName?: string | null
@@ -269,6 +273,11 @@ export type LiveRepricerLoadTrace = {
 }
 
 export type LiveRepricerSkuListSummary = {
+  settlementFormulaVersion?: string
+  settlementProfitKopecks?: number | null
+  settlementCogsKopecks?: number | null
+  finalPayoutKopecks?: number | null
+  settlementBlockers?: string[]
   revenueKopecks?: number
   marginKopecks?: number | null
   taxKopecks?: number | null
@@ -840,7 +849,10 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     ? kopecksToRub(row.analytics.expensesKopecks)
     : null
   const factTaxState = row.analytics?.factTaxState
-  const financeNetProfitKopecks = factTaxState && row.analytics?.factNetProfitKopecks !== undefined
+  const hasSettlementProfit = row.analytics?.settlementFormulaVersion === 'wb-final-payout-cogs-tax-v1'
+  const financeNetProfitKopecks = hasSettlementProfit
+    ? row.analytics?.settlementProfitKopecks ?? null
+    : factTaxState && row.analytics?.factNetProfitKopecks !== undefined
     ? row.analytics.factNetProfitKopecks
     : row.analytics?.netProfitKopecks
   const financeNetProfitRub = hasFinance && financeNetProfitKopecks != null
@@ -853,7 +865,7 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
   const revenue7d = hasFinance ? financeRevenueRub : 0
   const storagePerSku = storageRub
   const netPerUnit = marginRub
-  const netSku = factTaxState
+  const netSku = hasSettlementProfit ? financeNetProfitRub : factTaxState
     ? factTaxState === 'configured' ? financeNetProfitRub : null
     : financeNetProfitRub != null
     ? financeNetProfitRub
@@ -862,6 +874,11 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     : marginRub != null && ordersPeriod > 0
       ? marginRub * ordersPeriod
       : null
+  const rawAbc = row.analytics?.abcCode ?? ''
+  const versionedAbc = row.analytics?.abcPolicyVersion === 'wb-units-profit-cumulative-80-95-v1'
+  const abcCode = versionedAbc && /^[ABC—]{2}$/.test(rawAbc)
+    ? `${rawAbc[0]}${hasSettlementProfit && Number.isSafeInteger(financeNetProfitKopecks) ? rawAbc[1] : '—'}`
+    : /^[ABC]{2}$/.test(rawAbc) ? `${rawAbc[0]}—` : null
   const pminRub = row.settings.effectivePMinKopecks != null
     ? kopecksToRub(row.settings.effectivePMinKopecks)
     : row.settings.pMinKopecks != null && row.settings.pMinKopecks > 0
@@ -919,8 +936,12 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     strategyDescription: row.strategy?.description ?? '',
     strategyAssignmentSource: parityAssignmentSource(row),
     nmId: row.meta.nmId ?? 0,
-    abc: row.analytics?.abcCode ?? 'CC',
-    abcCode: row.analytics?.abcCode ?? 'CC',
+    // Legacy profit rank is not compatible with the owner's settlement policy.
+    abc: abcCode ?? '——',
+    abcCode,
+    abcReason: row.analytics?.abcPolicyVersion === 'wb-units-profit-cumulative-80-95-v1'
+      ? row.analytics.abcReason || 'Первая буква — продажи в штуках, вторая — прибыль после удержаний WB, себестоимости и налога. Накопленный вклад: 80% / 95%. Внутренние расходы компании сейчас исключены.'
+      : 'Первая буква — текущий legacy-класс по штукам продаж (квоты 20/30/50%, не накопленный вклад). Вторая не рассчитана: чистая прибыль по новому контракту ещё не получена.',
     promoActive: row.analytics?.promotionStatus === 'yes',
     promoPrice: row.analytics?.promotionStatus === 'yes' ? currentPrice : 0,
     promotionStatusText: displayPromotionLabel || promotionLabel || null,

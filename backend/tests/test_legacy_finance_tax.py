@@ -58,6 +58,28 @@ def _resolve(cache, start, end=None, org=1):
     return get_legacy_finance_taxes(org, cache, Period(date.fromisoformat(start), date.fromisoformat(end or start)))["123"]
 
 
+@pytest.mark.parametrize("amount", [0, 12345])
+def test_settlement_cost_uses_dated_cost_and_net_sold_units(tax_db, amount):
+    from app.platform.economics.costs import CostsService
+    from app.platform.economics.legacy_tax import get_legacy_finance_taxes
+    _policy(tax_db, "2026-08-31T21:00:00")
+    CostsService(tax_db, 1).set_cost(catalog_sku_id=11, amount_kopecks=amount,
+        value_state="configured", effective_from=datetime(2026, 8, 31, 21, tzinfo=timezone.utc),
+        source="fixture", source_reference="dated-cost", evidence_status="dated")
+    result = get_legacy_finance_taxes(1, _cache(_fact(100000, 3, 1)),
+        Period(date(2026, 9, 1), date(2026, 9, 1)), include_costs=True)["123"]
+    assert result["settlementCogsKopecks"] == amount * 2
+    assert result["taxKopecks"] == 7500
+
+
+def test_missing_dated_cost_does_not_become_zero(tax_db):
+    from app.platform.economics.legacy_tax import get_legacy_finance_taxes
+    _policy(tax_db, "2026-08-31T21:00:00")
+    result = get_legacy_finance_taxes(1, _cache(_fact(100000)),
+        Period(date(2026, 9, 1), date(2026, 9, 1)), include_costs=True)["123"]
+    assert result["settlementCogsKopecks"] is None
+
+
 def test_september_confirmation_does_not_reprice_august_tax(tax_db):
     _policy(tax_db, "2026-08-01T00:00:00", 600, confirmed=False, reference="old-assumption")
     _policy(tax_db, "2026-08-31T21:00:00")

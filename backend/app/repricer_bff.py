@@ -5247,6 +5247,78 @@ def _build_sku_row(
     return row
 
 
+SETTLEMENT_PROFIT_VERSION = "wb-final-payout-cogs-tax-v1"
+SETTLEMENT_ABC_VERSION = "wb-units-profit-cumulative-80-95-v1"
+
+
+def settlement_profit_metrics(finance: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """WB settlement only. Commission/acquiring already in payable; no Ads double debit.
+
+    Finance promotion is moved out of deduction by _finance_row_costs, so it is
+    subtracted exactly once here. Existing signed corrections remain signed.
+    No current-price COGS, workReturn, internal costs or planned tax fallback.
+    """
+    costs = ("logisticsKopecks", "storageKopecks", "acceptanceKopecks", "penaltyKopecks",
+             "deductionKopecks", "loyaltyCostKopecks", "adSpendKopecks")
+    fields = (*costs, "payableKopecks", "additionalPaymentKopecks")
+    blockers = []
+    if finance.get("commissionSource") != "buyerRevenueKopecks-payableKopecks-acquiringKopecks":
+        blockers.append("settlement_payable_unconfirmed")
+    if any(type(finance.get(field)) is not int for field in fields):
+        blockers.append("settlement_components_missing")
+    payout = None if blockers else (finance["payableKopecks"]
+        - sum(finance[field] for field in costs) + finance["additionalPaymentKopecks"])
+    cogs = context.get("settlementCogsKopecks")
+    tax = context.get("taxKopecks")
+    if context.get("settlementAllocationConfirmed") is False:
+        blockers.append("settlement_account_expenses_unreconciled")
+    if type(cogs) is not int:
+        blockers.append("settlement_dated_cogs_missing")
+    if context.get("factTaxState") != "configured" or type(tax) is not int:
+        blockers.append("settlement_tax_missing")
+    return {"settlementFormulaVersion": SETTLEMENT_PROFIT_VERSION,
+            "settlementAdvertisingKopecks": finance.get("adSpendKopecks"),
+            "finalPayoutKopecks": payout,
+            "settlementCogsKopecks": cogs if type(cogs) is int else None,
+            "settlementProfitKopecks": None if blockers else payout - cogs - tax,
+            "settlementBlockers": blockers}
+
+
+def cumulative_abc(values: dict[str, int | None]) -> dict[str, str | None]:
+    """Stable IDs break ties; threshold-crossing item stays in the prior group.
+
+    Missing member blocks the axis (denominator unknown). Nonpositive entries
+    are C when there is positive contribution, otherwise the axis is unknown.
+    Integer comparisons avoid percent rounding at 80/95 boundaries.
+    """
+    total = sum(max(value, 0) for value in values.values() if type(value) is int)
+    if not total or any(type(value) is not int for value in values.values()):
+        return dict.fromkeys(values)
+    result = {}
+    cumulative = 0
+    for key, value in sorted(values.items(), key=lambda item: (-item[1], item[0])):
+        result[key] = "C" if value <= 0 else "A" if cumulative * 100 < total * 80 else "B" if cumulative * 100 < total * 95 else "C"
+        cumulative += max(value, 0)
+    return result
+
+
+def apply_settlement_abc(rows: list[dict[str, Any]], finance: dict[str, dict[str, Any]],
+                         contexts: dict[str, dict[str, Any]]) -> None:
+    # The finance universe includes historical SKUs absent from current catalog.
+    metrics = {str(key): settlement_profit_metrics(fact, contexts.get(str(key), {})) for key, fact in finance.items()}
+    sales = cumulative_abc({str(key): fact.get("salesUnits") for key, fact in finance.items()})
+    profits = cumulative_abc({key: value["settlementProfitKopecks"] for key, value in metrics.items()})
+    for row in rows:
+        key = str((row.get("meta") or {}).get("nmId"))
+        analytics = row.setdefault("analytics", {})
+        analytics.update(metrics.get(key) or settlement_profit_metrics({}, {}))
+        sales_class, profit_class = sales.get(key), profits.get(key)
+        analytics.update(abcPolicyVersion=SETTLEMENT_ABC_VERSION,
+                         salesClass=sales_class, profitClass=profit_class,
+                         abcCode=f"{sales_class or '—'}{profit_class or '—'}",
+                         abcReason=None if sales_class and profit_class else "Недостаточно подтверждённых данных для классификации всего аккаунта")
+
+
 def _abc_letter(rank_index: int, total: int) -> str:
     if total <= 0:
         return "C"
@@ -5443,6 +5515,8 @@ def list_repricer_skus(
             )
         )
     _apply_abc_codes(rows, use_demo_data=use_demo_data)
+    if not use_demo_data:
+        apply_settlement_abc(rows, cached_finance_aggregates or {}, cached_finance_taxes or {})
     if sort_by_demand:
         rows.sort(key=_sku_demand_sort_key)
     return rows

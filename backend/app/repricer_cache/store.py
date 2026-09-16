@@ -21,6 +21,16 @@ FINANCE_REVENUE_BASIS = "retailAmount"
 FINANCE_SCHEMA_VERSION = "v4"
 
 
+def _db_timestamp(value: Any) -> str | None:
+    """Raw SQL returns datetime in PostgreSQL and ISO text in SQLite."""
+    if value is None:
+        return None
+    parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.isoformat()
+
+
 def finance_cache_uses_current_revenue_basis(payload: dict[str, Any]) -> bool:
     return (
         payload.get("revenueBasis") == FINANCE_REVENUE_BASIS
@@ -367,7 +377,7 @@ def cached_goods_meta(organization_id: int) -> dict[str, Any]:
             ),
             {"organization_id": organization_id},
         ).mappings().first()
-        latest_fetched_at = row["latest_fetched_at"].isoformat() if row and row["latest_fetched_at"] else None
+        latest_fetched_at = _db_timestamp(row["latest_fetched_at"]) if row else None
         return {
             "pagesCached": int(row["pages_cached"] or 0) if row else 0,
             "totalCached": int(row["total_cached"] or 0) if row else 0,
@@ -626,7 +636,7 @@ def list_source_cache_ranges_by_prefix(
                     "dailyAggregateDates": daily_dates,
                     "revenueBasis": row["revenue_basis"],
                     "financeSchemaVersion": row["finance_schema_version"],
-                    "fetchedAt": row["fetched_at"].isoformat() if row["fetched_at"] else None,
+                    "fetchedAt": _db_timestamp(row["fetched_at"]),
                 }
             )
         return result
@@ -785,7 +795,7 @@ def get_source_cache_meta_fields(organization_id: int, source_key: str) -> dict[
         ).mappings().first()
         if row is None:
             return {}
-        fetched_at = row["fetched_at"].isoformat() if row["fetched_at"] else None
+        fetched_at = _db_timestamp(row["fetched_at"])
         if source_key.startswith("finance_"):
             return {
                 "fetchedAt": fetched_at,

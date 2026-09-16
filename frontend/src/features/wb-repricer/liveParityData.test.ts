@@ -112,6 +112,24 @@ describe('repricer WB sync API', () => {
 })
 
 describe('mapLiveRepricerRowToParityProduct', () => {
+  test.each([24800000, 0, -100, null])('uses versioned settlement profit %s without legacy fallback', (profit) => {
+    const product = mapLiveRepricerRowToParityProduct({
+      meta: { articleId: 'ABC-TEST', name: 'Synthetic', currentPriceKopecks: 10000, basketsLast7d: 0, basketNorm: 1, status: 'auto' },
+      settings: { cogsKopecks: 1000, logisticsKopecks: 0, minMarginPct: 0, wbCommissionPct: 0 },
+      analytics: { financeState: 'ok', abcCode: profit === null ? 'A—' : 'AC', abcPolicyVersion: 'wb-units-profit-cumulative-80-95-v1', settlementFormulaVersion: 'wb-final-payout-cogs-tax-v1', settlementProfitKopecks: profit, netProfitKopecks: 999999 },
+    }, 0)
+    expect(product.abcCode).toBe(profit === null ? 'A—' : 'AC')
+    expect(product.netSku).toBe(profit === null ? null : profit / 100)
+  })
+  test.each(['AA', 'AB', 'BC', 'CC', undefined, '', 'invalid'])('does not present legacy profit rank %s as confirmed net-profit ABC', (abcCode) => {
+    const product = mapLiveRepricerRowToParityProduct({
+      meta: { articleId: 'ABC-TEST', name: 'Synthetic ABC', currentPriceKopecks: 10000, basketsLast7d: 0, basketNorm: 1, status: 'auto' },
+      settings: { cogsKopecks: 1000, logisticsKopecks: 0, minMarginPct: 0, wbCommissionPct: 0 },
+      analytics: { abcCode, netProfitKopecks: 1000 },
+    }, 0)
+    expect(product.abcCode).toBe(abcCode && /^[ABC]{2}$/.test(abcCode) ? `${abcCode[0]}—` : null)
+    expect(product.abcReason).toContain('чистая прибыль')
+  })
   test('uses direct SPP API buyer price for price after SPP instead of wallet final price', () => {
     const product = mapLiveRepricerRowToParityProduct({
       meta: {

@@ -2068,7 +2068,20 @@ def _repricer_finance_taxes(
     key = (organization_id, "finance_taxes", period.cache_key)
     if memo is not None and key in memo:
         return memo[key]
-    taxes = get_legacy_finance_taxes(organization_id, finance_cache, period)
+    taxes = get_legacy_finance_taxes(organization_id, finance_cache, period, include_costs=True)
+    # Do not rank SKU profit while some account expenses remain outside SKUs.
+    # Missing reconciliation is not evidence of a zero residual.
+    diagnostics = _limited_finance_diagnostics(finance_cache, limit=1)
+    aggregates = finance_cache.get("aggregates") or {}
+    components = ("logistics", "storage", "acceptance", "penalty", "deduction",
+                  "loyaltyCost", "adSpend", "additionalPayment")
+    reconciled = all(
+        (raw := _finance_raw_cost_total(diagnostics, component)) is not None
+        and raw == sum(_int_or_zero(row.get(f"{component}Kopecks")) for row in aggregates.values())
+        for component in components
+    )
+    for context in taxes.values():
+        context["settlementAllocationConfirmed"] = reconciled
     if memo is not None:
         memo[key] = taxes
     return taxes
@@ -2150,7 +2163,7 @@ def _list_repricer_skus_from_cached_sources(
     )
 
 
-SKU_LIST_SNAPSHOT_VERSION = 12
+SKU_LIST_SNAPSHOT_VERSION = 13
 SKU_LIST_SNAPSHOT_CHUNK_SIZE = 150
 
 
@@ -2741,7 +2754,26 @@ def _repricer_list_summary(
         fact_tax_reasons.add("finance_missing")
     avg_margin_pct = (margin_kopecks / revenue_kopecks * 100) if revenue_kopecks != 0 and not fact_tax_reasons else None
     promo_share_pct = round(promo_count / len(rows) * 100) if rows else 0
+    settlement_rows = [row.get("analytics") or {} for row in rows]
+    settlement_blockers = sorted({reason for row in settlement_rows for reason in row.get("settlementBlockers", [])})
+    if any(row.get("settlementFormulaVersion") != repricer_bff_module.SETTLEMENT_PROFIT_VERSION
+           or type(row.get("settlementProfitKopecks")) is not int for row in settlement_rows):
+        settlement_blockers.append("settlement_rows_incomplete")
+    if any(unassigned_finance_components.get(key, 0) for key in ("commission", "acquiring")):
+        settlement_blockers.append("settlement_unassigned_payable_unconfirmed")
+    settlement_residual = sum((-amount if key == "additionalPayment" else amount)
+        for key, amount in unassigned_finance_components.items() if key not in {"commission", "acquiring"})
+    if finance_ad_spend_kopecks is not None:
+        # Compare Finance promotions only, never the parallel Ads representation.
+        settlement_residual += finance_ad_spend_kopecks - sum(
+            _int_or_zero(row.get("settlementAdvertisingKopecks")) for row in settlement_rows)
+    settlement_profit = None if settlement_blockers else sum(row["settlementProfitKopecks"] for row in settlement_rows) - settlement_residual
     return {
+        "settlementFormulaVersion": repricer_bff_module.SETTLEMENT_PROFIT_VERSION,
+        "settlementProfitKopecks": settlement_profit,
+        "finalPayoutKopecks": None if settlement_blockers else sum(row["finalPayoutKopecks"] for row in settlement_rows) - settlement_residual,
+        "settlementCogsKopecks": None if settlement_blockers else sum(row["settlementCogsKopecks"] for row in settlement_rows),
+        "settlementBlockers": settlement_blockers,
         "revenueKopecks": revenue_kopecks,
         "sellerRevenueKopecks": revenue_kopecks,
         "buyerRevenueKopecks": buyer_revenue_kopecks,
@@ -3012,6 +3044,7 @@ def _repricer_list_summary_from_source_caches(
         )
         if revenue_kopecks > 0 and net_profit_kopecks is not None:
             analytics["marginPct"] = round(_int_or_zero(net_profit_kopecks) / revenue_kopecks * 100, 1)
+        analytics.update(repricer_bff_module.settlement_profit_metrics(finance, tax))
         rows.append({"meta": meta, "analytics": analytics})
 
     summary = _repricer_list_summary(

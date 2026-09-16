@@ -30,3 +30,9 @@ class CostSetRequest(BaseModel):
     sourceReference: str = Field(min_length=1, max_length=255)
     evidenceStatus: EvidenceState
     supersedesCostVersionId: int | None = Field(default=None, ge=1)
+
+
+class CurrentCostSetRequest(BaseModel):
+    amountKopecks: int = Field(strict=True, ge=0, le=9_007_199_254_740_991)
+    expectedCostVersionId: int | None = Field(ge=1)
+    sourceReference: str = Field(min_length=1, max_length=255, pattern=r".*\S.*")
