@@ -135,6 +135,10 @@ test('stop during an in-flight chunk preserves its acknowledgement and sends no 
   const submitted = h.page({ items: offers.map((item) => ({ nmId: item.nmId, sizeId: item.sizeId, buyerPriceNoWalletKopecks: 130800 })) })
   await postGate.entered
   const stopped = h.popup({ type: 'stop' })
+  const reopened = harness({ local: clone(h.local) })
+  await reopened.startup()
+  assert.equal((await reopened.popup({ type: 'status' })).state.status, 'paused', 'browser restart must retain a stop issued before the POST returned')
+  assert.equal(reopened.calls.length, 0)
   postGate.release()
   await submitted; await stopped
   const state = (await h.popup({ type: 'status' })).state
@@ -156,6 +160,20 @@ test('stop during catalog GET prevents another page or a stale-cache refresh POS
     assert.equal(h.navigations.length, 0)
     assert.equal((await h.popup({ type: 'status' })).state.reason, 'user_stopped')
   }
+})
+
+test('stop during a recurring catalog read remains paused after closing the browser', async () => {
+  const catalogGate = gate()
+  const h = harness({ local: { token: TOKEN, control: { enabled: true, nextRunAt: Date.now() - 1 } }, catalogGate })
+  const running = h.startup()
+  await catalogGate.entered
+  const stopping = h.popup({ type: 'stop' })
+  const reopened = harness({ local: clone(h.local) })
+  await reopened.startup()
+  catalogGate.release()
+  await running; await stopping
+  assert.equal((await reopened.popup({ type: 'status' })).state.status, 'paused')
+  assert.equal(reopened.calls.length, 0)
 })
 
 test('manual resume revisits the paused seller instead of skipping its offers', async () => {

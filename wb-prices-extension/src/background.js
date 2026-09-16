@@ -22,7 +22,7 @@ let serial = Promise.resolve()
 const ready = (async () => {
   await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })
   await chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })
-  const local = await chrome.storage.local.get(['token', 'control'])
+  const local = await chrome.storage.local.get(['token', 'control', 'stopRequested'])
   token = local.token
   const stored = await chrome.storage.session.get(['state', 'stopRequested'])
   const saved = stored.state
@@ -33,7 +33,7 @@ const ready = (async () => {
     else if (local.control.reason) { state.status = 'paused'; state.reason = local.control.reason }
   }
   if (!token) state = emptyState()
-  stopped = Boolean(stored.stopRequested)
+  stopped = Boolean(stored.stopRequested || local.stopRequested)
   if (stopped && token) { state.status = 'paused'; state.reason = 'user_stopped' }
   else if (state.status !== 'paused' && state.pendingRequest?.kind === 'snapshot') { state.status = 'paused'; state.reason = 'submission_unknown' }
   else if (state.status !== 'paused' && state.pendingRequest?.kind === 'refresh') state.status = 'refreshing'
@@ -341,6 +341,7 @@ async function command(message, generation = controlGeneration) {
   if (state.status === 'running') throw new Error('stop_first')
   stopped = false
   await chrome.storage.session.remove('stopRequested')
+  await chrome.storage.local.remove('stopRequested')
   if (message.type === 'connect') {
     const candidate = message.token?.trim() || token
     if (typeof candidate !== 'string' || !/^sat_wbp_[A-Za-z0-9_-]{32,256}$/.test(candidate)) throw new Error('token_invalid')
@@ -383,6 +384,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (popup && ['stop', 'disconnect'].includes(message?.type)) {
     stopped = true; controlGeneration += 1; clearTimers()
     void chrome.storage.session.set({ stopRequested: true })
+    void chrome.storage.local.set({ stopRequested: true })
   }
   if (!popup && C.isTrustedPageSender(sender, chrome.runtime.id, state.tabId, state.pageUrl)
     && C.sanitizePageMessage(message, state.pageUrl)?.type === 'blocked') { stopped = true; clearTimers() }
