@@ -6,18 +6,19 @@ import time
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import Text, column, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.infra.db import get_session_factory
 from app.infra.redis_client import get_redis_client
 from app.repricer_cache.orm import WbRepricerGoodsCacheRow, WbRepricerSourceCacheRow
+from app.wb_browser_prices import CONNECTION_KEY, PRICES_KEY, apply_browser_prices
 
 _REDIS_CACHE_TTL_SECONDS = 45
 _REDIS_DISABLED_UNTIL = 0.0
 FINANCE_REVENUE_BASIS = "retailAmount"
-FINANCE_SCHEMA_VERSION = "v3"
+FINANCE_SCHEMA_VERSION = "v4"
 
 
 def finance_cache_uses_current_revenue_basis(payload: dict[str, Any]) -> bool:
@@ -315,7 +316,7 @@ def list_cached_goods(organization_id: int) -> list[dict[str, Any]]:
     redis_key = _goods_list_cache_key(organization_id)
     cached = _redis_get_json_list(redis_key)
     if cached is not None:
-        return cached
+        return _goods_with_browser_prices(organization_id, cached)
 
     goods: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -330,7 +331,18 @@ def list_cached_goods(organization_id: int) -> list[dict[str, Any]]:
             seen.add(dedupe_key)
             goods.append(_slim_good_payload(item))
     _redis_set_json_list(redis_key, goods)
-    return goods
+    return _goods_with_browser_prices(organization_id, goods)
+
+
+def browser_prices_selected(organization_id: int) -> bool:
+    return bool((get_source_cache(organization_id, CONNECTION_KEY, strict=True) or {}).get("marketplaceAccountId"))
+
+
+def _goods_with_browser_prices(organization_id: int, goods: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not goods:
+        return goods
+    connection = get_source_cache(organization_id, CONNECTION_KEY, strict=True)
+    return apply_browser_prices(goods, connection, get_source_cache(organization_id, PRICES_KEY) if connection else None)
 
 
 def cached_goods_meta(organization_id: int) -> dict[str, Any]:
@@ -454,6 +466,7 @@ def get_source_cache(
     source_key: str,
     *,
     slim: bool = False,
+    strict: bool = False,
 ) -> dict[str, Any] | None:
     redis_key = _source_cache_key(organization_id, source_key, slim=slim)
     redis_allowed = _source_cache_redis_allowed(source_key, slim=slim)
@@ -477,7 +490,12 @@ def get_source_cache(
             return slim_source_cache_payload(source_key, payload)
         return payload
 
-    payload = _run_db(_db)
+    if strict:
+        # Source selection must distinguish a missing row from unavailable storage.
+        with get_session_factory()() as session:
+            payload = _db(session)
+    else:
+        payload = _run_db(_db)
     if payload is not None and redis_allowed:
         _redis_set_json(redis_key, payload)
     return payload
@@ -604,7 +622,7 @@ def list_source_cache_ranges_by_prefix(
                     "dailyDetailPreservedBy": row["daily_detail_preserved_by"],
                     "dailyDetailRequestsCompleted": row["daily_detail_requests_completed"],
                     "dailyDetailRequestsTotal": row["daily_detail_requests_total"],
-                    "dailyAggregatesDays": len(daily_dates) if daily_dates else None,
+                    "dailyAggregatesDays": len(daily_dates) if row["daily_aggregate_dates"] is not None else None,
                     "dailyAggregateDates": daily_dates,
                     "revenueBasis": row["revenue_basis"],
                     "financeSchemaVersion": row["finance_schema_version"],
@@ -625,19 +643,39 @@ def get_covering_source_cache(
     slim: bool = False,
 ) -> dict[str, Any] | None:
     def _db(session: Session) -> dict[str, Any] | None:
-        row = session.scalar(
+        candidates = aliased(
+            WbRepricerSourceCacheRow,
             select(WbRepricerSourceCacheRow)
             .where(
                 WbRepricerSourceCacheRow.organization_id == organization_id,
                 WbRepricerSourceCacheRow.source_key.like(f"{source_key_prefix}%"),
-                text("(payload::jsonb ? 'dailyAggregates')"),
-                text("jsonb_typeof((payload::jsonb)->'dailyAggregates') = 'object'"),
-                text("(payload::jsonb)->'dailyAggregates' <> '{}'::jsonb"),
-                text("(payload->>'dateFrom') <= :date_from"),
-                text("(payload->>'dateTo') >= :date_to"),
+            )
+            .order_by(WbRepricerSourceCacheRow.fetched_at.desc())
+            # Keep JSON checks above the sorted scan so LIMIT can stop early.
+            .offset(0)
+            .subquery(),
+        )
+        # Legacy metadata can disagree with the payload. Read its two bounds in
+        # one JSON pass, retaining payload authority and newest-first selection.
+        period = func.json_to_record(text(
+            "CASE WHEN json_typeof(payload) = 'object' THEN payload ELSE '{}'::json END"
+        )).table_valued(column("dateFrom", Text), column("dateTo", Text)).render_derived(
+            with_types=True,
+        ).lateral("period")
+        row = session.scalar(
+            select(candidates)
+            .join(period, text("true"))
+            .where(
+                # CASE prevents PostgreSQL pushing the large daily JSON check
+                # ahead of the range projection for non-covering rows.
+                text("""CASE WHEN period."dateFrom" <= :date_from
+                              AND period."dateTo" >= :date_to
+                         THEN json_typeof(payload->'dailyAggregates') = 'object'
+                              AND (payload->'dailyAggregates')::jsonb <> '{}'::jsonb
+                         ELSE false END"""),
             )
             .params(date_from=date_from.isoformat(), date_to=date_to.isoformat())
-            .order_by(WbRepricerSourceCacheRow.fetched_at.desc())
+            .order_by(candidates.fetched_at.desc())
             .limit(1)
         )
         if row is None:
@@ -666,6 +704,39 @@ def get_source_cache_fetched_at(organization_id: int, source_key: str) -> str | 
         )
         return row.isoformat() if row is not None else None
 
+    return _run_db(_db)
+
+
+def get_repricer_sources_revision(organization_id: int) -> str | None:
+    """Small metadata read; never deserialize period payloads to check freshness."""
+    def _db(session: Session) -> str | None:
+        row = session.scalar(
+            select(func.max(WbRepricerSourceCacheRow.fetched_at)).where(
+                WbRepricerSourceCacheRow.organization_id == organization_id,
+                or_(
+                    WbRepricerSourceCacheRow.source_key.in_(("content_cards", "commission_tariffs", "stocks", "promotions", "promotion_thresholds", CONNECTION_KEY)),
+                    *(WbRepricerSourceCacheRow.source_key.like(f"{prefix}_%") for prefix in ("finance", "baskets", "period_stats", "ads")),
+                ),
+                ~WbRepricerSourceCacheRow.source_key.like("baskets_detail_%"),
+            )
+        )
+        return row.isoformat() if row is not None else None
+
+    return _run_db(_db)
+
+
+def get_source_cache_range_revision(
+    organization_id: int, source_key_prefix: str, *, date_from: date, date_to: date,
+) -> str | None:
+    """Detect source updates from metadata, including overlapping daily windows."""
+    def _db(session: Session) -> str | None:
+        fetched_at = session.scalar(select(func.max(WbRepricerSourceCacheRow.fetched_at)).where(
+            WbRepricerSourceCacheRow.organization_id == organization_id,
+            WbRepricerSourceCacheRow.source_key.like(f"{source_key_prefix}%"),
+            or_(WbRepricerSourceCacheRow.range_date_from.is_(None), WbRepricerSourceCacheRow.range_date_from <= date_to),
+            or_(WbRepricerSourceCacheRow.range_date_to.is_(None), WbRepricerSourceCacheRow.range_date_to >= date_from),
+        ))
+        return fetched_at.isoformat() if fetched_at is not None else None
     return _run_db(_db)
 
 

@@ -50,6 +50,25 @@ class AvitoOAuthClient:
             expiresAt=datetime.now(timezone.utc) + timedelta(seconds=max(60, expires_in - 60)),
         )
 
+    def fetch_verified_account_token(
+        self, client_id: str, client_secret: str, *,
+        expected_external_account_id: str, max_response_bytes: int,
+        clock, client=None,
+    ):
+        """Opt-in strict exchange evidence; no cache/store or authority publication.
+
+        Existing legacy callers are intentionally not switched to this method.
+        Clock/response budget and any injected transport are trusted dependencies.
+        """
+        from app.avito.credential_exchange import fetch_verified_account_token
+
+        return fetch_verified_account_token(
+            client_id, client_secret,
+            expected_external_account_id=expected_external_account_id,
+            max_response_bytes=max_response_bytes, clock=clock, client=client,
+            base_url=self.base_url, timeout_seconds=self.timeout_seconds,
+        )
+
 
 def _token_is_fresh(expires_at: datetime | None) -> bool:
     if expires_at is None:

@@ -542,9 +542,24 @@ class FakeWbApiClient:
                 wbRequestId=wb_request_id,
             )
 
+        status_code = 200
+        if (
+            request.path == "/api/finance/v1/sales-reports/detailed"
+            and isinstance(data, dict)
+            and isinstance(data.get("data"), list)
+        ):
+            body = request.jsonBody or {}
+            cursor = int(body.get("rrdId", 0))
+            rows = data["data"]
+            if cursor:
+                rows = [item for item in rows if int(item.get("rrdId") or item.get("rrd_id") or 0) > cursor]
+            rows = rows[:int(body.get("limit", 100_000))]
+            data = {**data, "data": rows}
+            status_code = 200 if rows else 204
+
         return WbApiResponseEnvelope(
             request=request,
-            statusCode=200,
+            statusCode=status_code,
             ok=True,
             data=data,
             rateLimit=rate_limit,
@@ -1169,6 +1184,7 @@ def build_fake_client(scenario: str) -> FakeWbApiClient:
     finance_sales_reports_detailed = {
         "data": [
             {
+                "rrdId": 1,
                 "reportId": 307401554,
                 "nmId": 123456,
                 "docTypeName": "Продажа",

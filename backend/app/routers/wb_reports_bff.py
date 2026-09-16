@@ -40,6 +40,7 @@ from app.repricer_cache.store import (
 )
 from app.repricer_bff import _extract_wb_media_url
 from app.repricer_persistence.store import load_algorithm_settings, load_runtime_state
+from app.platform.economics.legacy_tax import legacy_finance_tax_revision
 from app.wb_ads_cache.store import get_ads_report_cache, save_ads_history_snapshots, save_ads_report_cache
 from app.wb_api.ads_runtime import AdsAttributionRow, AdsAttributionSnapshot
 from app.wb_api.client import (
@@ -70,7 +71,7 @@ from app.wb_sync_plan import historical_sync_as_of
 
 router = APIRouter(tags=["wb-reports-bff"])
 
-DIGEST_REPORT_PAYLOAD_VERSION = "v12"
+DIGEST_REPORT_PAYLOAD_VERSION = "v14"
 
 ReportId = Literal["digest", "abc", "rnp", "pnl", "expenses", "ads", "stock", "week-over-week"]
 ReportGroupBy = Literal["sku", "manager", "brand", "category", "status", "warehouse", "campaign"]
@@ -85,10 +86,18 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _report_rules_preview_rows(organization_id: int) -> tuple[list[dict[str, Any]], list[str]]:
+def _report_rules_preview_rows(organization_id: int, *, finance_allowed: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
     rows: list[dict[str, Any]] = []
     reports: set[str] = set()
     for cached in list_source_cache_by_prefix(organization_id, "reports_payload_", limit=50, slim=False):
+        source_key = str(cached.get("sourceKey") or "")
+        source_report_id = source_key.removeprefix("reports_payload_").split("_", 1)[0]
+        if source_report_id in {"abc", "pnl"}:
+            _, _, _, cached_source = _parse_report_payload_cache_key(source_key, source_report_id)
+            if not cached_source or not cached_source.endswith(f"_{'finance' if finance_allowed else 'nofinance'}"):
+                continue
+            if not _report_payload_cache_is_usable(source_report_id, cached, organization_id=organization_id):
+                continue
         report = cached.get("report") if isinstance(cached.get("report"), dict) else {}
         report_rows = report.get("rows") if isinstance(report.get("rows"), list) else []
         report_id = str((report.get("meta") or {}).get("id") or cached.get("sourceKey") or "report")
@@ -638,23 +647,8 @@ def _ads_by_nm(ads_snapshot: Any | None) -> dict[int, dict[str, int]]:
 
 
 def _profit_by_nm(snapshot: Any, ads_by_nm: dict[int, dict[str, int]]) -> dict[int, dict[str, int | float | None]]:
-    result: dict[int, dict[str, int | float | None]] = {}
-    for nm_id, revenue in getattr(snapshot, "revenue_by_nm_kopecks", {}).items():
-        seller_payout = int(getattr(snapshot, "seller_payout_by_nm_kopecks", {}).get(nm_id, 0) or 0)
-        costs = sum(
-            int(getattr(snapshot, field, {}).get(nm_id, 0) or 0)
-            for field in (
-                "commission_cost_by_nm_kopecks",
-                "logistics_cost_by_nm_kopecks",
-                "penalties_cost_by_nm_kopecks",
-                "acceptance_cost_by_nm_kopecks",
-                "storage_cost_by_nm_kopecks",
-            )
-        )
-        ad_spend = int(ads_by_nm.get(nm_id, {}).get("ad_spend", 0) or 0)
-        profit = seller_payout - costs - ad_spend
-        result[nm_id] = {"profit": profit, "margin": round(profit / revenue * 100, 2) if revenue else None}
-    return result
+    # Raw WB streams do not carry dated tax or SKU cost evidence; ABC supplies factual profit.
+    return {nm_id: {"profit": None, "margin": None} for nm_id in getattr(snapshot, "revenue_by_nm_kopecks", {})}
 
 
 def _catalog_meta_by_nm(organization_id: int | None) -> dict[int, dict[str, Any]]:
@@ -2131,6 +2125,15 @@ def _week_row_key(row: dict[str, Any]) -> str:
     return str(row.get("nmId") or row.get("sku") or row.get("label") or "").strip()
 
 
+def _abc_row_profit(row: dict[str, Any]) -> int | None:
+    if row.get("factTaxState") == "missing":
+        return None
+    for key in ("netTotalKopecks", "profitKopecks"):
+        if key in row:
+            return _int_value(row[key]) if row[key] is not None else None
+    return None if row.get("factTaxState") else 0
+
+
 def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     previous_by_key = {_week_row_key(row): row for row in previous_rows or [] if _week_row_key(row)}
     result: list[dict[str, Any]] = []
@@ -2147,8 +2150,8 @@ def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dic
         previous_baskets = _int_value(previous.get("baskets")) if previous else None
         margin = _float_value(row.get("marginPct"))
         previous_margin = _float_value(previous.get("marginPct")) if previous else None
-        profit = _int_value(row.get("netTotalKopecks") or row.get("profitKopecks"))
-        previous_profit = _int_value(previous.get("netTotalKopecks") or previous.get("profitKopecks")) if previous else None
+        profit = _abc_row_profit(row)
+        previous_profit = _abc_row_profit(previous) if previous else None
         price = _int_value(row.get("priceWithSppKopecks") or row.get("priceKopecks"))
         previous_price = _int_value(previous.get("priceWithSppKopecks") or previous.get("priceKopecks")) if previous else None
         stock_units = _int_value(row.get("wbStockUnits"))
@@ -2167,6 +2170,9 @@ def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dic
                 "baskets": {"units": baskets, "kopecks": None, "deltaPct": _delta_pct(baskets, previous_baskets)},
                 "marginPct": {"percent": margin, "deltaPct": _delta_pct(margin, previous_margin)},
                 "profit": {"kopecks": profit, "deltaPct": _delta_pct(profit, previous_profit)},
+                "factTaxState": row.get("factTaxState"),
+                "factTaxReason": row.get("factTaxReason"),
+                "previousFactTaxReason": previous.get("factTaxReason"),
                 "price": {"kopecks": price, "deltaPct": _delta_pct(price, previous_price)},
                 "wasOutOfStock": stock_units <= 0,
                 "stockAvailability7d": availability,
@@ -2286,7 +2292,7 @@ def _week_rows_with_period_stats(rows: list[dict[str, Any]], period_stats: dict[
 
         profit = _int_value(enriched.get("netTotalKopecks") or enriched.get("profitKopecks"))
         margin = _float_value(enriched.get("marginPct"))
-        if profit == 0 and margin is not None and margin != 0 and sales_kopecks > 0:
+        if not enriched.get("factTaxState") and "netTotalKopecks" not in enriched and "profitKopecks" not in enriched and profit == 0 and margin is not None and margin != 0 and sales_kopecks > 0:
             enriched["netTotalKopecks"] = int(round(sales_kopecks * margin / 100))
             enriched["profitSource"] = "margin_estimate"
             changed = True
@@ -2657,9 +2663,16 @@ def _repricer_row_to_abc_row(row: dict[str, Any]) -> dict[str, Any]:
     settings = row.get("settings") if isinstance(row.get("settings"), dict) else {}
     orders_units = _int_value(analytics.get("ordersUnits"))
     orders_kopecks = _int_value(analytics.get("revenueKopecks"))
-    sales_units = _int_value(analytics.get("salesUnits"))
-    sales_kopecks = _int_value(analytics.get("sellerRevenueKopecks") or analytics.get("revenueKopecks"))
-    net_profit_kopecks = _int_value(analytics.get("netProfitKopecks") or analytics.get("factNetProfitKopecks"))
+    sales_units = _int_value(analytics.get("salesUnits")) - _int_value(analytics.get("returnsUnits"))
+    sales_kopecks = _int_value(analytics["sellerRevenueKopecks"] if "sellerRevenueKopecks" in analytics else analytics.get("revenueKopecks"))
+    fact_tax_state = analytics.get("factTaxState")
+    if fact_tax_state:
+        raw_profit = analytics.get("factNetProfitKopecks") if "factNetProfitKopecks" in analytics else analytics.get("netProfitKopecks")
+        net_profit_kopecks = _int_value(raw_profit) if fact_tax_state == "configured" and raw_profit is not None else None
+        margin_pct = round(net_profit_kopecks / sales_kopecks * 100, 2) if net_profit_kopecks is not None and sales_kopecks > 0 else None
+    else:
+        net_profit_kopecks = _int_value(analytics.get("netProfitKopecks") or analytics.get("factNetProfitKopecks"))
+        margin_pct = _float_value(analytics.get("marginPct"))
     return {
         "sku": str(meta.get("articleId") or meta.get("vendorCode") or row.get("articleId") or ""),
         "nmId": meta.get("nmId"),
@@ -2678,7 +2691,10 @@ def _repricer_row_to_abc_row(row: dict[str, Any]) -> dict[str, Any]:
         "ordersComposite": {"units": orders_units, "kopecks": orders_kopecks, "deltaPct": None},
         "salesComposite": {"units": sales_units, "kopecks": sales_kopecks, "deltaPct": None},
         "netTotalKopecks": net_profit_kopecks,
-        "marginPct": _float_value(analytics.get("marginPct")),
+        "marginPct": margin_pct,
+        "taxKopecks": analytics.get("taxKopecks"),
+        "factTaxState": fact_tax_state,
+        "factTaxReason": analytics.get("factTaxReason"),
         "adSpendKopecks": _int_value(analytics.get("adSpendKopecks")),
         "wbStockUnits": _int_value(analytics.get("wbStockUnits")),
         "buyoutPct": _float_value(analytics.get("buyoutPct")),
@@ -2704,7 +2720,7 @@ def _abc_filtered_summary_from_rows(rows: list[dict[str, Any]], *, source_status
         ]
     sales_kopecks = complete_sum(composites("salesComposite", "kopecks"))
     profit_kopecks = complete_sum([
-        row.get("netTotalKopecks") if row.get("netTotalKopecks") is not None else row.get("profitKopecks")
+        _abc_row_profit(row)
         for row in rows
         if isinstance(row, dict)
     ])
@@ -2833,9 +2849,9 @@ def _map_abc_to_report_response(payload: Any, date_range: dict[str, str]) -> dic
             "title": "Чистая прибыль по SKU",
             "valueLabel": "Чистая прибыль, коп",
             "points": [
-                {"label": str(row.get("sku") or row.get("label") or index + 1), "value": int(row.get("netTotalKopecks") if row.get("netTotalKopecks") is not None else row.get("profitKopecks"))}
+                {"label": str(row.get("sku") or row.get("label") or index + 1), "value": _abc_row_profit(row)}
                 for index, row in enumerate(abc_rows[:20])
-                if isinstance(row, dict) and (row.get("netTotalKopecks") is not None or row.get("profitKopecks") is not None)
+                if isinstance(row, dict) and _abc_row_profit(row) is not None
             ],
         },
         "columns": _abc_report_columns(),
@@ -2851,24 +2867,31 @@ def _map_abc_to_report_response(payload: Any, date_range: dict[str, str]) -> dic
     }
 
 
-def _map_pnl_to_report_response(payload: Any, date_range: dict[str, str], cash_flow: dict[str, Any] | None = None) -> dict[str, Any]:
-    financial_confirmation_status = "confirmed" if "WB-03" not in payload.blockerIds else "pending"
+def _map_pnl_to_report_response(payload: Any, date_range: dict[str, str], cash_flow: dict[str, Any] | None = None, *, finance_allowed: bool = False) -> dict[str, Any]:
+    cash_flow_disabled = (cash_flow or {}).get("status") == "disabled"
+    financial_confirmation_status = "confirmed" if "WB-03" not in payload.blockerIds and not cash_flow_disabled else "pending"
+    source_status = "partial" if cash_flow_disabled and payload.sourceStatus == "fresh" else payload.sourceStatus
+    rows = [row.model_dump(mode="json") for row in payload.rows]
+    if cash_flow_disabled:
+        for row in rows:
+            row.update(overheadKopecks=None, netProfitKopecks=None, marginPct=None, sourceStatus=source_status)
     return {
         "cacheVersion": PNL_REPORT_PAYLOAD_VERSION,
-        "meta": _meta("pnl", "P&L", "Unit P&L report.", "financial", payload.sourceStatus),
+        "meta": _meta("pnl", "P&L", "Unit P&L report.", "financial", source_status),
         "headline": "Финансовые поля показываются с учетом finance_viewer policy.",
-        "warning": None,
+        "warning": "Интеграция с 1С отключена. Операционные расходы и итоговая прибыль не подтверждены." if cash_flow_disabled else None,
+        "blockerIds": [*payload.blockerIds, "ONE_C_DISABLED"] if cash_flow_disabled else list(payload.blockerIds),
         "financialConfirmationStatus": financial_confirmation_status,
         "filters": {"dateRange": date_range, "groupBy": payload.groupBy},
         "kpis": [
             _kpi("revenue", "Выручка", str(payload.totals.revenueKopecks or 0)),
-            _kpi("net_profit", "Чистая прибыль", str(payload.totals.netProfitKopecks or 0)),
-            _kpi("margin_pct", "Маржа", f"{payload.totals.marginPct or 0}%"),
+            _kpi("net_profit", "Чистая прибыль", "—" if cash_flow_disabled or payload.totals.netProfitKopecks is None else str(payload.totals.netProfitKopecks)),
+            _kpi("margin_pct", "Маржа", "—" if cash_flow_disabled or payload.totals.marginPct is None else f"{payload.totals.marginPct}%"),
         ],
         "chart": {
             "title": "Маржа по строкам",
             "valueLabel": "Маржа, %",
-            "points": [{"label": row.label, "value": row.marginPct or 0} for row in payload.rows],
+            "points": [] if cash_flow_disabled else [{"label": row.label, "value": row.marginPct} for row in payload.rows if row.marginPct is not None],
         },
         "columns": [
             {"key": "label", "label": "SKU"},
@@ -2882,8 +2905,8 @@ def _map_pnl_to_report_response(payload: Any, date_range: dict[str, str], cash_f
             {"key": "netProfitKopecks", "label": "Чистая прибыль"},
             {"key": "marginPct", "label": "Маржа"},
         ],
-        "rows": [row.model_dump(mode="json") for row in payload.rows],
-        "cashFlow": cash_flow,
+        "rows": rows,
+        "cashFlow": cash_flow if finance_allowed else None,
     }
 
 
@@ -2893,6 +2916,7 @@ def _map_cash_flow_to_expenses_response(
     group_by: str,
     job: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    disabled = cash_flow.get("status") == "disabled"
     data = cash_flow.get("data") if isinstance(cash_flow.get("data"), dict) else {}
     source_rows = data.get("rows") if isinstance(data.get("rows"), list) else []
     period_label = f"{date_range['from']} — {date_range['to']}"
@@ -2918,16 +2942,17 @@ def _map_cash_flow_to_expenses_response(
     total_kopecks = data.get("totals", {}).get("operationalExpenseKopecks") if isinstance(data.get("totals"), dict) else None
     if total_kopecks is None:
         total_kopecks = sum(_int_value(row.get("amountKopecks")) for row in rows)
-    source_status = "fresh" if cash_flow.get("status") == "ready" else "pending_financial"
+    source_status = "partial" if disabled else "fresh" if cash_flow.get("status") == "ready" else "pending_financial"
     response = {
+        "cacheVersion": EXPENSES_REPORT_PAYLOAD_VERSION,
         "meta": _meta("expenses", "Расходы", "Статьи ДДС из 1С cash-flow для операционных расходов.", "financial", source_status),
         "headline": "Показываем операционные расходные статьи ДДС из 1С за выбранный период.",
-        "warning": None if cash_flow.get("status") == "ready" else "Ждём 1С cash-flow для выбранного периода.",
+        "warning": "Интеграция с 1С отключена. Данные расходов за выбранный период не получены." if disabled else None if cash_flow.get("status") == "ready" else "Ждём 1С cash-flow для выбранного периода.",
         "financialConfirmationStatus": "final_financial" if cash_flow.get("status") == "ready" else "pending_financial",
         "filters": {"dateRange": date_range, "groupBy": group_by},
         "kpis": [
-            _kpi("expense_rows", "Статей ДДС", str(len(rows))),
-            _kpi("operational_expenses", "Опер. расходы", str(total_kopecks or 0)),
+            _kpi("expense_rows", "Статей ДДС", "—" if disabled else str(len(rows))),
+            _kpi("operational_expenses", "Опер. расходы", "—" if disabled else str(total_kopecks or 0)),
             _kpi("cash_flow_status", "1С cash-flow", str(cash_flow.get("status") or "pending")),
         ],
         "chart": {
@@ -3184,6 +3209,8 @@ def _build_ads_report_payload(
         date_to=date_to,
         group_by=group_by,
     )
+    if refresh and ads_snapshot.source_status == "blocked":
+        raise HTTPException(status_code=409, detail="WB_ADS_CACHE_EMPTY")
     payload = _map_ads_to_report_response(date_range, ads_snapshot)
     stored = save_ads_report_cache(
         organization_id=actor.organization_id,
@@ -3217,12 +3244,14 @@ def _build_digest_payload(
     total_sales_revenue = _int_value(summary["buyerRevenueKopecks"]) if "buyerRevenueKopecks" in summary else (_int_value(funnel_totals.get("buyoutSumKopecks")) if has_funnel else sum(item["sales_revenue"] for item in aggregates.values()))
     total_returns = _int_value(summary["returnsUnits"]) if "returnsUnits" in summary else (_int_value(funnel_totals.get("cancelCount")) if has_funnel else sum(item["returns_qty"] for item in aggregates.values()))
     total_ad_spend = _int_value(summary["adSpendKopecks"]) if "adSpendKopecks" in summary else ads_snapshot.totals.get("ad_spend_kopecks", 0)
-    margin_profit = _int_value(summary["marginKopecks"]) if "marginKopecks" in summary else _preliminary_margin_kopecks(source_snapshot)
+    margin_profit = (_int_value(summary["marginKopecks"]) if summary["marginKopecks"] is not None else None) if "marginKopecks" in summary else _preliminary_margin_kopecks(source_snapshot)
     margin_hint = (
-        "Прибыль после себестоимости, расходов WB, рекламы и налога по настройкам SKU."
+        "Прибыль после себестоимости, расходов WB, рекламы и подтверждённого налога за период."
         if summary
         else "Предварительная прибыль после удержаний WB. Формула: seller payout - комиссии WB - логистика - штрафы - приемка - хранение."
     )
+    if margin_profit is None:
+        margin_hint = "Прибыль неизвестна: налог за выбранный период не подтверждён."
     stock_rows = [_stock_row_to_digest_payload(row) for row in source_snapshot.stocks]
     alerts = []
     for row in stock_rows:
@@ -3296,7 +3325,7 @@ def _build_digest_payload(
             _kpi(
                 "margin_profit",
                 "Марж. прибыль",
-                str(margin_profit),
+                str(margin_profit) if margin_profit is not None else "—",
                 margin_hint,
             ),
             _kpi("oos_risk", "OOS риск", f"{oos_count} SKU", "Товары с нулевым доступным остатком: остаток WB + возвраты от клиента = 0. Такие позиции могут перестать продаваться, пока не появится доступный остаток."),
@@ -3361,11 +3390,12 @@ BACKGROUND_REPORT_JOB_STALE_AFTER = timedelta(minutes=15)
 BACKGROUND_REPORT_QUEUED_STALE_AFTER = timedelta(seconds=30)
 DIGEST_CACHE_TTL = timedelta(hours=24)
 REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
-ABC_REPORT_PAYLOAD_VERSION = "v16"
-PNL_REPORT_PAYLOAD_VERSION = "v1"
+ABC_REPORT_PAYLOAD_VERSION = "v19"
+PNL_REPORT_PAYLOAD_VERSION = "v6"
+EXPENSES_REPORT_PAYLOAD_VERSION = "v1"
 RNP_REPORT_PAYLOAD_VERSION = "v3"
 STOCK_REPORT_PAYLOAD_VERSION = "v5"
-WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v2"
+WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v4"
 
 
 def _abc_economics_version(organization_id: int) -> str:
@@ -3410,15 +3440,31 @@ def _report_cache_key(
     source: str,
     *,
     organization_id: int | None = None,
+    finance_allowed: bool = False,
 ) -> str:
     if report_id == "abc" and organization_id is not None:
-        return f"reports_payload_abc_{ABC_REPORT_PAYLOAD_VERSION}_{_abc_economics_version(organization_id)}_org{organization_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}"
+        return f"reports_payload_abc_{ABC_REPORT_PAYLOAD_VERSION}_{_abc_economics_version(organization_id)}_org{organization_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}_{'finance' if finance_allowed else 'nofinance'}"
+    if report_id == "pnl":
+        return f"reports_payload_pnl_{PNL_REPORT_PAYLOAD_VERSION}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}_{'finance' if finance_allowed else 'nofinance'}"
     return f"reports_payload_{report_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}_{source}"
 
 
-def _report_job_cache_key(report_id: str, date_from: date, date_to: date, group_by: str, source: str | None = None) -> str:
+def _report_job_cache_key(
+    report_id: str,
+    date_from: date,
+    date_to: date,
+    group_by: str,
+    source: str | None = None,
+    *,
+    finance_allowed: bool | None = None,
+) -> str:
     source_suffix = f"_{source}" if report_id == "pnl" and source else ""
-    return f"reports_job_{report_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}{source_suffix}"
+    finance_suffix = (
+        f"_{'finance' if finance_allowed else 'nofinance'}"
+        if report_id in {"abc", "pnl"} and finance_allowed is not None
+        else ""
+    )
+    return f"reports_job_{report_id}_{date_from.isoformat()}_{date_to.isoformat()}_{group_by}{source_suffix}{finance_suffix}"
 
 
 def _parse_report_job_timestamp(value: Any) -> datetime | None:
@@ -3508,9 +3554,21 @@ def _rnp_report_cache_has_funnel_signal(cache: dict[str, Any]) -> bool:
     return not (funnel_rows == 0 and (ads_rows > 0 or has_ads_only_rows))
 
 
+def _report_tax_unavailable(report: dict[str, Any]) -> bool:
+    return "tax_policy_unavailable" in (report.get("blockerIds") or []) or any(
+        row.get(key) == "tax_policy_unavailable"
+        for row in report.get("rows") or [] if isinstance(row, dict)
+        for key in ("factTaxReason", "previousFactTaxReason")
+    )
+
+
 def _report_payload_cache_is_usable(report_id: str, cache: dict[str, Any], *, organization_id: int | None = None) -> bool:
     if not _report_payload_cache_is_fresh(cache):
         return False
+    if report_id in {"abc", "pnl", "week-over-week"} and organization_id is not None:
+        tax_revision = legacy_finance_tax_revision(organization_id)
+        if tax_revision == "unavailable" or cache.get("taxRevision") != tax_revision or _report_tax_unavailable(cache.get("report") or {}):
+            return False
     if report_id == "rnp" and not _rnp_report_cache_has_funnel_signal(cache):
         return False
     if report_id == "rnp":
@@ -3527,9 +3585,14 @@ def _report_payload_cache_is_usable(report_id: str, cache: dict[str, Any], *, or
             return False
         if organization_id is not None and report.get("economicsVersion") != _abc_economics_version(organization_id):
             return False
-    if report_id == "pnl":
+    if report_id in {"pnl", "expenses"}:
         report = cache.get("report") if isinstance(cache.get("report"), dict) else {}
-        if report.get("cacheVersion") != PNL_REPORT_PAYLOAD_VERSION:
+        version = PNL_REPORT_PAYLOAD_VERSION if report_id == "pnl" else EXPENSES_REPORT_PAYLOAD_VERSION
+        if report.get("cacheVersion") != version:
+            return False
+        cash_flow = report.get("cashFlow")
+        cached_1c_disabled = "ONE_C_DISABLED" in (report.get("blockerIds") or []) or (isinstance(cash_flow, dict) and cash_flow.get("status") == "disabled")
+        if cached_1c_disabled != (not get_settings().one_c_enabled):
             return False
     if report_id == "week-over-week":
         report = cache.get("report") if isinstance(cache.get("report"), dict) else {}
@@ -3563,6 +3626,7 @@ def _save_exact_report_payload_cache(
     group_by: str,
     source: str,
     report: dict[str, Any],
+    finance_allowed: bool = False,
 ) -> dict[str, Any]:
     report = _normalize_report_basket_fields(report)
     if report_id == "abc":
@@ -3573,9 +3637,11 @@ def _save_exact_report_payload_cache(
         "dateTo": date_to.isoformat(),
         "completedAt": _utc_now_iso(),
     }
+    if report_id in {"abc", "pnl", "week-over-week"}:
+        cache["taxRevision"] = "unavailable" if _report_tax_unavailable(report) else legacy_finance_tax_revision(organization_id)
     save_source_cache(
         organization_id,
-        _report_cache_key(report_id, date_from, date_to, group_by, source, organization_id=organization_id),
+        _report_cache_key(report_id, date_from, date_to, group_by, source, organization_id=organization_id, finance_allowed=finance_allowed),
         cache,
     )
     return cache
@@ -3661,6 +3727,11 @@ def _parse_report_payload_cache_key(source_key: str, report_id: str) -> tuple[da
     tail = source_key[len(prefix):]
     if report_id == "abc":
         tail = re.sub(rf"^{re.escape(ABC_REPORT_PAYLOAD_VERSION)}_[0-9a-f]+_org\d+_", "", tail)
+    if report_id == "pnl":
+        version = f"{PNL_REPORT_PAYLOAD_VERSION}_"
+        if not tail.startswith(version):
+            return None, None, None, None
+        tail = tail[len(version):]
     match = re.match(r"(?P<date_from>\d{4}-\d{2}-\d{2})_(?P<date_to>\d{4}-\d{2}-\d{2})_(?P<group_by>[^_]+)_(?P<source>.+)$", tail)
     if not match:
         return None, None, None, None
@@ -3683,6 +3754,7 @@ def _latest_report_payload_cache(
     source: str,
     date_from: date | None = None,
     date_to: date | None = None,
+    finance_allowed: bool = False,
 ) -> tuple[dict[str, Any], date, date] | None:
     requested_from = date_from
     requested_to = date_to
@@ -3696,16 +3768,18 @@ def _latest_report_payload_cache(
                 group_by,
                 source,
                 organization_id=organization_id,
+                finance_allowed=finance_allowed,
             ),
             slim=False,
         ) or {}
         if _report_payload_cache_is_usable(report_id, exact, organization_id=organization_id):
             return exact, requested_from, requested_to
         return None
+    scoped_source = f"{source}_{'finance' if finance_allowed else 'nofinance'}" if report_id in {"abc", "pnl"} else source
     for cache in list_source_cache_by_prefix(organization_id, f"reports_payload_{report_id}_", limit=50, slim=False):
         source_key = str(cache.get("sourceKey") or "")
         fallback_from, fallback_to, cached_group_by, cached_source = _parse_report_payload_cache_key(source_key, report_id)
-        if cached_group_by != group_by or cached_source != source:
+        if cached_group_by != group_by or cached_source != scoped_source:
             continue
         if not _report_payload_cache_is_usable(report_id, cache, organization_id=organization_id):
             continue
@@ -3834,7 +3908,14 @@ def _completed_report_job_from_cache(
     group_by: str,
     cache: dict[str, Any],
     current_job: dict[str, Any] | None = None,
+    *,
+    preserve_finished_refresh: bool = True,
 ) -> dict[str, Any]:
+    if current_job and (
+        _report_job_is_reusable(current_job)
+        or (preserve_finished_refresh and _report_job_is_finished_refresh(current_job))
+    ):
+        return dict(current_job)
     return {
         **(current_job or {}),
         "state": "completed",
@@ -3855,9 +3936,7 @@ def _completed_report_job_from_cache(
 
 def _report_job_is_reusable(job: dict[str, Any]) -> bool:
     state = job.get("state")
-    if state in {"waiting_1c", "waiting_baskets_detail", "waiting_daily_detail"}:
-        return True
-    if state not in {"queued", "running"}:
+    if state not in {"queued", "running", "waiting_1c"}:
         return False
     heartbeat = (
         _parse_report_job_timestamp(job.get("updatedAt"))
@@ -3877,7 +3956,7 @@ def _report_job_is_reusable(job: dict[str, Any]) -> bool:
 def _report_job_is_active_refresh(job: dict[str, Any]) -> bool:
     state = str(job.get("state") or "")
     stage = str(job.get("stage") or "")
-    return state in ACTIVE_REPORT_JOB_STATES and stage in ACTIVE_REPORT_JOB_STAGES and _report_job_is_reusable(job)
+    return state in ACTIVE_REPORT_JOB_STATES and (stage in ACTIVE_REPORT_JOB_STAGES or job.get("kind") == "report_source_refresh") and _report_job_is_reusable(job)
 
 
 def _report_job_is_finished_refresh(job: dict[str, Any]) -> bool:
@@ -3891,7 +3970,9 @@ def _report_job_for_response(job: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(job, dict) or not job:
         return job
     state = job.get("state")
-    if state not in {"queued", "running"} or _report_job_is_reusable(job):
+    if state == "waiting_1c" and not job.get("taskId"):
+        return job  # The expenses view can wait for 1C without a background worker.
+    if state not in {"queued", "running", "waiting_1c"} or _report_job_is_reusable(job):
         return job
     return {
         **job,
@@ -4020,7 +4101,7 @@ def get_reports_digest(
         and cache_age_seconds is not None
         and cache_age_seconds <= int(DIGEST_CACHE_TTL.total_seconds())
     )
-    if cache_status == "exact" and cache_fresh:
+    if cache_status == "exact" and cache_fresh and not (_report_job_is_reusable(job) or _report_job_is_finished_refresh(job)):
         job = {
             **job,
             "state": "completed",
@@ -4045,7 +4126,7 @@ def get_reports_digest(
         "completedAt": selected_cache.get("completedAt"),
         "fetchedAt": selected_cache.get("fetchedAt"),
     }
-    payload["digestJob"] = job
+    payload["digestJob"] = _report_job_for_response(job)
     record_audit_event(
         actor=actor,
         action="reports.bff.digest.get",
@@ -4157,7 +4238,7 @@ def preview_report_rules(request: Request, draft: RulesDraftRequest = Body(...))
         normalized = normalize_config(draft.config)
     except ReportRulesValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors) from exc
-    rows, available_reports = _report_rules_preview_rows(actor.organization_id)
+    rows, available_reports = _report_rules_preview_rows(actor.organization_id, finance_allowed=has_permission(actor, "finance:read"))
     preview = create_preview(rows, active, normalized)
     return {
         **preview,
@@ -4249,6 +4330,8 @@ def refresh_reports_digest(request: Request, preset: str = Query(default="7d"), 
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
     key = _digest_job_cache_key(date_from, date_to)
     current = get_source_cache(actor.organization_id, key, slim=False) or {}
+    if _report_job_is_reusable(current):
+        return {**current, "reused": True}
     exact = get_source_cache(actor.organization_id, _digest_cache_key(date_from, date_to), slim=False) or {}
     exact_age_seconds = _digest_cache_age_seconds(exact)
     if _digest_cache_is_fresh(exact):
@@ -4268,8 +4351,6 @@ def refresh_reports_digest(request: Request, preset: str = Query(default="7d"), 
         }
         save_source_cache(actor.organization_id, key, payload)
         return payload
-    if current.get("state") in {"queued", "running"}:
-        return {**current, "reused": True}
     from app.repricer_tasks import build_digest_for_org
     task = build_digest_for_org.delay(actor.organization_id, date_from.isoformat(), date_to.isoformat(), has_permission(actor, "finance:read"), None)
     payload = {"state": "queued", "taskId": task.id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "queuedAt": _utc_now_iso()}
@@ -4282,7 +4363,8 @@ def get_reports_digest_status(request: Request, preset: str = Query(default="7d"
     actor = actor_from_request(request)
     assert_permission_or_audit(actor=actor, permission="settings:read", action="reports.bff.digest.status", object_type="wb_report", object_id="digest", reason="actor cannot read digest job")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
-    return get_source_cache(actor.organization_id, _digest_job_cache_key(date_from, date_to), slim=False) or {"state": "idle", "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat()}
+    job = get_source_cache(actor.organization_id, _digest_job_cache_key(date_from, date_to), slim=False) or {"state": "idle", "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat()}
+    return _report_job_for_response(job)
 
 
 @router.get("/api/wb/reports/{report_id}/latest-cache")
@@ -4298,7 +4380,7 @@ def get_reports_latest_cache(
     actor = actor_from_request(request)
     assert_permission_or_audit(
         actor=actor,
-        permission="settings:read",
+        permission="finance:read" if report_id == "expenses" else "settings:read",
         action="reports.bff.latest_cache.get",
         object_type="wb_report",
         object_id=report_id,
@@ -4339,7 +4421,8 @@ def get_reports_latest_cache(
                 "completedAt": cache.get("completedAt"),
                 "fetchedAt": cache.get("fetchedAt"),
             }
-            payload["digestJob"] = {
+            job = get_source_cache(actor.organization_id, _digest_job_cache_key(date_from, date_to), slim=False) or {}
+            payload["digestJob"] = _report_job_for_response(job) if job else {
                 "state": "completed",
                 "stage": "cache",
                 "label": "Воронка продаж взята из последнего свежего кэша",
@@ -4355,6 +4438,7 @@ def get_reports_latest_cache(
             return payload
         raise HTTPException(status_code=404, detail="REPORT_LATEST_CACHE_MISSING")
 
+    finance_allowed = has_permission(actor, "finance:read")
     requested_from = None
     requested_to = None
     if preset != "latest" or from_ or to:
@@ -4367,6 +4451,7 @@ def get_reports_latest_cache(
         source=source,
         date_from=requested_from,
         date_to=requested_to,
+        finance_allowed=finance_allowed,
     )
     if latest is None:
         if report_id == "week-over-week" and requested_from is not None and requested_to is not None:
@@ -4377,7 +4462,7 @@ def get_reports_latest_cache(
                 date_from=requested_from,
                 date_to=requested_to,
                 date_range=date_range,
-                finance_allowed=has_permission(actor, "finance:read"),
+                finance_allowed=finance_allowed,
                 wb_token=None,
             )
             if _week_report_has_period_activity(payload):
@@ -4390,10 +4475,20 @@ def get_reports_latest_cache(
                     source=source,
                     report=payload,
                 )
-                job = _completed_report_job_from_cache(report_id, requested_from, requested_to, groupBy, cache, payload.get("reportJob") if isinstance(payload.get("reportJob"), dict) else {})
-                save_source_cache(actor.organization_id, _report_job_cache_key(report_id, requested_from, requested_to, groupBy), job)
+                job_key = _report_job_cache_key(
+                    report_id,
+                    requested_from,
+                    requested_to,
+                    groupBy,
+                    source,
+                    finance_allowed=finance_allowed,
+                )
+                job = get_source_cache(actor.organization_id, job_key, slim=False) or {}
+                response_job = _completed_report_job_from_cache(report_id, requested_from, requested_to, groupBy, cache, job)
+                if response_job != job:
+                    save_source_cache(actor.organization_id, job_key, response_job)
                 payload["cache"] = _report_payload_cache_meta(cache, date_range, "derived")
-                payload["reportJob"] = job
+                payload["reportJob"] = response_job
                 return payload
         raise HTTPException(status_code=404, detail="REPORT_LATEST_CACHE_MISSING")
     cache, date_from, date_to = latest
@@ -4401,7 +4496,18 @@ def get_reports_latest_cache(
     if report is None:
         raise HTTPException(status_code=404, detail="REPORT_LATEST_CACHE_MISSING")
     date_range = {"preset": "custom", "from": date_from.isoformat(), "to": date_to.isoformat()}
-    job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {}
+    job = get_source_cache(
+        actor.organization_id,
+        _report_job_cache_key(
+            report_id,
+            date_from,
+            date_to,
+            groupBy,
+            source,
+            finance_allowed=finance_allowed,
+        ),
+        slim=False,
+    ) or {}
     payload = _apply_report_rules_to_payload(report, actor.organization_id, compact_abc=False) if report_id == "abc" else dict(report)
     payload["cache"] = _report_payload_cache_meta(cache, date_range, "latest")
     payload["reportJob"] = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cache, job)
@@ -4457,7 +4563,7 @@ def get_reports_export(
     actor = actor_from_request(request)
     assert_permission_or_audit(
         actor=actor,
-        permission="settings:read",
+        permission="finance:read" if report_id == "expenses" else "settings:read",
         action="reports.bff.export.get",
         object_type="wb_export",
         object_id=f"export:{report_id}",
@@ -4574,7 +4680,7 @@ def get_cash_flow_report(
     actor = actor_from_request(request)
     assert_permission_or_audit(
         actor=actor,
-        permission="settings:read",
+        permission="finance:read",
         action="reports.cash_flow.get",
         object_type="cash_flow",
         object_id=f"{from_}:{to}",
@@ -4603,7 +4709,7 @@ def get_reports_by_id(
     actor = actor_from_request(request)
     assert_permission_or_audit(
         actor=actor,
-        permission="settings:read",
+        permission="finance:read" if report_id == "expenses" else "settings:read",
         action="reports.bff.get",
         object_type="wb_report",
         object_id=report_id,
@@ -4612,6 +4718,14 @@ def get_reports_by_id(
     finance_allowed = has_permission(actor, "finance:read")
     wb_token = None if report_id in BACKGROUND_REPORT_IDS else _actor_wb_token(actor)
     date_from, date_to, date_range = _range_from_preset(preset, from_, to)
+    job_key = _report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        groupBy,
+        source,
+        finance_allowed=finance_allowed,
+    )
 
     if report_id == "expenses":
         cash_flow = get_cash_flow_for_period(
@@ -4620,26 +4734,26 @@ def get_reports_by_id(
             period_to=date_to,
             requested_by=actor.user_id,
         )
-        job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {
+        job = get_source_cache(actor.organization_id, job_key, slim=False) or {
             "state": "waiting_1c" if cash_flow.get("status") in {"pending", "processing"} else "completed",
             "reportId": report_id,
             "dateFrom": date_from.isoformat(),
             "dateTo": date_to.isoformat(),
             "groupBy": groupBy,
             "stage": "waiting_1c" if cash_flow.get("status") in {"pending", "processing"} else "completed",
-            "label": "Ждём операционные расходы от 1С" if cash_flow.get("status") in {"pending", "processing"} else "Расходы из 1С готовы",
+            "label": "Операционные расходы недоступны" if cash_flow.get("status") == "disabled" else "Ждём операционные расходы от 1С" if cash_flow.get("status") in {"pending", "processing"} else "Расходы из 1С готовы",
             "percent": 20 if cash_flow.get("status") in {"pending", "processing"} else 100,
         }
         return _map_cash_flow_to_expenses_response(cash_flow, date_range, groupBy, job)
 
     if report_id == "abc":
-        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
+        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=finance_allowed)
         cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
         report = cached.get("report") if isinstance(cached.get("report"), dict) else None
         if report is not None and _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
             job = get_source_cache(
                 actor.organization_id,
-                _report_job_cache_key(report_id, date_from, date_to, groupBy, source),
+                job_key,
                 slim=False,
             ) or {}
             payload = dict(report)
@@ -4651,16 +4765,17 @@ def get_reports_by_id(
         cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
         cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
         report = cached.get("report") if isinstance(cached.get("report"), dict) else None
-        job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {
+        job = get_source_cache(actor.organization_id, job_key, slim=False) or {
             "state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy,
         }
         if report is not None:
             if not _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
                 return _empty_background_report(report_id, date_range, groupBy, _report_job_for_response(job))
             job = _report_job_for_response(job)
-            if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
-                job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
-                save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), job)
+            response_job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
+            if response_job != job:
+                save_source_cache(actor.organization_id, job_key, response_job)
+            job = response_job
             payload = _apply_report_rules_to_payload(report, actor.organization_id)
             payload["cache"] = _report_payload_cache_meta(
                 cached,
@@ -4672,19 +4787,20 @@ def get_reports_by_id(
         return _empty_background_report(report_id, date_range, groupBy, job)
 
     if report_id == "pnl":
-        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
+        cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=finance_allowed)
         cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
         report = cached.get("report") if isinstance(cached.get("report"), dict) else None
-        job = get_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), slim=False) or {
+        job = get_source_cache(actor.organization_id, job_key, slim=False) or {
             "state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy,
         }
         if report is not None:
             if not _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
                 return _empty_background_report(report_id, date_range, groupBy, _report_job_for_response(job))
             job = _report_job_for_response(job)
-            if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
-                job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
-                save_source_cache(actor.organization_id, _report_job_cache_key(report_id, date_from, date_to, groupBy, source), job)
+            response_job = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
+            if response_job != job:
+                save_source_cache(actor.organization_id, job_key, response_job)
+            job = response_job
             payload = _apply_report_rules_to_payload(report, actor.organization_id)
             payload["cache"] = _report_payload_cache_meta(
                 cached,
@@ -4699,8 +4815,9 @@ def get_reports_by_id(
     if daily_sources:
         ready, missing_sources = _report_daily_sources_ready(actor.organization_id, daily_sources, date_from=date_from, date_to=date_to)
         if not ready:
-            job_key = _report_job_cache_key(report_id, date_from, date_to, groupBy)
             current_job = get_source_cache(actor.organization_id, job_key, slim=False) or {}
+            if _report_job_is_reusable(current_job):
+                return _empty_background_report(report_id, date_range, groupBy, current_job)
             job = _report_waiting_daily_detail_job(report_id, date_from, date_to, groupBy, missing_sources, current_job)
             save_source_cache(actor.organization_id, job_key, job)
             return _empty_background_report(report_id, date_range, groupBy, job)
@@ -4791,15 +4908,15 @@ def get_reports_by_id(
                 _kpi("sku_count", "SKU", str(filtered_summary.get("skuCount") or 0)),
                 _kpi("orders", "Заказы", str(filtered_summary.get("ordersCount") or 0)),
                 _kpi("orders_revenue", "Выручка", str(filtered_summary.get("ordersKopecks") or 0)),
-                _kpi("profit", "Прибыль", str(filtered_summary.get("profitKopecks") or 0)),
+                _kpi("profit", "Прибыль", "—" if filtered_summary.get("profitKopecks") is None else str(filtered_summary["profitKopecks"])),
             ],
             "chart": {
                 "title": "Чистая прибыль по SKU",
                 "valueLabel": "Чистая прибыль, коп",
                 "points": [
-                    {"label": str(row.get("sku") or row.get("label") or index + 1), "value": int(row.get("netTotalKopecks") or row.get("profitKopecks") or 0)}
+                    {"label": str(row.get("sku") or row.get("label") or index + 1), "value": _abc_row_profit(row)}
                     for index, row in enumerate(abc_rows[:20])
-                    if isinstance(row, dict)
+                    if isinstance(row, dict) and _abc_row_profit(row) is not None
                 ],
             },
             "columns": _abc_report_columns(),
@@ -4810,7 +4927,7 @@ def get_reports_by_id(
             "sourceEvidence": [item.model_dump(mode="json") for item in abc_payload.sourceEvidence],
             "filteredSummary": filtered_summary,
         }, actor.organization_id, compact_abc=True)
-        _save_exact_report_payload_cache(organization_id=actor.organization_id, report_id=report_id, date_from=date_from, date_to=date_to, group_by=groupBy, source=source, report=payload)
+        _save_exact_report_payload_cache(organization_id=actor.organization_id, report_id=report_id, date_from=date_from, date_to=date_to, group_by=groupBy, source=source, report=payload, finance_allowed=finance_allowed)
         return payload
     if report_id == "pnl":
         source_mode = "final" if source == "financial" else "preliminary"
@@ -4829,7 +4946,7 @@ def get_reports_by_id(
             organization_id=actor.organization_id,
             wb_token=None,
         )
-        return _apply_report_rules_to_payload(_map_pnl_to_report_response(pnl_payload, date_range, cash_flow), actor.organization_id)
+        return _apply_report_rules_to_payload(_map_pnl_to_report_response(pnl_payload, date_range, cash_flow, finance_allowed=finance_allowed), actor.organization_id)
 
     return {
         "meta": _meta(report_id, report_id, "unknown report"),
@@ -4845,18 +4962,38 @@ def get_reports_by_id(
 @router.post("/api/wb/reports/{report_id}/jobs")
 def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pnl", "expenses", "stock", "week-over-week"], preset: str = Query(default="7d"), from_: str | None = Query(default=None, alias="from"), to: str | None = Query(default=None), groupBy: ReportGroupBy = Query(default="sku"), source: str = Query(default="operational")) -> dict[str, Any]:
     actor = actor_from_request(request)
-    assert_permission_or_audit(actor=actor, permission="settings:read", action="reports.bff.job.start", object_type="wb_report", object_id=report_id, reason="actor cannot refresh report")
+    assert_permission_or_audit(actor=actor, permission="finance:read" if report_id == "expenses" else "settings:read", action="reports.bff.job.start", object_type="wb_report", object_id=report_id, reason="actor cannot refresh report")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
-    key = _report_job_cache_key(report_id, date_from, date_to, groupBy, source)
-    cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id)
+    finance_allowed = has_permission(actor, "finance:read")
+    key = _report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        groupBy,
+        source,
+        finance_allowed=finance_allowed,
+    )
+    cache_key = _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=finance_allowed)
     cached = get_source_cache(actor.organization_id, cache_key, slim=False) or {}
     current = get_source_cache(actor.organization_id, key, slim=False) or {}
-    if _report_job_is_active_refresh(current):
+    if _report_job_is_reusable(current):
         return {**current, "reused": True}
     if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
-        payload = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, current)
+        payload = _completed_report_job_from_cache(
+            report_id, date_from, date_to, groupBy, cached, current,
+            preserve_finished_refresh=False,
+        )
         save_source_cache(actor.organization_id, key, payload)
         return payload
+    cash_flow = None
+    if report_id in {"pnl", "expenses"}:
+        cash_flow = get_cash_flow_for_period(
+            organization_id=actor.organization_id,
+            period_from=date_from,
+            period_to=date_to,
+            requested_by=actor.user_id,
+        )
+    cash_flow_response = {"cashFlow": cash_flow if finance_allowed else None} if cash_flow is not None else {}
     daily_sources = REPORT_DAILY_SOURCES_BY_ID.get(report_id, ())
     if daily_sources:
         ready, missing_sources = _report_daily_sources_ready(actor.organization_id, daily_sources, date_from=date_from, date_to=date_to)
@@ -4871,7 +5008,7 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
                 date_to.isoformat(),
                 groupBy,
                 source,
-                has_permission(actor, "finance:read"),
+                finance_allowed,
                 None,
             )
             payload = {
@@ -4886,22 +5023,12 @@ def start_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "
                 "updatedAt": _utc_now_iso(),
             }
             save_source_cache(actor.organization_id, key, payload)
-            return {**payload, "reused": False}
-    if _report_job_is_reusable(current):
-        return {**current, "reused": True}
-    cash_flow = None
-    if report_id in {"pnl", "expenses"}:
-        cash_flow = get_cash_flow_for_period(
-            organization_id=actor.organization_id,
-            period_from=date_from,
-            period_to=date_to,
-            requested_by=actor.user_id,
-        )
+            return {**payload, "reused": False, **cash_flow_response}
     from app.repricer_tasks import build_report_for_org
-    task = build_report_for_org.delay(actor.organization_id, actor.user_id, report_id, date_from.isoformat(), date_to.isoformat(), groupBy, source, has_permission(actor, "finance:read"), None)
+    task = build_report_for_org.delay(actor.organization_id, actor.user_id, report_id, date_from.isoformat(), date_to.isoformat(), groupBy, source, finance_allowed, None)
     payload = {"state": "queued", "taskId": task.id, "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy, "source": source, "queuedAt": _utc_now_iso()}
     save_source_cache(actor.organization_id, key, payload)
-    return {**payload, "reused": False, **({"cashFlow": cash_flow} if cash_flow is not None else {})}
+    return {**payload, "reused": False, **cash_flow_response}
 
 
 @router.post("/api/wb/reports/{report_id}/refresh-sources-job")
@@ -4917,12 +5044,27 @@ def start_report_source_refresh_job(
     actor = actor_from_request(request)
     assert_permission_or_audit(actor=actor, permission="settings:read", action="reports.bff.sources_refresh.start", object_type="wb_report", object_id=report_id, reason="actor cannot refresh report sources")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
-    key = _digest_job_cache_key(date_from, date_to) if report_id == "digest" else _report_job_cache_key(report_id, date_from, date_to, groupBy, source)
+    finance_allowed = has_permission(actor, "finance:read")
+    key = _digest_job_cache_key(date_from, date_to) if report_id == "digest" else _report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        groupBy,
+        source,
+        finance_allowed=finance_allowed,
+    )
     current = get_source_cache(actor.organization_id, key, slim=False) or {}
     if _report_job_is_active_refresh(current):
         return {**current, "reused": True}
+    if report_id == "pnl":
+        get_cash_flow_for_period(
+            organization_id=actor.organization_id,
+            period_from=date_from,
+            period_to=date_to,
+            requested_by=actor.user_id,
+        )
     from app.repricer_tasks import refresh_report_sources_for_org
-    task = refresh_report_sources_for_org.delay(actor.organization_id, actor.user_id, report_id, date_from.isoformat(), date_to.isoformat(), groupBy, source, has_permission(actor, "finance:read"), None)
+    task = refresh_report_sources_for_org.delay(actor.organization_id, actor.user_id, report_id, date_from.isoformat(), date_to.isoformat(), groupBy, source, finance_allowed, None)
     payload = {
         "state": "queued",
         "taskId": task.id,
@@ -4944,17 +5086,25 @@ def start_report_source_refresh_job(
 @router.get("/api/wb/reports/{report_id}/jobs")
 def get_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pnl", "expenses", "stock", "week-over-week"], preset: str = Query(default="7d"), from_: str | None = Query(default=None, alias="from"), to: str | None = Query(default=None, alias="to"), groupBy: ReportGroupBy = Query(default="sku"), source: str = Query(default="operational")) -> dict[str, Any]:
     actor = actor_from_request(request)
-    assert_permission_or_audit(actor=actor, permission="settings:read", action="reports.bff.job.status", object_type="wb_report", object_id=report_id, reason="actor cannot read report job")
+    assert_permission_or_audit(actor=actor, permission="finance:read" if report_id == "expenses" else "settings:read", action="reports.bff.job.status", object_type="wb_report", object_id=report_id, reason="actor cannot read report job")
     date_from, date_to, _ = _range_from_preset(preset, from_, to)
-    key = _report_job_cache_key(report_id, date_from, date_to, groupBy, source)
+    finance_allowed = has_permission(actor, "finance:read")
+    key = _report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        groupBy,
+        source,
+        finance_allowed=finance_allowed,
+    )
     job = get_source_cache(actor.organization_id, key, slim=False) or {"state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy}
-    if _report_job_is_active_refresh(job):
+    if _report_job_is_reusable(job):
         return _report_job_for_response({**job, "reused": True})
     if _report_job_is_finished_refresh(job):
         return _report_job_for_response({**job, "reused": True})
     cached = get_source_cache(
         actor.organization_id,
-        _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id),
+        _report_cache_key(report_id, date_from, date_to, groupBy, source, organization_id=actor.organization_id, finance_allowed=finance_allowed),
         slim=False,
     ) or {}
     if _report_payload_cache_is_usable(report_id, cached, organization_id=actor.organization_id):
@@ -4987,7 +5137,16 @@ def refresh_ads_report_cache(
         date_to=date_to,
         date_range=date_range,
         wb_token=None,
-        refresh=False,
+        refresh=True,
+    )
+    _save_exact_report_payload_cache(
+        organization_id=actor.organization_id,
+        report_id="ads",
+        date_from=date_from,
+        date_to=date_to,
+        group_by="campaign",
+        source="operational",
+        report=_apply_report_rules_to_payload(payload, actor.organization_id),
     )
     record_audit_event(
         actor=actor,

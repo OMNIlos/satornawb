@@ -4,10 +4,9 @@ from datetime import date
 from io import BytesIO
 from typing import Any
 from xml.sax.saxutils import escape
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from app.avito.orders import AvitoOrderRow
-
 
 HEADERS = [
     "№ задания",
@@ -38,6 +37,17 @@ def _col_ref(index: int) -> str:
 
 def _cell(ref: str, value: Any, style: int = 2) -> str:
     text = "" if value is None else str(value)
+    # Reject XML 1.0-invalid input rather than emit a corrupt workbook or drop text.
+    if any(
+        not (
+            code in (9, 10, 13)
+            or 0x20 <= code <= 0xD7FF
+            or 0xE000 <= code <= 0xFFFD
+            or 0x10000 <= code <= 0x10FFFF
+        )
+        for code in map(ord, text)
+    ):
+        raise ValueError("Invalid XML character in XLSX text")
     if not text:
         return f'<c r="{ref}" s="{style}"/>'
     return f'<c r="{ref}" s="{style}" t="inlineStr"><is><t>{escape(text)}</t></is></c>'
@@ -155,10 +165,16 @@ def build_avito_orders_picking_xlsx(orders: list[AvitoOrderRow], *, date_from: d
 
     buffer = BytesIO()
     with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
-        archive.writestr("[Content_Types].xml", content_types)
-        archive.writestr("_rels/.rels", rels)
-        archive.writestr("xl/workbook.xml", workbook_xml)
-        archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
-        archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
-        archive.writestr("xl/styles.xml", styles)
+        for name, content in (
+            ("[Content_Types].xml", content_types),
+            ("_rels/.rels", rels),
+            ("xl/workbook.xml", workbook_xml),
+            ("xl/_rels/workbook.xml.rels", workbook_rels),
+            ("xl/worksheets/sheet1.xml", sheet_xml),
+            ("xl/styles.xml", styles),
+        ):
+            # Fixed ZIP epoch keeps retries byte-stable within the same renderer runtime.
+            member = ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            member.compress_type = ZIP_DEFLATED
+            archive.writestr(member, content)
     return buffer.getvalue()

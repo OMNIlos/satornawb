@@ -34,6 +34,8 @@ from app.repricer_cache.store import (
     save_source_cache,
 )
 from app.repricer_persistence.store import load_algorithm_settings, load_runtime_state
+from app.platform.economics.legacy_tax import get_legacy_finance_taxes, legacy_finance_tax_revision
+from app.platform.period import Period
 from app.repricer_sync import (
     _good_buyer_price_no_wallet_kopecks,
     _good_seller_price_kopecks,
@@ -49,7 +51,7 @@ PlanFactDimension = Literal["company", "manager", "brand"]
 
 DEFAULT_FROM = date(2026, 5, 1)
 DEFAULT_TO = date(2026, 5, 28)
-PNL_REPORT_CACHE_VERSION = "v3"
+PNL_REPORT_CACHE_VERSION = "v5"
 PNL_REPORT_CACHE_TTL = timedelta(hours=24)
 PNL_REPORT_STALE_TTL = timedelta(hours=24)
 
@@ -138,9 +140,9 @@ def _evidence(source_id: str, source_type: Literal["wb_api", "wb_excel", "manual
     ]
 
 
-def _calc_margin_pct(net_profit_kopecks: int, revenue_kopecks: int) -> float:
-    if revenue_kopecks <= 0:
-        return 0.0
+def _calc_margin_pct(net_profit_kopecks: int | None, revenue_kopecks: int) -> float | None:
+    if net_profit_kopecks is None or revenue_kopecks <= 0:
+        return None
     return round(net_profit_kopecks / revenue_kopecks * 100, 2)
 
 
@@ -173,8 +175,9 @@ def _abc_financial_components(
     ads: dict[str, Any],
     revenue_kopecks: int,
     sales_units: int,
+    finance_tax: dict[str, Any],
     cogs_kopecks: int | None = None,
-) -> dict[str, int]:
+) -> dict[str, int | None]:
     cogs = _nonnegative_int(settings.get("cogsKopecks")) * sales_units if cogs_kopecks is None else cogs_kopecks
     commission = _finance_commission_kopecks(finance)
     logistics = _int_or_zero(finance.get("logisticsKopecks"))
@@ -195,9 +198,9 @@ def _abc_financial_components(
         _nonnegative_int(settings.get("otherExpensePerSaleKopecks")) * sales_units
         + int(round(revenue_kopecks * _nonnegative_float_or_zero(settings.get("otherExpensePricePct")) / 100))
     )
-    tax = int(round(revenue_kopecks * _nonnegative_float_or_zero(settings.get("taxPct")) / 100))
-    expenses = cogs + commission + logistics + storage + acceptance + penalty + deduction + finance_other_expenses + acquiring + loyalty_cost + ad_spend + other_expenses + tax - compensation
-    net_profit = revenue_kopecks - expenses
+    tax = finance_tax.get("taxKopecks") if finance_tax.get("factTaxState") == "configured" else None
+    expenses = cogs + commission + logistics + storage + acceptance + penalty + deduction + finance_other_expenses + acquiring + loyalty_cost + ad_spend + other_expenses - compensation
+    net_profit = revenue_kopecks - expenses - tax if tax is not None else None
     return {
         "revenueKopecks": revenue_kopecks,
         "cogsKopecks": cogs,
@@ -593,8 +596,12 @@ def _get_cached_pnl_response(
     *,
     organization_id: int,
     cache_key: str,
+    tax_revision: str | None = None,
 ) -> PnlReportResponse | None:
     cache = get_source_cache(organization_id, cache_key, slim=False) or {}
+    tax_revision = tax_revision if tax_revision is not None else legacy_finance_tax_revision(organization_id)
+    if tax_revision == "unavailable" or cache.get("taxRevision") != tax_revision:
+        return None
     fetched_at = _parse_cache_datetime(cache.get("fetchedAt"))
     if fetched_at is None:
         return None
@@ -642,11 +649,13 @@ def _save_pnl_response_cache(
     organization_id: int,
     cache_key: str,
     report: PnlReportResponse,
+    tax_revision: str,
 ) -> None:
     save_source_cache(
         organization_id,
         cache_key,
         {
+            "taxRevision": "unavailable" if "tax_policy_unavailable" in report.blockerIds else tax_revision,
             "ttlSeconds": int(PNL_REPORT_CACHE_TTL.total_seconds()),
             "staleTtlSeconds": int(PNL_REPORT_STALE_TTL.total_seconds()),
             "report": report.model_dump(mode="json"),
@@ -874,18 +883,16 @@ def _label_for_group(
     return f"nm-{nm_id}", sku, brand, manager, sku
 
 
-def _add_amount(target: dict[str, Any], key: str, amount: int) -> None:
-    target[key] = _int_or_zero(target.get(key)) + amount
+def _add_amount(target: dict[str, Any], key: str, amount: int | None) -> None:
+    target[key] = None if amount is None or target.get(key) is None else _int_or_zero(target[key]) + amount
 
 
 _PNL_NONNEGATIVE_AMOUNT_KEYS = (
-    "revenueKopecks",
     "cogsKopecks",
     "commissionKopecks",
     "logisticsKopecks",
     "storageKopecks",
     "adSpendKopecks",
-    "taxKopecks",
     "overheadKopecks",
 )
 
@@ -894,7 +901,8 @@ def _normalize_pnl_row_amounts(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
     for key in _PNL_NONNEGATIVE_AMOUNT_KEYS:
         normalized[key] = max(0, _int_or_zero(normalized.get(key)))
-    normalized["netProfitKopecks"] = _int_or_zero(normalized.get("netProfitKopecks"))
+    for key in ("revenueKopecks", "taxKopecks", "netProfitKopecks"):
+        normalized[key] = _int_or_zero(normalized[key]) if normalized.get(key) is not None else None
     return normalized
 
 
@@ -911,6 +919,8 @@ def _build_cached_pnl_report(
     aggregates = finance_cache.get("aggregates") if isinstance(finance_cache.get("aggregates"), dict) else {}
     if not aggregates:
         return None
+
+    finance_taxes = get_legacy_finance_taxes(organization_id, finance_cache, Period(date_from, date_to))
 
     ads_cache = _period_cache(organization_id, "ads", date_from, date_to)
     ads_aggregates = ads_cache.get("aggregates") if isinstance(ads_cache.get("aggregates"), dict) else {}
@@ -959,7 +969,7 @@ def _build_cached_pnl_report(
             + max(0, deduction_signed)
             + _nonnegative_int(finance.get("loyaltyCostKopecks"))
         )
-        finance_credits = _nonnegative_int(finance.get("additionalPaymentKopecks")) + max(0, -penalty_signed) + max(0, -deduction_signed)
+        finance_credits = _int_or_zero(finance.get("additionalPaymentKopecks")) + max(0, -penalty_signed) + max(0, -deduction_signed)
         acquiring = _nonnegative_int(finance.get("acquiringKopecks"))
         ads_row = ads_aggregates.get(str(nm_id)) if isinstance(ads_aggregates.get(str(nm_id)), dict) else {}
         ads = _nonnegative_int(
@@ -971,9 +981,10 @@ def _build_cached_pnl_report(
             _nonnegative_int(settings.get("otherExpensePerSaleKopecks")) * sales_units
             + int(round(revenue_base * _nonnegative_float_or_zero(settings.get("otherExpensePricePct")) / 100))
         )
-        tax = int(round(revenue_base * _nonnegative_float_or_zero(settings.get("taxPct")) / 100))
+        finance_tax = finance_taxes.get(str(raw_nm_id), {})
+        tax = finance_tax.get("taxKopecks") if finance_tax.get("factTaxState") == "configured" else None
         overhead = other_expenses
-        net_profit = revenue - (cogs + commission + logistics + storage + acquiring + ads + tax + overhead - finance_credits)
+        net_profit = revenue - (cogs + commission + logistics + storage + acquiring + ads + tax + overhead - finance_credits) if tax is not None else None
 
         row = rows_by_key.setdefault(
             group_key,
@@ -1014,7 +1025,9 @@ def _build_cached_pnl_report(
         isinstance(row, dict) and row.get("financeAdSpendAuthoritative") for row in aggregates.values()
     )
     ads_blockers = [] if ads_cache or finance_ads_authoritative else ["WB-02"]
-    source_status: Literal["fresh", "partial", "stale", "blocked", "unknown"] = "fresh" if not ads_blockers else "partial"
+    tax_blockers = ["WB_PNL_TAX_UNCONFIRMED"] if any(row["taxKopecks"] is None for row in rows_by_key.values()) else []
+    tax_blockers += sorted({item["factTaxReason"] for item in finance_taxes.values() if item.get("factTaxReason")})
+    source_status: Literal["fresh", "partial", "stale", "blocked", "unknown"] = "fresh" if not ads_blockers and not tax_blockers else "partial"
     confidence: Literal["high", "medium", "low", "blocked"] = "high" if source_status == "fresh" else "medium"
     if not finance_allowed:
         source_status = "partial"
@@ -1028,7 +1041,7 @@ def _build_cached_pnl_report(
                 **{
                     **row,
                     "overheadKopecks": row["overheadKopecks"] if finance_allowed else None,
-                    "marginPct": _calc_margin_pct(_int_or_zero(row["netProfitKopecks"]), _int_or_zero(row["revenueKopecks"])),
+                    "marginPct": _calc_margin_pct(row["netProfitKopecks"], _int_or_zero(row["revenueKopecks"])),
                     "sourceStatus": source_status,
                     "confidence": confidence,
                 }
@@ -1036,11 +1049,11 @@ def _build_cached_pnl_report(
         )
 
     total_revenue = sum(_int_or_zero(row.revenueKopecks) for row in rows)
-    total_net_profit = sum(_int_or_zero(row.netProfitKopecks) for row in rows)
+    total_net_profit = sum(row.netProfitKopecks for row in rows) if all(row.netProfitKopecks is not None for row in rows) else None
     total_storage = sum(_int_or_zero(row.storageKopecks) for row in rows)
-    total_tax = sum(_int_or_zero(row.taxKopecks) for row in rows)
+    total_tax = sum(row.taxKopecks for row in rows) if all(row.taxKopecks is not None for row in rows) else None
     total_overhead = sum(_int_or_zero(row.overheadKopecks) for row in rows)
-    blockers = sorted(set(ads_blockers))
+    blockers = sorted(set(ads_blockers + tax_blockers))
     report_state: Literal["operative", "preliminary", "final", "blocked"] = requested_state
     if requested_state == "final" and blockers:
         report_state = "preliminary"
@@ -1138,7 +1151,7 @@ def _build_cached_pnl_report(
         fieldMapping=_pnl_field_mapping(),
         manualCosts=[
             ManualCost(costId="storage", label="Storage/acceptance/penalties/deductions", amountKopecks=total_storage, allocationBase="sku", sourceStatus="fresh", blockerIds=[]),
-            ManualCost(costId="tax", label="Tax", amountKopecks=total_tax, allocationBase="sku", sourceStatus="fresh", blockerIds=[]),
+            ManualCost(costId="tax", label="Tax", amountKopecks=total_tax, allocationBase="sku", sourceStatus="partial" if tax_blockers else "fresh", blockerIds=tax_blockers),
             ManualCost(
                 costId="overhead",
                 label="Operating expenses",
@@ -1217,10 +1230,10 @@ def _pnl_field_mapping() -> list[PnlFieldMapping]:
         PnlFieldMapping(
             metricId="tax",
             metricLabel="Tax expense",
-            sourceId="repricer-algorithm-settings",
-            sourceField="taxPct",
-            formula="taxKopecks = sellerRevenueKopecks * taxPct / 100",
-            fallback="manual taxPct setting",
+            sourceId="organization-economics-dated-tax",
+            sourceField="tax_basis_points/effective_from",
+            formula="taxKopecks = sum(selected-period net revenue by confirmed dated tax rate)",
+            fallback="unknown until the selected-period tax policy and revenue basis are confirmed",
             blockerIds=[],
         ),
         PnlFieldMapping(
@@ -1301,6 +1314,7 @@ def build_pnl_report(
 ) -> PnlReportResponse:
     pnl_cache_key = None
     if organization_id is not None:
+        tax_revision = legacy_finance_tax_revision(organization_id)
         pnl_cache_key = _pnl_report_cache_key(
             date_from=date_from,
             date_to=date_to,
@@ -1308,7 +1322,7 @@ def build_pnl_report(
             requested_state=requested_state,
             finance_allowed=finance_allowed,
         )
-        cached_pnl = _get_cached_pnl_response(organization_id=organization_id, cache_key=pnl_cache_key)
+        cached_pnl = _get_cached_pnl_response(organization_id=organization_id, cache_key=pnl_cache_key, tax_revision=tax_revision)
         if cached_pnl is not None:
             return cached_pnl
 
@@ -1321,7 +1335,7 @@ def build_pnl_report(
             finance_allowed=finance_allowed,
         )
         if cached_report is not None:
-            _save_pnl_response_cache(organization_id=organization_id, cache_key=pnl_cache_key, report=cached_report)
+            _save_pnl_response_cache(organization_id=organization_id, cache_key=pnl_cache_key, report=cached_report, tax_revision=tax_revision)
             return cached_report
         return _empty_pnl_report_from_cache_miss(
             date_from=date_from,
@@ -1349,6 +1363,7 @@ def _build_cached_ads_snapshot(
     ads_cache = _period_cache(organization_id, "ads", date_from, date_to)
     aggregates = _cache_aggregates(ads_cache)
     rows: list[AdsAttributionRow] = []
+    unallocated = False
     totals = {
         "ad_spend_kopecks": 0,
         "impressions": 0,
@@ -1360,30 +1375,36 @@ def _build_cached_ads_snapshot(
     for raw_key, aggregate in aggregates.items():
         if not isinstance(aggregate, dict):
             continue
-        nm_id = _int_or_zero(aggregate.get("nmId") or aggregate.get("nmID") or raw_key)
         campaign_id_raw = aggregate.get("campaignId") or aggregate.get("advertId") or aggregate.get("advert_id")
         campaign_id = str(campaign_id_raw) if campaign_id_raw not in (None, "") else None
-        ad_spend = _nonnegative_int(aggregate.get("adSpendKopecks") or aggregate.get("spendKopecks") or aggregate.get("sumKopecks"))
-        impressions = _nonnegative_int(aggregate.get("adImpressions") or aggregate.get("impressions") or aggregate.get("views"))
-        clicks = _nonnegative_int(aggregate.get("adClicks") or aggregate.get("clicks"))
-        cart_adds = _nonnegative_int(aggregate.get("adCartAdds") or aggregate.get("cartAdds") or aggregate.get("cartCount") or aggregate.get("baskets"))
-        orders_count = _nonnegative_int(aggregate.get("adOrders") or aggregate.get("ordersCount") or aggregate.get("orderCount") or aggregate.get("orders"))
-        orders_kopecks = _nonnegative_int(aggregate.get("adSalesKopecks") or aggregate.get("ordersKopecks") or aggregate.get("orderSumKopecks") or aggregate.get("salesKopecks"))
+        nm_id = _int_or_zero(aggregate.get("nmId") or aggregate.get("nmID") or (raw_key if not campaign_id else None))
+        ad_spend = _first_nonnegative_int_or_none(aggregate, "adSpendKopecks", "spendKopecks", "sumKopecks")
+        impressions = _first_nonnegative_int_or_none(aggregate, "adImpressions", "impressions", "views")
+        clicks = _first_nonnegative_int_or_none(aggregate, "adClicks", "clicks")
+        cart_adds = _first_nonnegative_int_or_none(aggregate, "adCartAdds", "cartAdds", "cartCount", "baskets")
+        orders_count = _first_nonnegative_int_or_none(aggregate, "adOrders", "ordersCount", "orderCount", "orders")
+        orders_kopecks = _first_nonnegative_int_or_none(aggregate, "adRevenueKopecks", "adSalesKopecks", "ordersKopecks", "orderSumKopecks", "salesKopecks")
         if not any((nm_id > 0, campaign_id, ad_spend, impressions, clicks, cart_adds, orders_count, orders_kopecks)):
             continue
-        totals["ad_spend_kopecks"] += ad_spend
-        totals["impressions"] += impressions
-        totals["clicks"] += clicks
-        totals["cart_adds"] += cart_adds
-        totals["orders_count"] += orders_count
-        totals["orders_kopecks"] += orders_kopecks
+        if group_by == "sku" and nm_id <= 0:
+            unallocated = True
+            continue
+        for key, value in (
+            ("ad_spend_kopecks", ad_spend), ("impressions", impressions),
+            ("clicks", clicks), ("cart_adds", cart_adds),
+            ("orders_count", orders_count), ("orders_kopecks", orders_kopecks),
+        ):
+            if value is None:
+                totals.pop(key, None)
+            elif key in totals:
+                totals[key] += value
         sku_id = str(nm_id) if nm_id > 0 else None
         rows.append(
             AdsAttributionRow(
                 campaign_id=campaign_id,
                 sku_id=sku_id,
                 attribution_level="campaign_sku" if sku_id and campaign_id else ("exact_sku" if sku_id else "campaign_only"),
-                confidence="high" if ad_spend or orders_count else "medium",
+                confidence="high" if sku_id and (ad_spend or orders_count) else "medium",
                 ad_spend_kopecks=ad_spend,
                 impressions=impressions,
                 clicks=clicks,
@@ -1397,15 +1418,24 @@ def _build_cached_ads_snapshot(
             )
         )
     has_any_data = bool(rows)
+    blockers = []
+    if unallocated:
+        blockers.append("WB_ADS_SKU_ATTRIBUTION_INCOMPLETE")
+    if has_any_data and len(totals) < 6:
+        blockers.append("WB_ADS_METRICS_INCOMPLETE")
+    if not has_any_data and not unallocated:
+        blockers.append("WB_ADS_CACHE_EMPTY")
+    if blockers:
+        blockers.insert(0, "WB-02")
     return AdsAttributionSnapshot(
-        source_status="fresh" if has_any_data else "blocked",
-        confidence="high" if has_any_data else "blocked",
-        blocker_ids=[] if has_any_data else ["WB_ADS_CACHE_EMPTY"],
+        source_status=("partial" if blockers else "fresh") if has_any_data else "blocked",
+        confidence=("high" if not blockers and any(row.confidence == "high" for row in rows) else "medium") if has_any_data else "blocked",
+        blocker_ids=blockers,
         source_evidence=_evidence(
             "wb-ads-attribution-cache",
             "wb_api",
             "WB Ads cached by repricer sync",
-            ["adSpendKopecks", "adImpressions", "adClicks", "adOrders", "adSalesKopecks"],
+            ["adSpendKopecks", "adImpressions", "adClicks", "adCartAdds", "adOrders", "adRevenueKopecks"],
         ),
         totals=totals,
         rows=rows,
@@ -1428,10 +1458,11 @@ def build_ads_performance_report(
         group_by=group_by,
     )
 
-    ad_spend = snapshot.totals.get("ad_spend_kopecks")
-    orders_kopecks = snapshot.totals.get("orders_kopecks")
-    drr_pct = _calc_drr_pct(ad_spend or 0, orders_kopecks or 0)
-    roi_pct = _calc_roi_pct(ad_spend or 0, orders_kopecks or 0)
+    totals = snapshot.totals if snapshot.rows else {}
+    ad_spend = totals.get("ad_spend_kopecks")
+    orders_kopecks = totals.get("orders_kopecks")
+    drr_pct = _calc_drr_pct(ad_spend, orders_kopecks) if ad_spend is not None and orders_kopecks else None
+    roi_pct = _calc_roi_pct(ad_spend, orders_kopecks) if ad_spend and orders_kopecks is not None else None
     romi_pct = roi_pct
 
     blocker_ids = snapshot.blocker_ids
@@ -1445,47 +1476,22 @@ def build_ads_performance_report(
             rowId=f"{group_by}-{row.campaign_id or 'unknown'}-{row.sku_id or index}",
             campaignId=row.campaign_id,
             skuId=row.sku_id,
-            brandId="brand-satorna",
-            managerId="maria",
+            brandId=None,
+            managerId=None,
             adSpendKopecks=ad_spend_row,
             impressions=row.impressions,
             clicks=row.clicks,
             cartAdds=row.cart_adds,
             ordersCount=row.orders_count,
             ordersKopecks=orders_row,
-            drrPct=_calc_drr_pct(ad_spend_row or 0, orders_row or 0),
-            romiPct=_calc_roi_pct(ad_spend_row or 0, orders_row or 0),
-            roiPct=_calc_roi_pct(ad_spend_row or 0, orders_row or 0),
+            drrPct=_calc_drr_pct(ad_spend_row, orders_row) if ad_spend_row is not None and orders_row else None,
+            romiPct=_calc_roi_pct(ad_spend_row, orders_row) if ad_spend_row and orders_row is not None else None,
+            roiPct=_calc_roi_pct(ad_spend_row, orders_row) if ad_spend_row and orders_row is not None else None,
             attributionLevel=row.attribution_level,
             confidence=row.confidence,
         )
 
     rows = [to_row(index, row) for index, row in enumerate(snapshot.rows, start=1)]
-    if not rows:
-        fallback_attribution: Literal["exact_sku", "campaign_sku", "campaign_only", "unknown"] = (
-            "campaign_sku" if group_by == "sku" else "campaign_only"
-        )
-        fallback_confidence: Literal["high", "medium", "low", "blocked"] = "medium" if group_by == "sku" else "low"
-        rows = [
-            AdsPerformanceRow(
-                rowId=f"{group_by}-fallback",
-                campaignId="unattributed",
-                skuId="FBBT_42" if group_by == "sku" else None,
-                brandId="brand-satorna",
-                managerId="maria",
-                adSpendKopecks=None,
-                impressions=None,
-                clicks=None,
-                cartAdds=None,
-                ordersCount=None,
-                ordersKopecks=None,
-                drrPct=None,
-                romiPct=None,
-                roiPct=None,
-                attributionLevel=fallback_attribution,
-                confidence=fallback_confidence,
-            )
-        ]
 
     return AdsPerformanceResponse(
         sourceStatus=source_status,
@@ -1497,10 +1503,10 @@ def build_ads_performance_report(
         groupBy=group_by,
         totals=AdsTotals(
             adSpendKopecks=ad_spend,
-            impressions=snapshot.totals.get("impressions"),
-            clicks=snapshot.totals.get("clicks"),
-            cartAdds=snapshot.totals.get("cart_adds"),
-            ordersCount=snapshot.totals.get("orders_count"),
+            impressions=totals.get("impressions"),
+            clicks=totals.get("clicks"),
+            cartAdds=totals.get("cart_adds"),
+            ordersCount=totals.get("orders_count"),
             ordersKopecks=orders_kopecks,
             drrPct=drr_pct,
             romiPct=romi_pct,
@@ -1676,13 +1682,16 @@ def _abc_group_rows(rows: list[dict[str, Any]], group_by: ReportGroupBy) -> list
             "impressions",
             "clicks",
         ):
-            bucket[key] += _int_or_zero(row.get(key))
+            _add_amount(bucket, key, row.get(key) if key in {"taxKopecks", "netTotalKopecks"} else _int_or_zero(row.get(key)))
+        if bucket.get("factTaxReason") != "tax_policy_unavailable" and (row.get("factTaxState") == "missing" or bucket.get("factTaxState") != "missing"):
+            bucket["factTaxState"] = row.get("factTaxState")
+            bucket["factTaxReason"] = row.get("factTaxReason")
 
     result = []
     for bucket in grouped.values():
         sales = bucket["salesKopecks"]
         profit = bucket["netTotalKopecks"]
-        bucket["marginPct"] = profit / sales * 100 if sales > 0 else None
+        bucket["marginPct"] = profit / sales * 100 if profit is not None and sales > 0 else None
         bucket["ordersComposite"] = _composite_metric(bucket["ordersUnits"], bucket["ordersKopecks"])
         bucket["salesComposite"] = _composite_metric(bucket["salesUnits"], bucket["salesKopecks"])
         bucket["ctrPct"] = bucket["clicks"] / bucket["impressions"] * 100 if bucket["impressions"] else None
@@ -1854,6 +1863,7 @@ def _build_abc_report_from_snapshots(
     finance_basis_compatible = not finance_cache or finance_cache_uses_current_revenue_basis(finance_cache)
     finance_source_available = finance_allowed and bool(finance_cache) and finance_basis_compatible
     finance_aggregates = _cache_aggregates(finance_cache) if finance_source_available else {}
+    finance_taxes = get_legacy_finance_taxes(organization_id, finance_cache, Period(date_from, date_to)) if finance_source_available else {}
 
     ads_cache = _period_cache(organization_id, "ads", date_from, date_to)
     ads_source_available = bool(ads_cache)
@@ -1949,7 +1959,8 @@ def _build_abc_report_from_snapshots(
         orders_kopecks = funnel_orders_kopecks if funnel_orders_kopecks is not None else 0
         sales_kopecks = seller_revenue
         finance_row_complete = finance_source_available and _int_or_zero(finance.get("sellerRevenueMissingRows")) == 0
-        profit_row_complete = finance_row_complete and ads_source_available
+        finance_tax = finance_taxes.get(str(nm_id), {"taxKopecks": None, "factTaxState": "missing", "factTaxReason": "tax_revenue_basis_unconfirmed"})
+        profit_row_complete = finance_row_complete and ads_source_available and finance_tax.get("taxKopecks") is not None and finance_tax.get("factTaxState") == "configured"
         cogs_total, cogs_settings = _abc_period_cogs(
             nm_id=nm_id,
             article_id=article_id,
@@ -1967,6 +1978,7 @@ def _build_abc_report_from_snapshots(
             ads=ads,
             revenue_kopecks=seller_revenue,
             sales_units=sales_units_for_costs,
+            finance_tax=finance_tax,
             cogs_kopecks=cogs_total,
         )
         cogs = financial["cogsKopecks"]
@@ -2084,9 +2096,11 @@ def _build_abc_report_from_snapshots(
             "paymentScheduleKopecks": _int_or_zero(finance.get("paymentScheduleKopecks")) if finance_source_available else None,
             "loyaltyCostKopecks": loyalty_cost if finance_source_available else None,
             "taxKopecks": tax if finance_row_complete else None,
+            "factTaxState": finance_tax["factTaxState"],
+            "factTaxReason": finance_tax.get("factTaxReason"),
             "otherExpensesKopecks": overhead if finance_row_complete else None,
             "drrOrdersPct": ad_spend / orders_kopecks * 100 if ads_source_available and orders_kopecks > 0 else None,
-            "drrSalesPct": ad_spend / sales_kopecks * 100 if profit_row_complete and sales_kopecks > 0 else None,
+            "drrSalesPct": ad_spend / sales_kopecks * 100 if finance_row_complete and ads_source_available and sales_kopecks > 0 else None,
             "netPerUnitKopecks": (int(round(net_profit / max(sales_units_for_costs, 1))) if sales_units_for_costs else net_profit) if profit_row_complete else None,
             "netTotalKopecks": net_profit if profit_row_complete else None,
             "logisticsCostPct": logistics / seller_revenue * 100 if seller_revenue > 0 else None,
@@ -2119,6 +2133,8 @@ def _build_abc_report_from_snapshots(
         blockers.append("WB_ABC_COGS_EFFECTIVE_DATE_MISSING")
     if "period_end_fallback" in cogs_evidence_statuses:
         blockers.append("WB_ABC_COGS_DAILY_COVERAGE_MISMATCH")
+    if any(row.get("factTaxState") == "missing" for row in rows):
+        blockers.append("WB_ABC_TAX_UNCONFIRMED")
     source_status = "fresh" if finance_allowed and not blockers else "partial"
     confidence = "high" if source_status == "fresh" else "medium"
     for row in rows:
@@ -2136,7 +2152,7 @@ def _build_abc_report_from_snapshots(
     rows = sorted(rows, key=lambda row: (_int_or_zero(row.get("salesKopecks")), _int_or_zero(row.get("netTotalKopecks"))), reverse=True)
     output_rows = _abc_group_rows(rows, group_by)
     finance_values_complete = finance_source_available and "WB_ABC_RETAIL_AMOUNT_MISSING" not in blockers
-    profit_values_complete = finance_values_complete and ads_source_available
+    profit_values_complete = finance_values_complete and ads_source_available and all(row.get("netTotalKopecks") is not None for row in rows)
     total_orders = sum(_int_or_zero(row.get("ordersUnits")) for row in rows) if baskets_cache else None
     total_orders_kopecks = sum(_int_or_zero(row.get("ordersKopecks")) for row in rows) if baskets_cache else None
     total_profit = sum(_int_or_zero(row.get("netTotalKopecks")) for row in rows) if profit_values_complete else None

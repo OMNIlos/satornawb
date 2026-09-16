@@ -21,7 +21,8 @@ from app.platform.finance.service import (
 )
 from app.platform.period import MOSCOW, Period
 
-FORMULA_VERSION = "wb-abc-pnl-fullstats-loyalty-v1"
+FORMULA_VERSION = "wb-abc-pnl-payable-v2"
+APPROVED_TAX_BLOCKER = "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750"
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,8 +71,10 @@ class AbcPnlRow:
     sales_class: str | None
     profit_class: None
     abc_code: None
-    net_profit_kopecks: None
+    net_profit_kopecks: int | None
     blocker_ids: tuple[str, ...]
+    profit_before_internal_expenses_kopecks: int | None = None
+    internal_expenses_kopecks: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +110,9 @@ class AbcPnlSummary:
     cashback_commission_change_kopecks: int | None
     loyalty_net_cost_kopecks: int | None
     profit_after_loyalty_kopecks: int | None
-    net_profit_kopecks: None
+    net_profit_kopecks: int | None
+    profit_before_internal_expenses_kopecks: int | None = None
+    internal_expenses_kopecks: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +150,108 @@ def _round_basis_points(amount_kopecks: int, basis_points: int) -> int:
     if remainder > 5_000 or remainder == 5_000 and quotient % 2:
         quotient += 1
     return sign * quotient
+
+
+@dataclass(frozen=True, slots=True)
+class ManagementProfitCalculation:
+    tax_kopecks: int | None
+    profit_before_internal_kopecks: int | None
+    net_profit_kopecks: int | None
+    blocker_ids: tuple[str, ...]
+    formula_version: str = "wb-management-profit-v1"
+
+
+def calculate_management_profit(
+    *,
+    sales_kopecks: int | None,
+    commission_kopecks: int | None,
+    logistics_kopecks: int | None,
+    storage_kopecks: int | None,
+    acceptance_kopecks: int | None,
+    advertising_kopecks: int | None,
+    penalty_kopecks: int | None,
+    cogs_kopecks: int | None,
+    tax_basis_points: int | None,
+    internal_expenses_kopecks: int | None,
+    sales_basis_confirmed: bool = False,
+    unmapped_components: dict[str, int | None] | None = None,
+    resolved_tax_kopecks: int | None = None,
+) -> ManagementProfitCalculation:
+    """Pure calculation, not policy activation or evidence of financial readiness.
+
+    Callers must resolve authorized, complete inputs for one account/period and
+    the effective EconomicsPolicy first. The owner's rate is 750 bps; there is
+    deliberately no global default or write to historical policies here.
+    ``unmapped_components={}`` is an explicit completed reconciliation; None,
+    unknown amounts or nonzero amounts keep profit blocked. An account expense
+    must not be reused for filtered rows without an approved allocation.
+    A summary passes the sum of resolved SKU taxes to retain their dated bases
+    and integer rounding; it must not round the combined revenue a second time.
+    """
+    expenses = {
+        "commission": commission_kopecks,
+        "logistics": logistics_kopecks,
+        "storage": storage_kopecks,
+        "acceptance": acceptance_kopecks,
+        "advertising": advertising_kopecks,
+        "penalty": penalty_kopecks,
+        "cogs": cogs_kopecks,
+    }
+    amounts = [
+        sales_kopecks,
+        internal_expenses_kopecks,
+        resolved_tax_kopecks,
+        *expenses.values(),
+    ]
+    if unmapped_components is not None:
+        amounts.extend(unmapped_components.values())
+    if any(value is not None and type(value) is not int for value in amounts):
+        raise ValueError("Money must be integer kopecks or None")
+    if tax_basis_points is not None and (
+        type(tax_basis_points) is not int or not 0 <= tax_basis_points <= 10_000
+    ):
+        raise ValueError("Tax rate must be integer basis points in 0..10000")
+    if type(sales_basis_confirmed) is not bool:
+        raise ValueError("Sales basis confirmation must be boolean")
+    blockers: list[str] = []
+    if not sales_basis_confirmed:
+        blockers.append("WB_MANAGEMENT_SALES_BASIS_UNCONFIRMED")
+    if sales_kopecks is None:
+        blockers.append("WB_MANAGEMENT_SALES_MISSING")
+    if tax_basis_points is None:
+        blockers.append("WB_MANAGEMENT_TAX_POLICY_MISSING")
+    for name, amount in expenses.items():
+        if amount is None:
+            blockers.append(f"WB_MANAGEMENT_{name.upper()}_MISSING")
+    if unmapped_components is None or any(
+        value != 0 for value in unmapped_components.values()
+    ):
+        blockers.append("WB_MANAGEMENT_OPERATIONS_UNRECONCILED")
+    tax = (
+        (
+            resolved_tax_kopecks
+            if resolved_tax_kopecks is not None
+            else _round_basis_points(sales_kopecks, tax_basis_points)
+        )
+        if sales_basis_confirmed
+        and sales_kopecks is not None
+        and tax_basis_points is not None
+        else None
+    )
+    before_internal = None
+    if not blockers:
+        assert sales_kopecks is not None and tax is not None
+        before_internal = (
+            sales_kopecks
+            - tax
+            - sum(amount for amount in expenses.values() if amount is not None)
+        )
+    net = None
+    if internal_expenses_kopecks is None:
+        blockers.append("WB_MANAGEMENT_INTERNAL_EXPENSES_MISSING")
+    elif before_internal is not None:
+        net = before_internal - internal_expenses_kopecks
+    return ManagementProfitCalculation(tax, before_internal, net, tuple(blockers))
 
 
 def _empty_summary(
@@ -298,18 +405,17 @@ class WbAbcPnlService:
             return None, None, "missing", None, ("WB_PNL_ECONOMICS_MISSING",)
 
         groups: dict[tuple[int, int, int], list[int]] = {}
+        tax_bases: dict[int, int] = {}
         for (_day, basis), policy in zip(daily, values, strict=True):
             assert policy is not None
             key = tuple(int(value) for value in policy.amounts)
             totals = groups.setdefault(key, [0, 0])
             totals[0] += basis.revenue_kopecks
             totals[1] += basis.sales_units
+            tax_bases[key[0]] = tax_bases.get(key[0], 0) + basis.revenue_kopecks
         tax = sum(
             _round_basis_points(revenue, tax_basis_points)
-            for (tax_basis_points, _other_basis_points, _per_sale), (
-                revenue,
-                _sales,
-            ) in groups.items()
+            for tax_basis_points, revenue in tax_bases.items()
         )
         other = sum(
             _round_basis_points(revenue, other_basis_points) + sales * per_sale
@@ -353,6 +459,8 @@ class WbAbcPnlService:
         loyalty_canonical: bool,
         sales_class: str | None,
         blockers: tuple[str, ...],
+        *,
+        approved_tax_policy: bool = False,
     ) -> AbcPnlRow:
         penalty = max(0, fact.penalty_kopecks)
         deduction = max(0, fact.deduction_kopecks)
@@ -373,9 +481,14 @@ class WbAbcPnlService:
             + fact.acquiring_kopecks
             - compensation
         )
+        payable_complete = not fact.payable_basis or fact.payable_kopecks is not None
         settlement_profit = (
-            None if cogs is None else fact.revenue_kopecks - cogs - finance_expenses
+            None
+            if cogs is None or not payable_complete
+            else fact.revenue_kopecks - cogs - finance_expenses
         )
+        if not payable_complete:
+            blockers = (*blockers, "WB_PNL_PAYABLE_INCOMPLETE")
         profit_before_ads_and_loyalty = (
             None
             if settlement_profit is None or tax is None or other_expenses is None
@@ -387,7 +500,9 @@ class WbAbcPnlService:
             else profit_before_ads_and_loyalty - advertising_spend
         )
         cashback_amount = fact.cashback_amount_kopecks if loyalty_canonical else None
-        cashback_discount = fact.cashback_discount_kopecks if loyalty_canonical else None
+        cashback_discount = (
+            fact.cashback_discount_kopecks if loyalty_canonical else None
+        )
         cashback_commission_change = (
             fact.cashback_commission_change_kopecks if loyalty_canonical else None
         )
@@ -399,6 +514,37 @@ class WbAbcPnlService:
         )
         if loyalty_net_cost is None:
             blockers = (*blockers, "WB_PNL_LOYALTY_NOT_CANONICAL")
+        if not approved_tax_policy:
+            blockers = (*blockers, APPROVED_TAX_BLOCKER)
+        blockers = (*blockers, "WB_PNL_INTERNAL_EXPENSES_MISSING")
+        management = calculate_management_profit(
+            sales_kopecks=fact.revenue_kopecks if payable_complete else None,
+            commission_kopecks=fact.commission_kopecks,
+            logistics_kopecks=fact.logistics_kopecks,
+            storage_kopecks=fact.storage_kopecks,
+            acceptance_kopecks=fact.acceptance_kopecks,
+            advertising_kopecks=advertising_spend,
+            penalty_kopecks=penalty,
+            tax_basis_points=750 if approved_tax_policy else None,
+            resolved_tax_kopecks=tax if approved_tax_policy else None,
+            cogs_kopecks=(
+                cogs
+                if cost_state == "configured"
+                and cost_evidence_status in {None, "dated"}
+                else None
+            ),
+            internal_expenses_kopecks=None,
+            sales_basis_confirmed=True,
+            unmapped_components={
+                "acquiring": fact.acquiring_kopecks,
+                "deduction": deduction,
+                "finance_other": finance_other,
+                "compensation": compensation,
+                "loyalty": loyalty_net_cost,
+            },
+        )
+        if "WB_MANAGEMENT_OPERATIONS_UNRECONCILED" in management.blocker_ids:
+            blockers = (*blockers, "WB_MANAGEMENT_OPERATIONS_UNRECONCILED")
         return AbcPnlRow(
             fact.nm_id,
             fact.seller_article,
@@ -444,8 +590,9 @@ class WbAbcPnlService:
             sales_class,
             None,
             None,
-            None,
+            management.net_profit_kopecks,
             blockers,
+            profit_before_internal_expenses_kopecks=management.profit_before_internal_kopecks,
         )
 
     @staticmethod
@@ -467,6 +614,9 @@ class WbAbcPnlService:
             return sum(int(getattr(row, name)) for row in rows)
 
         costs_complete = all(row.cogs_kopecks is not None for row in rows)
+        settlement_complete = all(
+            row.settlement_profit_kopecks is not None for row in rows
+        )
         economics_complete = all(
             row.tax_kopecks is not None and row.other_expenses_kopecks is not None
             for row in rows
@@ -491,11 +641,38 @@ class WbAbcPnlService:
         cashback_commission_complete = all(
             row.cashback_commission_change_kopecks is not None for row in rows
         )
-        loyalty_complete = all(
-            row.loyalty_net_cost_kopecks is not None for row in rows
-        )
+        loyalty_complete = all(row.loyalty_net_cost_kopecks is not None for row in rows)
         loyalty_net_cost = (
             total("loyalty_net_cost_kopecks") if loyalty_complete else None
+        )
+        approved_inputs = all(
+            row.settlement_profit_kopecks is not None
+            and row.cost_value_state == "configured"
+            and row.cost_evidence_status in {None, "dated"}
+            and APPROVED_TAX_BLOCKER not in row.blocker_ids
+            for row in rows
+        )
+        management = calculate_management_profit(
+            sales_kopecks=total("revenue_kopecks"),
+            commission_kopecks=total("commission_kopecks"),
+            logistics_kopecks=total("logistics_kopecks"),
+            storage_kopecks=total("storage_kopecks"),
+            acceptance_kopecks=total("acceptance_kopecks"),
+            advertising_kopecks=advertising_total,
+            penalty_kopecks=total("penalty_kopecks"),
+            tax_basis_points=750 if approved_inputs else None,
+            resolved_tax_kopecks=total("tax_kopecks") if approved_inputs else None,
+            cogs_kopecks=total("cogs_kopecks") if approved_inputs else None,
+            internal_expenses_kopecks=None,
+            sales_basis_confirmed=True,
+            unmapped_components=(
+                None
+                if any(
+                    "WB_MANAGEMENT_OPERATIONS_UNRECONCILED" in row.blocker_ids
+                    for row in rows
+                )
+                else {}
+            ),
         )
         return AbcPnlSummary(
             total("operation_count"),
@@ -517,7 +694,7 @@ class WbAbcPnlService:
             total("acquiring_kopecks"),
             total("finance_expenses_kopecks"),
             total("cogs_kopecks") if costs_complete else None,
-            total("settlement_profit_kopecks") if costs_complete else None,
+            total("settlement_profit_kopecks") if settlement_complete else None,
             total("tax_kopecks") if economics_complete else None,
             total("other_expenses_kopecks") if economics_complete else None,
             profit_before_ads,
@@ -537,7 +714,8 @@ class WbAbcPnlService:
                 if profit_before_loyalty is not None and loyalty_net_cost is not None
                 else None
             ),
-            None,
+            management.net_profit_kopecks,
+            profit_before_internal_expenses_kopecks=management.profit_before_internal_kopecks,
         )
 
     def get_page(
@@ -568,11 +746,10 @@ class WbAbcPnlService:
         )
         loyalty_canonical = (
             source.snapshot is not None
-            and source.snapshot.formula_version == "wb-finance-v2"
+            and source.snapshot.formula_version in {"wb-finance-v2", "wb-finance-v3"}
         )
-        loyalty_complete = (
-            loyalty_canonical
-            and all(fact.loyalty_net_cost_kopecks is not None for fact in source.facts)
+        loyalty_complete = loyalty_canonical and all(
+            fact.loyalty_net_cost_kopecks is not None for fact in source.facts
         )
         advertising_complete = (
             advertising.state in {"ready", "empty"}
@@ -693,6 +870,16 @@ class WbAbcPnlService:
                     loyalty_canonical,
                     sales_classes.get(fact.nm_id),
                     (*cost_blockers, *economics_blockers),
+                    approved_tax_policy=bool(economics_daily_by_nm.get(fact.nm_id))
+                    and tax is not None
+                    and all(
+                        policy is not None
+                        and policy.tax_basis_points == 750
+                        and policy.tax_value_state == "configured"
+                        and policy.tax_evidence_status == "dated"
+                        for instant, _basis in economics_daily_by_nm.get(fact.nm_id, [])
+                        for policy in [policies.get((sku_id, instant))]
+                    ),
                 )
             )
         rows.sort(

@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from celery.exceptions import Retry
+from celery.exceptions import Ignore, Retry
 
 from app import repricer_bff as repricer_bff_module
 from app.avito.auth import resolve_user_avito_access_token
@@ -140,7 +140,7 @@ def _digest_report_summary(organization_id: int, date_from: date, date_to: date)
 
 
 @celery_app.task(name="reports.build_digest_for_org", bind=True, max_retries=0)
-def build_digest_for_org(self, organization_id: int, date_from_iso: str, date_to_iso: str, finance_allowed: bool, wb_token: str | None) -> dict[str, Any]:
+def build_digest_for_org(self, organization_id: int, date_from_iso: str, date_to_iso: str, finance_allowed: bool, wb_token: str | None, *, source_refresh: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build one exact digest range outside the request/response lifecycle."""
     from datetime import date as date_type
     from app.routers import wb_reports_bff as reports
@@ -149,9 +149,10 @@ def build_digest_for_org(self, organization_id: int, date_from_iso: str, date_to
     date_to = date_type.fromisoformat(date_to_iso)
     date_range = {"preset": "custom", "from": date_from_iso, "to": date_to_iso}
     job_key = reports._digest_job_cache_key(date_from, date_to)
+    refresh_context = {"kind": "report_source_refresh", "sync": source_refresh} if source_refresh is not None else {}
     started_at = reports._utc_now_iso()
     def update_progress(stage: str, label: str, percent: int) -> None:
-        reports.save_source_cache(organization_id, job_key, {"state": "running", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "startedAt": started_at, "stage": stage, "label": label, "percent": percent, "updatedAt": reports._utc_now_iso()})
+        reports.save_source_cache(organization_id, job_key, {**refresh_context, "state": "running", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "startedAt": started_at, "stage": stage, "label": label, "percent": percent, "updatedAt": reports._utc_now_iso()})
     update_progress("queued", "Задача принята, ждём worker", 0)
     try:
         wb_token = None
@@ -187,11 +188,11 @@ def build_digest_for_org(self, organization_id: int, date_from_iso: str, date_to
         cached = {"digest": digest, "dateFrom": date_from_iso, "dateTo": date_to_iso, "completedAt": reports._utc_now_iso()}
         reports.save_source_cache(organization_id, reports._digest_cache_key(date_from, date_to), cached)
         reports.save_source_cache(organization_id, "reports_digest_latest", cached)
-        result = {"state": "completed", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "stage": "completed", "label": "Воронка продаж готова", "percent": 100, "finishedAt": reports._utc_now_iso()}
+        result = {**refresh_context, "state": "completed", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "stage": "completed", "label": "Воронка продаж готова", "percent": 100, "finishedAt": reports._utc_now_iso()}
         reports.save_source_cache(organization_id, job_key, result)
         return result
     except Exception as exc:
-        result = {"state": "failed", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "finishedAt": reports._utc_now_iso(), "error": str(exc)[:500]}
+        result = {**refresh_context, "state": "failed", "stage": "failed", "taskId": self.request.id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "finishedAt": reports._utc_now_iso(), "error": str(exc)[:500]}
         reports.save_source_cache(organization_id, job_key, result)
         raise
 
@@ -205,7 +206,14 @@ def refresh_report_sources_for_org(self, organization_id: int, user_id: str, rep
     date_from = date_type.fromisoformat(date_from_iso)
     date_to = date_type.fromisoformat(date_to_iso)
     plan = _report_source_refresh_plan(report_id)
-    job_key = reports._digest_job_cache_key(date_from, date_to) if report_id == "digest" else reports._report_job_cache_key(report_id, date_from, date_to, group_by, source)
+    job_key = reports._digest_job_cache_key(date_from, date_to) if report_id == "digest" else reports._report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        group_by,
+        source,
+        finance_allowed=finance_allowed,
+    )
     task_id = str(getattr(self.request, "id", None) or f"manual-refresh-{uuid4().hex[:12]}")
     started_at = reports._utc_now_iso()
     resolved_wb_token = _report_refresh_wb_token(organization_id, user_id, wb_token)
@@ -276,17 +284,23 @@ def refresh_report_sources_for_org(self, organization_id: int, user_id: str, rep
             save_job("building_report", "Собираем отчет", 78, sync=refresh_result)
 
         if report_id == "digest":
-            result = build_digest_for_org.run(organization_id, date_from_iso, date_to_iso, finance_allowed, None)
-        else:
-            result = build_report_for_org.run(organization_id, user_id, report_id, date_from_iso, date_to_iso, group_by, source, finance_allowed, None)
-        return save_job("completed", "Отчет обновлен", 100, "completed", sync=refresh_result, result=result, finishedAt=reports._utc_now_iso())
+            return self.replace(build_digest_for_org.s(
+                organization_id, date_from_iso, date_to_iso, finance_allowed, None,
+                source_refresh=refresh_result,
+            ))
+        return self.replace(build_report_for_org.s(
+            organization_id, user_id, report_id, date_from_iso, date_to_iso,
+            group_by, source, finance_allowed, None, source_refresh=refresh_result,
+        ))
+    except Ignore:
+        raise
     except Exception as exc:
         save_job("failed", "Не удалось обновить данные отчета", 100, "failed", error=str(exc)[:500], finishedAt=reports._utc_now_iso())
         raise
 
 
 @celery_app.task(name="reports.build_report_for_org", bind=True, max_retries=240)
-def build_report_for_org(self, organization_id: int, user_id: str, report_id: str, date_from_iso: str, date_to_iso: str, group_by: str, source: str, finance_allowed: bool, wb_token: str | None) -> dict[str, Any]:
+def build_report_for_org(self, organization_id: int, user_id: str, report_id: str, date_from_iso: str, date_to_iso: str, group_by: str, source: str, finance_allowed: bool, wb_token: str | None, *, source_refresh: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build a heavy report outside the HTTP request and persist its exact response."""
     from datetime import date as date_type
     from app.routers import wb_reports_bff as reports
@@ -295,7 +309,14 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
     date_from = date_type.fromisoformat(date_from_iso)
     date_to = date_type.fromisoformat(date_to_iso)
     date_range = {"preset": "custom", "from": date_from_iso, "to": date_to_iso}
-    job_key = reports._report_job_cache_key(report_id, date_from, date_to, group_by, source)
+    job_key = reports._report_job_cache_key(
+        report_id,
+        date_from,
+        date_to,
+        group_by,
+        source,
+        finance_allowed=finance_allowed,
+    )
     cache_key = reports._report_cache_key(
         report_id,
         date_from,
@@ -303,10 +324,12 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
         group_by,
         source,
         organization_id=organization_id,
+        finance_allowed=finance_allowed,
     )
+    refresh_context = {"kind": "report_source_refresh", "sync": source_refresh} if source_refresh is not None else {}
     started_at = reports._utc_now_iso()
     def progress(stage: str, label: str, percent: int, state: str = "running") -> None:
-        reports.save_source_cache(organization_id, job_key, {"state": state, "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "stage": stage, "label": label, "percent": percent, "startedAt": started_at, "updatedAt": reports._utc_now_iso()})
+        reports.save_source_cache(organization_id, job_key, {**refresh_context, "state": state, "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "stage": stage, "label": label, "percent": percent, "startedAt": started_at, "updatedAt": reports._utc_now_iso()})
     progress("queued", "Задача принята", 0)
     try:
         required_daily_sources = REPORT_DAILY_SOURCES_BY_ID.get(report_id, ())
@@ -336,7 +359,7 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
             report = reports._build_stock_report_payload(date_range, snapshot, organization_id=organization_id, wb_token=wb_token)
         elif report_id == "ads":
             progress("ads", "Собираем рекламу из WB sync cache", 20)
-            report = reports._build_ads_report_payload(actor=SimpleNamespace(organization_id=organization_id, user_id=user_id), date_from=date_from, date_to=date_to, date_range=date_range, wb_token=None, refresh=False)
+            report = reports._build_ads_report_payload(actor=SimpleNamespace(organization_id=organization_id, user_id=user_id), date_from=date_from, date_to=date_to, date_range=date_range, wb_token=None, refresh=True)
         elif report_id == "rnp":
             progress("rnp", "Собираем РНП из WB sync cache", 20)
             payload = reports.build_rnp_report(date_from=date_from, date_to=date_to, group_by=group_by, finance_allowed=finance_allowed, organization_id=organization_id, wb_token=None, force_refresh=False, progress_callback=progress)
@@ -366,21 +389,21 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
                 label = "1С забрала задачу, ждём операционные расходы" if cash_flow.get("status") == "processing" else "Ждём операционные расходы от 1С"
                 progress("waiting_1c", label, 20, "waiting_1c")
                 raise self.retry(countdown=3)
-            if cash_flow.get("status") != "ready":
+            if cash_flow.get("status") not in {"ready", "disabled"}:
                 raise RuntimeError(f"Не удалось получить расходы из 1С: {cash_flow.get('status') or 'статус неизвестен'}")
-            progress("pnl", "Собираем P&L с расходами 1С", 35)
-            payload = reports.build_pnl_report(date_from=date_from, date_to=date_to, group_by=group_by, requested_state="final" if source == "financial" else "preliminary", finance_allowed=finance_allowed, organization_id=organization_id, wb_token=None, progress_callback=progress)
+            progress("pnl", "Собираем P&L из данных WB" if cash_flow.get("status") == "disabled" else "Собираем P&L с расходами 1С", 35)
+            payload = reports.build_pnl_report(date_from=date_from, date_to=date_to, group_by=group_by, requested_state="final" if source == "financial" and cash_flow.get("status") == "ready" else "preliminary", finance_allowed=finance_allowed, organization_id=organization_id, wb_token=None, progress_callback=progress)
             progress("pnl-map", "Готовим таблицу P&L", 97)
-            report = reports._map_pnl_to_report_response(payload, date_range, cash_flow)
+            report = reports._map_pnl_to_report_response(payload, date_range, cash_flow, finance_allowed=finance_allowed)
         elif report_id == "expenses":
             cash_flow = reports.get_cash_flow_for_period(organization_id=organization_id, period_from=date_from, period_to=date_to, requested_by=user_id)
             if cash_flow.get("status") in {"pending", "processing"}:
                 label = "1С забрала задачу, ждём статьи ДДС" if cash_flow.get("status") == "processing" else "Ждём статьи ДДС от 1С"
                 progress("waiting_1c", label, 20, "waiting_1c")
                 raise self.retry(countdown=3)
-            if cash_flow.get("status") != "ready":
+            if cash_flow.get("status") not in {"ready", "disabled"}:
                 raise RuntimeError(f"Не удалось получить расходы из 1С: {cash_flow.get('status') or 'статус неизвестен'}")
-            progress("expenses", "Собираем статьи ДДС из 1С", 80)
+            progress("expenses", "Операционные расходы недоступны" if cash_flow.get("status") == "disabled" else "Собираем статьи ДДС из 1С", 80)
             report = reports._map_cash_flow_to_expenses_response(cash_flow, date_range, group_by)
         elif report_id == "week-over-week":
             previous_from, previous_to = reports._previous_period(date_from, date_to)
@@ -497,19 +520,23 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
                 group_by,
                 source,
                 organization_id=organization_id,
+                finance_allowed=finance_allowed,
             )
-        cached_report = {"report": report, "completedAt": reports._utc_now_iso()}
-        reports.save_source_cache(organization_id, cache_key, cached_report)
+        reports._save_exact_report_payload_cache(
+            organization_id=organization_id, report_id=report_id,
+            date_from=date_from, date_to=date_to, group_by=group_by, source=source,
+            report=report, finance_allowed=finance_allowed,
+        )
         persisted_report = reports.get_source_cache(organization_id, cache_key, slim=False)
         if not isinstance(persisted_report, dict) or not isinstance(persisted_report.get("report"), dict):
             raise RuntimeError(f"Background report payload was not persisted: {cache_key}")
-        result = {"state": "completed", "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "source": source, "stage": "completed", "label": "Отчёт готов", "percent": 100, "finishedAt": reports._utc_now_iso()}
+        result = {**refresh_context, "state": "completed", "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "source": source, "stage": "completed", "label": "Отчёт готов", "percent": 100, "finishedAt": reports._utc_now_iso()}
         reports.save_source_cache(organization_id, job_key, result)
         return result
     except Retry:
         raise
     except Exception as exc:
-        result = {"state": "failed", "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "finishedAt": reports._utc_now_iso(), "error": str(exc)[:500]}
+        result = {**refresh_context, "state": "failed", "stage": "failed", "taskId": self.request.id, "reportId": report_id, "dateFrom": date_from_iso, "dateTo": date_to_iso, "groupBy": group_by, "finishedAt": reports._utc_now_iso(), "error": str(exc)[:500]}
         reports.save_source_cache(organization_id, job_key, result)
         raise
 
@@ -1034,8 +1061,11 @@ def _range_source_ready(
     }
     available_dates: set[str] = set()
     for cache in caches:
-        if isinstance(cache, dict):
-            available_dates |= _daily_aggregate_dates(cache)
+        if not isinstance(cache, dict):
+            continue
+        if source == "finance" and require_current_finance_basis and not finance_cache_uses_current_revenue_basis(cache):
+            continue
+        available_dates |= _daily_aggregate_dates(cache)
     return bool(required_dates) and required_dates.issubset(available_dates)
 
 
@@ -1406,7 +1436,7 @@ def _materialize_report_snapshots_for_profile(organization_id: int, profile: WbS
                     progress_callback=abc_progress,
                 )
                 abc_report = reports._apply_report_rules_to_payload(reports._map_abc_to_report_response(abc_payload, date_range), organization_id)
-                reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="abc", date_from=date_from, date_to=date_to, group_by="sku", source="operational", report=abc_report)
+                reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="abc", date_from=date_from, date_to=date_to, group_by="sku", source="operational", report=abc_report, finance_allowed=True)
                 saved.append("abc")
                 progress("Снапшоты отчетов: ABC готов", 4)
             else:
@@ -1426,7 +1456,7 @@ def _materialize_report_snapshots_for_profile(organization_id: int, profile: WbS
         if "ads" in profile.sources or profile.window_kind == "onboarding":
             progress("Снапшоты отчетов: собираем рекламу", max(1, len(saved)))
             if sources_ready("ads", ("ads",)):
-                ads_report = reports._apply_report_rules_to_payload(reports._build_ads_report_payload(actor=actor, date_from=date_from, date_to=date_to, date_range=date_range, wb_token=None, refresh=False), organization_id)
+                ads_report = reports._apply_report_rules_to_payload(reports._build_ads_report_payload(actor=actor, date_from=date_from, date_to=date_to, date_range=date_range, wb_token=None, refresh=True), organization_id)
                 reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="ads", date_from=date_from, date_to=date_to, group_by="campaign", source="operational", report=ads_report)
                 saved.append("ads")
                 progress("Снапшоты отчетов: реклама готова", 6)
@@ -1445,12 +1475,18 @@ def _materialize_report_snapshots_for_profile(organization_id: int, profile: WbS
                 organization_id=organization_id,
                 wb_token=None,
             )
-            pnl_report = reports._apply_report_rules_to_payload(reports._map_pnl_to_report_response(pnl_payload, date_range, cash_flow), organization_id)
-            pnl_cache = reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="pnl", date_from=date_from, date_to=date_to, group_by="sku", source="operational", report=pnl_report)
-            reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="pnl", date_from=date_from, date_to=date_to, group_by="sku", source="financial", report=pnl_report)
+            pnl_report = reports._apply_report_rules_to_payload(reports._map_pnl_to_report_response(pnl_payload, date_range, cash_flow, finance_allowed=True), organization_id)
+            pnl_cache = reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="pnl", date_from=date_from, date_to=date_to, group_by="sku", source="operational", report=pnl_report, finance_allowed=True)
+            reports._save_exact_report_payload_cache(organization_id=organization_id, report_id="pnl", date_from=date_from, date_to=date_to, group_by="sku", source="financial", report=pnl_report, finance_allowed=True)
             reports.save_source_cache(
                 organization_id,
-                reports._report_job_cache_key("pnl", date_from, date_to, "sku"),
+                reports._report_job_cache_key(
+                    "pnl",
+                    date_from,
+                    date_to,
+                    "sku",
+                    finance_allowed=True,
+                ),
                 reports._completed_report_job_from_cache("pnl", date_from, date_to, "sku", pnl_cache, {"source": "report-snapshots"}),
             )
             saved.append("pnl")

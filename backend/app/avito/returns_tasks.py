@@ -109,6 +109,59 @@ def _browser_snapshot_from_cache(organization_id: int) -> AvitoOrdersBrowserSnap
 
 @celery_app.task(name="avito.sync_returns_for_org", bind=True, max_retries=0)
 def sync_returns_for_org(self, organization_id: int, scenario: str = "complete", force: bool = False) -> dict[str, Any]:
+    try:
+        return _sync_returns_for_org(organization_id, scenario, force)
+    except Exception:
+        try:
+            _save_sync_status(organization_id, {
+                "state": "failed", "organizationId": organization_id,
+                "error": "avito_returns_sync_failed", "retryable": True,
+            })
+        except Exception:
+            pass
+    # Outside both exception handlers: Celery receives neither the original
+    # provider/driver exception nor its chained context, even if status save fails.
+    raise RuntimeError("avito_returns_sync_failed") from None
+
+
+def _safe_orders_diagnostics(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    safe: dict[str, Any] = {"endpoint": "GET /order-management/1/orders"}
+    status = value.get("status")
+    if type(status) is int and 100 <= status <= 599:
+        safe["status"] = status
+    for key in ("ordersCount", "rawCount"):
+        count = value.get(key)
+        if type(count) is int and 0 <= count <= 2**31 - 1:
+            safe[key] = count
+    safe["reason"] = "avito_http_error" if value.get("reason") == "avito_http_error" else None
+    return safe
+
+
+def _safe_orders_error(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    codes = {
+        "auth_required": (False, "AVITO_AUTH"),
+        "forbidden_scope": (False, "AVITO_ORDER_MANAGEMENT_SCOPE"),
+        "rate_limited": (True, "AVITO_RATE_LIMIT"),
+        "avito_server_error": (True, "AVITO_ORDERS"),
+        "avito_request_failed": (False, "AVITO_ORDERS"),
+        "transport_error": (True, "AVITO_ORDERS"),
+    }
+    code = value.get("code") if isinstance(value, dict) else getattr(value, "code", None)
+    if type(code) is not str or code not in codes:
+        code = "avito_request_failed"
+    retryable, blocker = codes[code]
+    supplied_retryable = value.get("retryable") if isinstance(value, dict) else getattr(value, "retryable", None)
+    if type(supplied_retryable) is bool:
+        retryable = supplied_retryable
+    return {"code": code, "message": "Avito orders source unavailable",
+            "retryable": retryable, "blockerIds": [blocker]}
+
+
+def _sync_returns_for_org(organization_id: int, scenario: str, force: bool) -> dict[str, Any]:
     settings = get_settings()
     sync_settings = get_returns_sync_settings(organization_id)
     if (not settings.avito_returns_sync_enabled or not sync_settings["enabled"]) and not force:
@@ -137,12 +190,12 @@ def sync_returns_for_org(self, organization_id: int, scenario: str = "complete",
         )
         result = client.fetch_orders(AvitoOrdersFetchRequest(dateFrom=start, statuses=["on_return"], limit=20, page=1))
         if result.status == "blocked":
-            error = result.error.model_dump(mode="json") if hasattr(result.error, "model_dump") else result.error
+            error = _safe_orders_error(result.error)
             payload = {
                 "state": "blocked",
                 "organizationId": organization_id,
                 "error": error,
-                "diagnostics": result.diagnostics,
+                "diagnostics": _safe_orders_diagnostics(result.diagnostics),
             }
             _save_sync_status(organization_id, payload)
             return payload
@@ -158,18 +211,12 @@ def sync_returns_for_org(self, organization_id: int, scenario: str = "complete",
             "upsert": upsert_result,
             "dateFrom": start.isoformat(),
             "statuses": ["on_return"],
-            "diagnostics": result.diagnostics,
+            "diagnostics": _safe_orders_diagnostics(result.diagnostics),
         }
         _save_sync_status(organization_id, payload)
         return payload
-    except Exception as exc:
-        payload = {
-            "state": "failed",
-            "organizationId": organization_id,
-            "error": str(exc)[:500],
-            "retryable": True,
-        }
-        _save_sync_status(organization_id, payload)
+    except Exception:
+        # The task boundary persists a fixed failure and raises outside context.
         raise
 
 

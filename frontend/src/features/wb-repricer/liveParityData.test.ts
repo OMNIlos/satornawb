@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { loadLiveBasketsDetailStatus, loadLiveRepricerCacheCoverage, loadLiveRepricerStats, mapLiveRepricerRowToParityProduct, refreshLiveRepricerAllSources, startLiveBasketsDetail } from './liveParityData'
+import { loadLiveBasketsDetailStatus, loadLiveRepricerCacheCoverage, loadLiveRepricerStats, mapLiveRepricerRowToParityProduct, refreshLiveRepricerAllSources, startLiveBasketsDetail, type LiveRepricerSkuRow } from './liveParityData'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -151,7 +151,7 @@ describe('mapLiveRepricerRowToParityProduct', () => {
     expect(product.buyerPriceNoWallet).toBe(1425)
     expect(product.priceWithSpp).toBe(1425)
     expect(product.priceFinal).toBe(1425)
-    expect(product.priceWithWallet).toBe(1650)
+    expect(product.priceWithWallet).toBe(1600)
     expect(product.spp).toBe(35.23)
   })
 
@@ -179,6 +179,28 @@ describe('mapLiveRepricerRowToParityProduct', () => {
 
     expect(product.priceWithSpp).toBeNull()
     expect(product.avgPriceSpp).toBe(1500)
+  })
+
+  test('preserves partial baskets and actual commission without a planned tariff', () => {
+    const product = mapLiveRepricerRowToParityProduct({
+      meta: { articleId: 'SKU-PARTIAL', nmId: 125, currentPriceKopecks: 220000, basketsLast7d: 30, basketNorm: 1 },
+      settings: { cogsKopecks: 50000 },
+      analytics: {
+        baskets: 0, basketsState: 'partial', basketsReason: 'Данные за 6 из 7 дней.',
+        commissionState: 'no_data', commissionReason: 'wb_commission_tariff_missing',
+        financeState: 'ok', commissionKopecks: 10000,
+        marginPct: 65, marginKopecks: 143000,
+        accountedBuyerPriceKopecks: 150000,
+      },
+    } as any, 0)
+    expect(product.bsk).toBe(0)
+    expect(product.basketsState).toBe('partial')
+    expect(product.basketsReason).toBe('Данные за 6 из 7 дней.')
+    expect(product.commissionRub).toBe(100)
+    expect(product.commissionPct).toBeNull()
+    expect(product.mg).toBeNull()
+    expect(product.mgRub).toBeNull()
+    expect(product.priceWithWallet).toBeNull()
   })
 
   test('recomputes invalid SPP percent from seller and buyer prices', () => {
@@ -215,5 +237,55 @@ describe('mapLiveRepricerRowToParityProduct', () => {
     expect(product.priceWithSpp).toBe(939)
     expect(product.priceWithWallet).toBe(901)
     expect(product.spp).toBe(36.12)
+  })
+})
+
+
+describe('effective backend minimum price', () => {
+  test.each([
+    { manual: 0, effective: 90000, source: 'calculated', expected: 900 },
+    { manual: 110000, effective: 110000, source: 'explicit', expected: 1100 },
+    { manual: 50000, effective: 77700, source: 'calculated', expected: 777 },
+    { manual: 0, effective: 0, source: 'calculated', expected: 0 },
+    { manual: 0, effective: undefined, source: undefined, expected: 786 },
+    { manual: 125000, effective: undefined, source: undefined, expected: 1250 },
+  ])('displays $expected rubles while preserving raw manual $manual', ({ manual, effective, source, expected }) => {
+    const row: LiveRepricerSkuRow = {
+      meta: { articleId: 'EFFECTIVE-PMIN', name: 'Synthetic floor', status: 'auto', currentPriceKopecks: 220000, basketsLast7d: 1, basketNorm: 1 },
+      settings: { cogsKopecks: 50000, logisticsKopecks: 5000, wbCommissionPct: 15, minMarginPct: 15, pMinKopecks: manual,
+        ...effective == null ? {} : { effectivePMinKopecks: effective, effectivePMinSource: source as 'explicit' | 'calculated' } },
+    }
+    const product = mapLiveRepricerRowToParityProduct(row, 0)
+    expect(product.pmin).toBe(expected)
+    expect(product.pminBeforeSpp).toBe(expected)
+    expect(product.settings.pMinKopecks).toBe(manual)
+  })
+})
+
+describe('dated factual tax contract', () => {
+  test.each([
+    { state: 'missing', fact: null, net: null, expected: null },
+    { state: 'missing', fact: 50000, net: 50000, expected: null },
+    { state: 'configured', fact: 0, net: 50000, expected: 0 },
+    { state: 'configured', fact: null, net: 50000, expected: null },
+    { state: 'configured', fact: 25000, net: 50000, expected: 250 },
+    { state: undefined, fact: undefined, net: 50000, expected: 500 },
+    { state: undefined, fact: undefined, net: null, expected: 1200 },
+  ])('keeps factual $state/$fact separate from the current-price plan', ({ state, fact, net, expected }) => {
+    const row = {
+      meta: { articleId: 'FACT-TAX', name: 'Synthetic tax contract', status: 'auto', currentPriceKopecks: 220000, basketsLast7d: 1, basketNorm: 1 },
+      settings: { cogsKopecks: 50000, logisticsKopecks: 5000, wbCommissionPct: 15, minMarginPct: 15 },
+      analytics: {
+        financeState: 'ok', factTaxState: state, factTaxReason: state === 'missing' ? 'tax_policy_unconfirmed' : null,
+        factNetProfitKopecks: fact, netProfitKopecks: net, plannedPeriodMarginKopecks: 120000,
+        marginKopecks: 10000, marginPct: 10, ordersUnits: 3, periodStatsState: 'ok',
+        commissionState: 'ok', commissionSource: 'tariffs.kgvpMarketplace', commissionDisplayPct: 15,
+      },
+    } as LiveRepricerSkuRow
+    const product = mapLiveRepricerRowToParityProduct(row, 0)
+    expect(product.netSku).toBe(expected)
+    expect(product.mgRub).toBe(100)
+    expect(product.netPerUnit).toBe(100)
+    expect(product.factTaxState).toBe(state)
   })
 })

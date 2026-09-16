@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -27,6 +28,7 @@ from app.repricer_bff import (
     fetch_baskets_daily_detail,
     fetch_ads_spend_aggregates,
     fetch_catalog_goods_page,
+    fetch_commission_tariffs,
     fetch_finance_report_aggregates,
     fetch_period_stats_aggregates,
     fetch_stock_aggregates,
@@ -35,6 +37,7 @@ from app.repricer_bff import (
     WbSalesFunnelDeferred,
 )
 from app.repricer_cache.store import (
+    browser_prices_selected,
     get_source_cache,
     list_cached_goods,
     list_source_cache_ranges_by_prefix,
@@ -65,6 +68,12 @@ SYNC_DEFAULT_SOURCES = ("goods", "content", "promotions", "stocks", "period-stat
 EXTERNAL_SPP_BATCH_SIZE = 100
 EXTERNAL_SPP_BATCH_INTERVAL_SECONDS = 10.0
 logger = logging.getLogger(__name__)
+
+
+class ExternalSppRateLimited(RuntimeError):
+    def __init__(self, prices: dict[int, int]) -> None:
+        self.prices = prices
+        super().__init__("Источник цен ограничил запросы (HTTP 429)")
 
 
 def _good_article_id(good: dict[str, Any]) -> str:
@@ -217,18 +226,15 @@ def fetch_external_spp_prices(
     sleep_fn: Callable[[float], None] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[int, int]:
-    """Fetch live buyer prices after SPP from the 41-spp API.
-
-    The API accepts up to 100 nm IDs joined by semicolon and requires a
-    10-second gap between batched requests.
-    """
+    """Fetch buyer prices in batches of 100, preserving the provider's units."""
     if httpx is None:
         raise RuntimeError("httpx is required for external SPP price fetch")
     settings = get_settings()
-    token = api_token or settings.spp_api_token
-    if not token:
-        return {}
     base_url = (api_base_url or settings.spp_api_base_url).rstrip("/")
+    public_api = base_url == "https://prices.wbcon.su"
+    token = api_token or settings.spp_api_token
+    if not public_api and not token:
+        return {}
     timeout = float(timeout_seconds if timeout_seconds is not None else settings.spp_api_timeout_seconds)
     sleeper = sleep_fn or time.sleep
     unique_nm_ids = []
@@ -245,11 +251,15 @@ def fetch_external_spp_prices(
 
     prices: dict[int, int] = {}
     batch_total = (len(unique_nm_ids) + EXTERNAL_SPP_BATCH_SIZE - 1) // EXTERNAL_SPP_BATCH_SIZE
-    headers = {
-        "accept": "application/json",
-        "Authorization": token if token.startswith("Bearer ") else f"Bearer {token}",
-    }
-    verify_ssl = ssl.create_default_context() if settings.spp_api_verify_ssl else False
+    headers = {"accept": "application/json"}
+    if not public_api:
+        headers["Authorization"] = token if token.startswith("Bearer ") else f"Bearer {token}"
+    verify_ssl = ssl.create_default_context() if public_api or settings.spp_api_verify_ssl else False
+    if public_api:
+        # WBCON omits its intermediate. Complete the chain to the system's trusted
+        # GlobalSign root; hostname, expiry and root verification remain required.
+        verify_ssl.load_verify_locations(cafile=Path(__file__).parent / "wb_api/globalsign-gcc-r6-alphassl-2025.pem")
+        verify_ssl.verify_flags &= ~ssl.VERIFY_X509_PARTIAL_CHAIN
     with httpx.Client(timeout=timeout, verify=verify_ssl) as client:
         for start in range(0, len(unique_nm_ids), EXTERNAL_SPP_BATCH_SIZE):
             if start > 0:
@@ -258,24 +268,31 @@ def fetch_external_spp_prices(
             if not batch:
                 continue
             response = client.get(
-                f"{base_url}/prices",
-                params={"nm": ";".join(str(item) for item in batch)},
+                f"{base_url}/{'get' if public_api else 'prices'}",
+                params={"articles" if public_api else "nm": ";".join(str(item) for item in batch)},
                 headers=headers,
             )
+            if public_api and getattr(response, "status_code", None) == 429:
+                raise ExternalSppRateLimited(prices)
             response.raise_for_status()
             payload = response.json()
-            rows = payload.get("prices") if isinstance(payload, dict) else None
+            rows = payload if public_api else payload.get("prices") if isinstance(payload, dict) else None
             if not isinstance(rows, list):
                 continue
             for row in rows:
                 if not isinstance(row, dict):
+                    continue
+                if public_api:
+                    nm_id, product = row.get("id"), row.get("salePriceU")
+                    if type(nm_id) is int and nm_id in batch and type(product) is int and product > 0:
+                        prices[nm_id] = product
                     continue
                 try:
                     nm_id = int(row.get("nm") or 0)
                     product = wb_goods_price_to_kopecks(row.get("product"))
                 except (TypeError, ValueError):
                     continue
-                if nm_id > 0 and product > 0 and str(row.get("status") or "ok") == "ok":
+                if nm_id in batch and product > 0 and str(row.get("status") or "ok") == "ok":
                     prices[nm_id] = product
             if progress_callback is not None:
                 progress_callback(
@@ -291,6 +308,7 @@ def fetch_external_spp_prices(
 
 def _apply_external_spp_prices_to_goods(goods: list[dict[str, Any]], prices_by_nm: dict[int, int]) -> int:
     matched = 0
+    source = "prices.wbcon.su" if get_settings().spp_api_base_url.rstrip("/") == "https://prices.wbcon.su" else "41-spp"
     for good in goods:
         nm_id = _good_nm_id(good)
         if nm_id is None:
@@ -309,7 +327,12 @@ def _apply_external_spp_prices_to_goods(goods: list[dict[str, Any]], prices_by_n
         target_size["buyerPriceKopecks"] = buyer_price_kopecks
         target_size["buyerPrice"] = buyer_price_rubles
         target_size["clientPrice"] = buyer_price_rubles
-        good["sizes"] = [target_size]
+        target_size["buyerPriceSource"] = source
+        target_size["buyerPriceObservedAt"] = _utc_now().isoformat()
+        target_size["buyerPriceSellerKopecks"] = seller_price_kopecks
+        # Keep other source sizes intact; the legacy nm-level enrichment does
+        # not establish buyer-price provenance for each individual offer.
+        good["sizes"] = [target_size, *target_sizes[1:]]
         matched += 1
     return matched
 
@@ -980,6 +1003,8 @@ def refresh_wb_data_sources(
     resolved_sources = _normalize_sources(sources)
     resolved_token_fingerprint = token_fingerprint or wb_token_fingerprint(wb_token)
     range_start, range_end, resolved_period_days = _normalize_period_range(period_days, date_from=date_from, date_to=date_to)
+    # Rolling yesterday-based ranges need the individual days from short syncs.
+    baskets_include_daily_detail = baskets_include_daily_detail or resolved_period_days <= 2
     period_suffix = _period_cache_suffix(period_days, date_from=date_from, date_to=date_to)
     status = initial_status if initial_status is not None else (
         begin_wb_sync(
@@ -1217,7 +1242,7 @@ def refresh_wb_data_sources(
                 from app import repricer_bff as repricer_bff_module
                 from app.routers.wb_repricer_bff import _build_repricer_sku_snapshot
 
-                repricer_bff_module.fetch_commission_tariffs(scenario, wb_token=wb_token, force=True)
+                repricer_bff_module.fetch_commission_tariffs(scenario, wb_token=wb_token, organization_id=organization_id)
                 snapshot = _build_repricer_sku_snapshot(
                     organization_id,
                     scenario,
@@ -1253,10 +1278,13 @@ def refresh_wb_data_sources(
         if "goods" in resolved_sources:
             step = start_step("goods")
             try:
+                fetch_commission_tariffs(scenario, wb_token=wb_token, organization_id=organization_id)
                 previous_goods = list_cached_goods(organization_id)
+                use_browser_prices = browser_prices_selected(organization_id)
                 fetched_goods: list[dict[str, Any]] = []
                 total_saved = 0
                 external_spp_matched_count = 0
+                external_spp_rate_limit: ExternalSppRateLimited | None = None
                 wb_sync_price_change_count = 0
                 offset = 0
                 limit = 1000
@@ -1290,11 +1318,17 @@ def refresh_wb_data_sources(
                                 progressCurrent=completed,
                                 progressTotal=total or None,
                                 message=f"Получаем цены после СПП: пачка {batch_current} из {batch_total}",
-                                request="41-SPP · до 100 артикулов в запросе",
+                                request="Цены WB · до 100 артикулов в запросе",
                             )
 
-                        external_spp_prices = fetch_external_spp_prices(page_nm_ids, progress_callback=report_spp_progress)
+                        external_spp_prices = (
+                            fetch_external_spp_prices(page_nm_ids, progress_callback=report_spp_progress)
+                            if external_spp_rate_limit is None and not use_browser_prices else {}
+                        )
                         external_spp_matched_count += _apply_external_spp_prices_to_goods(goods, external_spp_prices)
+                    except ExternalSppRateLimited as exc:
+                        external_spp_rate_limit = exc
+                        external_spp_matched_count += _apply_external_spp_prices_to_goods(goods, exc.prices)
                     except Exception as exc:
                         logger.warning("External SPP price fetch failed org=%s offset=%s: %s", organization_id, offset, exc)
                     fetched_goods.extend([item for item in goods if isinstance(item, dict)])
@@ -1317,17 +1351,15 @@ def refresh_wb_data_sources(
                         break
                     offset += limit
                 new_warmup_count = _mark_new_goods_as_warmup(previous_goods, fetched_goods)
-                finish_step(
-                    step,
-                    _step_ok(
-                        "goods",
-                        count=total_saved,
-                        cache=cache,
-                        newWarmupCount=new_warmup_count,
-                        externalSppMatchedCount=external_spp_matched_count,
-                        wbSyncPriceChangeCount=wb_sync_price_change_count,
-                    ),
+                goods_result = _step_ok(
+                    "goods", count=total_saved, cache=cache, newWarmupCount=new_warmup_count,
+                    externalSppMatchedCount=external_spp_matched_count,
+                    wbSyncPriceChangeCount=wb_sync_price_change_count,
                 )
+                if external_spp_rate_limit is not None:
+                    goods_result.update(status="partial", error=str(external_spp_rate_limit),
+                                        externalSppStatus="rate_limited", externalSppHttpStatus=429)
+                finish_step(step, goods_result)
             except Exception as exc:
                 finish_step(step, _step_error("goods", exc))
 
@@ -1540,6 +1572,11 @@ def refresh_wb_data_sources(
                                 previous_chunks.append(chunk)
                                 existing_chunk_keys.add(chunk_key)
 
+                    # Refresh short rolling windows; retain checkpoints only when resuming a partial fetch.
+                    if resolved_period_days <= 2 and previous_baskets_cache.get("dailyDetailStatus") != "partial":
+                        previous_daily_aggregates = {}
+                        previous_chunks = []
+
                     def report_baskets_progress(progress: dict[str, Any]) -> None:
                         current = int(progress.get("processedNmIds") or 0)
                         total = int(progress.get("totalNmIds") or len(nm_ids))
@@ -1724,7 +1761,7 @@ def refresh_wb_data_sources(
                 from app import repricer_bff as repricer_bff_module
                 from app.routers.wb_repricer_bff import _build_repricer_sku_snapshot
 
-                repricer_bff_module.fetch_commission_tariffs(scenario, wb_token=wb_token, force=True)
+                repricer_bff_module.fetch_commission_tariffs(scenario, wb_token=wb_token, organization_id=organization_id)
                 snapshot = _build_repricer_sku_snapshot(
                     organization_id,
                     scenario,

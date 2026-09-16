@@ -334,8 +334,8 @@ def _enriched_return_candidates(organization_id: int) -> list[AvitoReturnCandida
 def _enrich_orders_with_return_matches(rows: list[AvitoOrderRow], *, organization_id: int) -> dict[str, Any]:
     try:
         candidates = _enriched_return_candidates(organization_id)
-    except Exception as exc:
-        return {"status": "unavailable", "candidates": 0, "matchedItems": 0, "error": str(exc)[:300]}
+    except Exception:
+        return {"status": "unavailable", "candidates": 0, "matchedItems": 0, "error": "avito_return_inventory_unavailable"}
     matched_items = 0
     for order in rows:
         for item in order.items:
@@ -865,13 +865,13 @@ def get_avito_orders(
             return _attach_return_inventory_payload(fallback, organization_id=actor.organization_id)
         except HTTPException:
             raise
-        except Exception as exc:
+        except Exception:
             fallback = _browser_snapshot_payload(browser_snapshot, start=start, days=days, statuses=statuses, page=page, limit=limit)
             source = dict(fallback.get("source") or {})
             source["diagnostics"] = {
                 **dict(source.get("diagnostics") or {}),
                 "apiFilterStatus": "failed",
-                "apiFilterError": str(exc),
+                "apiFilterError": "avito_orders_filter_unavailable",
             }
             fallback["source"] = source
             return _attach_return_inventory_payload(fallback, organization_id=actor.organization_id)

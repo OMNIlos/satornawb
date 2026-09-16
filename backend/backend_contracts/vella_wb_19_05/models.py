@@ -66,10 +66,16 @@ class PnlFieldMapping(BaseModel):
 class ManualCost(BaseModel):
     costId: str = Field(min_length=1)
     label: str = Field(min_length=1)
-    amountKopecks: Optional[int] = Field(default=None, ge=0)
+    amountKopecks: Optional[int] = None
     allocationBase: Literal["sku", "brand", "manager", "marketplace", "manual", "unknown"]
     sourceStatus: SourceStatus
     blockerIds: List[str]
+
+    @model_validator(mode="after")
+    def validate_signed_tax(self) -> ManualCost:
+        if self.costId != "tax" and self.amountKopecks is not None and self.amountKopecks < 0:
+            raise ValueError("Only factual tax may be negative after returns")
+        return self
 
 
 class DayAllocationSummary(BaseModel):
@@ -86,13 +92,13 @@ class PnlRow(BaseModel):
     brandId: Optional[str]
     managerId: Optional[str]
     skuId: Optional[str]
-    revenueKopecks: Optional[int] = Field(default=None, ge=0)
+    revenueKopecks: Optional[int] = None
     cogsKopecks: Optional[int] = Field(default=None, ge=0)
     commissionKopecks: Optional[int] = Field(default=None, ge=0)
     logisticsKopecks: Optional[int] = Field(default=None, ge=0)
     storageKopecks: Optional[int] = Field(default=None, ge=0)
     adSpendKopecks: Optional[int] = Field(default=None, ge=0)
-    taxKopecks: Optional[int] = Field(default=None, ge=0)
+    taxKopecks: Optional[int] = None
     overheadKopecks: Optional[int] = Field(default=None, ge=0)
     netProfitKopecks: Optional[int]
     marginPct: Optional[float]
@@ -101,7 +107,7 @@ class PnlRow(BaseModel):
 
 
 class PnlTotals(BaseModel):
-    revenueKopecks: Optional[int] = Field(default=None, ge=0)
+    revenueKopecks: Optional[int] = None
     netProfitKopecks: Optional[int]
     marginPct: Optional[float]
     sourceStatus: SourceStatus

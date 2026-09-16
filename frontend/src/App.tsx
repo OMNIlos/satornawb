@@ -1,37 +1,76 @@
+import { lazy, Suspense, type ComponentType } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { RouteErrorBoundary } from '@/components/RouteErrorBoundary'
 import { ThemeProvider } from '@/components/ThemeProvider'
 import { AppShell } from '@/layouts/AppShell'
 import { ComingSoon } from '@/pages/stub/ComingSoon'
-import { TemplatesPage } from './features/wb-repricer/TemplatesPage'
-import { VellaFoundationWorkbench } from './components/vella/VellaFoundationWorkbench'
-import { VellaSystemCatalog } from './components/vella-system/VellaSystemCatalog'
-import { VellaStaticPage } from './features/vella-static/VellaStaticPage'
-import { VellaHtmlParityPage } from './features/vella-parity/VellaHtmlParityPage'
-import { VellaReactApp } from './features/vella-react/VellaReactApp'
-import { VellaHtmlRepricer } from './components/vella-system/html/VellaHtmlRepricer'
-import { WbRepricerPage } from './features/wb-repricer/WbRepricerPage'
-import { WbRepricerChangelogPage } from './features/wb-repricer/WbRepricerChangelogPage'
-import { WbRepricerSimulatorPage } from './features/wb-repricer/WbRepricerSimulatorPage'
-import { WbRepricerStatsPage } from './features/wb-repricer/WbRepricerStatsPage'
-import { WbReportsPage } from './features/wb-reports/WbReportsPage'
-import { WbSourcesPage } from './features/wb-sources/WbSourcesPage'
-import { WbRepricerWiki } from './wiki/pages/WbRepricerWiki'
-import { LiquidationWiki } from './wiki/pages/LiquidationWiki'
-import { PromotionsWiki } from './wiki/pages/PromotionsWiki'
-import { AlgorithmWiki } from './wiki/pages/AlgorithmWiki'
-import { TemplatesWiki } from './wiki/pages/TemplatesWiki'
-import { OrdersPrintListPage } from './features/orders/OrdersPrintListPage'
 import { AuthProvider } from './features/auth/AuthProvider'
 import { LoginPage } from './features/auth/LoginPage'
 import { RegisterPage } from './features/auth/RegisterPage'
 import { PublicOnlyAuth, RequireAuth } from './features/auth/AuthRoutes'
 
+const TemplatesPage = lazyRoute(() => import('./features/wb-repricer/TemplatesPage').then(({ TemplatesPage }) => ({ default: TemplatesPage })))
+const VellaFoundationWorkbench = lazyRoute(() => import('./components/vella/VellaFoundationWorkbench').then(({ VellaFoundationWorkbench }) => ({ default: VellaFoundationWorkbench })))
+const VellaSystemCatalog = lazyRoute(() => import('./components/vella-system/VellaSystemCatalog').then(({ VellaSystemCatalog }) => ({ default: VellaSystemCatalog })))
+const VellaStaticPage = lazyRoute(() => import('./features/vella-static/VellaStaticPage').then(({ VellaStaticPage }) => ({ default: VellaStaticPage })))
+const VellaReactApp = lazyRoute(() => import('./features/vella-react/VellaReactApp').then(({ VellaReactApp }) => ({ default: VellaReactApp })))
+const VellaHtmlRepricer = lazyRoute(() => import('./components/vella-system/html/VellaHtmlRepricer').then(({ VellaHtmlRepricer }) => ({ default: VellaHtmlRepricer })))
+const WbRepricerPage = lazyRoute(() => import('./features/wb-repricer/WbRepricerPage').then(({ WbRepricerPage }) => ({ default: WbRepricerPage })))
+const WbRepricerChangelogPage = lazyRoute(() => import('./features/wb-repricer/WbRepricerChangelogPage').then(({ WbRepricerChangelogPage }) => ({ default: WbRepricerChangelogPage })))
+const WbRepricerSimulatorPage = lazyRoute(() => import('./features/wb-repricer/WbRepricerSimulatorPage').then(({ WbRepricerSimulatorPage }) => ({ default: WbRepricerSimulatorPage })))
+const WbRepricerStatsPage = lazyRoute(() => import('./features/wb-repricer/WbRepricerStatsPage').then(({ WbRepricerStatsPage }) => ({ default: WbRepricerStatsPage })))
+const WbReportsPage = lazyRoute(() => import('./features/wb-reports/WbReportsPage').then(({ WbReportsPage }) => ({ default: WbReportsPage })))
+const WbSourcesPage = lazyRoute(() => import('./features/wb-sources/WbSourcesPage').then(({ WbSourcesPage }) => ({ default: WbSourcesPage })))
+const WbRepricerWiki = lazyRoute(() => import('./wiki/pages/WbRepricerWiki').then(({ WbRepricerWiki }) => ({ default: WbRepricerWiki })))
+const LiquidationWiki = lazyRoute(() => import('./wiki/pages/LiquidationWiki').then(({ LiquidationWiki }) => ({ default: LiquidationWiki })))
+const PromotionsWiki = lazyRoute(() => import('./wiki/pages/PromotionsWiki').then(({ PromotionsWiki }) => ({ default: PromotionsWiki })))
+const AlgorithmWiki = lazyRoute(() => import('./wiki/pages/AlgorithmWiki').then(({ AlgorithmWiki }) => ({ default: AlgorithmWiki })))
+const TemplatesWiki = lazyRoute(() => import('./wiki/pages/TemplatesWiki').then(({ TemplatesWiki }) => ({ default: TemplatesWiki })))
+const OrdersPrintListPage = lazyRoute(() => import('./features/orders/OrdersPrintListPage').then(({ OrdersPrintListPage }) => ({ default: OrdersPrintListPage })))
+const LazyVellaHtmlParityPage = lazyRoute(() => import('./features/vella-parity/VellaHtmlParityPage')
+  .then(module => ({ default: module.VellaHtmlParityPage })))
+
+function lazyRoute<T extends ComponentType>(load: () => Promise<{ default: T }>) {
+  return lazy(() => load().catch(() => ({ default: ChunkLoadError as unknown as T })))
+}
+
+function RouteLoading() {
+  return (
+    <div role="status" className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-slate-100">
+      <div className="rounded-2xl border border-white/10 bg-white/5 px-5 py-4 text-sm">Загружаем раздел...</div>
+    </div>
+  )
+}
+
+function ChunkLoadError() {
+  return (
+    <div role="alert" className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-slate-100">
+      <div className="rounded-2xl border border-white/10 bg-white/5 px-5 py-4 text-sm">
+        <h1 className="mb-2 text-lg">Раздел не загрузился</h1>
+        <p className="mb-4">Не удалось загрузить код раздела. Обновите страницу, чтобы повторить загрузку.</p>
+        <button type="button" className="rounded-lg border border-white/20 px-4 py-2" onClick={() => window.location.reload()}>
+          Обновить страницу
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function VellaHtmlParityPage() {
+  // Import failures have explicit document reload recovery; render errors still reach RouteErrorBoundary.
+  return (
+    <Suspense fallback={<RouteLoading />}>
+      <LazyVellaHtmlParityPage />
+    </Suspense>
+  )
+}
+
 function RoutedApp() {
   const location = useLocation()
   return (
     <RouteErrorBoundary resetKey={location.pathname}>
-      <Routes>
+      <Suspense fallback={<RouteLoading />}>
+        <Routes>
             <Route element={<PublicOnlyAuth />}>
               <Route path="/auth/login" element={<LoginPage />} />
               <Route path="/auth/register" element={<RegisterPage />} />
@@ -154,7 +193,6 @@ function RoutedApp() {
                 <Route path="/avito/wallets" element={<ComingSoon />} />
 
                 <Route path="/orders" element={<OrdersPrintListPage />} />
-                <Route path="/orders/kiz" element={<ComingSoon />} />
                 <Route path="/orders/returns" element={<ComingSoon />} />
 
                 <Route path="/help" element={<Navigate to="/wiki/wb-repricer" replace />} />
@@ -169,7 +207,8 @@ function RoutedApp() {
                 <Route path="*" element={<ComingSoon />} />
               </Route>
             </Route>
-      </Routes>
+        </Routes>
+      </Suspense>
     </RouteErrorBoundary>
   )
 }

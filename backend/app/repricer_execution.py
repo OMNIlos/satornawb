@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.modules.wb_repricing_calculation import settings_minimum_price_kopecks
 from app.repricer_cache.store import get_source_cache, save_source_cache
 from app.repricer_persistence.store import append_execution_run, upsert_pending_price_approvals
 from app.repricer_settings import (
@@ -21,7 +22,7 @@ from app.repricer_bff import (
     ALGORITHM_SETTINGS_STATE,
     FRONTEND_STRATEGY_BY_ID,
     LIQUIDATION_ACTIVE,
-    _p_min_kopecks,
+    _effective_pmin,
     list_repricer_changelog,
     list_repricer_skus,
     record_repricer_price_change,
@@ -130,33 +131,7 @@ def _parse_iso(value: str | None) -> datetime | None:
 
 
 def _settings_pmin_kopecks(settings: dict[str, Any]) -> int:
-    try:
-        override = int(settings.get("pMinKopecks") or settings.get("pminKopecks") or 0)
-    except (TypeError, ValueError):
-        override = 0
-    if override > 0:
-        return override
-    base_cost = (
-        _setting_int(settings, "cogsKopecks")
-        + _setting_int(settings, "logisticsKopecks")
-        + _setting_int(settings, "otherExpensePerSaleKopecks")
-        + _setting_int(settings, "storageCostPerSaleKopecks")
-    )
-    pick_pack_pct = _setting_float(settings, "pickPackCostPercent")
-    if pick_pack_pct > 0:
-        base_cost += round(_setting_int(settings, "cogsKopecks") * pick_pack_pct / 100)
-    fixed_margin = _setting_int(settings, "minMarginKopecks")
-    variable_pct = (
-        _setting_float(settings, "wbCommissionPct")
-        + _setting_float(settings, "minMarginPct")
-        + _setting_float(settings, "taxPct")
-        + _effective_price_expense_pct(settings)
-        + _setting_float(settings, "advertCostPercent")
-    )
-    denominator = 1 - variable_pct / 100
-    if denominator <= 0:
-        return max(1, base_cost + fixed_margin)
-    return max(1, int(round((base_cost + fixed_margin) / denominator)))
+    return settings_minimum_price_kopecks(settings)
 
 
 def _settings_pmax_kopecks(settings: dict[str, Any], old_price: int) -> int:
@@ -283,15 +258,18 @@ def _economics_from_row(row: dict[str, Any]) -> DraftEconomicsInput:
     current_price = int(row.get("meta", {}).get("currentPriceKopecks") or analytics.get("basePriceKopecks") or 0)
     storage = _setting_int(settings, "storageCostPerSaleKopecks")
     tax_kopecks = round(current_price * _setting_float(settings, "taxPct") / 100) if current_price > 0 else 0
-    buyout_pct = float(analytics.get("buyoutPct") or 80)
-    buyout_pct = max(0.0, min(100.0, buyout_pct))
+    commission_pct = analytics.get("wbCommissionPct")
+    if analytics.get("commissionState") in {"fallback", "no_data"}:
+        commission_pct = None
+    elif commission_pct is None:
+        commission_pct = settings.get("wbCommissionPct")
     return DraftEconomicsInput(
         cogsKopecks=_setting_int(settings, "cogsKopecks"),
-        commissionPct=float(analytics.get("wbCommissionPct") if analytics.get("wbCommissionPct") is not None else settings.get("wbCommissionPct") or 0),
+        commissionPct=commission_pct,
         logisticsKopecks=_setting_int(settings, "logisticsKopecks") + _setting_int(settings, "otherExpensePerSaleKopecks"),
         storageKopecks=storage,
         taxKopecks=tax_kopecks,
-        buyoutPct=buyout_pct,
+        buyoutPct=analytics.get("buyoutPct"),
         stockUnits=int(stock_units) if stock_units is not None else 1,
         promoActive=analytics.get("promotionStatus") == "yes",
     )
@@ -1373,14 +1351,7 @@ def _execute_single_sku(
         night_apply_payload = _night_median_apply_payload(row, organization_id)
 
     economics = _economics_from_row(row)
-    min_price = _settings_pmin_kopecks(settings)
-    if frontend_id == "illiquid":
-        min_price = _p_min_kopecks(
-            int(settings["cogsKopecks"]),
-            float(settings["wbCommissionPct"]),
-            int(settings["logisticsKopecks"]),
-            0,
-        )
+    min_price, _ = _effective_pmin(row)
     p_max = _settings_pmax_kopecks(settings, old_price)
     explanation = ""
     recommended: int | None = None
@@ -2011,5 +1982,3 @@ def execute_all_assigned_skus(
         trigger=trigger,
         persist_run=persist_run,
     )
-
-

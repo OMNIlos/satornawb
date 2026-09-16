@@ -25,7 +25,7 @@ from app.platform.finance.orm import (
     WbFinanceSyncRunSkuRollupRow,
 )
 from app.platform.integrations.orm import MarketplaceAccountRow
-from app.platform.period import MOSCOW, Period, PeriodValidationError
+from app.platform.period import MOSCOW, Period, PeriodTemporalState, PeriodValidationError
 
 ReportType = Literal["main", "redemptions", "unknown"]
 OperationKind = Literal["sale", "return", "correction", "other"]
@@ -66,11 +66,13 @@ _PNL_FIELDS = (
     "cashback_amount_kopecks",
     "cashback_discount_kopecks",
     "cashback_commission_change_kopecks",
+    "payable_kopecks",
 )
 _NULLABLE_PNL_FIELDS = {
     "cashback_amount_kopecks",
     "cashback_discount_kopecks",
     "cashback_commission_change_kopecks",
+    "payable_kopecks",
 }
 
 
@@ -112,6 +114,7 @@ class FinanceOperation:
     cashback_amount_kopecks: int | None
     cashback_discount_kopecks: int | None
     cashback_commission_change_kopecks: int | None
+    payable_kopecks: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +199,8 @@ class FinancePnlFact:
     cashback_amount_kopecks: int | None
     cashback_discount_kopecks: int | None
     cashback_commission_change_kopecks: int | None
+    payable_kopecks: int | None = None
+    payable_basis: bool = False
 
     @property
     def loyalty_net_cost_kopecks(self) -> int | None:
@@ -205,6 +210,13 @@ class FinancePnlFact:
             or self.cashback_commission_change_kopecks is None
         ):
             return None
+        if self.payable_basis:
+            if self.payable_kopecks is None:
+                return None
+            # Discount compensation is already included in reconciled payable.
+            return (
+                self.cashback_amount_kopecks + self.cashback_commission_change_kopecks
+            )
         return (
             self.cashback_amount_kopecks
             + self.cashback_commission_change_kopecks
@@ -243,7 +255,9 @@ def _positive_integer(raw: Any) -> int | None:
 
 
 def _money(raw: Any) -> int:
-    if raw in (None, "") or isinstance(raw, bool):
+    if isinstance(raw, bool):
+        raise FinanceNormalizationError("invalid money value")
+    if raw in (None, ""):
         return 0
     try:
         value = Decimal(str(raw).replace(",", ".")) * 100
@@ -264,8 +278,6 @@ def _first_money(row: dict[str, Any], *keys: str) -> int:
 def _optional_first_money(row: dict[str, Any], *keys: str) -> int | None:
     for key in keys:
         if key in row and row[key] not in (None, ""):
-            if isinstance(row[key], bool):
-                raise FinanceNormalizationError("invalid money value")
             return _money(row[key])
     return None
 
@@ -325,11 +337,12 @@ def normalize_operation(
     document_sign = -1 if doc_type == "возврат" else 1
     quantity = max(0, _integer(row.get("quantity") or row.get("saleQuantity")) or 0)
     units = document_sign * quantity if doc_type in {"продажа", "возврат"} else 0
-    revenue = (
-        document_sign * _first_money(row, "retailAmount", "retail_amount")
-        if doc_type in {"продажа", "возврат"}
-        else 0
-    )
+    revenue = 0
+    if doc_type in {"продажа", "возврат"}:
+        retail_amount = _optional_first_money(row, "retailAmount", "retail_amount")
+        if retail_amount is None:
+            raise FinanceNormalizationError("missing trade revenue")
+        revenue = document_sign * retail_amount
     commission = document_sign * _first_money(
         row,
         "ppvzSalesCommission",
@@ -338,6 +351,7 @@ def normalize_operation(
         "commissionRub",
     )
     acquiring = document_sign * _first_money(row, "acquiringFee", "acquiring_fee")
+    payable = _optional_first_money(row, "forPay", "ppvz_for_pay")
     deduction = _first_money(row, "deduction", "deductionRub")
     bonus_type = _text(row, "bonusTypeName", "bonus_type_name")
     is_promotion = "wb продвижение" in bonus_type.casefold()
@@ -383,8 +397,9 @@ def normalize_operation(
         "acceptance_kopecks": _first_money(row, "paidAcceptance", "acceptance"),
         "penalty_kopecks": _first_money(row, "penalty", "penaltyRub"),
         "deduction_kopecks": deduction,
-        "additional_payment_kopecks": payment_schedule - reward_adjustment,
+        "additional_payment_kopecks": -payment_schedule - reward_adjustment,
         "acquiring_kopecks": acquiring,
+        "payable_kopecks": None if payable is None else document_sign * payable,
         "cashback_amount_kopecks": _optional_first_money(
             row, "cashbackAmount", "cashback_amount"
         ),
@@ -621,6 +636,18 @@ def _snapshot(row: WbFinanceSyncRunRow) -> FinanceSnapshot:
         captured_at=_utc(row.captured_at),
         last_observed_at=_utc(row.last_observed_at),
     )
+
+
+def _source_state(
+    run: WbFinanceSyncRunRow, temporal_state: PeriodTemporalState, operation_count: int
+) -> FinanceSourceState:
+    if (
+        temporal_state == "partial"
+        or _utc(run.last_observed_at)
+        < Period(run.date_from, run.date_to).end_exclusive_at
+    ):
+        return "partial"
+    return "empty" if operation_count == 0 else "ready"
 
 
 class FinanceService:
@@ -986,7 +1013,18 @@ class FinanceService:
                 summed(operation.units > 0, operation.units),
                 summed(operation.units < 0, -operation.units),
                 func.coalesce(func.sum(operation.units), 0),
-                func.coalesce(func.sum(operation.commission_kopecks), 0),
+                func.coalesce(
+                    func.sum(case(
+                        (
+                            operation.payable_kopecks.is_not(None),
+                            operation.revenue_kopecks
+                            - operation.payable_kopecks
+                            - operation.acquiring_kopecks,
+                        ),
+                        else_=operation.commission_kopecks,
+                    )),
+                    0,
+                ),
                 func.coalesce(func.sum(operation.logistics_kopecks), 0),
                 func.coalesce(func.sum(operation.storage_kopecks), 0),
                 func.coalesce(func.sum(operation.acceptance_kopecks), 0),
@@ -997,6 +1035,7 @@ class FinanceService:
                 complete_sum(operation.cashback_amount_kopecks),
                 complete_sum(operation.cashback_discount_kopecks),
                 complete_sum(operation.cashback_commission_change_kopecks),
+                complete_sum(operation.payable_kopecks),
             )
             .select_from(relation)
             .where(*criteria)
@@ -1033,6 +1072,7 @@ class FinanceService:
                     rollup.cashback_amount_kopecks,
                     rollup.cashback_discount_kopecks,
                     rollup.cashback_commission_change_kopecks,
+                    rollup.payable_kopecks,
                 ).where(
                     rollup.organization_id == self.organization_id,
                     rollup.marketplace_account_id == run.marketplace_account_id,
@@ -1361,7 +1401,7 @@ class FinanceService:
                 date_from=period.date_from,
                 date_to=period.date_to,
                 snapshot_checksum=checksum,
-                formula_version="wb-finance-v2",
+                formula_version="wb-finance-v3",
                 operation_count=len(operations),
                 is_materialized=False,
                 is_rollup_materialized=False,
@@ -1505,11 +1545,7 @@ class FinanceService:
             )
             for row in item_rows[offset : offset + limit]
         ]
-        state = (
-            "partial"
-            if temporal_state == "partial"
-            else "empty" if summary.operation_count == 0 else "ready"
-        )
+        state = _source_state(run, temporal_state, summary.operation_count)
         return FinancePage(
             state,
             period,
@@ -1539,9 +1575,10 @@ class FinanceService:
             return FinancePnlSource(state, period, None, [], {}, {})
 
         exact = run.date_from == period.date_from and run.date_to == period.date_to
+        # Exact membership can include fees with an earlier or unknown sale date.
         if run.is_pnl_rollup_materialized and exact:
             rows = self._materialized_pnl_rows(run)
-        elif run.is_daily_pnl_rollup_materialized:
+        elif run.is_daily_pnl_rollup_materialized and not exact:
             rows = self._materialized_daily_pnl_rows(run, period)
         else:
             rows = self._pnl_operation_rows(run, period)
@@ -1573,15 +1610,13 @@ class FinanceService:
                 cashback_commission_change_kopecks=(
                     None if row[23] is None else int(row[23])
                 ),
+                payable_kopecks=None if row[24] is None else int(row[24]),
+                payable_basis=run.formula_version == "wb-finance-v3",
             )
             for row in rows
         ]
         operation_count = sum(fact.operation_count for fact in facts)
-        state: FinanceSourceState = (
-            "partial"
-            if temporal_state == "partial"
-            else "empty" if operation_count == 0 else "ready"
-        )
+        state = _source_state(run, temporal_state, operation_count)
         if run.is_daily_pnl_rollup_materialized:
             daily_net_units, daily_economics_basis = (
                 self._materialized_daily_bases(run, period)

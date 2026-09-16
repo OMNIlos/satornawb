@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.control_plane.auth import ActorContext
@@ -13,6 +15,10 @@ from app.modules.wb_reports.schemas import (
     AbcPnlPageView,
     AbcPnlRowView,
     AbcPnlSummaryView,
+)
+from app.modules.wb_reports.table_export import (
+    ReportTableExportRequest,
+    render_report_table_export,
 )
 from app.platform.clock import utc_now
 from app.platform.finance.access import (
@@ -25,6 +31,30 @@ from app.platform.finance.service import FinanceAccountNotFound
 from app.platform.period import Period, PeriodValidationError
 
 router = APIRouter(tags=["wb-reports-v2"])
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+MAX_TABLE_EXPORT_BODY_BYTES = 5 * 1024 * 1024
+
+
+async def _table_export_request(request: Request) -> ReportTableExportRequest:
+    content_length = request.headers.get("content-length")
+    if (
+        content_length
+        and content_length.isdigit()
+        and int(content_length) > MAX_TABLE_EXPORT_BODY_BYTES
+    ):
+        raise HTTPException(413, detail={"code": "REPORT_EXPORT_BODY_TOO_LARGE"})
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_TABLE_EXPORT_BODY_BYTES:
+            raise HTTPException(413, detail={"code": "REPORT_EXPORT_BODY_TOO_LARGE"})
+        body.extend(chunk)
+    try:
+        return ReportTableExportRequest.model_validate_json(body)
+    except (ValidationError, ValueError):
+        raise HTTPException(
+            422,
+            detail={"code": "VALIDATION_ERROR", "message": "Request validation failed"},
+        ) from None
 
 
 def _view(
@@ -86,6 +116,10 @@ def _view(
                 profitClass=row.profit_class,
                 abcCode=row.abc_code,
                 netProfitKopecks=row.net_profit_kopecks,
+                profitBeforeInternalExpensesKopecks=(
+                    row.profit_before_internal_expenses_kopecks
+                ),
+                internalExpensesKopecks=row.internal_expenses_kopecks,
                 blockerIds=list(row.blocker_ids),
             )
             for row in page.items
@@ -132,6 +166,10 @@ def _view(
             loyaltyNetCostKopecks=page.summary.loyalty_net_cost_kopecks,
             profitAfterLoyaltyKopecks=page.summary.profit_after_loyalty_kopecks,
             netProfitKopecks=page.summary.net_profit_kopecks,
+            profitBeforeInternalExpensesKopecks=(
+                page.summary.profit_before_internal_expenses_kopecks
+            ),
+            internalExpensesKopecks=page.summary.internal_expenses_kopecks,
         ),
         meta=AbcPnlMetaView(
             state=page.state,
@@ -223,3 +261,33 @@ def get_wb_abc_pnl(
             detail={"code": "WB_ACCOUNT_NOT_FOUND", "message": str(exc)},
         ) from exc
     return _view(page, marketplaceAccountId, resolved_now)
+
+
+@router.post("/api/v2/wb/reports/table.xlsx")
+def export_wb_report_table(
+    payload: Annotated[ReportTableExportRequest, Depends(_table_export_request)],
+    actor: Annotated[ActorContext, Depends(get_finance_actor)],
+    session: Annotated[Session, Depends(get_db_session)],
+) -> Response:
+    require_finance_read(actor)
+    require_wb_account_scope(session, actor, payload.marketplaceAccountId)
+    try:
+        Period(payload.dateFrom, payload.dateTo)
+    except PeriodValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "INVALID_PERIOD", "message": str(exc)},
+        ) from exc
+    content = render_report_table_export(
+        payload,
+        organization_id=actor.organization_id,
+    )
+    filename = f"wb-{payload.reportKind}-{payload.dateFrom}-{payload.dateTo}.xlsx"
+    return Response(
+        content,
+        media_type=XLSX_MIME,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
