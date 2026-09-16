@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, aliased
 from app.infra.db import get_session_factory
 from app.infra.redis_client import get_redis_client
 from app.repricer_cache.orm import WbRepricerGoodsCacheRow, WbRepricerSourceCacheRow
+from app.wb_browser_prices import CONNECTION_KEY, PRICES_KEY, apply_browser_prices
 
 _REDIS_CACHE_TTL_SECONDS = 45
 _REDIS_DISABLED_UNTIL = 0.0
@@ -315,7 +316,7 @@ def list_cached_goods(organization_id: int) -> list[dict[str, Any]]:
     redis_key = _goods_list_cache_key(organization_id)
     cached = _redis_get_json_list(redis_key)
     if cached is not None:
-        return cached
+        return _goods_with_browser_prices(organization_id, cached)
 
     goods: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -330,7 +331,18 @@ def list_cached_goods(organization_id: int) -> list[dict[str, Any]]:
             seen.add(dedupe_key)
             goods.append(_slim_good_payload(item))
     _redis_set_json_list(redis_key, goods)
-    return goods
+    return _goods_with_browser_prices(organization_id, goods)
+
+
+def browser_prices_selected(organization_id: int) -> bool:
+    return bool((get_source_cache(organization_id, CONNECTION_KEY, strict=True) or {}).get("marketplaceAccountId"))
+
+
+def _goods_with_browser_prices(organization_id: int, goods: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not goods:
+        return goods
+    connection = get_source_cache(organization_id, CONNECTION_KEY, strict=True)
+    return apply_browser_prices(goods, connection, get_source_cache(organization_id, PRICES_KEY) if connection else None)
 
 
 def cached_goods_meta(organization_id: int) -> dict[str, Any]:
@@ -454,6 +466,7 @@ def get_source_cache(
     source_key: str,
     *,
     slim: bool = False,
+    strict: bool = False,
 ) -> dict[str, Any] | None:
     redis_key = _source_cache_key(organization_id, source_key, slim=slim)
     redis_allowed = _source_cache_redis_allowed(source_key, slim=slim)
@@ -477,7 +490,12 @@ def get_source_cache(
             return slim_source_cache_payload(source_key, payload)
         return payload
 
-    payload = _run_db(_db)
+    if strict:
+        # Source selection must distinguish a missing row from unavailable storage.
+        with get_session_factory()() as session:
+            payload = _db(session)
+    else:
+        payload = _run_db(_db)
     if payload is not None and redis_allowed:
         _redis_set_json(redis_key, payload)
     return payload
@@ -696,7 +714,7 @@ def get_repricer_sources_revision(organization_id: int) -> str | None:
             select(func.max(WbRepricerSourceCacheRow.fetched_at)).where(
                 WbRepricerSourceCacheRow.organization_id == organization_id,
                 or_(
-                    WbRepricerSourceCacheRow.source_key.in_(("content_cards", "commission_tariffs", "stocks", "promotions", "promotion_thresholds")),
+                    WbRepricerSourceCacheRow.source_key.in_(("content_cards", "commission_tariffs", "stocks", "promotions", "promotion_thresholds", CONNECTION_KEY)),
                     *(WbRepricerSourceCacheRow.source_key.like(f"{prefix}_%") for prefix in ("finance", "baskets", "period_stats", "ads")),
                 ),
                 ~WbRepricerSourceCacheRow.source_key.like("baskets_detail_%"),

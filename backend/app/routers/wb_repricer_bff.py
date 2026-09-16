@@ -36,6 +36,7 @@ from app.repricer_nomenclature_excel import (
     parse_repricer_nomenclature_excel,
 )
 from app.repricer_cache.store import (
+    browser_prices_selected,
     cached_goods_meta,
     compact_heavy_source_cache_rows,
     finance_cache_uses_current_revenue_basis,
@@ -50,6 +51,7 @@ from app.repricer_cache.store import (
     save_goods_page,
     save_source_cache,
 )
+from app.wb_browser_prices import PRICES_KEY as BROWSER_PRICES_KEY, rows_expire_at, timestamp as browser_price_timestamp
 
 SKU_LIST_MAX_ITEMS = 150
 SKU_LIST_PAGE_SIZE_DEFAULT = 150
@@ -2148,7 +2150,7 @@ def _list_repricer_skus_from_cached_sources(
     )
 
 
-SKU_LIST_SNAPSHOT_VERSION = 11
+SKU_LIST_SNAPSHOT_VERSION = 12
 SKU_LIST_SNAPSHOT_CHUNK_SIZE = 150
 
 
@@ -2191,6 +2193,11 @@ def _load_repricer_sku_snapshot(
     cache = get_source_cache(organization_id, snapshot_key, slim=False)
     if not cache or int(cache.get("version") or 0) != SKU_LIST_SNAPSHOT_VERSION:
         return None
+    now = datetime.now(timezone.utc)
+    if cache.get("browserPricesExpireAt"):
+        expiry = browser_price_timestamp(cache["browserPricesExpireAt"])
+        if expiry is None or expiry <= now:
+            return None
     if str(period_suffix).isdigit():
         start, end, _days, _suffix = _repricer_period_context(int(period_suffix))
         if not _cache_matches_range(cache.get("response", {}) if view == "stats" else cache, start, end):
@@ -2205,6 +2212,11 @@ def _load_repricer_sku_snapshot(
         return None
     if cache.get("goodsRevision") != cached_goods_meta(organization_id).get("latestFetchedAt"):
         return None
+    if cache.get("browserPricesRevision") != get_source_cache_fetched_at(organization_id, BROWSER_PRICES_KEY):
+        # Coalesce upload batches from the original read, never extend a price's TTL.
+        read_at = browser_price_timestamp(cache.get("browserPricesReadAt"))
+        if read_at is None or not read_at <= now < read_at + timedelta(seconds=60):
+            return None
     if cache.get("storage") == "chunked":
         cache.setdefault("snapshotKey", snapshot_key)
         return cache
@@ -2289,6 +2301,7 @@ def _save_repricer_list_snapshot(
         })
     return save_source_cache(organization_id, snapshot_key, {
         **payload, "version": SKU_LIST_SNAPSHOT_VERSION, "storage": "chunked",
+        "browserPricesExpireAt": payload.get("browserPricesExpireAt") or rows_expire_at(rows),
         "snapshotKey": snapshot_key, "generation": generation, "chunkSize": chunk_size,
         "chunksCount": (len(rows) + chunk_size - 1) // chunk_size, "total": len(rows),
         "builtAt": datetime.now(timezone.utc).isoformat(),
@@ -2322,6 +2335,8 @@ def _build_repricer_sku_snapshot(
     tax_revision = legacy_finance_tax_revision(organization_id)
     source_revision = get_repricer_sources_revision(organization_id)
     goods_revision = cached_goods_meta(organization_id).get("latestFetchedAt")
+    browser_prices_read_at = datetime.now(timezone.utc).isoformat()
+    browser_prices_revision = get_source_cache_fetched_at(organization_id, BROWSER_PRICES_KEY)
     rows = _list_repricer_skus_from_cached_sources(
         organization_id,
         scenario,
@@ -2377,6 +2392,8 @@ def _build_repricer_sku_snapshot(
         include_content=include_content,
     )
     return _save_repricer_list_snapshot(organization_id, snapshot_key, rows, {
+        "browserPricesRevision": browser_prices_revision,
+        "browserPricesReadAt": browser_prices_read_at,
         "sourceRevision": source_revision,
         "goodsRevision": goods_revision,
         "stateRevision": state_revision,
@@ -4076,6 +4093,8 @@ def get_repricer_stats(
             return response
     source_revision = get_repricer_sources_revision(organization_id)
     goods_meta = cached_goods_meta(organization_id)
+    browser_prices_read_at = datetime.now(timezone.utc).isoformat()
+    browser_prices_revision = get_source_cache_fetched_at(organization_id, BROWSER_PRICES_KEY)
 
     def respond(all_rows, cache, *, missing_sources=False, fetched_sources=()):
         filtered = [row for row in all_rows if _row_matches_sku_filters(
@@ -4101,6 +4120,9 @@ def get_repricer_stats(
             key = _repricer_sku_snapshot_key(scenario, period_suffix=_period_suffix,
                                             include_promotions=False, include_content=False, view="stats")
             _save_repricer_list_snapshot(organization_id, key, items, {
+                "browserPricesExpireAt": rows_expire_at(filtered),
+                "browserPricesRevision": browser_prices_revision,
+                "browserPricesReadAt": browser_prices_read_at,
                 "sourceRevision": source_revision, "goodsRevision": goods_meta.get("latestFetchedAt"),
                 "stateRevision": state_revision,
                 "taxRevision": tax_revision,
@@ -4115,6 +4137,8 @@ def get_repricer_stats(
                                                   page=1, page_size=max(1, int(goods_meta.get("totalCached") or 0)))
         if products is not None:
             snapshot, rows = products
+            browser_prices_read_at = snapshot.get("browserPricesReadAt")
+            browser_prices_revision = snapshot.get("browserPricesRevision")
             cache = dict(snapshot.get("cache") or {})
             missing = any(not cache.get(field) for field in ("periodStatsFetchedAt", "financeFetchedAt", "adsFetchedAt", "basketsFetchedAt"))
             return respond(rows, cache, missing_sources=missing)
@@ -5142,6 +5166,7 @@ def refresh_sku_list_page(
     _ensure_wb_sync_not_running(actor.organization_id)
     repricer_bff_module.fetch_commission_tariffs(scenario, wb_token=wb_token, force=True, organization_id=actor.organization_id)
     previous_goods = list_cached_goods(actor.organization_id)
+    use_browser_prices = browser_prices_selected(actor.organization_id)
     total_saved = 0
     external_spp_matched_count = 0
     external_spp_rate_limit: ExternalSppRateLimited | None = None
@@ -5154,7 +5179,7 @@ def refresh_sku_list_page(
         try:
             external_spp_prices = (
                 fetch_external_spp_prices(_unique_nm_ids_from_goods(goods))
-                if external_spp_rate_limit is None else {}
+                if external_spp_rate_limit is None and not use_browser_prices else {}
             )
             external_spp_matched_count += _apply_external_spp_prices_to_goods(goods, external_spp_prices)
         except ExternalSppRateLimited as exc:

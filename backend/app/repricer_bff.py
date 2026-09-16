@@ -4691,6 +4691,7 @@ def _build_sku_row(
     image_url: str | None = None,
     buyer_price_source: str | None = None,
     buyer_price_observed_at: str | None = None,
+    buyer_price_expires_at: str | None = None,
 ) -> dict[str, Any]:
     meta_overrides = _sku_meta_seed(article_id, use_demo_data)
     if meta_overrides["status"] == "warmup":
@@ -5153,6 +5154,7 @@ def _build_sku_row(
             "buyerPriceWithWalletKopecks": buyer_price_with_wallet_kopecks,
             "buyerPriceSource": buyer_price_source if buyer_price_kopecks is not None else None,
             "buyerPriceObservedAt": buyer_price_observed_at if buyer_price_kopecks is not None else None,
+            "buyerPriceExpiresAt": buyer_price_expires_at if buyer_price_kopecks is not None else None,
             "accountedBuyerPriceKopecks": accounted_buyer_price_kopecks,
             "marginBaseKopecks": margin_sales_base_kopecks,
             "avgPriceWithSppKopecks": funnel_avg_price_kopecks,
@@ -5437,6 +5439,7 @@ def list_repricer_skus(
                 image_url=image_url,
                 buyer_price_source=price_size.get("buyerPriceSource") or good.get("buyerPriceSource"),
                 buyer_price_observed_at=price_size.get("buyerPriceObservedAt") or good.get("buyerPriceObservedAt"),
+                buyer_price_expires_at=price_size.get("buyerPriceExpiresAt"),
             )
         )
     _apply_abc_codes(rows, use_demo_data=use_demo_data)

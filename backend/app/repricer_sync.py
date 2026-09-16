@@ -37,6 +37,7 @@ from app.repricer_bff import (
     WbSalesFunnelDeferred,
 )
 from app.repricer_cache.store import (
+    browser_prices_selected,
     get_source_cache,
     list_cached_goods,
     list_source_cache_ranges_by_prefix,
@@ -1279,6 +1280,7 @@ def refresh_wb_data_sources(
             try:
                 fetch_commission_tariffs(scenario, wb_token=wb_token, organization_id=organization_id)
                 previous_goods = list_cached_goods(organization_id)
+                use_browser_prices = browser_prices_selected(organization_id)
                 fetched_goods: list[dict[str, Any]] = []
                 total_saved = 0
                 external_spp_matched_count = 0
@@ -1321,7 +1323,7 @@ def refresh_wb_data_sources(
 
                         external_spp_prices = (
                             fetch_external_spp_prices(page_nm_ids, progress_callback=report_spp_progress)
-                            if external_spp_rate_limit is None else {}
+                            if external_spp_rate_limit is None and not use_browser_prices else {}
                         )
                         external_spp_matched_count += _apply_external_spp_prices_to_goods(goods, external_spp_prices)
                     except ExternalSppRateLimited as exc:

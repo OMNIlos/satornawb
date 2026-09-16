@@ -33,6 +33,7 @@ from app.routers.notifications import router as notifications_router
 from app.routers.one_c_cash_flow import router as one_c_cash_flow_router
 from app.routers.source_registry import router as source_registry_router
 from app.routers.wb_discovery import router as wb_discovery_router
+from app.routers.wb_browser_prices import router as wb_browser_prices_router
 from app.routers.wb_19_05 import router as wb_19_05_router
 from app.routers.wb_reports_sprint_d import router as wb_reports_sprint_d_router
 from app.routers.wb_reports_bff import router as wb_reports_bff_router
@@ -208,6 +209,7 @@ def create_app() -> FastAPI:
     app.include_router(control_plane_router)
     app.include_router(source_registry_router)
     app.include_router(wb_discovery_router)
+    app.include_router(wb_browser_prices_router)
     app.include_router(wb_repricer_bff_router)
     app.include_router(wb_repricer_wb23_router)
     app.include_router(wb_repricer_sprint_b_router)

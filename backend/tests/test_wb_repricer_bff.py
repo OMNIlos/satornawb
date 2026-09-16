@@ -4002,6 +4002,10 @@ def test_wb_sync_writes_ads_cache_before_advertising_shadow(monkeypatch):
 
 
 def test_wb_sync_runs_four_independent_sources_in_parallel_and_waits_for_goods(monkeypatch):
+    monkeypatch.setattr("app.repricer_sync.browser_prices_selected", lambda _: False)
+    monkeypatch.setattr("app.repricer_sync.fetch_commission_tariffs", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(repricer_bff_module, "fetch_commission_tariffs", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(wb_repricer_bff_router, "_build_repricer_sku_snapshot", lambda *_args, **_kwargs: {"total": 0})
     import threading
     import time
 
@@ -4655,8 +4659,10 @@ def test_wb_sync_external_spp_fetches_batches_and_waits_between_requests(monkeyp
     ]
 
 
-def test_wb_sync_goods_step_saves_external_spp_price_as_buyer_price(monkeypatch):
+@pytest.mark.parametrize("browser_selected", [False, True])
+def test_wb_sync_goods_step_saves_external_spp_price_as_buyer_price(monkeypatch, browser_selected):
     from app.repricer_sync import refresh_wb_data_sources
+    monkeypatch.setattr("app.repricer_sync.browser_prices_selected", lambda _: browser_selected)
 
     saved_goods: list[list[dict[str, object]]] = []
 
@@ -4674,10 +4680,11 @@ def test_wb_sync_goods_step_saves_external_spp_price_as_buyer_price(monkeypatch)
             "wbRequestId": "wb-goods-1",
         },
     )
-    monkeypatch.setattr(
-        "app.repricer_sync.fetch_external_spp_prices",
-        lambda nm_ids, **_kwargs: {123: 149_600},
-    )
+    external_calls = []
+    def external_prices(*args, **kwargs):
+        external_calls.append(args)
+        return {123: 149_600}
+    monkeypatch.setattr("app.repricer_sync.fetch_external_spp_prices", external_prices)
     monkeypatch.setattr(
         "app.repricer_sync.save_goods_page",
         lambda **kwargs: saved_goods.append(kwargs["goods"]) or {"totalCached": len(kwargs["goods"])},
@@ -4692,6 +4699,11 @@ def test_wb_sync_goods_step_saves_external_spp_price_as_buyer_price(monkeypatch)
     )
 
     saved_size = saved_goods[0][0]["sizes"][0]
+    assert bool(external_calls) is not browser_selected
+    if browser_selected:
+        assert result["steps"][0]["externalSppMatchedCount"] == 0
+        assert "buyerPriceNoWalletKopecks" not in saved_size
+        return
     assert result["steps"][0]["externalSppMatchedCount"] == 1
     assert saved_size["buyerPriceNoWalletKopecks"] == 149_600
     assert saved_size["buyerPriceNoWallet"] == 1496
@@ -4700,6 +4712,7 @@ def test_wb_sync_goods_step_saves_external_spp_price_as_buyer_price(monkeypatch)
 
 def test_wb_sync_goods_step_persists_spp_heartbeat_progress(monkeypatch):
     from app.repricer_sync import refresh_wb_data_sources
+    monkeypatch.setattr("app.repricer_sync.browser_prices_selected", lambda _: False)
 
     saved_statuses: list[dict[str, object]] = []
     monkeypatch.setattr("app.repricer_sync.get_wb_sync_status", lambda _organization_id: {"state": "idle"})
@@ -4808,8 +4821,10 @@ def test_wb_sync_price_audit_records_seller_and_spp_changes(monkeypatch):
     assert "с СПП" in str(events[1]["reason"])
 
 
-def test_manual_goods_refresh_saves_external_spp_price_as_buyer_price(monkeypatch):
+@pytest.mark.parametrize("browser_selected", [False, True])
+def test_manual_goods_refresh_saves_external_spp_price_as_buyer_price(monkeypatch, browser_selected):
     saved_goods: list[list[dict[str, object]]] = []
+    monkeypatch.setattr("app.routers.wb_repricer_bff.browser_prices_selected", lambda _: browser_selected)
 
     monkeypatch.setattr(
         "app.routers.wb_repricer_bff._request_actor_and_wb_token",
@@ -4830,10 +4845,11 @@ def test_manual_goods_refresh_saves_external_spp_price_as_buyer_price(monkeypatc
             "wbRequestId": "wb-req-1",
         },
     )
-    monkeypatch.setattr(
-        "app.routers.wb_repricer_bff.fetch_external_spp_prices",
-        lambda nm_ids: {1238632126: 148_900},
-    )
+    external_calls = []
+    def external_prices(*args, **kwargs):
+        external_calls.append(args)
+        return {1238632126: 148_900}
+    monkeypatch.setattr("app.routers.wb_repricer_bff.fetch_external_spp_prices", external_prices)
     monkeypatch.setattr(
         "app.routers.wb_repricer_bff.save_goods_page",
         lambda **kwargs: saved_goods.append(kwargs["goods"]) or {"totalCached": len(kwargs["goods"]), "pagesCached": 1, "nextOffset": 1000, "pageLimit": kwargs["page_limit"]},
@@ -4843,6 +4859,11 @@ def test_manual_goods_refresh_saves_external_spp_price_as_buyer_price(monkeypatc
 
     assert response.status_code == 200
     payload = response.json()
+    assert bool(external_calls) is not browser_selected
+    if browser_selected:
+        assert payload["externalSppMatchedCount"] == 0
+        assert "buyerPriceNoWalletKopecks" not in saved_goods[0][0]["sizes"][0]
+        return
     assert payload["externalSppMatchedCount"] == 1
     saved_size = saved_goods[0][0]["sizes"][0]
     assert saved_size["buyerPriceNoWalletKopecks"] == 148_900
