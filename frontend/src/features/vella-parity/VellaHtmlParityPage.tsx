@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, FileSpreadsheet
 import QRCode from 'qrcode'
 import { AuthContext, useAuth } from '@/features/auth/authContext'
 import { WbConnection } from '@/features/wb-live/WbConnection'
+import { WbBrowserPricesConnection } from '@/features/wb-repricer/WbBrowserPricesConnection'
 import { WbProducts } from '@/features/wb-live/WbProducts'
 import { CanonicalAvitoStatisticsPage, canonicalAvitoStatisticsEnabled } from '@/features/avito/CanonicalAvitoStatistics'
 import { CanonicalNotificationsIsland, canonicalNotificationsEnabled } from '@/features/notifications/CanonicalNotificationsIsland'
@@ -24380,6 +24381,7 @@ function SettingsProfileIsland({ replacementKey }: { replacementKey: string }) {
                   </div>
                 </div>
                 )}
+                {isProfileRoute ? <WbBrowserPricesConnection /> : null}
                 <div className="profile-token-card">
                   <div className="profile-token-head">
                     <div>
