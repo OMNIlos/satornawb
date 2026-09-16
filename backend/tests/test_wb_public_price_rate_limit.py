@@ -36,6 +36,7 @@ def test_rate_limited_catalog_keeps_observed_prices_and_stops_provider_calls(mon
     monkeypatch.setattr(router.repricer_bff_module, 'fetch_commission_tariffs', lambda *args, **kwargs: {})
     monkeypatch.setattr(sync, 'fetch_commission_tariffs', lambda *args, **kwargs: {})
     for module in (sync, router):
+        monkeypatch.setattr(module, 'browser_prices_selected', lambda _: False)
         monkeypatch.setattr(module, 'list_cached_goods', lambda _: [])
         monkeypatch.setattr(module, 'fetch_catalog_goods_page',
                             lambda *args, **kwargs: {'goods': deepcopy(page[kwargs['offset']:kwargs['offset'] + kwargs['limit']])})
