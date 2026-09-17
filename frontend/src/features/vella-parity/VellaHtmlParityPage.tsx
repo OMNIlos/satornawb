@@ -2466,13 +2466,18 @@ function statsAggregate(items: LiveRepricerStatsItem[], key: string): number | n
 function updateStatsTrends(items = statsVisibleItems()) {
   const previous = new Map(statsPreviousRows?.map((item) => [item.articleId, item]) || [])
   const pairs = items.filter((item) => previous.has(item.articleId))
-  const oldItems = pairs.map((item) => previous.get(item.articleId)!)
   document.querySelectorAll<HTMLElement>('#tab-repricer-stats th[data-stats-trend]').forEach((header) => {
     header.querySelector('.stats-trend')?.remove()
     if (!statsPreviousRows || !pairs.length) return
     const key = header.dataset.statsTrend || ''
-    const current = statsAggregate(pairs, key)
-    const prior = statsAggregate(oldItems, key)
+    const comparable = pairs.filter((item) => {
+      const old = previous.get(item.articleId)!
+      const funnelField = ['totalImpressions', 'totalClicks', 'baskets', 'cartToOrderCrPct', 'averagePriceKopecks'].includes(key)
+      if (funnelField && [item, old].some((row) => row.sources?.states?.baskets === 'partial')) return false
+      return statsAggregate([item], key) != null && statsAggregate([old], key) != null
+    })
+    const current = statsAggregate(comparable, key)
+    const prior = statsAggregate(comparable.map((item) => previous.get(item.articleId)!), key)
     if (current == null || prior == null || Math.abs(current - prior) < 1e-9) return
     const up = current > prior
     const arrow = document.createElement('span')

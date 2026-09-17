@@ -40,8 +40,9 @@ it('filters statistics and compares each visible SKU with the adjacent equal-len
       const items = [
         { articleId: 'A', brand: 'Alpha', managerId: 'm1', managerName: 'One', metrics: { impressions: prior ? 50 : 100 }, sources: {}, priceProtection: {}, decision: {} },
         { articleId: 'B', brand: 'Beta', managerId: 'm2', managerName: 'Two', metrics: { impressions: prior ? 20 : 10 }, sources: {}, priceProtection: {}, decision: {} },
+        { articleId: 'C', brand: 'Gamma', metrics: { impressions: prior ? 100 : null }, sources: {}, priceProtection: {}, decision: {} },
       ]
-      return route.fulfill({ json: { items, total: 2, summary: { baskets: 0, orders: 0 },
+      return route.fulfill({ json: { items, total: 3, summary: { baskets: 0, orders: 0 },
         dateFrom: prior ? '2026-07-25' : '2026-08-01', dateTo: prior ? '2026-07-31' : '2026-08-07' } })
     })
     await page.goto('http://satorna.test/wb/repricer/stats')
@@ -58,7 +59,7 @@ it('filters statistics and compares each visible SKU with the adjacent equal-len
     await page.locator('[data-stats-column-toggle="impressions"]').uncheck()
     expect(await page.locator('th[data-stats-column="impressions"]').isVisible()).toBe(false)
     await page.locator('#repricerStatsReset').click()
-    expect(await page.locator('#repricerStatsBody [data-report-row]:visible').count()).toBe(2)
+    expect(await page.locator('#repricerStatsBody [data-report-row]:visible').count()).toBe(3)
     expect(await page.locator('.stats-trend').innerText()).toBe('↑')
     expect(errors).toEqual([])
   } finally { await browser.close() }
