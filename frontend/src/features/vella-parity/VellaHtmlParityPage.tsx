@@ -45,6 +45,7 @@ import {
   type ReportRulesReadResponse,
 } from '@/features/wb-reports/reportRulesApi'
 import { lastClosedWbDay, resolvePresetPeriodRange } from '@/features/wb-repricer/presetPeriodAnchor'
+import { missingPeriodSources, preparePeriod } from '@/features/wb-repricer/preparePeriod'
 import {
   adaptCanonicalAbcReport,
   adaptCanonicalPnlReport,
@@ -6525,7 +6526,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
       const state = canonicalPeriod ? 'unknown' : coverageDay?.state ?? (coverageLoading ? 'loading' : 'missing')
       const inAllowedWindow = iso >= minCustomIso && iso <= todayIso
       const inCurrentMonth = date.getMonth() === firstOfMonth.getMonth()
-      const selectable = inAllowedWindow && (canonicalPeriod || Boolean(coverageDay) && state !== 'missing')
+      const selectable = inAllowedWindow && (activeTab === 'products' || canonicalPeriod || Boolean(coverageDay) && state !== 'missing')
       return {
         iso,
         label: String(date.getDate()),
@@ -6539,7 +6540,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
         isTo: iso === customToIso,
       }
     })
-  }, [calendarMonthIso, canonicalPeriod, coverageByDate, coverageLoading, customFromIso, customToIso, minCustomIso, todayIso])
+  }, [activeTab, calendarMonthIso, canonicalPeriod, coverageByDate, coverageLoading, customFromIso, customToIso, minCustomIso, todayIso])
   const canGoPrevMonth = addIsoMonths(calendarMonthIso, -1) >= monthStartIso(minCustomIso)
   const canGoNextMonth = addIsoMonths(calendarMonthIso, 1) <= monthStartIso(todayIso)
 
@@ -27104,7 +27105,13 @@ function ProductsKpiStripIsland() {
     : window.__vellaProductsSummary?.cogsKopecks !== null
   const cogsValue = kpi.revenueAvailable && cogsKnown ? `${formatProductsInteger(kpi.cogsRub)} ₽` : '—'
   const expensesValue = kpi.revenueAvailable && window.__vellaProductsSummary?.expensesKopecks !== null ? `${formatProductsInteger(kpi.expensesRub)} ₽` : '—'
-  const ordersValue = formatProductsInteger(kpi.ordersUnits)
+  const buyoutSummary = window.__vellaProductsSummary
+  const buyoutUnits = buyoutSummary?.buyoutUnits
+  const buyoutAmount = buyoutSummary?.buyoutAmountKopecks
+  const buyoutsKnown = Number.isSafeInteger(buyoutUnits) && Number.isSafeInteger(buyoutAmount)
+  const buyoutsValue = buyoutsKnown
+    ? `${formatProductsInteger(buyoutUnits!)} шт. / ${(buyoutAmount! / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`
+    : '— шт. / — ₽'
   const salesValue = kpi.revenueAvailable ? formatProductsInteger(kpi.salesUnits) : '—'
   const returnsValue = formatProductsInteger(kpi.returnsUnits)
   const adsValue = kpi.adsAvailable ? `${formatProductsInteger(kpi.adSpendRub)} ₽` : '—'
@@ -27125,11 +27132,11 @@ function ProductsKpiStripIsland() {
   const items = [
     ['Выручка за период', 'WB retailAmount: продажи минус возвраты за выбранный период, до вычета расходов', 'kpiRevenue', revenueValue, revenueDelta],
     [settlement ? 'Маржа, ₽ / %' : 'Маржа репрайсера, ₽ / %', settlement ? 'Окончательная выплата после удержаний WB − датированная себестоимость проданных товаров − налог от продаж. Расходы WB повторно не вычитаются. Процент от текущей выручки. Внутренние расходы компании сейчас исключены.' : 'Прежний расчёт: выручка WB + корректировка за единицу × продажи нетто − себестоимость − расходы − налог. Процент от текущей выручки. Новый контракт выплаты ещё не получен.', 'kpiMarginRub', marginValue, marginDelta],
-    ['Заказы, шт. / ₽', 'Количество из текущего источника заказов за выбранный период. Согласованная денежная сумма заказов не передаётся API; она не вычисляется по текущей цене.', 'kpiOrdersUnits', `${ordersValue} шт. / — ₽`, 'сумма заказов пока неизвестна'],
+    ['Выкуплено, шт. / ₽', 'Подтверждённые продажи из финансового отчёта WB за выбранный период: количество единиц и фактическая сумма продаж. Не оформленные заказы и не выплата продавцу. Возвраты показаны отдельно, здесь не вычитаются.', 'kpiOrdersUnits', buyoutsValue, buyoutsKnown ? 'выкупленные товары · возвраты отдельно' : 'данные выкупов ещё не загружены'],
     ['Продажи по себестоимости', settlement ? 'Датированная себестоимость × (продажи − возвраты) по дням периода' : 'Себестоимость из настроек SKU × (продажи − возвраты)', 'kpiCogs', cogsValue, 'с учётом возвратов'],
     ['Расходы ₽', 'Комиссия, логистика, хранение, приёмка, штрафы, удержания, эквайринг, реклама и прочие расходы', 'kpiExpenses', expensesValue, 'финансы и реклама'],
     ['Реклама ₽', 'Расход рекламы за выбранный период', 'kpiAdsSpend', adsValue, adsDelta],
-    ['Продажи нетто, шт', 'Продажи минус возвраты за выбранный период', 'kpiSalesUnits', salesValue, 'продажи − возвраты'],
+    ['Продажи шт', 'Продажи минус возвраты за выбранный период', 'kpiSalesUnits', salesValue, ''],
     ['Возвраты, шт', 'Количество возвратов за выбранный период', 'kpiReturnsUnits', returnsValue, 'возвраты покупателей'],
     ['Цен изменено за период', 'Сколько товаров обновили цену в выбранном периоде', 'kpiPriceChanges', formatProductsInteger(kpi.priceChanges), 'история изменений', true],
     ['Корзины за период', 'Добавления в корзину за выбранный период.', 'kpiBaskets', formatProductsInteger(kpi.totalBaskets), basketsPartial ? 'загружена часть периода' : 'сигнал спроса'],
@@ -29231,6 +29238,7 @@ async function loadProductsPageFromRuntime(
   accessToken: string,
   page = window.__vellaProductsListState?.page ?? 1,
   signal?: AbortSignal,
+  prepareMissing = true,
 ) {
   if (WB_ACCOUNT_PRODUCTS_ENABLED && (isCanonicalProductsRoute(window.location.pathname) || resolveParityRouteTarget(window.location.pathname, window.location.search).tab === 'products')) {
     throw new ApiError('Откройте товары выбранного аккаунта WB. Старое чтение этого экрана отключено.', 409, 'WB_ACCOUNT_REQUIRED')
@@ -29289,6 +29297,21 @@ async function loadProductsPageFromRuntime(
     isLatestLoad,
   )
   syncProductsKpisFromRuntime()
+  if (prepareMissing && import.meta.env.DEV && import.meta.env.VITE_LOCAL_PERIOD_AUTOLOAD === 'true') {
+    const sources = missingPeriodSources(payload.cache as Record<string, unknown> | undefined)
+    if (sources.length) {
+      window.showToast?.('Загружаем выбранный период из WB. Ожидайте завершения в статусе загрузки.', 'info')
+      try {
+        const ready = await preparePeriod(accessToken, productsPeriodRequest(), sources, isLatestLoad, signal)
+        if (ready && isLatestLoad()) return loadProductsPageFromRuntime(accessToken, requestedPage, signal, false)
+      } catch (error) {
+        if (isLatestLoad()) {
+          window.showToast?.(error instanceof Error ? error.message : 'Не удалось загрузить период', 'warning')
+          return loadProductsPageFromRuntime(accessToken, requestedPage, signal, false)
+        }
+      }
+    }
+  }
   return payload
 }
 

@@ -58,7 +58,7 @@ it('keeps current buyer columns separate and removes only the product margin col
       if (url.origin === 'http://satorna.test' && request.method() === 'GET') {
         if (url.pathname === '/api/v1/wb-repricer/sku') return route.fulfill({ json: {
           items, total: items.length, itemsReturned: items.length, page: 1, pageSize: 150,
-          summary: { skuCount: items.length }, cache: { totalCached: items.length, pagesCached: 1 },
+          summary: { skuCount: items.length, buyoutUnits: 6, buyoutAmountKopecks: 160001 }, cache: { totalCached: items.length, pagesCached: 1 },
         } })
         if (['/api/v1/wb-repricer/strategies/catalog', '/api/v1/wb-repricer/sku-groups', '/api/v1/wb-repricer/changelog'].includes(url.pathname)) return route.fulfill({ json: { items: [], total: 0 } })
         if (['/api/v1/wb-repricer/sync/status', '/api/v1/wb-repricer/worker/status'].includes(url.pathname)) return route.fulfill({ json: { state: 'completed', running: false, steps: [] } })
@@ -113,7 +113,8 @@ it('keeps current buyer columns separate and removes only the product margin col
     })
     expect(prices).toEqual(rows.map(row => ({ sku: row.sku, average: row.average / 100, buyer: row.buyer === null ? null : row.buyer / 100 })).sort((a, b) => a.sku.localeCompare(b.sku)))
     await page.locator('.products-kpi-more summary').click()
-    expect(await page.locator('#kpiOrdersUnits').innerText()).toContain('шт. / — ₽')
+    expect(compact(await page.locator('#kpiOrdersUnits').innerText())).toBe('6шт./1600,01₽')
+    expect(await page.locator('#kpiOrdersUnits').locator('..').innerText()).toContain('Выкуплено, шт. / ₽')
     expect(await page.locator('#kpiInSale').innerText()).toBe('—')
     const outputDir = path.join(root, 'output/playwright/all-products')
     await mkdir(outputDir, { recursive: true })

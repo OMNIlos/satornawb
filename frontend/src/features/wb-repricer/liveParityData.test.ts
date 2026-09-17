@@ -153,6 +153,10 @@ describe('mapLiveRepricerRowToParityProduct', () => {
       },
       analytics: {
         buyerPriceNoWalletKopecks: 142500,
+        wbStockUnits: 121,
+        circulationStockUnits: 613,
+        stockInWayToClient: 299,
+        stockInWayFromClient: 193,
         avgPriceWithSppKopecks: 150000,
         accountedBuyerPriceKopecks: 165000,
         buyerPriceWithWalletKopecks: 160000,
@@ -166,6 +170,10 @@ describe('mapLiveRepricerRowToParityProduct', () => {
     } as any, 0)
 
     expect(product.avgPriceSpp).toBe(1500)
+    expect(product.stock).toBe(121)
+    expect(product.circulationStock).toBe(613)
+    expect(product.stockToBuyer).toBe(299)
+    expect(product.stockFromBuyer).toBe(193)
     expect(product.buyerPriceNoWallet).toBe(1425)
     expect(product.priceWithSpp).toBe(1425)
     expect(product.priceFinal).toBe(1425)

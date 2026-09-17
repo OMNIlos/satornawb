@@ -2817,6 +2817,14 @@ def _merge_stock_product_totals(
         row["marketplaceStockUnits"] = max(int(row["totalStockUnits"]) - wb_stock_units, 0)
 
 
+def stock_circulation_units(stock: dict[str, Any] | None) -> int | None:
+    """Current inventory in circulation, never available-to-sell inventory."""
+    values = [(stock or {}).get(key) for key in ("wbStockUnits", "inWayToClient", "inWayFromClient")]
+    if any(type(value) is not int or value < 0 for value in values):
+        return None
+    return sum(values)
+
+
 def fetch_stock_aggregates(
     scenario: str,
     wb_token: str | None = None,
@@ -2864,8 +2872,13 @@ def fetch_stock_aggregates(
             row["wbStockUnits"] += quantity
             row["totalStockUnits"] = max(int(row.get("totalStockUnits") or 0), int(row.get("wbStockUnits") or 0))
             row["marketplaceStockUnits"] = max(int(row["totalStockUnits"]) - int(row.get("wbStockUnits") or 0), 0)
-            row["inWayToClient"] += int(item.get("inWayToClient") or 0)
-            row["inWayFromClient"] += int(item.get("inWayFromClient") or 0)
+            for direction in ("inWayToClient", "inWayFromClient"):
+                value = item.get(direction)
+                row[direction] = (
+                    row[direction] + value
+                    if row[direction] is not None and type(value) is int and value >= 0
+                    else None
+                )
             row["warehouses"] += 1
         if len(items) < limit:
             break
@@ -5118,6 +5131,9 @@ def _build_sku_row(
             "promotionName": active_promotion_name,
             "promotionId": _promotion_id(active_promotion) if active_promotion else None,
             "wbStockUnits": wb_stock_units,
+            "circulationStockUnits": stock_circulation_units(stock_aggregate),
+            "stockInWayToClient": (stock_aggregate or {}).get("inWayToClient"),
+            "stockInWayFromClient": (stock_aggregate or {}).get("inWayFromClient"),
             "stockState": "ok" if has_stock_data else ("fallback" if use_demo_data else "no_data"),
             "buyoutPct": buyout_pct_value,
             "buyoutSource": buyout_source if buyout_pct_value is not None else None,
@@ -5142,6 +5158,8 @@ def _build_sku_row(
                 "funnelOrderCount": int(previous_baskets.get("orderCount") or 0) if previous_baskets else None,
             } if previous_period_aggregate or previous_baskets else None,
             "periodStatsState": "ok" if has_period_data else ("fallback" if use_demo_data else "no_data"),
+            "buyoutUnits": finance_aggregate.get("salesUnits") if finance_aggregate else None,
+            "buyoutAmountKopecks": finance_aggregate.get("grossSalesKopecks") if finance_aggregate and not finance_aggregate.get("sellerRevenueMissingRows") else None,
             "salesUnits": sales_units,
             "returnsUnits": returns_units,
             "revenueKopecks": revenue_gross_kopecks,

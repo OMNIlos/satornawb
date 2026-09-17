@@ -2163,7 +2163,7 @@ def _list_repricer_skus_from_cached_sources(
     )
 
 
-SKU_LIST_SNAPSHOT_VERSION = 13
+SKU_LIST_SNAPSHOT_VERSION = 15
 SKU_LIST_SNAPSHOT_CHUNK_SIZE = 150
 
 
@@ -2591,6 +2591,16 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
+def _buyout_summary(rows: list[dict[str, Any]]) -> tuple[int | None, int | None]:
+    facts = [row.get("analytics") or {} for row in rows]
+    confirmed = [fact for fact in facts if fact.get("financeState") == "ok"]
+    if not confirmed:
+        return (None, None) if rows else (0, 0)
+    if any(type(fact.get(key)) is not int for fact in confirmed for key in ("buyoutUnits", "buyoutAmountKopecks")):
+        return None, None
+    return sum(fact["buyoutUnits"] for fact in confirmed), sum(fact["buyoutAmountKopecks"] for fact in confirmed)
+
+
 def _repricer_list_summary(
     rows: list[dict[str, Any]],
     *,
@@ -2780,6 +2790,9 @@ def _repricer_list_summary(
         "marginKopecks": margin_kopecks if not fact_tax_reasons else None,
         "cogsKopecks": cogs_kopecks,
         "expensesKopecks": expenses_kopecks,
+        "buyoutUnits": _buyout_summary(rows)[0],
+        "buyoutAmountKopecks": _buyout_summary(rows)[1],
+        "buyoutSource": "finance.sale.grossSalesKopecks",
         "ordersUnits": orders_units_total,
         "cancelledOrdersUnits": cancelled_orders_units,
         "funnelOrderCount": funnel_orders_units,
@@ -2999,6 +3012,8 @@ def _repricer_list_summary_from_source_caches(
                 "ordersUnits": funnel_order_count if funnel_order_count is not None else _int_or_zero(period.get("ordersUnits")),
                 "cancelledOrdersUnits": _int_or_zero(period.get("cancelledOrdersUnits")),
                 "funnelOrderCount": funnel_order_count,
+                "buyoutUnits": finance.get("salesUnits") if finance else None,
+                "buyoutAmountKopecks": finance.get("grossSalesKopecks") if finance and not finance.get("sellerRevenueMissingRows") else None,
                 "salesUnits": sales_units,
                 "returnsUnits": returns_units,
                 "revenueKopecks": revenue_kopecks,

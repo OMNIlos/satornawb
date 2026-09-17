@@ -126,6 +126,9 @@ export type LiveRepricerSkuRow = {
     promotionName?: string | null
     promotionId?: string | number | null
     wbStockUnits?: number | null
+    circulationStockUnits?: number | null
+    stockInWayToClient?: number | null
+    stockInWayFromClient?: number | null
     stockState?: 'ok' | 'fallback' | 'no_data'
     buyoutPct?: number | null
     baskets?: number | null
@@ -273,6 +276,9 @@ export type LiveRepricerLoadTrace = {
 }
 
 export type LiveRepricerSkuListSummary = {
+  buyoutUnits?: number | null
+  buyoutAmountKopecks?: number | null
+  buyoutSource?: string
   settlementFormulaVersion?: string
   settlementProfitKopecks?: number | null
   settlementCogsKopecks?: number | null
@@ -918,6 +924,12 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     basketsReason: row.analytics?.basketsReason ?? null,
     periodStatsState,
     stockState,
+    circulationStock: row.analytics?.circulationStockUnits ?? null,
+    circulationStockRub: row.analytics?.circulationStockUnits != null
+      ? row.analytics.circulationStockUnits * currentPrice : null,
+    stockWarehouse: row.analytics?.wbStockUnits ?? null,
+    stockToBuyer: row.analytics?.stockInWayToClient ?? null,
+    stockFromBuyer: row.analytics?.stockInWayFromClient ?? null,
     mg: commissionPct != null && row.analytics?.marginPct != null ? Math.round(row.analytics.marginPct) : null,
     mgRub: marginRub,
     bsk: baskets,

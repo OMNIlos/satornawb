@@ -25,3 +25,27 @@ def test_explicit_reads_allowed(method, host, path):
 ])
 def test_writes_and_unapproved_destinations_denied(method, url):
     assert not module.allowed_request(httpx.Request(method, url))
+
+
+def test_guard_blocks_sockets_outside_read_and_resets_after_error(monkeypatch):
+    import socket
+    monkeypatch.setattr(socket.socket, "connect", socket.socket.connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", socket.socket.connect_ex)
+    monkeypatch.setattr(httpx.Client, "send", httpx.Client.send)
+    calls = []
+    module.install_readonly_network_guard(lambda sock, address: calls.append(address), lambda sock, address: 0)
+    with socket.socket() as sock:
+        with pytest.raises(OSError):
+            sock.connect(("127.0.0.1", 1))
+    def transport(request):
+        with socket.socket() as sock:
+            sock.connect(("test-only", 443))
+        return httpx.Response(302, headers={"location": "https://example.com"})
+    with httpx.Client(transport=httpx.MockTransport(transport), follow_redirects=True) as client:
+        assert client.get("https://common-api.wildberries.ru/api/v1/seller-info").status_code == 302
+        with pytest.raises(RuntimeError):
+            client.post("https://discounts-prices-api.wildberries.ru/api/v2/upload/task")
+    assert calls == [("test-only", 443)]
+    with socket.socket() as sock:
+        with pytest.raises(OSError):
+            sock.connect(("127.0.0.1", 1))

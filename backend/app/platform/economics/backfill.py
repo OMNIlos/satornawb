@@ -707,6 +707,7 @@ def apply_cost_backfill(
     marketplace_account_id: int,
     snapshot: LegacyCostSnapshot,
     chunk_size: int = 100,
+    include_costs: bool = True,
 ) -> BackfillApplyResult:
     if chunk_size < 1:
         raise BackfillValidationError("chunk_size must be positive")
@@ -798,7 +799,7 @@ def apply_cost_backfill(
 
         service = CostsService(session, organization_id)
         for item, catalog_sku_id in identities:
-            for cost in item.costs:
+            for cost in item.costs if include_costs else ():
                 service.set_cost(
                     catalog_sku_id=catalog_sku_id,
                     amount_kopecks=cost.amount_kopecks,

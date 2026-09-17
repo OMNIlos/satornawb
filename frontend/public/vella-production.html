@@ -12886,12 +12886,12 @@ function bskCellHTML(p){
   return '<div class="bsk"><span class="bsk-num">' + p.bsk + ' ' + arr + '</span><div class="bsk-spark' + sparkCls + '">' + bars + '</div></div>';
 }
 function stockCellHTML(p){
-  if (p.stockState === 'no_data') return '<span class="metric-main" data-tip="Остатки появятся после успешного обновления WB Analytics stocks">нет данных</span>';
+  if (p.circulationStock == null) return '<span class="metric-main" data-tip="Не получены все составляющие: склад, в пути к покупателю и от покупателя">нет данных</span>';
   let cls = '';
-  if (p.stock === 0) cls = 'zero';
-  else if (p.stock <= 5) cls = 'crit';
-  else if (p.stock <= 20) cls = 'low';
-  return '<div class="metric-stack"><span class="stock ' + cls + '">' + p.stock + '</span><span class="metric-sub">' + fmt(p.stockRub) + ' ₽</span></div>';
+  if (p.circulationStock === 0) cls = 'zero';
+  else if (p.circulationStock <= 5) cls = 'crit';
+  else if (p.circulationStock <= 20) cls = 'low';
+  return '<div class="metric-stack" data-tip="Текущий снимок, не история выбранного периода. Склад: ' + p.stockWarehouse + '; к покупателю: ' + p.stockToBuyer + '; от покупателя: ' + p.stockFromBuyer + '. Сумма в рублях — оценка по текущей цене."><span class="stock ' + cls + '">' + p.circulationStock + '</span><span class="metric-sub">' + fmt(p.circulationStockRub) + ' ₽</span></div>';
 }
 function tplHTML(p){
   let inner;
@@ -13612,7 +13612,7 @@ function productSortValue(p, key){
     bsk: () => p.bsk ?? 0,
     ordersPeriod: () => p.ordersPeriod ?? 0,
     buyout: () => p.buyout ?? -1,
-    stock: () => p.stock ?? 0,
+    stock: () => p.circulationStock ?? -1,
     tpl: () => TPL[p.tpl]?.label || 'нет',
     __vellaBackendOrder: () => p.__vellaBackendOrder ?? 0,
   };

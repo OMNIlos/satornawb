@@ -31,8 +31,12 @@ os.environ.update(
 # button click. Listening and accepting localhost HTTP do not use connect().
 def deny_connect(*args, **kwargs):
     raise OSError("External actions disabled in isolated local preview")
-socket.socket.connect = deny_connect
-socket.socket.connect_ex = deny_connect
+if "--wb-readonly-data" in sys.argv:
+    from load_local_wb_readonly import install_readonly_network_guard
+    install_readonly_network_guard(socket.socket.connect, socket.socket.connect_ex)
+else:
+    socket.socket.connect = deny_connect
+    socket.socket.connect_ex = deny_connect
 
 from app.main import create_app
 from app.infra.db import create_all_for_local_dev
