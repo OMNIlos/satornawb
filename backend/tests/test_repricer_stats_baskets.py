@@ -99,7 +99,7 @@ def stats_runtime(monkeypatch):
     monkeypatch.setattr(wb_repricer_bff_router, "cached_goods_meta", lambda organization_id: {"totalCached": len(goods) if organization_id == 1 else 0})
     monkeypatch.setattr(wb_repricer_bff_router, "get_wb_sync_status", lambda _organization_id: {})
     monkeypatch.setattr(wb_repricer_bff_router, "legacy_finance_tax_revision", lambda _org: "fixture-tax")
-    monkeypatch.setattr(wb_repricer_bff_router, "get_legacy_finance_taxes", lambda *_args: {})
+    monkeypatch.setattr(wb_repricer_bff_router, "get_legacy_finance_taxes", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(wb_repricer_bff_router, "_hydrate_org_repricer_state", lambda _request: 1)
     monkeypatch.setattr(repricer_bff_module, "get_settings", lambda: settings)
     monkeypatch.setattr(repricer_bff_module, "fetch_commission_tariffs", _fail("commission provider must not be called"))
@@ -674,7 +674,7 @@ def test_products_rows_summary_and_stats_share_one_dated_tax_resolution(stats_ru
     goods[:] = [_good(index) for index in range(1, 177)]
     request(baskets=_source_payload({str(good["nmID"]): {"cartCount": 1} for good in goods}))
     calls = []
-    def taxes(org, cache, period):
+    def taxes(org, cache, period, **_kwargs):
         calls.append((org, cache["fetchedAt"], period.cache_key))
         return {key: {"taxKopecks": 0, "factTaxState": "configured", "factTaxReason": None}
                 for key in cache["aggregates"]}
@@ -705,7 +705,7 @@ def test_stats_keeps_actual_tax_and_profit_unknown_without_planned_substitution(
 def test_stats_retries_transient_tax_read_without_waiting_for_source_revision(stats_runtime, monkeypatch, products_ready):
     _goods, _storage, request = stats_runtime
     request(baskets=_source_payload({"10001": {"cartCount": 1}}))
-    monkeypatch.setattr(wb_repricer_bff_router, "get_legacy_finance_taxes", lambda *_args: {
+    monkeypatch.setattr(wb_repricer_bff_router, "get_legacy_finance_taxes", lambda *_args, **_kwargs: {
         "10001": {"taxKopecks": None, "factTaxState": "missing", "factTaxReason": "tax_policy_unavailable"},
     })
     if products_ready:
@@ -715,7 +715,7 @@ def test_stats_retries_transient_tax_read_without_waiting_for_source_revision(st
     unavailable = request(baskets=None, params={"topMode": "true"})
     assert unavailable["items"][0]["metrics"]["taxKopecks"] is None
     assert unavailable["items"][0]["metrics"]["factTaxReason"] == "tax_policy_unavailable"
-    monkeypatch.setattr(wb_repricer_bff_router, "get_legacy_finance_taxes", lambda *_args: {
+    monkeypatch.setattr(wb_repricer_bff_router, "get_legacy_finance_taxes", lambda *_args, **_kwargs: {
         "10001": {"taxKopecks": 0, "factTaxState": "configured", "factTaxReason": None},
     })
     recovered = request(baskets=None, params={"topMode": "true"})
