@@ -52,6 +52,22 @@ def _require(actor: ActorContext, permission: str) -> None:
         )
 
 
+def _require_cost_sku_scope(session: Session, actor: ActorContext, catalog_sku_id: int) -> None:
+    from app.infra.db import set_tenant_context
+    set_tenant_context(session, actor.organization_id)
+    membership = session.scalar(select(IamMembershipRow).where(
+        IamMembershipRow.organization_id == actor.organization_id,
+        IamMembershipRow.user_id == actor.user_id, IamMembershipRow.is_active.is_(True)))
+    if membership is None:
+        raise HTTPException(status_code=403, detail={"code": "NO_ACCESS"})
+    if membership.scope_mode != "all":
+        accounts = set(session.scalars(select(MarketplaceOfferRow.marketplace_account_id).where(
+            MarketplaceOfferRow.organization_id == actor.organization_id,
+            MarketplaceOfferRow.catalog_sku_id == catalog_sku_id)).all())
+        if not accounts or not accounts.issubset(set(membership.allowed_account_ids or [])):
+            raise HTTPException(status_code=403, detail={"code": "NO_ACCESS"})
+
+
 def _cost_view(cost: CostValue, *, visible: bool) -> CostView:
     if not visible:
         return CostView(valueState="restricted")
@@ -254,6 +270,7 @@ def post_catalog_sku_cost(
 ) -> DataEnvelope[CostView]:
     _require(actor, "catalog:read")
     _require(actor, "costs:write")
+    _require_cost_sku_scope(session, actor, catalogSkuId)
     try:
         row = CostsService(session, actor.organization_id).set_cost(
             catalog_sku_id=catalogSkuId,
@@ -290,21 +307,8 @@ def post_catalog_sku_current_cost(
     _require(actor, "catalog:read")
     _require(actor, "costs:read")
     _require(actor, "costs:write")
-    # A shared CatalogSku changes every linked offer, so require access to all
-    # affected accounts, not merely the account visible in the current table.
-    from app.infra.db import set_tenant_context
-    set_tenant_context(session, actor.organization_id)
-    membership = session.scalar(select(IamMembershipRow).where(
-        IamMembershipRow.organization_id == actor.organization_id,
-        IamMembershipRow.user_id == actor.user_id, IamMembershipRow.is_active.is_(True)))
-    if membership is None:
-        raise HTTPException(status_code=403, detail={"code": "NO_ACCESS"})
-    if membership.scope_mode != "all":
-        accounts = set(session.scalars(select(MarketplaceOfferRow.marketplace_account_id).where(
-            MarketplaceOfferRow.organization_id == actor.organization_id,
-            MarketplaceOfferRow.catalog_sku_id == catalogSkuId)).all())
-        if not accounts or not accounts.issubset(set(membership.allowed_account_ids or [])):
-            raise HTTPException(status_code=403, detail={"code": "NO_ACCESS"})
+    # A shared CatalogSku changes every linked offer.
+    _require_cost_sku_scope(session, actor, catalogSkuId)
     try:
         row = CostsService(session, actor.organization_id).set_current_cost(
             catalog_sku_id=catalogSkuId, amount_kopecks=payload.amountKopecks,

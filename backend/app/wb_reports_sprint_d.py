@@ -286,6 +286,51 @@ def _abc_funnel_impressions(row: dict[str, Any]) -> int | None:
     )
 
 
+def abc_spp_by_nm(
+    organization_id: int,
+    date_from: date,
+    date_to: date,
+    *,
+    fallback_cache: dict[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Last observed WB order SPP and its dated, sparse 14-day series."""
+    history_from = date_to - timedelta(days=13)
+    cache = _period_cache(organization_id, "period_stats", history_from, date_to)
+    daily = cache.get("dailyAggregates") if isinstance(cache, dict) else None
+    if not isinstance(daily, dict) or not daily:
+        fallback = fallback_cache or _period_cache(organization_id, "period_stats", date_from, date_to)
+        daily = fallback.get("dailyAggregates") if isinstance(fallback, dict) else None
+    if not isinstance(daily, dict):
+        return {}
+    observations: dict[str, dict[str, tuple[float, int | None]]] = {}
+    for day_key, day_rows in daily.items():
+        day = _parse_cache_date(day_key)
+        if day is None or not history_from <= day <= date_to or not isinstance(day_rows, dict):
+            continue
+        for nm_id, source in day_rows.items():
+            if not isinstance(source, dict):
+                continue
+            pct = _first_float_or_none(source, "sppPct")
+            if pct is None or not 0 <= pct <= 100:
+                continue
+            price = _first_nonnegative_int_or_none(source, "avgPriceWithSppKopecks")
+            observations.setdefault(str(nm_id), {})[day.isoformat()] = (round(pct, 2), price)
+    result: dict[str, dict[str, Any]] = {}
+    for nm_id, values in observations.items():
+        latest_day = max(values)
+        pct, price = values[latest_day]
+        result[nm_id] = {
+            "sppPct": pct,
+            "sppBuyerPriceKopecks": price,
+            "sppObservedOn": latest_day,
+            "sppHistory": [
+                {"date": day.isoformat(), "pct": values.get(day.isoformat(), (None, None))[0]}
+                for day in (history_from + timedelta(days=offset) for offset in range(14))
+            ],
+        }
+    return result
+
+
 def _abc_funnel_open_count(row: dict[str, Any]) -> int | None:
     return _first_nonnegative_int_or_none(row, "openCount", "openCardCount", "openCard")
 
@@ -721,13 +766,13 @@ def _sku_settings_from_state(
     cogs_effective_from: str | None = None
     cogs_key = {"F": "tshirt", "H": "hoodie", "L": "longsleeve"}.get(_article_type(article_id))
     cogs_by_garment = algorithm.get("cogsByGarmentRub")
-    if cogs_key and isinstance(cogs_by_garment, dict):
+    garment_history = (algorithm.get("cogsByGarmentHistory") or {}).get(cogs_key) if cogs_key else None
+    if cogs_key and isinstance(cogs_by_garment, dict) and (effective_on is None or not garment_history):
         cogs_rub = _float_or_none(cogs_by_garment.get(cogs_key))
         if cogs_rub and cogs_rub > 0:
             defaults["cogsKopecks"] = int(round(cogs_rub * 100))
             cogs_source = "algorithm_garment"
 
-    garment_history = (algorithm.get("cogsByGarmentHistory") or {}).get(cogs_key) if cogs_key else None
     if effective_on is not None and isinstance(garment_history, list):
         effective_entries = []
         for index, entry in enumerate(garment_history):
@@ -736,15 +781,16 @@ def _sku_settings_from_state(
             effective_from = _parse_cache_date(entry.get("effectiveFrom")) or date.min
             if effective_from <= effective_on:
                 effective_entries.append((effective_from, index, entry))
-        if effective_entries:
-            _effective_from, _index, entry = max(effective_entries, key=lambda item: item[:2])
+        baseline = next((entry for entry in garment_history if isinstance(entry, dict) and entry.get("source") == "observed_snapshot"), None)
+        if effective_entries or baseline:
+            entry = max(effective_entries, key=lambda item: item[:2])[2] if effective_entries else baseline
             cogs_rub = _float_or_none(entry.get("cogsRub"))
             if cogs_rub is not None and cogs_rub > 0:
                 defaults["cogsKopecks"] = int(round(cogs_rub * 100))
                 cogs_source = "algorithm_garment_history"
             else:
                 cogs_source = "type_default_after_algorithm_override"
-            cogs_effective_from = entry.get("effectiveFrom")
+            cogs_effective_from = entry.get("effectiveFrom") if effective_entries else None
 
     settings = {
         "cogsKopecks": int(defaults.get("cogsKopecks") or 0),
@@ -756,15 +802,15 @@ def _sku_settings_from_state(
     base_cogs_source = cogs_source
     base_cogs_effective_from = cogs_effective_from
     overrides = (runtime.get("skuSettingsOverrides") or {}).get(article_id)
+    history = (runtime.get("cogsHistory") or {}).get(article_id)
     if isinstance(overrides, dict):
         for key in ("cogsKopecks", "taxPct", "otherExpensePricePct", "otherExpensePerSaleKopecks"):
-            if overrides.get(key) is not None:
+            if overrides.get(key) is not None and (key != "cogsKopecks" or effective_on is None or not history):
                 settings[key] = overrides[key]
-        if overrides.get("cogsKopecks") is not None:
+        if overrides.get("cogsKopecks") is not None and (effective_on is None or not history):
             cogs_source = "sku_override"
             cogs_effective_from = None
 
-    history = (runtime.get("cogsHistory") or {}).get(article_id)
     if effective_on is not None and isinstance(history, list):
         effective_entries = []
         for index, entry in enumerate(history):
@@ -773,8 +819,9 @@ def _sku_settings_from_state(
             effective_from = _parse_cache_date(entry.get("effectiveFrom")) or date.min
             if effective_from <= effective_on:
                 effective_entries.append((effective_from, index, entry))
-        if effective_entries:
-            _effective_from, _index, entry = max(effective_entries, key=lambda item: item[:2])
+        baseline = next((entry for entry in history if isinstance(entry, dict) and entry.get("source") == "observed_snapshot"), None)
+        if effective_entries or baseline:
+            entry = max(effective_entries, key=lambda item: item[:2])[2] if effective_entries else baseline
             if entry.get("cogsKopecks") is not None:
                 settings["cogsKopecks"] = entry["cogsKopecks"]
                 cogs_source = "sku_history"
@@ -787,7 +834,7 @@ def _sku_settings_from_state(
                     else None
                 )
             if entry.get("cogsKopecks") is not None:
-                cogs_effective_from = entry.get("effectiveFrom")
+                cogs_effective_from = entry.get("effectiveFrom") if effective_entries else None
     settings["cogsSource"] = cogs_source
     settings["cogsEffectiveFrom"] = cogs_effective_from
     return settings
@@ -1870,6 +1917,7 @@ def _build_abc_report_from_snapshots(
     ads_aggregates = _cache_aggregates(ads_cache)
     period_stats_cache = _period_cache(organization_id, "period_stats", date_from, date_to)
     period_stats_aggregates = _cache_aggregates(period_stats_cache)
+    spp_by_nm = abc_spp_by_nm(organization_id, date_from, date_to, fallback_cache=period_stats_cache)
     baskets_cache = _period_cache(organization_id, "baskets", date_from, date_to)
     baskets_aggregates = _cache_aggregates(baskets_cache)
     stock_cache = _stock_cache(organization_id, date_from, date_to)
@@ -2045,6 +2093,7 @@ def _build_abc_report_from_snapshots(
             "category": str(good.get("subjectName") or good.get("subject") or baskets.get("category") or "Не задано"),
             "priceBeforeSppKopecks": price_before_spp,
             "priceWithSppKopecks": price_with_spp,
+            **spp_by_nm.get(str(nm_id), {}),
             "averageSalePriceKopecks": average_sale_price,
             "cogsPerUnitKopecks": cogs_per_unit,
             "cogsKopecks": cogs if finance_source_available else None,

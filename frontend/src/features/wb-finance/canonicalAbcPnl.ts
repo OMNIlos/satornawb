@@ -28,6 +28,10 @@ const snapshotSchema = z.object({
 const rowSchema = z.object({
   nmId: z.number().int().safe().positive().nullable(),
   sellerArticle: z.string().nullable(),
+  sppPct: z.number().min(0).max(100).nullable().optional(),
+  sppBuyerPriceKopecks: nullableInteger.optional(),
+  sppObservedOn: isoDate.nullable().optional(),
+  sppHistory: z.array(z.object({ date: isoDate, pct: z.number().min(0).max(100).nullable() }).strict()).optional(),
   catalogSkuId: z.number().int().safe().positive().nullable(),
   operationCount: z.number().int().safe().nonnegative(),
   revenueKopecks: z.number().int().safe(),
@@ -211,6 +215,7 @@ export function buildCanonicalAbcPnlPath(input: {
   period: CanonicalPeriod
   limit: number
   offset: number
+  includeSpp?: boolean
 }) {
   const params = new URLSearchParams({
     marketplaceAccountId: String(input.marketplaceAccountId),
@@ -219,6 +224,7 @@ export function buildCanonicalAbcPnlPath(input: {
     limit: String(input.limit),
     offset: String(input.offset),
   })
+  if (input.includeSpp) params.set('includeSpp', 'true')
   return `/api/v2/wb/reports/abc-pnl?${params.toString()}`
 }
 
@@ -251,6 +257,7 @@ export async function fetchCanonicalAbcPnl(input: {
   period: CanonicalPeriod
   signal?: AbortSignal
   pageSize?: number
+  includeSpp?: boolean
   request?: CanonicalRequest
 }): Promise<CanonicalAbcPnlPage> {
   const request = input.request ?? apiRequest
@@ -268,6 +275,7 @@ export async function fetchCanonicalAbcPnl(input: {
       period: input.period,
       limit: pageSize,
       offset,
+      includeSpp: input.includeSpp,
     })
     const payload = await request(path, {
       signal: input.signal,
@@ -347,7 +355,12 @@ export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage) {
     rows: page.items.map((item) => ({
       sku: item.sellerArticle,
       nmId: item.nmId,
+      sppPct: item.sppPct ?? null,
+      sppBuyerPriceKopecks: item.sppBuyerPriceKopecks ?? null,
+      sppObservedOn: item.sppObservedOn ?? null,
+      sppHistory: item.sppHistory ?? [],
       cogsKopecks: item.cogsKopecks,
+      cogsPerUnitKopecks: item.cogsKopecks !== null && item.netUnits > 0 ? Math.round(item.cogsKopecks / item.netUnits) : null,
       salesComposite: { units: item.netUnits, kopecks: item.revenueKopecks, deltaPct: null },
       adSpendKopecks: item.advertisingSpendKopecks,
       profitAfterLoyaltyKopecks: item.profitAfterLoyaltyKopecks,

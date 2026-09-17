@@ -2780,6 +2780,7 @@ def _abc_report_columns() -> list[dict[str, Any]]:
         {"key": "manager", "label": "Менеджер"},
         {"key": "priceBeforeSppKopecks", "label": "Цена до СПП", **right},
         {"key": "priceWithSppKopecks", "label": "Цена после СПП", **right},
+        {"key": "sppPct", "label": "СПП", **percent},
         {"key": "averageSalePriceKopecks", "label": "Средняя цена", **right},
         {"key": "cogsPerUnitKopecks", "label": "Себестоимость", **right},
         {"key": "grossMarginKopecks", "label": "Валовая маржа", **right},
@@ -3394,7 +3395,7 @@ BACKGROUND_REPORT_JOB_STALE_AFTER = timedelta(minutes=15)
 BACKGROUND_REPORT_QUEUED_STALE_AFTER = timedelta(seconds=30)
 DIGEST_CACHE_TTL = timedelta(hours=24)
 REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
-ABC_REPORT_PAYLOAD_VERSION = "v19"
+ABC_REPORT_PAYLOAD_VERSION = "v20"
 PNL_REPORT_PAYLOAD_VERSION = "v6"
 EXPENSES_REPORT_PAYLOAD_VERSION = "v1"
 RNP_REPORT_PAYLOAD_VERSION = "v4"

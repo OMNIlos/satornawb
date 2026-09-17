@@ -5001,6 +5001,10 @@ type AbcBackendRow = {
   priceKopecks?: number | null
   priceBeforeSppKopecks?: number | null
   priceWithSppKopecks?: number | null
+  sppPct?: number | null
+  sppBuyerPriceKopecks?: number | null
+  sppObservedOn?: string | null
+  sppHistory?: Array<{ date: string; pct: number | null }> | null
   cogsPerUnitKopecks?: number | null
   cogsKopecks?: number | null
   marginPct?: number | null
@@ -5352,6 +5356,7 @@ export const ABC_TABLE_COLUMNS: AbcTableColumn[] = [
   { label: 'Акция', sortKey: 'promo', column: 'promo', help: 'Участие товара в акции WB и статус по загруженным акциям/ценам.' },
   { label: 'Менеджер', sortKey: 'manager', column: 'manager', help: 'Ответственный менеджер. Если пусто, товар попадает в общий список без ответственного.' },
   { label: 'Цена до СПП', sortKey: 'price', column: 'price', className: 'num', help: 'Цена продавца до скидки постоянного покупателя. Берется из WB price source.' },
+  { label: 'СПП · 14 дней', sortKey: 'spp', column: 'spp', className: 'num', help: 'Последний СПП из заказов WB за 14 дней, цена покупателя в день наблюдения и дневная динамика. Дни без заказов не заполняются.' },
   { label: 'Себестоимость', sortKey: 'cogs', column: 'cogs', className: 'num', help: 'Себестоимость товара: закупка/печать/упаковка по настройкам SKU. Нужна для маржи и чистой прибыли.' },
   { label: 'Маржа ₽/%', sortKey: 'margin', column: 'margin', className: 'num', help: 'Маржа = цена продажи минус себестоимость и доступные удержания WB. Процент = маржа / цена продажи * 100%.' },
   { label: 'Показы', sortKey: 'views', column: 'impressions', className: 'num', help: 'Показы карточки по данным WB. Если WB API не отдал показатель, отображается прочерк.' },
@@ -6343,6 +6348,10 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
     managerId: row.managerId || '',
     price: formatAbcKopecks(price),
     spp: `с СПП ${formatAbcKopecks(priceWithSpp)}`,
+    sppPct: asAbcNumber(row.sppPct),
+    sppBuyerPrice: formatAbcKopecks(row.sppBuyerPriceKopecks),
+    sppObservedOn: row.sppObservedOn ?? '',
+    sppHistory: row.sppHistory ?? [],
     cogs: formatAbcKopecks(cogsPerUnit),
     type: abcSkuTypeFromBackend(row),
     margin: `${formatAbcKopecks(row.marginKopecks)} / ${marginPct === null ? '—' : formatAbcPct(marginPct)}`,
@@ -6554,6 +6563,7 @@ export function installAbcLiveDataBridge(accessToken: string | null, canonicalRo
               accessToken: authToken,
               marketplaceAccountId: canonicalRollout.marketplaceAccountId,
               period,
+              includeSpp: true,
               signal: controller.signal,
             }))
           : await loadLatestReportCache<AbcBackendReport>('abc', 'abc', authToken, 'sku', period, 'operational', {
@@ -6632,6 +6642,7 @@ function abcSortValue(row: AbcReportRow, key: string, originalIndex: number) {
     promo: () => row.promo,
     manager: () => row.manager,
     price: () => parseAbcNumber(row.price),
+    spp: () => Number(row.sppPct ?? -1),
     cogs: () => parseAbcNumber(row.cogs),
     margin: () => parseAbcNumber(row.margin),
     views: () => parseAbcNumber(row.views),
@@ -6769,9 +6780,26 @@ function renderAbcIdentityCells(ctx: AbcRowRenderContext) {
 }
 
 function renderAbcCommercialCells(ctx: AbcRowRenderContext) {
-  const { text } = ctx
+  const { row, text } = ctx
+  const sppPct = asAbcNumber(row.sppPct)
+  const history = (Array.isArray(row.sppHistory) ? row.sppHistory : [])
+    .filter((point): point is { date: string; pct: number | null } => !!point && typeof point === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(String((point as { date?: unknown }).date)))
+    .slice(-14)
+  const observed = history.filter((point) => typeof point.pct === 'number')
+  const previousPct = observed.length > 1 ? observed[observed.length - 2].pct : null
+  const change = sppPct !== null && previousPct !== null ? sppPct - previousPct : null
+  let prior: number | null = null
+  const bars = history.map((point) => {
+    const pct = typeof point.pct === 'number' && Number.isFinite(point.pct) ? point.pct : null
+    const direction = pct === null ? 'missing' : prior === null ? 'flat' : pct > prior ? 'up' : pct < prior ? 'down' : 'flat'
+    if (pct !== null) prior = pct
+    return `<i class="${direction}" style="height:${pct === null ? 12 : Math.min(100, Math.max(18, 20 + pct * 1.6))}%" title="${escapeHtml(point.date)}: ${pct === null ? 'нет заказов' : formatAbcPct(pct)}"></i>`
+  }).join('')
+  const arrow = change === null || change === 0 ? '' : `<span class="abc-spp-arrow ${change > 0 ? 'up' : 'down'}" title="К предыдущему дню с заказом">${change > 0 ? '▲' : '▼'} ${Math.abs(change).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} пп</span>`
+  const sppCell = sppPct === null ? '—' : `<strong>${formatAbcPct(sppPct)}</strong> ${arrow}<span class="sub">${text('sppBuyerPrice', '—')} · ${escapeHtml(text('sppObservedOn'))}</span>${bars ? `<span class="abc-spp-bars" role="img" aria-label="СПП по дням за 14 дней">${bars}</span>` : ''}`
   return [
     abcRowCell('abc-price-cell', `<strong>${text('price')}</strong><span class="sub">${text('spp')}</span>`, 'class="num"'),
+    abcRowCell('abc-spp-cell', sppCell, 'class="num abc-spp-cell"', 'data-tip="СПП по последним заказам WB; серый день означает отсутствие наблюдений"'),
     abcRowCell('abc-cogs-cell', text('cogs', '—'), 'class="num"', 'data-tip="Себестоимость за единицу из настроек SKU"'),
     abcRowCell('abc-margin-cell', `<span class="${text('marginCls')}" data-tip="Маржа после себестоимости, комиссии, логистики, хранения и рекламы">${text('margin')}</span><span class="sub">${text('delta')}</span>`, 'class="num"'),
   ].join('\n    ')
@@ -38887,6 +38915,15 @@ export function VellaHtmlParityPage() {
           width: max-content;
           table-layout: auto;
         }
+        .vella-html-parity-root #tab-abc .abc-spp-cell { min-width: 170px; text-align: left; }
+        .vella-html-parity-root #tab-abc .abc-spp-arrow { font-size: 11px; white-space: nowrap; }
+        .vella-html-parity-root #tab-abc .abc-spp-arrow.up { color: #059669; }
+        .vella-html-parity-root #tab-abc .abc-spp-arrow.down { color: #dc2626; }
+        .vella-html-parity-root #tab-abc .abc-spp-bars { display: flex; align-items: flex-end; gap: 2px; width: 145px; height: 28px; margin-top: 5px; }
+        .vella-html-parity-root #tab-abc .abc-spp-bars i { flex: 1; min-width: 3px; border-radius: 2px 2px 0 0; background: #94a3b8; }
+        .vella-html-parity-root #tab-abc .abc-spp-bars i.up { background: #16a34a; }
+        .vella-html-parity-root #tab-abc .abc-spp-bars i.down { background: #ef4444; }
+        .vella-html-parity-root #tab-abc .abc-spp-bars i.flat { background: #22c55e; }
         .vella-html-parity-root #tab-abc > .abc-table-workspace {
           width: calc(100% - 40px) !important;
           max-width: calc(100% - 40px) !important;

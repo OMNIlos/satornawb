@@ -65,7 +65,7 @@ export function buildPnlTableRows(rows: PnlRow[]): Cell[][] {
   })
 }
 
-type AbcRawRow = { sku?: string | null; nmId?: number | string | null; cogsPerUnitKopecks?: number | null; adSpendKopecks?: number | null; profitBeforeInternalExpensesKopecks?: number | null; blockerIds?: string[] | null }
+type AbcRawRow = { sku?: string | null; nmId?: number | string | null; sppPct?: number | null; cogsPerUnitKopecks?: number | null; adSpendKopecks?: number | null; profitBeforeInternalExpensesKopecks?: number | null; blockerIds?: string[] | null }
 type AbcDisplayRow = Record<string, unknown>
 export function buildAbcTableRows(rawRows: AbcRawRow[], displayRows: AbcDisplayRow[], snapshot: { count: number; rows: Array<{ row: AbcDisplayRow; originalIndex: number }> }, columns: string[]): Cell[][] {
   const seen = new Set<number>()
@@ -80,6 +80,7 @@ export function buildAbcTableRows(rawRows: AbcRawRow[], displayRows: AbcDisplayR
       position: [row.sku, row.name].filter(Boolean).join('\n'), wb: raw.nmId ?? null,
       status: String(row.status ?? ''), abc: String(row.abc ?? ''), action: String(row.action ?? ''),
       cogs: rubles(raw.cogsPerUnitKopecks), sales: String(row.sales ?? ''),
+      spp: raw.sppPct ?? null,
       ads: raw.adSpendKopecks == null ? null : String(row.ads ?? ''), net: rubles(raw.profitBeforeInternalExpensesKopecks),
       comment: raw.blockerIds?.length ? raw.blockerIds.join(' · ') : 'canonical',
     }

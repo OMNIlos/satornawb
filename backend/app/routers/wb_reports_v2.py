@@ -29,6 +29,7 @@ from app.platform.finance.access import (
 from app.platform.finance.schemas import FinancePeriodView, FinanceSnapshotView
 from app.platform.finance.service import FinanceAccountNotFound
 from app.platform.period import Period, PeriodValidationError
+from app.wb_reports_sprint_d import abc_spp_by_nm
 
 router = APIRouter(tags=["wb-reports-v2"])
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -61,14 +62,18 @@ def _view(
     page: AbcPnlPage,
     marketplace_account_id: int,
     resolved_now: datetime,
+    organization_id: int,
+    include_spp: bool,
 ) -> AbcPnlPageView:
     period = page.period
     snapshot = page.snapshot
+    spp_by_nm = abc_spp_by_nm(organization_id, period.date_from, period.date_to) if include_spp else {}
     return AbcPnlPageView(
         items=[
             AbcPnlRowView(
                 nmId=row.nm_id,
                 sellerArticle=row.seller_article,
+                **spp_by_nm.get(str(row.nm_id), {}),
                 catalogSkuId=row.catalog_sku_id,
                 operationCount=row.operation_count,
                 revenueKopecks=row.revenue_kopecks,
@@ -228,6 +233,7 @@ def get_wb_abc_pnl(
     dateTo: date | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    includeSpp: bool = Query(default=False),
 ) -> AbcPnlPageView:
     require_finance_read(actor)
     require_wb_account_scope(session, actor, marketplaceAccountId)
@@ -260,7 +266,7 @@ def get_wb_abc_pnl(
             status_code=404,
             detail={"code": "WB_ACCOUNT_NOT_FOUND", "message": str(exc)},
         ) from exc
-    return _view(page, marketplaceAccountId, resolved_now)
+    return _view(page, marketplaceAccountId, resolved_now, actor.organization_id, includeSpp)
 
 
 @router.post("/api/v2/wb/reports/table.xlsx")

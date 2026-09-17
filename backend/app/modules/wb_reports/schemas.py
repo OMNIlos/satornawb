@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -11,6 +12,10 @@ from app.platform.finance.schemas import FinancePeriodView, FinanceSnapshotView
 class AbcPnlRowView(BaseModel):
     nmId: int | None = Field(default=None, gt=0)
     sellerArticle: str | None = None
+    sppPct: float | None = None
+    sppBuyerPriceKopecks: int | None = None
+    sppObservedOn: date | None = None
+    sppHistory: list[dict[str, date | float | None]] = Field(default_factory=list)
     catalogSkuId: int | None = Field(default=None, gt=0)
     operationCount: int = Field(ge=0)
     revenueKopecks: int
