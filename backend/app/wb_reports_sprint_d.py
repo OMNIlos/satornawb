@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha1
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 from vella_wb_19_05.models import (
@@ -293,19 +294,22 @@ def abc_spp_by_nm(
     *,
     fallback_cache: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Last observed WB order SPP and its dated, sparse 14-day series."""
-    history_from = date_to - timedelta(days=13)
-    cache = _period_cache(organization_id, "period_stats", history_from, date_to)
+    """Current buyer-price SPP, with dated WB order observations as fallback."""
+    today = datetime.now(ZoneInfo("Europe/Moscow")).date()
+    show_current = date_to >= today - timedelta(days=1)
+    history_to = today if show_current else date_to
+    history_from = history_to - timedelta(days=13)
+    cache = _period_cache(organization_id, "period_stats", history_from, history_to)
     daily = cache.get("dailyAggregates") if isinstance(cache, dict) else None
     if not isinstance(daily, dict) or not daily:
         fallback = fallback_cache or _period_cache(organization_id, "period_stats", date_from, date_to)
         daily = fallback.get("dailyAggregates") if isinstance(fallback, dict) else None
     if not isinstance(daily, dict):
-        return {}
+        daily = {}
     observations: dict[str, dict[str, tuple[float, int | None]]] = {}
     for day_key, day_rows in daily.items():
         day = _parse_cache_date(day_key)
-        if day is None or not history_from <= day <= date_to or not isinstance(day_rows, dict):
+        if day is None or not history_from <= day <= history_to or not isinstance(day_rows, dict):
             continue
         for nm_id, source in day_rows.items():
             if not isinstance(source, dict):
@@ -315,6 +319,26 @@ def abc_spp_by_nm(
                 continue
             price = _first_nonnegative_int_or_none(source, "avgPriceWithSppKopecks")
             observations.setdefault(str(nm_id), {})[day.isoformat()] = (round(pct, 2), price)
+    live_nm_ids: set[str] = set()
+    if show_current:
+        now = datetime.now(timezone.utc)
+        for good in list_cached_goods(organization_id):
+            nm_id = _int_or_zero(good.get("nmID") or good.get("nmId"))
+            sizes = good.get("sizes") if isinstance(good.get("sizes"), list) else []
+            size = sizes[0] if sizes and isinstance(sizes[0], dict) else {}
+            observed = _parse_cache_datetime(size.get("buyerPriceObservedAt") or good.get("buyerPriceObservedAt"))
+            seller = _good_seller_price_kopecks(good)
+            buyer = _good_buyer_price_no_wallet_kopecks(good)
+            if (nm_id <= 0 or observed is None or now - observed > timedelta(hours=36)
+                or observed > now or not seller or buyer is None
+                or size.get("buyerPriceSellerKopecks") not in (None, seller)):
+                continue
+            pct = round((seller - buyer) / seller * 100, 2)
+            if not 0 <= pct <= 100:
+                continue
+            day_key = observed.astimezone(ZoneInfo("Europe/Moscow")).date().isoformat()
+            observations.setdefault(str(nm_id), {})[day_key] = (pct, buyer)
+            live_nm_ids.add(str(nm_id))
     result: dict[str, dict[str, Any]] = {}
     for nm_id, values in observations.items():
         latest_day = max(values)
@@ -327,6 +351,7 @@ def abc_spp_by_nm(
                 {"date": day.isoformat(), "pct": values.get(day.isoformat(), (None, None))[0]}
                 for day in (history_from + timedelta(days=offset) for offset in range(14))
             ],
+            "sppSource": "current_buyer_price" if nm_id in live_nm_ids else "supplier.orders.spp",
         }
     return result
 

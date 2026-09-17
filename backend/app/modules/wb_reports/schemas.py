@@ -15,6 +15,7 @@ class AbcPnlRowView(BaseModel):
     sppPct: float | None = None
     sppBuyerPriceKopecks: int | None = None
     sppObservedOn: date | None = None
+    sppSource: str | None = None
     sppHistory: list[dict[str, date | float | None]] = Field(default_factory=list)
     catalogSkuId: int | None = Field(default=None, gt=0)
     operationCount: int = Field(ge=0)

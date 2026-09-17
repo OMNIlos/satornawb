@@ -5004,6 +5004,7 @@ type AbcBackendRow = {
   sppPct?: number | null
   sppBuyerPriceKopecks?: number | null
   sppObservedOn?: string | null
+  sppSource?: string | null
   sppHistory?: Array<{ date: string; pct: number | null }> | null
   cogsPerUnitKopecks?: number | null
   cogsKopecks?: number | null
@@ -5356,7 +5357,7 @@ export const ABC_TABLE_COLUMNS: AbcTableColumn[] = [
   { label: 'Акция', sortKey: 'promo', column: 'promo', help: 'Участие товара в акции WB и статус по загруженным акциям/ценам.' },
   { label: 'Менеджер', sortKey: 'manager', column: 'manager', help: 'Ответственный менеджер. Если пусто, товар попадает в общий список без ответственного.' },
   { label: 'Цена до СПП', sortKey: 'price', column: 'price', className: 'num', help: 'Цена продавца до скидки постоянного покупателя. Берется из WB price source.' },
-  { label: 'СПП · 14 дней', sortKey: 'spp', column: 'spp', className: 'num', help: 'Последний СПП из заказов WB за 14 дней, цена покупателя в день наблюдения и дневная динамика. Дни без заказов не заполняются.' },
+  { label: 'СПП · 14 дней', sortKey: 'spp', column: 'spp', className: 'num', help: 'Текущий СПП из сохранённой цены покупателя; при её отсутствии — последнее наблюдение в заказах WB. График показывает только дни с данными.' },
   { label: 'Себестоимость', sortKey: 'cogs', column: 'cogs', className: 'num', help: 'Себестоимость товара: закупка/печать/упаковка по настройкам SKU. Нужна для маржи и чистой прибыли.' },
   { label: 'Маржа ₽/%', sortKey: 'margin', column: 'margin', className: 'num', help: 'Маржа = цена продажи минус себестоимость и доступные удержания WB. Процент = маржа / цена продажи * 100%.' },
   { label: 'Показы', sortKey: 'views', column: 'impressions', className: 'num', help: 'Показы карточки по данным WB. Если WB API не отдал показатель, отображается прочерк.' },
@@ -6351,6 +6352,7 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
     sppPct: asAbcNumber(row.sppPct),
     sppBuyerPrice: formatAbcKopecks(row.sppBuyerPriceKopecks),
     sppObservedOn: row.sppObservedOn ?? '',
+    sppSource: row.sppSource ?? '',
     sppHistory: row.sppHistory ?? [],
     cogs: formatAbcKopecks(cogsPerUnit),
     type: abcSkuTypeFromBackend(row),
@@ -6799,7 +6801,7 @@ function renderAbcCommercialCells(ctx: AbcRowRenderContext) {
   const sppCell = sppPct === null ? '—' : `<strong>${formatAbcPct(sppPct)}</strong> ${arrow}<span class="sub">${text('sppBuyerPrice', '—')} · ${escapeHtml(text('sppObservedOn'))}</span>${bars ? `<span class="abc-spp-bars" role="img" aria-label="СПП по дням за 14 дней">${bars}</span>` : ''}`
   return [
     abcRowCell('abc-price-cell', `<strong>${text('price')}</strong><span class="sub">${text('spp')}</span>`, 'class="num"'),
-    abcRowCell('abc-spp-cell', sppCell, 'class="num abc-spp-cell"', 'data-tip="СПП по последним заказам WB; серый день означает отсутствие наблюдений"'),
+    abcRowCell('abc-spp-cell', sppCell, 'class="num abc-spp-cell"', `data-tip="${text('sppSource') === 'current_buyer_price' ? 'Текущий СПП по цене покупателя' : 'СПП из последнего заказа WB'}; серый день означает отсутствие наблюдений"`),
     abcRowCell('abc-cogs-cell', text('cogs', '—'), 'class="num"', 'data-tip="Себестоимость за единицу из настроек SKU"'),
     abcRowCell('abc-margin-cell', `<span class="${text('marginCls')}" data-tip="Маржа после себестоимости, комиссии, логистики, хранения и рекламы">${text('margin')}</span><span class="sub">${text('delta')}</span>`, 'class="num"'),
   ].join('\n    ')
