@@ -3153,12 +3153,14 @@ def _sales_funnel_metrics(source: dict[str, Any]) -> dict[str, Any]:
         "showCountTotal",
         "impressionCount",
     )
+    wishlist_count = _first_number(source, "addToWishlist", "addToWishlistCount")
     return {
         "cartCount": int(cart_count) if cart_count is not None else None,
         "orderCount": int(order_count) if order_count is not None else None,
         "orderSumKopecks": _first_kopecks(source, "orderSum", "ordersSumRub", "ordersSum"),
         "openCount": int(_first_number(source, "openCount", "openCardCount", "openCard") or 0),
         "impressions": int(impressions) if impressions is not None else None,
+        "wishlistCount": int(wishlist_count) if wishlist_count is not None else None,
         "buyoutCount": buyout_count,
         "buyoutSumKopecks": _first_kopecks(source, "buyoutSum", "buyoutsSumRub", "buyoutsSum"),
         "buyoutPct": buyout_pct,

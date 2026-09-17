@@ -96,6 +96,9 @@ def test_build_rnp_snapshot_merges_cached_sales_funnel_with_ads(monkeypatch):
 
     assert snapshot.rows[0].nmId == 123456
     assert snapshot.rows[0].openCount == 100
+    assert snapshot.rows[0].impressions is None
+    assert snapshot.rows[0].ctrPct is None
+    assert snapshot.rows[0].wishlistCount is None
     assert snapshot.rows[0].adClicks == 8
     assert snapshot.rows[0].adSpendKopecks == 10000
     assert snapshot.rows[0].organicOrderCountEstimated == 8
@@ -104,7 +107,7 @@ def test_build_rnp_snapshot_merges_cached_sales_funnel_with_ads(monkeypatch):
     assert snapshot.rows[0].tacooPct == 1.0
     assert snapshot.rows[0].organicEstimate is True
     assert "estimated_organic" in snapshot.rows[0].reasons
-    assert "rnp_report_v5_2026-06-01_2026-06-07_sku" in saved_payloads
+    assert "rnp_report_v6_2026-06-01_2026-06-07_sku" in saved_payloads
 
 
 def test_build_rnp_snapshot_reads_ad_prefixed_metrics_from_period_cache(monkeypatch):
@@ -118,7 +121,9 @@ def test_build_rnp_snapshot_reads_ad_prefixed_metrics_from_period_cache(monkeypa
                 "aggregates": {
                     "123456": {
                         "openCount": 100,
+                        "impressions": 1_000,
                         "cartCount": 20,
+                        "wishlistCount": 3,
                         "orderCount": 10,
                         "orderSumKopecks": 1_000_000,
                     }
@@ -154,6 +159,9 @@ def test_build_rnp_snapshot_reads_ad_prefixed_metrics_from_period_cache(monkeypa
     )
 
     row = snapshot.rows[0]
+    assert row.impressions == 1_000
+    assert row.ctrPct == 10.0
+    assert row.wishlistCount == 3
     assert row.adImpressions == 40
     assert row.adClicks == 8
     assert row.adCartAdds == 4
@@ -168,7 +176,7 @@ def test_build_rnp_snapshot_reads_report_cache_without_refetching_wb(monkeypatch
     ).model_dump(mode="json")
 
     def fake_get_source_cache(_organization_id: int, source_key: str, slim: bool = True):
-        if source_key == "rnp_report_v5_2026-06-01_2026-06-07_sku":
+        if source_key == "rnp_report_v6_2026-06-01_2026-06-07_sku":
             return {
                 "rows": [cached_row],
                 "sourceStatus": "partial",
@@ -357,7 +365,7 @@ def test_build_rnp_snapshot_does_not_create_ads_only_rows_when_funnel_is_blocked
     assert snapshot.diagnostics["summary"]["adsOnlySkuCount"] == 0
     assert snapshot.diagnostics["sources"][0]["status"] == "blocked"
     assert "WB_SALES_FUNNEL_FAILED:429" in snapshot.diagnostics["sources"][0]["errors"][0]
-    payload = saved_payloads["rnp_report_v5_2026-06-01_2026-07-01_sku"]
+    payload = saved_payloads["rnp_report_v6_2026-06-01_2026-07-01_sku"]
     assert payload["rows"] == []
 
 

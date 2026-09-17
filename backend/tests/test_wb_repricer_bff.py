@@ -2378,7 +2378,9 @@ def test_baskets_sales_funnel_accepts_count_aliases_from_wb(monkeypatch):
                                 "statistic": {
                                     "selected": {
                                         "openCardCount": 380,
+                                        "viewCount": 1_900,
                                         "addToCartCount": 64,
+                                        "addToWishlist": 12,
                                         "ordersCount": 27,
                                         "ordersSumRub": 48120,
                                         "buyoutsCount": 19,
@@ -2406,6 +2408,8 @@ def test_baskets_sales_funnel_accepts_count_aliases_from_wb(monkeypatch):
 
     aggregate = payload["aggregates"]["101"]
     assert aggregate["openCount"] == 380
+    assert aggregate["impressions"] == 1_900
+    assert aggregate["wishlistCount"] == 12
     assert aggregate["cartCount"] == 64
     assert aggregate["orderCount"] == 27
     assert aggregate["orderSumKopecks"] == 4_812_000

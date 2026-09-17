@@ -227,8 +227,10 @@ class RnpRow(BaseModel):
     managerId: Optional[str]
     activeRule: Optional[str] = None
     openCount: Optional[int] = Field(default=None, ge=0)
+    impressions: Optional[int] = Field(default=None, ge=0)
     openCountDeltaPct: Optional[float] = None
     cartCount: Optional[int] = Field(default=None, ge=0)
+    wishlistCount: Optional[int] = Field(default=None, ge=0)
     cartCountDeltaPct: Optional[float] = None
     orderCount: Optional[int] = Field(default=None, ge=0)
     orderCountDeltaPct: Optional[float] = None

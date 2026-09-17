@@ -13,7 +13,7 @@ from app.wb_api.ads_runtime import AdsAttributionRow
 from app.wb_api.client import RateLimitedWbApiClient, WbApiRequest, build_wb_analytics_client
 
 
-RNP_REPORT_CACHE_VERSION = "v5"
+RNP_REPORT_CACHE_VERSION = "v6"
 RNP_FUNNEL_CACHE_VERSION = "v2"
 RNP_FUNNEL_PAGE_LIMIT = 1000
 RNP_FUNNEL_MAX_ATTEMPTS = 3
@@ -266,7 +266,9 @@ def _normalize_sales_funnel_product(item: dict[str, Any]) -> dict[str, Any] | No
         "brandName": product.get("brandName") or product.get("brand"),
         "categoryName": product.get("subjectName"),
         "openCount": _nonnegative(_first_value(selected, "openCount", "openCardCount", "openCard")),
+        "impressions": _as_optional_nonnegative(_first_value(selected, "viewCount", "viewCountTotal", "views", "impressions", "showCount")),
         "cartCount": _nonnegative(_first_value(selected, "cartCount", "addToCartCount", "addToCart")),
+        "wishlistCount": _as_optional_nonnegative(_first_value(selected, "addToWishlist", "addToWishlistCount")),
         "orderCount": _nonnegative(_first_value(selected, "orderCount", "ordersCount", "orders")),
         "orderSumKopecks": _rub_to_kopecks(order_sum),
         "buyoutCount": _nonnegative(_first_value(selected, "buyoutCount", "buyoutsCount", "buyouts")),
@@ -406,6 +408,7 @@ def _cached_funnel_rows(organization_id: int, date_from: date, date_to: date) ->
         order_count = _nonnegative(_first_value(aggregate, "orderCount", "ordersCount", "orders"))
         cart_count = _nonnegative(_first_value(aggregate, "cartCount", "cartAdds", "addToCartCount", "addToCart", "baskets"))
         open_count = _nonnegative(_first_value(aggregate, "openCount", "openCardCount", "openCard"))
+        impressions = _as_optional_nonnegative(_first_value(aggregate, "impressions", "viewCount", "views"))
         buyout_count = _nonnegative(_first_value(aggregate, "buyoutCount", "buyoutsCount", "buyouts", "salesUnits"))
         rows.append(
             {
@@ -415,7 +418,9 @@ def _cached_funnel_rows(organization_id: int, date_from: date, date_to: date) ->
                 "brandName": aggregate.get("brandName") or aggregate.get("brand"),
                 "categoryName": aggregate.get("categoryName") or aggregate.get("subjectName") or aggregate.get("subject"),
                 "openCount": open_count,
+                "impressions": impressions,
                 "cartCount": cart_count,
+                "wishlistCount": _as_optional_nonnegative(_first_value(aggregate, "wishlistCount", "addToWishlist", "addToWishlistCount")),
                 "orderCount": order_count,
                 "orderSumKopecks": _nonnegative(_first_value(aggregate, "orderSumKopecks", "ordersKopecks")),
                 "buyoutCount": buyout_count,
@@ -789,6 +794,7 @@ def _rnp_row_from_sources(
     nm_id = _nonnegative(funnel.get("nmId"))
     sku = str(funnel.get("sku") or nm_id)
     open_count = _nonnegative(funnel.get("openCount"))
+    impressions = _as_optional_nonnegative(funnel.get("impressions"))
     cart_count = _nonnegative(funnel.get("cartCount"))
     order_count = _nonnegative(funnel.get("orderCount"))
     order_sum = _nonnegative(funnel.get("orderSumKopecks"))
@@ -826,8 +832,10 @@ def _rnp_row_from_sources(
         managerId=None,
         activeRule=None,
         openCount=open_count,
+        impressions=impressions,
         openCountDeltaPct=_as_float(funnel.get("openCountDeltaPct")),
         cartCount=cart_count,
+        wishlistCount=_as_optional_nonnegative(funnel.get("wishlistCount")),
         cartCountDeltaPct=_as_float(funnel.get("cartCountDeltaPct")),
         orderCount=order_count,
         orderCountDeltaPct=_as_float(funnel.get("orderCountDeltaPct")),
@@ -836,7 +844,7 @@ def _rnp_row_from_sources(
         buyoutCount=_nonnegative(funnel.get("buyoutCount")),
         buyoutSumKopecks=_nonnegative(funnel.get("buyoutSumKopecks")),
         buyoutPct=_as_float(funnel.get("buyoutPct")),
-        ctrPct=None,
+        ctrPct=_pct(open_count, impressions or 0),
         atcrPct=_as_float(funnel.get("atcrPct")),
         cartToOrderPct=_as_float(funnel.get("cartToOrderPct")),
         adImpressions=ad_impressions,

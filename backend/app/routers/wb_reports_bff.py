@@ -2989,8 +2989,8 @@ def _map_rnp_to_report_response(payload: Any, date_range: dict[str, str]) -> dic
             "deltaPct": item.get("orderCountDeltaPct"),
         }
         item["salesComposite"] = {
-            "units": item.get("buyoutCount") or item.get("orderCount") or 0,
-            "kopecks": item.get("buyoutSumKopecks") or item.get("orderSumKopecks") or 0,
+            "units": item.get("buyoutCount"),
+            "kopecks": item.get("buyoutSumKopecks"),
             "deltaPct": item.get("orderSumDeltaPct"),
         }
         item["sourceStatus"] = item.get("sourceStatus") or payload.sourceStatus
@@ -3034,9 +3034,13 @@ def _map_rnp_to_report_response(payload: Any, date_range: dict[str, str]) -> dic
             {"key": "productName", "label": "Товар"},
             {"key": "warehouseName", "label": "Основной склад WB"},
             {"key": "warehouses", "label": "Активные склады WB"},
+            {"key": "impressions", "label": "Показы"},
             {"key": "openCount", "label": "Переходы"},
+            {"key": "ctrPct", "label": "CTR из показов в клики, %"},
             {"key": "openCountDeltaPct", "label": "Дельта переходов"},
             {"key": "cartCount", "label": "Корзины"},
+            {"key": "atcrPct", "label": "CR из карточки в корзину, %"},
+            {"key": "wishlistCount", "label": "Добавили в отложенные"},
             {"key": "cartCountDeltaPct", "label": "Дельта корзин"},
             {"key": "ordersComposite", "label": "Заказы"},
             {"key": "salesComposite", "label": "Продажи"},
@@ -3393,7 +3397,7 @@ REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
 ABC_REPORT_PAYLOAD_VERSION = "v19"
 PNL_REPORT_PAYLOAD_VERSION = "v6"
 EXPENSES_REPORT_PAYLOAD_VERSION = "v1"
-RNP_REPORT_PAYLOAD_VERSION = "v3"
+RNP_REPORT_PAYLOAD_VERSION = "v4"
 STOCK_REPORT_PAYLOAD_VERSION = "v5"
 WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v4"
 

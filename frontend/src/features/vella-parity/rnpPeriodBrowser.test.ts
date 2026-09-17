@@ -52,6 +52,9 @@ it('hides the old RNP period while the next scoped cache response is pending', a
         rows: Array.from({ length: 51 }, (_, index) => ({
           sku: index === 0 ? second ? 'SECOND-PERIOD-SKU' : 'FIRST-PERIOD-SKU' : `EXTRA-${second ? 'SECOND' : 'FIRST'}-${index + 1}`,
           productName: 'Synthetic product', nmId: 101 + index,
+          ...(index === 0 ? { impressions: 100, openCount: 10, ctrPct: 10, cartCount: 4, atcrPct: 40,
+            wishlistCount: 2, orderCount: 1, orderSumKopecks: 12_345, cartToOrderPct: 25,
+            buyoutCount: 0, buyoutSumKopecks: 0 } : {}),
           photoUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
         })),
         kpis: [], formulaNotes: [], sourceEvidence: [], reportJob: null,
@@ -75,6 +78,23 @@ it('hides the old RNP period while the next scoped cache response is pending', a
     expect(await first.count()).toBe(0)
     const dataRows = page.locator('#tab-rnp [data-report-row="rnp"]:visible')
     expect(await dataRows.count()).toBe(50)
+    expect(await page.locator('#tab-rnp [data-vella-island="rnp-kpi-strip"]').count()).toBe(0)
+    const headers = (await page.locator('#tab-rnp thead th').allTextContents()).map(text => text.replace('?', '').trim())
+    expect(headers.indexOf('Показы') + 1).toBe(headers.indexOf('Перешли в карточку'))
+    expect(headers.indexOf('Клики / CTR рекламы') + 1).toBe(headers.indexOf('Реклама'))
+    expect(headers).toContain('Добавили в отложенные')
+    expect(headers).toContain('CR из карточки в корзину, %')
+    expect(headers).toContain('CR в заказ, %')
+    expect(headers).not.toContain('Заказали на сумму')
+    expect(headers).not.toContain('Выкупили на сумму')
+    const firstCells = dataRows.first().locator('td')
+    expect(await firstCells.count()).toBe(headers.length)
+    expect(await page.locator('#tab-rnp [data-vella-island="rnp-live-table-body"] > tr:last-child td').getAttribute('colspan')).toBe(String(headers.length))
+    expect(await firstCells.nth(headers.indexOf('Показы')).innerText()).toBe('100')
+    expect(await firstCells.nth(headers.indexOf('CTR из показов в клики, %')).innerText()).toBe('10%')
+    expect(await firstCells.nth(headers.indexOf('Добавили в отложенные')).innerText()).toBe('2')
+    expect(await firstCells.nth(headers.indexOf('Заказали, шт / сумма')).innerText()).toContain('123 ₽')
+    expect(await firstCells.nth(headers.indexOf('Выкупили, шт / сумма')).innerText()).toContain('0 ₽')
     const search = page.locator('#tab-rnp .search input')
     await search.fill('EXTRA-SECOND-51')
     await expect.poll(() => dataRows.count()).toBe(1)

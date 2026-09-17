@@ -33,6 +33,26 @@ from app.wb_api.reports_sources_runtime import WbStockRow
 from tests.auth_helpers import auth_headers
 
 
+def test_rnp_buyout_composite_keeps_zero_instead_of_copying_orders():
+    from app.routers.wb_reports_bff import _map_rnp_to_report_response
+    from app.wb_api.rnp_runtime import _rnp_row_from_sources
+
+    row = _rnp_row_from_sources(
+        {"nmId": 101, "sku": "SKU-101", "orderCount": 7, "orderSumKopecks": 100_000,
+         "buyoutCount": 0, "buyoutSumKopecks": 0},
+        None, "partial", "medium",
+    )
+    payload = SimpleNamespace(
+        rows=[row], sourceStatus="partial", groupBy="sku", adSpendKopecks=0,
+        formulaNotes=[], sourceEvidence=[], adsSourceStatus="partial", diagnostics={},
+    )
+
+    mapped = _map_rnp_to_report_response(payload, {"preset": "custom", "from": "2026-09-17", "to": "2026-09-17"})
+
+    assert mapped["rows"][0]["ordersComposite"] == {"units": 7, "kopecks": 100_000, "deltaPct": None}
+    assert mapped["rows"][0]["salesComposite"] == {"units": 0, "kopecks": 0, "deltaPct": None}
+
+
 def test_cached_reports_sources_snapshot_builds_from_repricer_sync_caches(monkeypatch):
     from app.routers import wb_reports_bff
 

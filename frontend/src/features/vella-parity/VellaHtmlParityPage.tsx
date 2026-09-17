@@ -9205,10 +9205,13 @@ type RnpBackendRow = {
   warehouses?: RnpBackendWarehouse[] | null
   managerId?: string | null
   activeRule?: string | null
+  impressions?: number | null
   openCount?: number | null
   openCountDeltaPct?: number | null
   cartCount?: number | null
   cartCountDeltaPct?: number | null
+  wishlistCount?: number | null
+  ctrPct?: number | null
   orderCount?: number | null
   orderSumKopecks?: number | null
   buyoutCount?: number | null
@@ -9302,19 +9305,18 @@ function currentRnpSourcesRefreshPath(period: Pick<ProductsAnalyticsPeriodState,
 }
 
 const RNP_HELP_TEXT: Record<string, string> = {
-  kpiRnp: 'РНП показывает долю товаров, которые по выбранным правилам требуют внимания: мало заказов, дорогая реклама, слабая маржа или просадка относительно порога.',
-  kpiSalesWow: 'Продажи WoW показывает, как изменилась сумма выкупов по сравнению с прошлым таким же периодом.',
-  kpiBelowThreshold: 'Сколько SKU сейчас ниже порога профиля. Это очередь товаров, которые менеджеру стоит проверить первыми.',
-  kpiWarehouses: 'Сколько складов WB попало в расчет. Если складов мало, отчет может показывать не всю картину по остаткам и продажам.',
   position: 'Товар из карточки WB: название, ваш SKU и nmID. По ним можно быстро найти позицию в кабинете WB.',
   category: 'Категория товара из карточки WB или справочника репрайсера.',
   color: 'Цвет товара из карточки WB или из номенклатуры, если он передан в отчёт.',
   manager: 'Ответственный за товар. Если менеджер не назначен, строка попадет в общий список.',
   strategy: 'Стратегия репрайсера, назначенная на товар. Если стратегия не назначена, строка остается без стратегии.',
+  impressions: 'Общие показы карточки за выбранный период. Если WB не передал показы товара, отображается прочерк.',
   wbOpens: 'Переходы в карточку товара за выбранный период.',
+  ctr: 'CTR = переходы в карточку / общие показы × 100%. При отсутствии показов не рассчитывается.',
   wbCarts: 'Добавления товара в корзину в WB за выбранный период.',
-  cartConversion: 'Конверсия в корзину: какая доля переходов в карточку закончилась добавлением товара в корзину.',
-  orderCr: 'CR заказ показывает, какая часть корзин дошла до заказа. Низкое значение значит, что товар добавляют, но не оформляют.',
+  cartConversion: 'CR в корзину = добавления в корзину / переходы в карточку × 100%.',
+  wishlist: 'Сколько раз товар добавили в отложенные за выбранный период по данным воронки WB.',
+  orderCr: 'CR в заказ = заказы / добавления в корзину × 100%.',
   wbOrders: 'Заказы WB: сколько штук и на какую сумму оформили покупатели. Это еще не выкуп.',
   orderSumDelta: 'Динамика суммы заказов относительно предыдущего такого же периода.',
   wbSales: 'Продажи WB: сколько штук покупатели реально выкупили и на какую сумму.',
@@ -9628,10 +9630,6 @@ function rnpStockUnits(row: RnpBackendRow) {
   return warehouses.reduce((sum, warehouse) => sum + (asAdsNumber(warehouse.availableUnits) ?? 0), 0)
 }
 
-function rnpRowSalesDelta(row: RnpBackendRow) {
-  return row.salesComposite?.deltaPct ?? row.ordersComposite?.deltaPct ?? row.cartCountDeltaPct ?? row.openCountDeltaPct
-}
-
 function rnpBusinessStatus(row: RnpBackendRow): RnpBusinessStatus {
   const reasons = row.reasons?.filter(Boolean) ?? []
   const acoo = asAdsNumber(row.acooPct ?? row.drrPct ?? row.tacooPct)
@@ -9651,28 +9649,6 @@ function rnpBusinessStatus(row: RnpBackendRow): RnpBusinessStatus {
     return { label: 'требует проверки', className: 'warn', tags: ['review'] }
   }
   return { label: 'стабильно', className: 'ok', tags: ['stable'] }
-}
-
-function rnpWarehouseKey(warehouseId: unknown, warehouseName: unknown) {
-  if (warehouseId !== null && warehouseId !== undefined && String(warehouseId).trim()) return `id:${String(warehouseId).trim()}`
-  const name = String(warehouseName ?? '').trim()
-  return name ? `name:${name.toLocaleLowerCase('ru-RU')}` : null
-}
-
-function rnpActiveWarehouseKeys(rows: RnpBackendRow[]) {
-  const keys = new Set<string>()
-  rows.forEach((row) => {
-    const warehouses = Array.isArray(row.warehouses) ? row.warehouses : []
-    warehouses.forEach((warehouse) => {
-      const key = rnpWarehouseKey(warehouse.warehouseId, warehouse.warehouseName)
-      if (key) keys.add(key)
-    })
-    if (warehouses.length === 0) {
-      const key = rnpWarehouseKey(row.warehouseId, row.warehouseName)
-      if (key) keys.add(key)
-    }
-  })
-  return keys
 }
 
 function rnpRowWarehousesText(row: RnpBackendRow) {
@@ -9720,51 +9696,6 @@ function rnpReasonText(row: RnpBackendRow) {
     return reason
   })
   return Array.from(new Set(labels)).join(', ')
-}
-
-function RnpKpiStripIsland({ replacementKey, state = { status: 'loading' } as RnpLiveState }: { replacementKey: string; state?: RnpLiveState }) {
-  const rows = state.status === 'ready' ? getRnpRows(state.report) : []
-  const statuses = rows.map(rnpBusinessStatus)
-  const belowRows = statuses.filter((status) => status.tags.includes('below-threshold')).length
-  const reviewRows = statuses.filter((status) => status.tags.includes('review')).length
-  const rnpPct = rows.length > 0 ? belowRows / rows.length * 100 : null
-  const salesDeltas = rows.map(rnpRowSalesDelta).map(asAdsNumber).filter((value): value is number => value != null)
-  const salesWow = salesDeltas.length > 0 ? salesDeltas.reduce((sum, value) => sum + value, 0) / salesDeltas.length : null
-  const activeWarehouseSet = rnpActiveWarehouseKeys(rows)
-  const activeWarehouses = activeWarehouseSet.size > 0 ? activeWarehouseSet.size : rows.length > 0 ? 33 : null
-  const sourceReviewCount = state.status === 'ready' && (state.report.adsSourceStatus !== 'fresh' || state.report.meta?.freshnessState !== 'fresh') ? 1 : 0
-  const cards = state.status === 'error'
-    ? [
-        { label: 'РНП', value: 'нет данных', delta: state.message, deltaClass: 'down', tip: rnpHeaderHelp('kpiRnp'), stroke: '#EF4444', points: '2,18 12,16 22,17 32,15 42,14' },
-        { label: 'Продажи WoW', value: 'нет данных', delta: 'ошибка загрузки', deltaClass: 'neutral', tip: rnpHeaderHelp('kpiSalesWow'), stroke: '#94A3B8', points: '2,15 12,15 22,15 32,15 42,15' },
-        { label: 'Ниже порога', value: 'нет данных', delta: 'нет строк', deltaClass: 'neutral', tip: rnpHeaderHelp('kpiBelowThreshold'), stroke: '#94A3B8', points: '2,15 12,15 22,15 32,15 42,15' },
-        { label: 'Активные склады', value: 'нет данных', delta: 'источник недоступен', deltaClass: 'neutral', tip: rnpHeaderHelp('kpiWarehouses'), stroke: '#94A3B8', points: '2,15 12,15 22,15 32,15 42,15' },
-      ]
-    : [
-        { label: 'РНП', value: state.status === 'loading' ? 'загрузка' : `${(rnpPct ?? 0).toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`, delta: state.status === 'loading' ? 'считаем сигнал' : `${belowRows > 0 ? '↓' : '→'} ${belowRows > 0 ? 'ниже порога' : 'в норме'}`, deltaClass: belowRows > 0 ? 'down' : 'up', tip: rnpHeaderHelp('kpiRnp'), stroke: '#2563EB', points: '2,18 10,15 18,16 28,11 36,10 42,7' },
-        { label: 'Продажи WoW', value: state.status === 'loading' ? 'загрузка' : rnpSignedPct(salesWow), delta: state.status === 'loading' ? 'ждем продажи' : `по ${salesDeltas.length.toLocaleString('ru-RU')} SKU`, deltaClass: (salesWow ?? 0) >= 0 ? 'up' : 'down', tip: rnpHeaderHelp('kpiSalesWow'), stroke: '#10B981', points: '2,17 10,16 18,14 28,12 36,10 42,8' },
-        { label: 'Ниже порога', value: state.status === 'loading' ? 'загрузка' : `${belowRows.toLocaleString('ru-RU')} SKU`, delta: state.status === 'loading' ? 'проверяем профиль' : reviewRows > 0 ? `↑ +${reviewRows.toLocaleString('ru-RU')} к проверке` : 'без новых рисков', deltaClass: reviewRows > 0 ? 'down' : 'up', tip: rnpHeaderHelp('kpiBelowThreshold'), stroke: '#F59E0B', points: '2,18 10,16 18,14 28,13 36,10 42,8' },
-        { label: 'Активные склады', value: state.status === 'loading' ? 'загрузка' : formatAdsInteger(activeWarehouses), delta: state.status === 'loading' ? 'собираем срез' : sourceReviewCount > 0 ? `${sourceReviewCount} требует проверки` : 'источники в норме', deltaClass: sourceReviewCount > 0 ? 'neutral' : 'up', tip: rnpHeaderHelp('kpiWarehouses'), stroke: '#94A3B8', points: '2,12 10,12 18,12 28,11 36,11 42,10' },
-      ]
-  return (
-    <div
-      key={replacementKey}
-      className="stats"
-      data-vella-island="rnp-kpi-strip"
-      data-vella-island-status="explicit-jsx"
-    >
-      {cards.map((card) => (
-        <div className={state.status === 'loading' ? 'stat rnp-live-loading' : 'stat'} key={card.label}>
-          <div className="stat-label">{card.label} <span className="stat-tip" data-tip={card.tip}>?</span></div>
-          <div className="stat-val">{card.value}</div>
-          <div className={`stat-delta ${card.deltaClass}`}>{card.delta}</div>
-          <svg className="stat-spark" width="44" height="22" viewBox="0 0 44 22" aria-hidden="true">
-            <polyline points={card.points} fill="none" stroke={card.stroke} strokeWidth="1.5" />
-          </svg>
-        </div>
-      ))}
-    </div>
-  )
 }
 
 const ADS_BALANCE_SERIES = {
@@ -12900,7 +12831,6 @@ function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as 
   const renderWindow = useReportTableRenderLimit(rows.length, 'rnp')
   const visibleRows = rows.slice(0, renderWindow.limit)
   if (state.status !== 'ready' || rows.length === 0) return null
-  const showCartConversion = rows.some((row) => asAdsNumber(row.atcrPct) != null)
   const showWbStock = rows.some((row) => rnpStockUnits(row) != null)
   return (
     <div
@@ -12925,21 +12855,22 @@ function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as 
             <RnpHeaderCell label="Цвет" helpKey="color" />
             <RnpHeaderCell label="Стратегия" helpKey="strategy" />
             <RnpHeaderCell label="Менеджер" helpKey="manager" />
+            <RnpHeaderCell label="Показы" helpKey="impressions" className="num" />
             <RnpHeaderCell label="Перешли в карточку" helpKey="wbOpens" className="num" />
+            <RnpHeaderCell label="CTR из показов в клики, %" helpKey="ctr" className="num" />
             <RnpHeaderCell label="Положили в корзину" helpKey="wbCarts" className="num" />
-            {showCartConversion ? <RnpHeaderCell label="Конверсия в корзину" helpKey="cartConversion" className="num" /> : null}
-            <RnpHeaderCell label="Заказали товаров, шт" helpKey="wbOrders" className="num" />
-            <RnpHeaderCell label="Конверсия в заказ" helpKey="orderCr" className="num" />
-            <RnpHeaderCell label="Заказали на сумму" helpKey="wbOrders" className="num" />
+            <RnpHeaderCell label="CR из карточки в корзину, %" helpKey="cartConversion" className="num" />
+            <RnpHeaderCell label="Добавили в отложенные" helpKey="wishlist" className="num" />
+            <RnpHeaderCell label="Заказали, шт / сумма" helpKey="wbOrders" className="num" />
+            <RnpHeaderCell label="CR в заказ, %" helpKey="orderCr" className="num" />
             <RnpHeaderCell label="Динамика суммы заказов" helpKey="orderSumDelta" className="num" />
-            <RnpHeaderCell label="Выкупили товаров, шт" helpKey="wbSales" className="num" />
+            <RnpHeaderCell label="Выкупили, шт / сумма" helpKey="wbSales" className="num" />
             <RnpHeaderCell label="Процент выкупа" helpKey="buyoutPct" className="num" />
-            <RnpHeaderCell label="Выкупили на сумму" helpKey="wbSales" className="num" />
             {showWbStock ? <RnpHeaderCell label="Остатки «Склад WB», шт" helpKey="wbStock" className="num" /> : null}
-            <RnpHeaderCell label="Показы рекламы" helpKey="adShows" className="num" />
-            <RnpHeaderCell label="Клики / CTR рекламы" helpKey="adClicksCtr" className="num" />
             <RnpHeaderCell label="Корзины из рекламы" helpKey="adCarts" className="num" />
             <RnpHeaderCell label="Заказы из рекламы" helpKey="adOrders" className="num" />
+            <RnpHeaderCell label="Показы рекламы" helpKey="adShows" className="num" />
+            <RnpHeaderCell label="Клики / CTR рекламы" helpKey="adClicksCtr" className="num" />
             <RnpHeaderCell label="Реклама" helpKey="adSpend" className="num" />
             <RnpHeaderCell label="ДРР" helpKey="drr" className="num" />
             <RnpHeaderCell label="Заказы без рекламы" helpKey="organic" className="num" />
@@ -13002,21 +12933,22 @@ function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as 
                 <td>{color}</td>
                 <td>{strategy}</td>
                 <td>{row.managerId ?? '—'}</td>
+                <td className="num">{formatAdsInteger(row.impressions)}</td>
                 <td className="num"><span className="metric-stack"><strong>{formatAdsInteger(row.openCount)}</strong>{rnpDeltaNode(row.openCountDeltaPct)}</span></td>
+                <td className="num">{formatAdsPct(row.ctrPct)}</td>
                 <td className="num"><span className="metric-stack"><strong>{formatAdsInteger(row.cartCount)}</strong>{rnpDeltaNode(row.cartCountDeltaPct)}</span></td>
-                {showCartConversion ? <td className="num">{rnpPercentMetricNode(row.atcrPct, 6)}</td> : null}
-                <td className="num">{formatAdsInteger(orderUnits)}</td>
+                <td className="num">{rnpPercentMetricNode(row.atcrPct, 6)}</td>
+                <td className="num">{formatAdsInteger(row.wishlistCount)}</td>
+                <td className="num"><span className="metric-stack"><strong>{orderUnits == null ? '—' : `${formatAdsInteger(orderUnits)} шт`}</strong><span className="subline">{formatAdsKopecks(orderKopecks)}</span></span></td>
                 <td className="num">{rnpPercentMetricNode(row.cartToOrderPct, 2)}</td>
-                <td className="num">{formatAdsKopecks(orderKopecks)}</td>
                 <td className="num">{rnpDeltaNode(orderDelta)}</td>
-                <td className="num">{formatAdsInteger(saleUnits)}</td>
+                <td className="num"><span className="metric-stack"><strong>{saleUnits == null ? '—' : `${formatAdsInteger(saleUnits)} шт`}</strong><span className="subline">{formatAdsKopecks(saleKopecks)}</span></span></td>
                 <td className="num">{rnpPercentMetricNode(row.buyoutPct, 65)}</td>
-                <td className="num">{formatAdsKopecks(saleKopecks)}</td>
                 {showWbStock ? <td className="num">{stockUnits == null ? '—' : formatAdsInteger(stockUnits)}</td> : null}
-                <td className="num">{formatAdsInteger(row.adImpressions)}</td>
-                <td className="num"><span className="metric-stack"><strong>{formatAdsInteger(row.adClicks)}</strong><span className="subline">{formatAdsPct(row.adCtrPct)}</span></span></td>
                 <td className="num">{formatAdsInteger(row.adCartAdds)}</td>
                 <td className="num">{formatAdsInteger(row.adOrders)}</td>
+                <td className="num">{formatAdsInteger(row.adImpressions)}</td>
+                <td className="num"><span className="metric-stack"><strong>{formatAdsInteger(row.adClicks)}</strong><span className="subline">{formatAdsPct(row.adCtrPct)}</span></span></td>
                 <td className="num">{formatAdsKopecks(row.adSpendKopecks)}</td>
                 <td className="num"><span className="metric-stack"><strong>{rnpPercentMetricNode(row.acooPct, 14, true)}</strong><span className={`subline ${rnpThresholdTone(row.tacooPct, 14, true)}`}>{formatAdsPct(row.tacooPct)}</span></span></td>
                 <td className="num"><span className="metric-stack"><strong>{formatAdsInteger(row.organicOrderCountEstimated)} шт</strong><span className="subline">{formatAdsKopecks(row.organicSalesKopecksEstimated)}</span></span></td>
@@ -13025,7 +12957,7 @@ function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as 
               </tr>
             )
           })}
-          <ReportTableMoreRow colSpan={25} shown={visibleRows.length} total={rows.length} onMore={renderWindow.loadMore} />
+          <ReportTableMoreRow colSpan={showWbStock ? 26 : 25} shown={visibleRows.length} total={rows.length} onMore={renderWindow.loadMore} />
         </tbody>
       </table>
     </div>
@@ -13436,9 +13368,7 @@ function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
           font-weight: 650;
         }
         .vella-html-parity-root #tab-rnp .rnp-skeleton-line,
-        .vella-html-parity-root #tab-rnp .rnp-skeleton-pill,
-        .vella-html-parity-root #tab-rnp .rnp-live-loading .stat-val,
-        .vella-html-parity-root #tab-rnp .rnp-live-loading .stat-delta {
+        .vella-html-parity-root #tab-rnp .rnp-skeleton-pill {
           display: inline-block;
           overflow: hidden;
           position: relative;
@@ -13446,16 +13376,6 @@ function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
           background: linear-gradient(90deg, #F1F5F9 0%, #E2E8F0 46%, #F8FAFC 92%);
           background-size: 220% 100%;
           animation: rnp-skeleton-shimmer 1.15s ease-in-out infinite;
-        }
-        .vella-html-parity-root #tab-rnp .rnp-live-loading .stat-val {
-          width: 86px;
-          height: 23px;
-          border-radius: 6px;
-        }
-        .vella-html-parity-root #tab-rnp .rnp-live-loading .stat-delta {
-          width: 118px;
-          height: 14px;
-          border-radius: 6px;
         }
         .vella-html-parity-root #tab-rnp .rnp-skeleton-line {
           width: 86px;
@@ -13581,7 +13501,6 @@ function RnpReportActiveIsland({ replacementKey }: { replacementKey: string }) {
               {rnpRefreshRunning ? `Обновляем ${rnpJob?.displayPercent ?? rnpJob?.percent ?? 0}%` : 'Обновить данные'}
             </button>
           </div>
-          <RnpKpiStripIsland replacementKey={`${replacementKey}-kpis`} state={state} />
           <RnpLiveSourceStripIsland replacementKey={`${replacementKey}-source`} state={state} />
           <RnpProgressPanelIsland replacementKey={`${replacementKey}-progress`} state={state} />
           <RnpToolbarIsland replacementKey={`${replacementKey}-toolbar`} />
