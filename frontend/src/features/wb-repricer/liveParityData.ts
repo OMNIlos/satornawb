@@ -316,6 +316,8 @@ export type LiveRepricerSkuListSummary = {
 }
 
 export type LiveRepricerStatsMetricPayload = {
+  totalImpressions?: number | null
+  totalClicks?: number | null
   impressions?: number | null
   clicks?: number | null
   ctrPct?: number | null
@@ -333,6 +335,7 @@ export type LiveRepricerStatsMetricPayload = {
   stockUnits?: number | null
   currentPriceKopecks?: number | null
   avgPriceWithSppKopecks?: number | null
+  averagePriceKopecks?: number | null
   medianPriceKopecks?: number | null
   sppPct?: number | null
   commissionPct?: number | null
@@ -342,6 +345,7 @@ export type LiveRepricerStatsItem = {
   articleId: string
   nmId?: number | null
   name?: string | null
+  subject?: string | null
   brand?: string | null
   imageUrl?: string | null
   photoUrl?: string | null

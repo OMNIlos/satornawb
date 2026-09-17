@@ -3052,6 +3052,8 @@ def _repricer_list_summary_from_source_caches(
                 "financeState": "ok" if nm_key in finance_aggregates else "no_data",
                 "workReturnKopecks": work_return_kopecks,
                 "baskets": _int_or_zero(baskets.get("cartCount")) if baskets.get("cartCount") is not None else None,
+                "totalImpressions": baskets.get("impressions"),
+                "totalClicks": baskets.get("openCount"),
                 "basketsState": baskets.get("coverageState") or ("ok" if baskets.get("cartCount") is not None else "no_data"),
                 "wbStockUnits": _int_or_zero(stock.get("wbStockUnits")),
                 "promotionStatus": "yes" if nm_id in active_promotion_nm_ids else "no",
@@ -3233,6 +3235,8 @@ def _repricer_stats_metrics(row: dict[str, Any]) -> dict[str, Any]:
     display_clicks: int | None = clicks if has_ad_data else None
     display_ad_spend_kopecks: int | None = ad_spend_kopecks if has_ad_data else None
     return {
+        "totalImpressions": analytics.get("totalImpressions"),
+        "totalClicks": analytics.get("totalClicks"),
         "impressions": display_impressions,
         "clicks": display_clicks,
         "ctrPct": _pct_or_none(clicks, impressions) if has_ad_data else None,
@@ -3254,6 +3258,7 @@ def _repricer_stats_metrics(row: dict[str, Any]) -> dict[str, Any]:
         "stockUnits": analytics.get("wbStockUnits"),
         "currentPriceKopecks": meta.get("currentPriceKopecks"),
         "avgPriceWithSppKopecks": analytics.get("avgPriceWithSppKopecks"),
+        "averagePriceKopecks": analytics.get("avgPriceWithSppKopecks"),
         "medianPriceKopecks": analytics.get("medianPriceKopecks") or analytics.get("avgPriceWithSppKopecks") or meta.get("currentPriceKopecks"),
         "sppPct": _float_or_none(analytics.get("sppPct")),
         "buyoutPct": _float_or_none(analytics.get("buyoutPct")),
@@ -3337,6 +3342,7 @@ def _repricer_stats_item(row: dict[str, Any]) -> dict[str, Any]:
         "articleId": meta.get("articleId"),
         "nmId": meta.get("nmId"),
         "name": meta.get("name"),
+        "subject": meta.get("subject"),
         "brand": meta.get("brand"),
         "imageUrl": meta.get("imageUrl") or meta.get("photoUrl") or repricer_bff_module._wb_public_photo_url(_positive_int_or_none(meta.get("nmId"))),
         "photoUrl": meta.get("photoUrl") or meta.get("imageUrl") or repricer_bff_module._wb_public_photo_url(_positive_int_or_none(meta.get("nmId"))),

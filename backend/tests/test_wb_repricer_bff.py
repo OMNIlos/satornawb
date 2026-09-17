@@ -1819,6 +1819,27 @@ def test_repricer_stats_metrics_keeps_missing_ads_as_nulls():
     assert metrics["drrPct"] is None
 
 
+def test_repricer_stats_total_metrics_and_period_price_do_not_use_ad_or_current_fallbacks():
+    row = {
+        "meta": {"currentPriceKopecks": 100_000},
+        "analytics": {
+            "adDataAvailable": True, "adImpressions": 1200, "adClicks": 60,
+            "adCartAdds": 15, "adSpendKopecks": 30_000, "revenueKopecks": 300_000,
+            "totalClicks": 180, "avgPriceWithSppKopecks": 85_000,
+        },
+    }
+    metrics = wb_repricer_bff_router._repricer_stats_metrics(row)
+    assert metrics["totalImpressions"] is None
+    assert metrics["totalClicks"] == 180
+    assert metrics["impressions"] == 1200
+    assert metrics["adCartAdds"] == 15
+    assert metrics["averagePriceKopecks"] == 85_000
+    assert metrics["ctrPct"] == 5.0
+    assert metrics["drrPct"] == 10.0
+    row["analytics"].pop("avgPriceWithSppKopecks")
+    assert wb_repricer_bff_router._repricer_stats_metrics(row)["averagePriceKopecks"] is None
+
+
 def test_build_sku_row_without_finance_sets_ads_availability_false():
     row = repricer_bff_module._build_sku_row(
         "NO_FIN_ADS",

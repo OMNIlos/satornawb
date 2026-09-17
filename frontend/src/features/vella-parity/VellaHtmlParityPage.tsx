@@ -2222,7 +2222,6 @@ function renderLiveRepricerStatsRow(item: LiveRepricerStatsItem) {
   ].filter(Boolean).join(' ').toLowerCase()
   const hasManager = repricerStatsHasAssignedManager(item.managerName)
   const managerName = hasManager ? String(item.managerName).trim() : 'Без ответственного'
-  const adText = `${repricerStatsRubFromKopecks(metrics.adSpendKopecks)} / ${repricerStatsPct(metrics.drrPct)}`
   const blockers = protection.blockerIds?.length
     ? protection.blockerIds.map(repricerStatsBlockerLabel).join(', ')
     : protection.message || 'защита пройдена'
@@ -2232,27 +2231,285 @@ function renderLiveRepricerStatsRow(item: LiveRepricerStatsItem) {
     : blockers
   const managerMeta = hasManager ? 'ответственный назначен' : 'менеджер не назначен'
   return `
-    <tr data-report-row="1" data-search="${escapeHtml(search)}" data-report-tags="${escapeHtml(dataTags)}">
-      <td class="report-sticky">
+    <tr data-report-row="1" data-article-id="${escapeHtml(item.articleId || '')}" data-search="${escapeHtml(search)}" data-report-tags="${escapeHtml(dataTags)}">
+      <td class="report-sticky" data-stats-column="product">
         <div class="report-product-cell" data-sku="${escapeHtml(item.articleId || '')}">
           ${renderRepricerStatsThumb(item)}
           <div><div class="sku">${escapeHtml(item.articleId || '—')}</div><span class="sub">${escapeHtml(item.name || item.brand || 'Товар')}</span><span class="sub">Артикул WB ${item.nmId ? escapeHtml(String(item.nmId)) : '—'}</span></div>
         </div>
       </td>
-      <td><span class="report-tag ${repricerStatsTagClass(decision.tone || decision.id)}">${escapeHtml(decision.label || 'на проверке')}</span><span class="sub report-decision-reason">${escapeHtml(decisionReason)}</span></td>
-      <td><div class="report-manager-cell"><span class="mgr-avatar">${escapeHtml(repricerStatsManagerInitials(managerName))}</span><span class="report-manager-main"><span class="report-manager-name">${escapeHtml(managerName)}</span><span class="report-manager-meta">${escapeHtml(managerMeta)}</span></span></div></td>
-      <td class="num">${repricerStatsNumber(metrics.impressions)}</td>
-      <td class="num">${repricerStatsNumber(metrics.clicks)} / ${repricerStatsPct(metrics.ctrPct)}</td>
-      <td class="num">${repricerStatsNumber(metrics.baskets)}${sources.states?.baskets === 'partial' ? '<span class="sub">часть периода</span>' : ''}</td>
-      <td class="num">${repricerStatsPct(metrics.cartToOrderCrPct)}</td>
-      <td class="num">${repricerStatsNumber(metrics.orders)}</td>
-      <td class="num">${escapeHtml(adText)}</td>
-      <td class="num">${metrics.stockUnits == null ? '—' : `${repricerStatsNumber(metrics.stockUnits)} шт`}</td>
-      <td class="num">${repricerStatsRubFromKopecks(metrics.medianPriceKopecks)}</td>
-      <td><span class="report-tag ${repricerStatsTagClass(protection.status)}">${escapeHtml(repricerStatsProtectionLabel(protection.status))}</span><span class="sub">${escapeHtml(blockers)}</span></td>
-      <td><span class="report-tag ${repricerStatsTagClass(sources.status)}">${escapeHtml(repricerStatsSourceLabel(sources.status))}</span><span class="sub">${escapeHtml(missing)}</span></td>
+      <td data-stats-column="action"><span class="report-tag ${repricerStatsTagClass(decision.tone || decision.id)}">${escapeHtml(decision.label || 'на проверке')}</span><span class="sub report-decision-reason">${escapeHtml(decisionReason)}</span></td>
+      <td data-stats-column="manager"><div class="report-manager-cell"><span class="mgr-avatar">${escapeHtml(repricerStatsManagerInitials(managerName))}</span><span class="report-manager-main"><span class="report-manager-name">${escapeHtml(managerName)}</span><span class="report-manager-meta">${escapeHtml(managerMeta)}</span></span></div></td>
+      <td class="num" data-stats-column="totalImpressions">${repricerStatsNumber(metrics.totalImpressions)}</td>
+      <td class="num" data-stats-column="impressions">${repricerStatsNumber(metrics.impressions)}</td>
+      <td class="num" data-stats-column="totalClicks">${repricerStatsNumber(metrics.totalClicks)}</td>
+      <td class="num" data-stats-column="clicks">${repricerStatsNumber(metrics.clicks)}</td>
+      <td class="num" data-stats-column="adCartAdds">${repricerStatsNumber(metrics.adCartAdds)}</td>
+      <td class="num" data-stats-column="baskets">${repricerStatsNumber(metrics.baskets)}${sources.states?.baskets === 'partial' ? '<span class="sub">часть периода</span>' : ''}</td>
+      <td class="num" data-stats-column="ctrPct">${repricerStatsPct(metrics.ctrPct)}</td>
+      <td class="num" data-stats-column="cartToOrderCrPct">${repricerStatsPct(metrics.cartToOrderCrPct)}</td>
+      <td class="num" data-stats-column="orders">${repricerStatsNumber(metrics.orders)}</td>
+      <td class="num" data-stats-column="adSpendKopecks">${repricerStatsRubFromKopecks(metrics.adSpendKopecks)}</td>
+      <td class="num" data-stats-column="drrPct">${repricerStatsPct(metrics.drrPct)}</td>
+      <td class="num" data-stats-column="stockUnits">${metrics.stockUnits == null ? '—' : `${repricerStatsNumber(metrics.stockUnits)} шт`}</td>
+      <td class="num" data-stats-column="averagePriceKopecks">${repricerStatsRubFromKopecks(metrics.averagePriceKopecks)}</td>
+      <td data-stats-column="protection"><span class="report-tag ${repricerStatsTagClass(protection.status)}">${escapeHtml(repricerStatsProtectionLabel(protection.status))}</span><span class="sub">${escapeHtml(blockers)}</span></td>
+      <td data-stats-column="sources"><span class="report-tag ${repricerStatsTagClass(sources.status)}">${escapeHtml(repricerStatsSourceLabel(sources.status))}</span><span class="sub">${escapeHtml(missing)}</span></td>
     </tr>
   `
+}
+
+type StatsRange = 'margin' | 'baskets' | 'orders' | 'price'
+type StatsFilters = {
+  segment: string
+  manager: string
+  status: string
+  promo: string
+  brand: string
+  ranges: Record<StatsRange, { from: number | null; to: number | null }>
+  types: string[]
+  attrs: string[]
+  strategy: string
+  stock: string
+  hiddenColumns: string[]
+}
+
+const statsSegments = [
+  ['all', 'Все'], ['problem', 'SKU ниже порогов'], ['nopmin', 'Без P_min'],
+  ['loss', 'Маржа ниже 0'], ['changes24h', 'Изменения 24ч'], ['illiquid', 'Неликвид'],
+] as const
+const statsStatuses = [
+  ['all', 'Все товары'], ['loko', 'Локомотивы'], ['new', 'Новинки'],
+  ['illiquid', 'Неликвид'], ['liq', 'Ликвидация'], ['manual', 'Ручной режим'],
+  ['nopmin', 'Без минимальной цены'],
+] as const
+const statsTypes = [
+  ['shirt', 'Футболка'], ['hoodie', 'Худи'], ['longsleeve', 'Лонгслив'],
+  ['shorts', 'Шорты'], ['balaclava', 'Балаклава'],
+] as const
+const statsAttrs = [['female', 'Жен.'], ['male', 'Муж.'], ['white', 'Белый'], ['black', 'Чёрный']] as const
+const statsColumnNames: Record<string, string> = {
+  product: 'Товар', action: 'Действие', manager: 'Ответственный', totalImpressions: 'Показы',
+  impressions: 'Показы рекламы', totalClicks: 'Общие клики', clicks: 'Клики рекламы',
+  adCartAdds: 'Корзины рекламы', baskets: 'Корзины', ctrPct: 'CTR',
+  cartToOrderCrPct: 'CR', orders: 'Заказы', adSpendKopecks: 'Реклама, ₽',
+  drrPct: 'DRR', stockUnits: 'Остаток', averagePriceKopecks: 'Средняя цена за период',
+  protection: 'Проверка цены', sources: 'Данные WB',
+}
+
+function defaultStatsFilters(): StatsFilters {
+  return {
+    segment: 'all', manager: 'all', status: 'all', promo: 'all', brand: 'all',
+    ranges: { margin: { from: null, to: null }, baskets: { from: null, to: null },
+      orders: { from: null, to: null }, price: { from: null, to: null } },
+    types: statsTypes.map(([key]) => key), attrs: statsAttrs.map(([key]) => key),
+    strategy: 'all', stock: 'all', hiddenColumns: [],
+  }
+}
+
+let statsFilters = defaultStatsFilters()
+let statsCurrentRows: LiveRepricerStatsItem[] = []
+let statsPreviousRows: LiveRepricerStatsItem[] | null = null
+let statsBaseSummary: LiveRepricerStatsResponse['summary'] | null = null
+let statsChangedIds: Set<string> | null = null
+let statsChangedError = ''
+let statsManagerId = ''
+let statsLoadedQuery = ''
+
+function statsItemType(item: LiveRepricerStatsItem) {
+  const raw = `${item.subject || ''} ${item.articleId || ''} ${item.name || ''}`.toLowerCase()
+  if (/hood|худи|\bh[bc]/.test(raw)) return 'hoodie'
+  if (/лонг|long|\bl[bc]/.test(raw)) return 'longsleeve'
+  if (/шорт|short/.test(raw)) return 'shorts'
+  if (/балак|balaclava/.test(raw)) return 'balaclava'
+  if (/футбол|shirt|\bf[bc]/.test(raw)) return 'shirt'
+  return ''
+}
+
+function statsItemAttrs(item: LiveRepricerStatsItem) {
+  const raw = `${item.subject || ''} ${item.articleId || ''} ${item.name || ''}`.toLowerCase()
+  const values = []
+  if (/жен|female|woman/.test(raw)) values.push('female')
+  if (/муж|male|men/.test(raw)) values.push('male')
+  if (/бел|white|\b[fhl]b/i.test(raw)) values.push('white')
+  if (/чер|чёр|black|\b[fhl]c/i.test(raw)) values.push('black')
+  return values
+}
+
+function statsMetricForRange(item: LiveRepricerStatsItem, range: StatsRange) {
+  const metrics = item.metrics ?? {}
+  if (range === 'margin') return metrics.marginPct
+  if (range === 'baskets') return metrics.baskets
+  if (range === 'orders') return metrics.orders
+  return metrics.currentPriceKopecks == null ? null : metrics.currentPriceKopecks / 100
+}
+
+function statsMatchesSegment(item: LiveRepricerStatsItem, segment: string) {
+  const metrics = item.metrics ?? {}
+  const pmin = item.priceProtection?.effectivePMinKopecks
+  if (segment === 'all') return true
+  if (segment === 'nopmin') return pmin == null || pmin <= 0
+  if (segment === 'loss') return metrics.marginPct != null && metrics.marginPct < 0
+  if (segment === 'changes24h') return statsChangedIds?.has(item.articleId) ?? false
+  if (segment === 'illiquid') return item.status === 'illiquid'
+  return (metrics.marginPct != null && metrics.marginPct < 0)
+    || pmin == null || pmin <= 0
+    || (metrics.stockUnits != null && metrics.stockUnits <= 20)
+    || item.status === 'illiquid' || item.status === 'liq' || item.status === 'liquidation'
+}
+
+function statsMatchesFilters(item: LiveRepricerStatsItem, filters = statsFilters) {
+  if (!statsMatchesSegment(item, filters.segment)) return false
+  const manager = item.managerId || 'unassigned'
+  if (filters.manager !== 'all' && manager !== (filters.manager === 'mine' ? statsManagerId : filters.manager)) return false
+  const pmin = item.priceProtection?.effectivePMinKopecks
+  if (filters.status !== 'all' && !(filters.status === 'nopmin' ? pmin == null || pmin <= 0
+    : filters.status === 'loko' ? item.status === 'loko' || item.status === 'locomotive'
+    : filters.status === 'liq' ? item.status === 'liq' || item.status === 'liquidation'
+    : item.status === filters.status)) return false
+  if (filters.promo !== 'all' && (item.promotionStatus === 'yes') !== (filters.promo === 'yes')) return false
+  if (filters.brand !== 'all' && String(item.brand || '').toLowerCase() !== filters.brand.toLowerCase()) return false
+  for (const range of ['margin', 'baskets', 'orders', 'price'] as const) {
+    const { from, to } = filters.ranges[range]
+    if (from == null && to == null) continue
+    const value = statsMetricForRange(item, range)
+    if (value == null || from != null && value < from || to != null && value > to) return false
+  }
+  if (filters.types.length !== statsTypes.length && !filters.types.includes(statsItemType(item))) return false
+  if (filters.attrs.length !== statsAttrs.length && !statsItemAttrs(item).some((attr) => filters.attrs.includes(attr))) return false
+  if (filters.strategy !== 'all' && item.strategyId !== filters.strategy) return false
+  const stock = item.metrics?.stockUnits
+  if (filters.stock !== 'all' && (stock == null || filters.stock === 'ending' && stock > 5
+    || filters.stock === 'low' && (stock <= 5 || stock > 20)
+    || filters.stock === 'normal' && (stock <= 20 || stock > 100)
+    || filters.stock === 'excess' && stock <= 100)) return false
+  return true
+}
+
+function statsVisibleItems() {
+  const query = document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')?.value.trim().toLowerCase() || ''
+  return statsCurrentRows.filter((item) => statsMatchesFilters(item) && (!query || query === statsLoadedQuery || [
+    item.articleId, item.nmId, item.name, item.subject, item.brand, item.managerName,
+    item.decision?.label,
+  ].some((part) => String(part || '').toLowerCase().includes(query))))
+}
+
+function statsSection(title: string, content: string, wide = false) {
+  return `<div class="products-filter-section${wide ? ' products-filter-section-wide' : ''}"><span>${title}</span><div class="products-filter-popover-grid">${content}</div></div>`
+}
+
+function statsChoices(key: keyof StatsFilters, choices: readonly (readonly [string, string])[], count?: (value: string) => number) {
+  return choices.map(([value, label]) => `<button class="chip${statsFilters[key] === value ? ' active' : ''}" type="button" data-stats-key="${key}" data-stats-value="${escapeHtml(value)}" aria-pressed="${statsFilters[key] === value}">${escapeHtml(label)}${count ? `<span class="chip-count">${repricerStatsNumber(count(value))}</span>` : ''}</button>`).join('')
+}
+
+function statsMultiChoices(key: 'types' | 'attrs', choices: readonly (readonly [string, string])[]) {
+  return choices.map(([value, label]) => `<button class="chip${statsFilters[key].includes(value) ? ' active' : ''}" type="button" data-stats-key="${key}" data-stats-value="${value}" aria-pressed="${statsFilters[key].includes(value)}">${label}</button>`).join('')
+}
+
+function renderStatsFiltersMenu() {
+  const panel = document.getElementById('repricerStatsFilters')
+  if (!panel) return
+  const managers = [...new Map(statsCurrentRows.filter((item) => item.managerId).map((item) => [String(item.managerId), String(item.managerName || item.managerId)])).entries()]
+  const brands = [...new Set(statsCurrentRows.map((item) => item.brand).filter((brand): brand is string => Boolean(brand)))].sort((a, b) => a.localeCompare(b, 'ru'))
+  const strategies = [...new Map(statsCurrentRows.filter((item) => item.strategyId).map((item) => [String(item.strategyId), String(item.strategyName || item.strategyId)])).entries()]
+  const count = (key: keyof StatsFilters, value: string) => statsCurrentRows.filter((item) => statsMatchesFilters(item, { ...defaultStatsFilters(), [key]: value })).length
+  const ranges = ([['margin', 'Маржа, %'], ['baskets', 'Корзины за период'], ['orders', 'Заказы за период'], ['price', 'Цена, ₽']] as const).map(([key, title]) => `<div class="products-filter-section"><span>${title}</span><div class="stats-range"><input type="number" inputmode="decimal" placeholder="от" aria-label="${title} от" data-stats-range="${key}" data-stats-bound="from" value="${statsFilters.ranges[key].from ?? ''}"><span>—</span><input type="number" inputmode="decimal" placeholder="до" aria-label="${title} до" data-stats-range="${key}" data-stats-bound="to" value="${statsFilters.ranges[key].to ?? ''}"></div></div>`).join('')
+  panel.className = 'products-advanced-filters-panel'
+  panel.innerHTML = `<div class="products-filter-popover-head"><div><b>Фильтры товаров</b><span>Сегменты, ответственные, показатели товара, акции, бренды и колонки таблицы.</span></div><div class="products-filter-head-actions"><button class="btn btn-ghost btn-sm" type="button" data-stats-action="clear">Очистить</button><button class="btn btn-primary btn-sm" type="button" data-stats-action="apply">Применить</button></div></div><div class="products-advanced-filter-grid">
+    ${statsSection('Сегменты', statsChoices('segment', statsSegments, (value) => count('segment', value)), true)}
+    ${statsSection('Ответственный', statsChoices('manager', [['all', 'Все менеджеры'], ['mine', 'Мои товары'], ['unassigned', 'Без ответственного'], ...managers], (value) => count('manager', value)))}
+    ${statsSection('Состояние товара', statsChoices('status', statsStatuses, (value) => count('status', value)))}
+    ${statsSection('Акции', statsChoices('promo', [['all', 'Все акции'], ['yes', 'В акции'], ['no', 'Без акции']], (value) => count('promo', value)))}
+    ${statsSection('Бренд', statsChoices('brand', [['all', 'Все бренды'], ...brands.map((brand) => [brand, brand] as const)], (value) => count('brand', value)))}
+    <div class="products-filter-section products-filter-section-wide"><span>Показатели товара</span><div class="stats-ranges">${ranges}</div></div>
+    ${statsSection('Тип одежды', statsMultiChoices('types', statsTypes))}
+    ${statsSection('Пол / цвет', statsMultiChoices('attrs', statsAttrs))}
+    ${statsSection('Стратегия', statsChoices('strategy', [['all', 'Все стратегии'], ...strategies]))}
+    ${statsSection('Бренд', statsChoices('brand', [['all', 'Все бренды'], ...brands.map((brand) => [brand, brand] as const)]))}
+    ${statsSection('Остаток', statsChoices('stock', [['all', 'Любой'], ['ending', 'Заканчивается ≤5'], ['low', 'Низкий 6–20'], ['normal', 'Норма 21–100'], ['excess', 'Избыток >100']]))}
+    ${statsSection('Колонки таблицы', Object.entries(statsColumnNames).map(([key, label]) => `<label class="stats-column-option"><input type="checkbox" data-stats-column-toggle="${key}" ${statsFilters.hiddenColumns.includes(key) ? '' : 'checked'}> ${escapeHtml(label)}</label>`).join(''), true)}
+  </div>${statsChangedError ? `<div class="report-empty-note visible" role="alert">${escapeHtml(statsChangedError)}</div>` : ''}`
+}
+
+function statsFilteredSummary(items: LiveRepricerStatsItem[]): LiveRepricerStatsResponse['summary'] {
+  const baskets = items.every((item) => item.metrics?.baskets != null) ? items.reduce((sum, item) => sum + Number(item.metrics?.baskets), 0) : null
+  const orders = items.reduce((sum, item) => sum + Number(item.metrics?.orders || 0), 0)
+  return {
+    skuCount: items.length, baskets, orders,
+    cartToOrderCrPct: baskets ? orders / baskets * 100 : null,
+    canRecalculate: items.filter((item) => item.decision?.id === 'can_recalculate').length,
+    priceBlocked: items.filter((item) => item.priceProtection?.status === 'blocked').length,
+    sourceReady: items.filter((item) => item.sources?.status === 'ready').length,
+    sourcePartial: items.filter((item) => item.sources?.status === 'partial').length,
+    sourceBlocked: items.filter((item) => item.sources?.status === 'blocked').length,
+  }
+}
+
+function statsAggregate(items: LiveRepricerStatsItem[], key: string): number | null {
+  const metrics = items.map((item) => item.metrics ?? {})
+  const sum = (field: keyof NonNullable<LiveRepricerStatsItem['metrics']>) => metrics.every((metric) => metric[field] != null)
+    ? metrics.reduce((total, metric) => total + Number(metric[field]), 0) : null
+  if (!items.length) return null
+  if (key === 'ctrPct' || key === 'cartToOrderCrPct' || key === 'drrPct') {
+    const numerator = sum(key === 'ctrPct' ? 'clicks' : key === 'drrPct' ? 'adSpendKopecks' : 'orders')
+    const denominator = sum(key === 'ctrPct' ? 'impressions' : key === 'drrPct' ? 'revenueKopecks' : 'baskets')
+    return numerator == null || denominator == null || denominator <= 0 ? null : numerator / denominator * 100
+  }
+  if (key === 'averagePriceKopecks') {
+    const orders = sum('orders')
+    return orders && metrics.every((metric) => metric.averagePriceKopecks != null && metric.orders != null)
+      ? metrics.reduce((total, metric) => total + Number(metric.averagePriceKopecks) * Number(metric.orders), 0) / orders : null
+  }
+  return sum(key as keyof NonNullable<LiveRepricerStatsItem['metrics']>)
+}
+
+function updateStatsTrends(items = statsVisibleItems()) {
+  const previous = new Map(statsPreviousRows?.map((item) => [item.articleId, item]) || [])
+  const pairs = items.filter((item) => previous.has(item.articleId))
+  const oldItems = pairs.map((item) => previous.get(item.articleId)!)
+  document.querySelectorAll<HTMLElement>('#tab-repricer-stats th[data-stats-trend]').forEach((header) => {
+    header.querySelector('.stats-trend')?.remove()
+    if (!statsPreviousRows || !pairs.length) return
+    const key = header.dataset.statsTrend || ''
+    const current = statsAggregate(pairs, key)
+    const prior = statsAggregate(oldItems, key)
+    if (current == null || prior == null || Math.abs(current - prior) < 1e-9) return
+    const up = current > prior
+    const arrow = document.createElement('span')
+    arrow.className = `stats-trend ${up ? 'up' : 'down'}`
+    arrow.setAttribute('role', 'img')
+    arrow.setAttribute('aria-label', `${up ? 'Рост' : 'Снижение'} к предыдущему периоду`)
+    arrow.title = `${up ? 'Рост' : 'Снижение'} к предыдущему периоду`
+    arrow.textContent = up ? '↑' : '↓'
+    header.insertBefore(arrow, header.firstElementChild)
+  })
+}
+
+function applyStatsFilters() {
+  const tab = document.getElementById('tab-repricer-stats')
+  const body = document.getElementById('repricerStatsBody')
+  if (!tab || !body) return
+  const visible = statsVisibleItems()
+  const ids = new Set(visible.map((item) => item.articleId))
+  body.querySelectorAll<HTMLElement>('tr[data-report-row]').forEach((row) => { row.hidden = !ids.has(row.dataset.articleId || '') })
+  body.querySelector('[data-report-empty]')?.remove()
+  if (!visible.length && statsCurrentRows.length) body.insertAdjacentHTML('beforeend', '<tr data-report-empty="1"><td colspan="18"><div class="report-empty-note visible">По выбранным фильтрам товаров нет.</div></td></tr>')
+  Object.keys(statsColumnNames).forEach((key) => tab.querySelectorAll<HTMLElement>(`[data-stats-column="${key}"]`).forEach((cell) => { cell.hidden = statsFilters.hiddenColumns.includes(key) }))
+  const unfiltered = (document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')?.value.trim().toLowerCase() || '') === statsLoadedQuery
+    && statsFilters.segment === 'all' && statsFilters.manager === 'all' && statsFilters.status === 'all'
+    && statsFilters.promo === 'all' && statsFilters.brand === 'all' && statsFilters.strategy === 'all'
+    && statsFilters.stock === 'all' && statsFilters.types.length === statsTypes.length
+    && statsFilters.attrs.length === statsAttrs.length
+    && Object.values(statsFilters.ranges).every(({ from, to }) => from == null && to == null)
+  updateLiveRepricerStatsKpis({ items: visible, total: visible.length, summary: unfiltered && statsBaseSummary ? statsBaseSummary : statsFilteredSummary(visible) })
+  const summary = tab.querySelector<HTMLElement>('[data-filter-summary] span')
+  if (summary) summary.innerHTML = `Показано <b>${repricerStatsNumber(visible.length)}</b> из ${repricerStatsNumber(tab.dataset.reportTotal)}${statsCurrentRows.length < Number(tab.dataset.reportTotal || 0) ? ' · загрузка продолжается' : ''}`
+  const active = Number(statsFilters.segment !== 'all') + Number(statsFilters.manager !== 'all') + Number(statsFilters.status !== 'all') + Number(statsFilters.promo !== 'all') + Number(statsFilters.brand !== 'all') + Number(statsFilters.strategy !== 'all') + Number(statsFilters.stock !== 'all') + Number(Object.values(statsFilters.ranges).some(({ from, to }) => from != null || to != null)) + Number(statsFilters.types.length !== statsTypes.length) + Number(statsFilters.attrs.length !== statsAttrs.length) + Number(statsFilters.hiddenColumns.length > 0)
+  const counter = tab.querySelector<HTMLElement>('.products-filter-trigger-count')
+  if (counter) counter.textContent = String(active)
+  const label = tab.querySelector<HTMLElement>('#repricerStatsFilterLabel')
+  if (label) label.textContent = `${statsSegments.find(([key]) => key === statsFilters.segment)?.[1] || 'Все'} · ${statsFilters.brand === 'all' ? 'Все бренды' : statsFilters.brand} · ${statsFilters.promo === 'all' ? 'Все акции' : statsFilters.promo === 'yes' ? 'В акции' : 'Без акции'}`
+  updateStatsTrends(visible)
 }
 
 function updateLiveRepricerStatsKpis(payload: LiveRepricerStatsResponse) {
@@ -2290,17 +2547,20 @@ function renderLiveRepricerStats(payload: LiveRepricerStatsResponse, append = fa
   const body = document.getElementById('repricerStatsBody')
   if (!tab || !body) return
   const rows = Array.isArray(payload.items) ? payload.items : []
+  statsCurrentRows = append ? [...statsCurrentRows, ...rows] : rows
+  statsBaseSummary = payload.summary
   const html = rows.length
     ? rows.map(renderLiveRepricerStatsRow).join('')
-    : '<tr data-report-state="empty"><td colspan="13"><div class="report-empty-note visible">За выбранный период пока нет товаров для статистики.</div></td></tr>'
+    : '<tr data-report-state="empty"><td colspan="18"><div class="report-empty-note visible">За выбранный период пока нет товаров для статистики.</div></td></tr>'
   body.querySelectorAll('[data-report-state], [data-report-empty]').forEach(row => row.remove())
   if (append) body.insertAdjacentHTML('beforeend', html)
   else body.innerHTML = html
   tab.dataset.reportTotal = String(payload.total ?? rows.length)
-  updateLiveRepricerStatsKpis(payload)
+  renderStatsFiltersMenu()
+  if (statsCurrentRows.length === rows.length && !document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')?.value && !Number(tab.querySelector('.products-filter-trigger-count')?.textContent)) updateLiveRepricerStatsKpis(payload)
   const summary = tab.querySelector<HTMLElement>('[data-filter-summary] span')
   if (summary) summary.innerHTML = `Показано <b>${repricerStatsNumber(payload.itemsReturned ?? rows.length)}</b> из ${repricerStatsNumber(payload.total)}`
-  window.applyGenericReportFilter?.(tab)
+  applyStatsFilters()
   window.initTooltips?.()
 }
 
@@ -2308,6 +2568,10 @@ function clearLiveRepricerStatsAggregates() {
   const tab = document.getElementById('tab-repricer-stats')
   if (!tab) return
   delete tab.dataset.reportTotal
+  statsCurrentRows = []
+  statsPreviousRows = null
+  statsBaseSummary = null
+  updateStatsTrends([])
   tab.querySelectorAll<HTMLElement>('.stats .stat-val').forEach(value => { value.textContent = '—' })
   tab.querySelectorAll<HTMLElement>('.stats .stat-delta').forEach(delta => {
     delta.textContent = ''
@@ -2320,14 +2584,14 @@ function clearLiveRepricerStatsAggregates() {
 function renderLiveRepricerStatsLoading() {
   clearLiveRepricerStatsAggregates()
   const body = document.getElementById('repricerStatsBody')
-  if (body) body.innerHTML = '<tr data-report-state="loading"><td colspan="13"><div class="report-empty-note visible" role="status">Загружаю статистику товаров...</div></td></tr>'
+  if (body) body.innerHTML = '<tr data-report-state="loading"><td colspan="18"><div class="report-empty-note visible" role="status">Загружаю статистику товаров...</div></td></tr>'
 }
 
 function renderLiveRepricerStatsError(error: unknown, preserveRows = false) {
   if (!preserveRows) clearLiveRepricerStatsAggregates()
   const body = document.getElementById('repricerStatsBody')
   const message = error instanceof Error ? error.message : 'Не удалось загрузить статистику репрайсера'
-  const html = `<tr data-report-state="error"><td colspan="13"><div class="report-empty-note visible" role="alert">${preserveRows ? 'Статистика загружена частично' : 'Статистика репрайсера недоступна'}: ${escapeHtml(message)} <button class="btn btn-default btn-sm" type="button" data-stats-retry>Повторить загрузку</button></div></td></tr>`
+  const html = `<tr data-report-state="error"><td colspan="18"><div class="report-empty-note visible" role="alert">${preserveRows ? 'Статистика загружена частично' : 'Статистика репрайсера недоступна'}: ${escapeHtml(message)} <button class="btn btn-default btn-sm" type="button" data-stats-retry>Повторить загрузку</button></div></td></tr>`
   if (body) {
     body.querySelectorAll('[data-report-state], [data-report-empty]').forEach(row => row.remove())
     if (preserveRows) body.insertAdjacentHTML('beforeend', html)
@@ -2335,10 +2599,69 @@ function renderLiveRepricerStatsError(error: unknown, preserveRows = false) {
   }
 }
 
-export function installRepricerStatsLiveBridge(accessToken: string | null) {
+export function installRepricerStatsLiveBridge(accessToken: string | null, managerId = '') {
   let disposed = false
   let generation = 0
   let controller: AbortController | null = null
+  statsManagerId = managerId
+  const tab = document.getElementById('tab-repricer-stats')
+  const trigger = tab?.querySelector<HTMLButtonElement>('#repricerStatsFiltersTrigger')
+  const panel = tab?.querySelector<HTMLElement>('#repricerStatsFilters')
+  const search = tab?.querySelector<HTMLInputElement>('.search input')
+  const reset = tab?.querySelector<HTMLButtonElement>('#repricerStatsReset')
+  const closePanel = () => { if (panel) panel.hidden = true; trigger?.setAttribute('aria-expanded', 'false') }
+  const togglePanel = () => { if (panel) panel.hidden = !panel.hidden; trigger?.setAttribute('aria-expanded', String(!panel?.hidden)) }
+  const resetFilters = () => { statsFilters = defaultStatsFilters(); if (search) search.value = ''; statsChangedError = ''; renderStatsFiltersMenu(); applyStatsFilters(); closePanel(); if (statsLoadedQuery) void load() }
+  const onPanelClick = (event: Event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-stats-key], button[data-stats-action]')
+    if (!button) return
+    if (button.dataset.statsAction === 'clear') { resetFilters(); return }
+    if (button.dataset.statsAction === 'apply') { applyStatsFilters(); closePanel(); return }
+    const key = button.dataset.statsKey as keyof StatsFilters
+    const value = button.dataset.statsValue || ''
+    if (key === 'types' || key === 'attrs') {
+      const values = statsFilters[key]
+      statsFilters[key] = values.includes(value) ? values.filter((item) => item !== value) : [...values, value]
+    } else if (key && key !== 'ranges' && key !== 'hiddenColumns') {
+      (statsFilters as unknown as Record<string, unknown>)[key] = value
+    }
+    renderStatsFiltersMenu()
+    applyStatsFilters()
+    if (key === 'segment' && value === 'changes24h' && statsChangedIds == null) void loadChanges()
+  }
+  const onPanelChange = (event: Event) => {
+    const input = event.target as HTMLInputElement
+    const range = input.dataset.statsRange as StatsRange | undefined
+    const bound = input.dataset.statsBound as 'from' | 'to' | undefined
+    if (range && bound) statsFilters.ranges[range][bound] = input.value === '' ? null : Number(input.value)
+    if (input.dataset.statsColumnToggle) statsFilters.hiddenColumns = input.checked
+      ? statsFilters.hiddenColumns.filter((key) => key !== input.dataset.statsColumnToggle)
+      : [...statsFilters.hiddenColumns, input.dataset.statsColumnToggle]
+    applyStatsFilters()
+  }
+  const loadChanges = async () => {
+    try {
+      if (!accessToken) throw new Error('Нужна авторизация')
+      const ids = new Set<string>()
+      for (let page = 1; page <= 10; page++) {
+        const params = new URLSearchParams({ from: new Date(Date.now() - DAY_MS).toISOString(), page: String(page), limit: '500' })
+        const response = await apiRequest<ParityChangelogResponse>(`/api/v1/wb-repricer/changelog?${params}`, {
+          headers: authorizationHeaders(accessToken), cache: 'no-store',
+        })
+        if (disposed) return
+        if (!response) throw new Error('Пустой ответ сервера')
+        response.items.forEach((entry) => { if (entry.oldPriceKopecks !== entry.newPriceKopecks) ids.add(entry.articleId) })
+        if (page * 500 >= response.total) break
+      }
+      statsChangedIds = ids
+    } catch (error) { statsChangedError = `Не удалось получить журнал изменений: ${error instanceof Error ? error.message : 'ошибка сети'}` }
+    if (!disposed) { renderStatsFiltersMenu(); applyStatsFilters() }
+  }
+  trigger?.addEventListener('click', togglePanel)
+  search?.addEventListener('input', applyStatsFilters)
+  reset?.addEventListener('click', resetFilters)
+  panel?.addEventListener('click', onPanelClick)
+  panel?.addEventListener('change', onPanelChange)
   const load = async () => {
     if (disposed) return null
     controller?.abort()
@@ -2352,12 +2675,12 @@ export function installRepricerStatsLiveBridge(accessToken: string | null) {
     }
     renderLiveRepricerStatsLoading()
     const period = repricerStatsPeriodRequest()
-    const queryInput = document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')
     const baseQuery = {
       ...period,
       pageSize: REPRICER_STATS_PAGE_SIZE,
-      q: queryInput?.value?.trim() || undefined,
+      q: search?.value.trim() || undefined,
     }
+    statsLoadedQuery = baseQuery.q?.toLowerCase() || ''
     let page = 1
     let pageCount = 1
     let firstPayload: LiveRepricerStatsResponse | null = null
@@ -2369,7 +2692,7 @@ export function installRepricerStatsLiveBridge(accessToken: string | null) {
       try {
         while (page <= pageCount) {
           body?.querySelectorAll('[data-report-state], [data-report-empty]').forEach(row => row.remove())
-          body?.insertAdjacentHTML('beforeend', `<tr data-report-state="loading"><td colspan="13"><div class="report-empty-note visible" role="status">${page === 1 ? 'Загружаю статистику товаров...' : `Загружаю страницу ${page} из ${pageCount}…`}</div></td></tr>`)
+          body?.insertAdjacentHTML('beforeend', `<tr data-report-state="loading"><td colspan="18"><div class="report-empty-note visible" role="status">${page === 1 ? 'Загружаю статистику товаров...' : `Загружаю страницу ${page} из ${pageCount}…`}</div></td></tr>`)
           const payload = await loadLiveRepricerStats(accessToken, signal, { ...baseQuery, page })
           if (!isCurrent()) return null
           if (page === 1) {
@@ -2379,6 +2702,33 @@ export function installRepricerStatsLiveBridge(accessToken: string | null) {
           }
           renderLiveRepricerStats({ ...payload, summary: firstPayload?.summary }, page > 1)
           page += 1
+        }
+        if (firstPayload && document.querySelector('#tab-repricer-stats th[data-stats-trend]')) {
+          const dateFrom = firstPayload.dateFrom
+          const dateTo = firstPayload.dateTo
+          if (dateFrom && dateTo) {
+            const start = Date.parse(`${dateFrom.slice(0, 10)}T00:00:00Z`)
+            const end = Date.parse(`${dateTo.slice(0, 10)}T00:00:00Z`)
+            const days = Math.round((end - start) / DAY_MS) + 1
+            if (days > 0 && days <= 366) {
+              const previousTo = new Date(start - DAY_MS).toISOString().slice(0, 10)
+              const previousFrom = new Date(start - days * DAY_MS).toISOString().slice(0, 10)
+              const previousRows: LiveRepricerStatsItem[] = []
+              try {
+                let previousPage = 1
+                let previousPages = 1
+                while (previousPage <= previousPages) {
+                  const prior = await loadLiveRepricerStats(accessToken, signal, { dateFrom: previousFrom, dateTo: previousTo, periodDays: days, pageSize: REPRICER_STATS_PAGE_SIZE, page: previousPage })
+                  if (!isCurrent()) return null
+                  if (prior.dateFrom?.slice(0, 10) !== previousFrom || prior.dateTo?.slice(0, 10) !== previousTo) break
+                  previousRows.push(...prior.items)
+                  previousPages = Math.ceil(Math.min(prior.total, REPRICER_STATS_MAX_ROWS) / REPRICER_STATS_PAGE_SIZE)
+                  previousPage++
+                }
+                if (previousPage > previousPages && isCurrent()) { statsPreviousRows = previousRows; updateStatsTrends() }
+              } catch { if (isCurrent()) { statsPreviousRows = null; updateStatsTrends() } }
+            }
+          }
         }
         return firstPayload
       } catch (error) {
@@ -2397,6 +2747,11 @@ export function installRepricerStatsLiveBridge(accessToken: string | null) {
   return () => {
     disposed = true
     controller?.abort()
+    trigger?.removeEventListener('click', togglePanel)
+    search?.removeEventListener('input', applyStatsFilters)
+    reset?.removeEventListener('click', resetFilters)
+    panel?.removeEventListener('click', onPanelClick)
+    panel?.removeEventListener('change', onPanelChange)
     if (window.__vellaLoadLiveRepricerStats === load) delete window.__vellaLoadLiveRepricerStats
   }
 }
@@ -34036,10 +34391,10 @@ export function VellaHtmlParityPage() {
 
   useEffect(() => {
     if (!runtime) return
-    const dispose = installRepricerStatsLiveBridge(accessToken)
+    const dispose = installRepricerStatsLiveBridge(accessToken, cabinetMe?.user.userId)
     if (effectiveActiveParityTab === 'repricer-stats') void window.__vellaLoadLiveRepricerStats?.()
     return dispose
-  }, [accessToken, effectiveActiveParityTab, runtime])
+  }, [accessToken, cabinetMe?.user.userId, effectiveActiveParityTab, runtime])
 
   useEffect(() => {
     const reloadRepricerStats = (event?: Event) => {
@@ -36487,6 +36842,39 @@ export function VellaHtmlParityPage() {
           background: var(--brand-light);
           color: var(--brand);
         }
+        .vella-html-parity-root #tab-repricer-stats #repricerStatsFilters[hidden],
+        .vella-html-parity-root #tab-repricer-stats [data-stats-column][hidden],
+        .vella-html-parity-root #tab-repricer-stats tr[hidden] { display: none !important; }
+        .vella-html-parity-root #tab-repricer-stats .products-filter-compact { display: flex; align-items: center; gap: 8px; min-width: 0; }
+        .vella-html-parity-root #tab-repricer-stats .products-filter-summary { color: var(--gray-500); font-size: 12px; white-space: nowrap; }
+        .vella-html-parity-root #tab-repricer-stats .products-filter-trigger-count { margin-left: 4px; color: var(--gray-500); }
+        .vella-html-parity-root #tab-repricer-stats #repricerStatsFilters {
+          margin: 10px 20px 12px; padding: 14px; border: 1px solid var(--gray-200);
+          border-radius: 14px; background: var(--white); color: var(--gray-900);
+          box-shadow: 0 10px 24px rgba(15, 23, 42, .05);
+        }
+        .vella-html-parity-root #tab-repricer-stats #repricerStatsFilters .products-filter-popover-head {
+          display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+          margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--gray-100);
+        }
+        .vella-html-parity-root #tab-repricer-stats #repricerStatsFilters .products-filter-popover-head > div:first-child { display: grid; gap: 3px; }
+        .vella-html-parity-root #tab-repricer-stats #repricerStatsFilters .products-filter-popover-head b { font-size: 15px; }
+        .vella-html-parity-root #tab-repricer-stats #repricerStatsFilters .products-filter-popover-head span { color: var(--gray-500); font-size: 12px; }
+        .vella-html-parity-root #tab-repricer-stats #repricerStatsFilters .products-filter-head-actions { display: flex; gap: 8px; }
+        .vella-html-parity-root #tab-repricer-stats .products-advanced-filter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 12px; }
+        .vella-html-parity-root #tab-repricer-stats .products-filter-section-wide { grid-column: span 2; }
+        .vella-html-parity-root #tab-repricer-stats .products-filter-section > span { display: block; margin-bottom: 8px; color: var(--gray-500); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+        .vella-html-parity-root #tab-repricer-stats .products-filter-popover-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+        .vella-html-parity-root #tab-repricer-stats .products-filter-popover-grid .chip { width: 100%; min-height: 30px; justify-content: space-between; border: 1px solid var(--gray-200); background: var(--white); color: var(--gray-700); }
+        .vella-html-parity-root #tab-repricer-stats .products-filter-popover-grid .chip.active { border-color: var(--brand); background: var(--brand-light); color: var(--brand); }
+        .vella-html-parity-root #tab-repricer-stats .stats-ranges { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .vella-html-parity-root #tab-repricer-stats .stats-range { display: flex; align-items: center; gap: 6px; }
+        .vella-html-parity-root #tab-repricer-stats .stats-range input { min-width: 0; width: 100%; height: 32px; padding: 5px 8px; border: 1px solid var(--gray-200); border-radius: 7px; }
+        .vella-html-parity-root #tab-repricer-stats .stats-column-option { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+        .vella-html-parity-root #tab-repricer-stats .stats-trend { margin-left: 5px; font-size: 15px; font-weight: 800; }
+        .vella-html-parity-root #tab-repricer-stats .stats-trend.up { color: #059669; }
+        .vella-html-parity-root #tab-repricer-stats .stats-trend.down { color: #dc2626; }
+        @media (max-width: 760px) { .vella-html-parity-root #tab-repricer-stats .products-advanced-filter-grid { grid-template-columns: 1fr; } .vella-html-parity-root #tab-repricer-stats .products-filter-section-wide { grid-column: auto; } }
         .vella-html-parity-root #tab-products .products-columns-filter-dd {
           position: relative;
           align-items: flex-start;

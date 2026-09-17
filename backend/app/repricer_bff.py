@@ -5139,6 +5139,8 @@ def _build_sku_row(
             "buyoutSource": buyout_source if buyout_pct_value is not None else None,
             "buyoutState": "ok" if buyout_pct_value is not None else "no_data",
             "baskets": int((baskets_aggregate or {}).get("cartCount") or 0) if has_baskets_data else (meta["basketsLast7d"] if use_demo_data else None),
+            "totalImpressions": (baskets_aggregate or {}).get("impressions") if has_baskets_cache else None,
+            "totalClicks": (baskets_aggregate or {}).get("openCount") if has_baskets_cache else None,
             "basketsState": str((baskets_aggregate or {}).get("coverageState") or "ok") if has_baskets_data else ("fallback" if use_demo_data else "no_data"),
             "basketsReason": (
                 f"Данные за {(baskets_aggregate or {}).get('coveredDays')} из {(baskets_aggregate or {}).get('requestedDays')} дней. Обновите выбранный период."
