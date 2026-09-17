@@ -38899,6 +38899,7 @@ export function VellaHtmlParityPage() {
           #tab-expenses,
           #tab-ads,
           #tab-stock,
+          #tab-repricer-stats,
           #tab-week
         ).tab-content {
           height: 100%;
@@ -38937,6 +38938,9 @@ export function VellaHtmlParityPage() {
           scrollbar-gutter: stable both-edges;
           scrollbar-width: thin;
           scrollbar-color: var(--gray-300) transparent;
+        }
+        .vella-html-parity-root #tab-repricer-stats .report-table-wrap.report-scrollable::after {
+          content: none;
         }
         .vella-html-parity-root #tab-abc .report-table-wrap::-webkit-scrollbar,
         .vella-html-parity-root #tab-repricer-stats .report-table-wrap::-webkit-scrollbar,
