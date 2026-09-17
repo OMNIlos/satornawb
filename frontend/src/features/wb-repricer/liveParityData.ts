@@ -336,6 +336,7 @@ export type LiveRepricerStatsMetricPayload = {
   currentPriceKopecks?: number | null
   avgPriceWithSppKopecks?: number | null
   averagePriceKopecks?: number | null
+  averagePriceOrderCount?: number | null
   medianPriceKopecks?: number | null
   sppPct?: number | null
   commissionPct?: number | null
@@ -396,6 +397,7 @@ export type LiveRepricerStatsSummary = {
   adSpendKopecks?: number
   revenueKopecks?: number
   drrPct?: number | null
+  metricTotals?: Record<string, { value: number | null; coveredSku: number; partialSku: number }>
 }
 
 export type LiveRepricerStatsResponse = {

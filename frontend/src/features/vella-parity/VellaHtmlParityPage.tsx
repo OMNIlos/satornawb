@@ -150,6 +150,7 @@ import {
   type LiveRepricerSkuListSummary,
   type LiveRepricerLoadTrace,
   type LiveRepricerProductsPayload,
+  type LiveRepricerStatsMetricPayload,
   type LiveRepricerStatsItem,
   type LiveRepricerStatsResponse,
   type LiveWbPromotion,
@@ -186,7 +187,6 @@ const PRODUCTS_PERIOD_STORAGE_KEY = 'vella.products.analyticsPeriod'
 const DAY_MS = 24 * 60 * 60 * 1000
 const ALGORITHM_PRICE_STEP_MAX_PCT = 50
 const REPRICER_STATS_PAGE_SIZE = 500
-const REPRICER_STATS_MAX_ROWS = 5000
 const DIGEST_MAX_DIRECT_DAYS = 14
 const DIGEST_FALLBACK_CHUNK_DAYS = 7
 const DIGEST_FALLBACK_MAX_ATTEMPTS = 20
@@ -2296,6 +2296,24 @@ const statsColumnNames: Record<string, string> = {
   drrPct: 'DRR', stockUnits: 'Остаток', averagePriceKopecks: 'Средняя цена за период',
   protection: 'Проверка цены', sources: 'Данные WB',
 }
+const statsMetricSources: Record<string, string> = {
+  canRecalculate: 'Внутренние правила репрайсера: товар может участвовать в автоматическом пересчёте.',
+  priceBlocked: 'Внутренняя проверка цены заблокировала пересчёт; подробная причина есть в строке товара.',
+  sources: 'Проверка полноты всех источников для автоматического пересчёта, включая СПП и комиссию. Это не состояние метрик воронки WB.',
+  totalImpressions: 'Общие показы карточек WB за период. Если WB не отдаёт показатель через API, значение недоступно.',
+  impressions: 'Показы рекламных кампаний WB за период.',
+  totalClicks: 'Переходы в карточки из воронки WB, включая рекламу.',
+  clicks: 'Клики по рекламным кампаниям WB за период.',
+  adCartAdds: 'Добавления в корзину после рекламы из статистики WB.',
+  baskets: 'Добавления в корзину из воронки WB за период.',
+  ctrPct: 'Клики рекламы / показы рекламы × 100 по одним и тем же товарам.',
+  cartToOrderCrPct: 'Заказы / добавления в корзину × 100 по одним и тем же товарам.',
+  orders: 'Заказы из воронки WB или статистики заказов за период.',
+  adSpendKopecks: 'Расходы на рекламу WB за период.',
+  drrPct: 'Расходы на рекламу / выручка × 100 по одним и тем же товарам.',
+  stockUnits: 'Текущий доступный остаток WB; это снимок, а не сумма за период.',
+  averagePriceKopecks: 'Средняя цена заказа из воронки WB, взвешенная по числу заказов за период.',
+}
 
 function defaultStatsFilters(): StatsFilters {
   return {
@@ -2311,10 +2329,20 @@ let statsFilters = defaultStatsFilters()
 let statsCurrentRows: LiveRepricerStatsItem[] = []
 let statsPreviousRows: LiveRepricerStatsItem[] | null = null
 let statsBaseSummary: LiveRepricerStatsResponse['summary'] | null = null
+let statsBaseCache: LiveRepricerStatsResponse['cache'] | null = null
 let statsChangedIds: Set<string> | null = null
 let statsChangedError = ''
 let statsManagerId = ''
 let statsLoadedQuery = ''
+let statsTablePage = 1
+let statsSortColumn = ''
+let statsSortDirection: 'asc' | 'desc' = 'desc'
+const STATS_TABLE_PAGE_SIZE = 100
+const statsMetricColumns = [
+  'baskets', 'totalImpressions', 'impressions', 'totalClicks', 'clicks', 'adCartAdds',
+  'ctrPct', 'cartToOrderCrPct', 'orders', 'adSpendKopecks', 'drrPct', 'stockUnits', 'averagePriceKopecks',
+] as const
+type StatsMetricColumn = typeof statsMetricColumns[number]
 
 function statsItemType(item: LiveRepricerStatsItem) {
   const raw = `${item.subject || ''} ${item.articleId || ''} ${item.name || ''}`.toLowerCase()
@@ -2388,10 +2416,26 @@ function statsMatchesFilters(item: LiveRepricerStatsItem, filters = statsFilters
 
 function statsVisibleItems() {
   const query = document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')?.value.trim().toLowerCase() || ''
-  return statsCurrentRows.filter((item) => statsMatchesFilters(item) && (!query || query === statsLoadedQuery || [
+  const visible = statsCurrentRows.filter((item) => statsMatchesFilters(item) && (!query || query === statsLoadedQuery || [
     item.articleId, item.nmId, item.name, item.subject, item.brand, item.managerName,
     item.decision?.label,
   ].some((part) => String(part || '').toLowerCase().includes(query))))
+  if (!statsSortColumn) return visible
+  const value = (item: LiveRepricerStatsItem): string | number | null => {
+    if (statsSortColumn === 'product') return item.articleId
+    if (statsSortColumn === 'manager') return item.managerName || ''
+    if (statsSortColumn === 'action') return item.decision?.label || ''
+    if (statsSortColumn === 'protection') return item.priceProtection?.status || ''
+    if (statsSortColumn === 'sources') return item.sources?.status || ''
+    return item.metrics?.[statsSortColumn as StatsMetricColumn] ?? null
+  }
+  return visible.sort((left, right) => {
+    const a = value(left), b = value(right)
+    if (a == null) return b == null ? 0 : 1
+    if (b == null) return -1
+    const order = typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b), 'ru', { numeric: true })
+    return statsSortDirection === 'asc' ? order : -order
+  })
 }
 
 function statsSection(title: string, content: string, wide = false) {
@@ -2432,17 +2476,43 @@ function renderStatsFiltersMenu() {
 }
 
 function statsFilteredSummary(items: LiveRepricerStatsItem[]): LiveRepricerStatsResponse['summary'] {
-  const baskets = items.every((item) => item.metrics?.baskets != null) ? items.reduce((sum, item) => sum + Number(item.metrics?.baskets), 0) : null
-  const orders = items.reduce((sum, item) => sum + Number(item.metrics?.orders || 0), 0)
+  const metricTotals = statsMetricTotals(items)
+  const baskets = metricTotals.baskets.coveredSku === items.length ? metricTotals.baskets.value : null
+  const orders = metricTotals.orders.value ?? 0
   return {
     skuCount: items.length, baskets, orders,
-    cartToOrderCrPct: baskets ? orders / baskets * 100 : null,
+    cartToOrderCrPct: metricTotals.cartToOrderCrPct.value,
     canRecalculate: items.filter((item) => item.decision?.id === 'can_recalculate').length,
     priceBlocked: items.filter((item) => item.priceProtection?.status === 'blocked').length,
     sourceReady: items.filter((item) => item.sources?.status === 'ready').length,
     sourcePartial: items.filter((item) => item.sources?.status === 'partial').length,
     sourceBlocked: items.filter((item) => item.sources?.status === 'blocked').length,
+    metricTotals,
   }
+}
+
+function statsMetricTotals(items: LiveRepricerStatsItem[]): Record<string, { value: number | null; coveredSku: number; partialSku: number }> {
+  const ratios: Record<string, [keyof LiveRepricerStatsMetricPayload, keyof LiveRepricerStatsMetricPayload]> = {
+    ctrPct: ['clicks', 'impressions'], cartToOrderCrPct: ['orders', 'baskets'], drrPct: ['adSpendKopecks', 'revenueKopecks'],
+  }
+  const funnel = new Set<StatsMetricColumn>(['totalImpressions', 'totalClicks', 'baskets', 'cartToOrderCrPct', 'averagePriceKopecks'])
+  return Object.fromEntries(statsMetricColumns.map((field) => {
+    const [numerator, denominator] = ratios[field] || []
+    const covered = items.filter((item) => {
+      const metric = item.metrics
+      if (field === 'averagePriceKopecks') return metric?.averagePriceKopecks != null && Number(metric.averagePriceOrderCount) > 0
+      return numerator ? metric?.[numerator] != null && metric?.[denominator] != null : metric?.[field] != null
+    })
+    let value: number | null = null
+    if (numerator) {
+      const total = covered.reduce((sum, item) => sum + Number(item.metrics?.[denominator]), 0)
+      if (total > 0) value = Math.round(covered.reduce((sum, item) => sum + Number(item.metrics?.[numerator]), 0) / total * 1000) / 10
+    } else if (field === 'averagePriceKopecks') {
+      const count = covered.reduce((sum, item) => sum + Number(item.metrics?.averagePriceOrderCount), 0)
+      if (count > 0) value = Math.round(covered.reduce((sum, item) => sum + Number(item.metrics?.averagePriceKopecks) * Number(item.metrics?.averagePriceOrderCount), 0) / count)
+    } else if (covered.length) value = covered.reduce((sum, item) => sum + Number(item.metrics?.[field]), 0)
+    return [field, { value, coveredSku: covered.length, partialSku: funnel.has(field) ? covered.filter((item) => item.sources?.states?.baskets === 'partial').length : 0 }]
+  }))
 }
 
 function statsAggregate(items: LiveRepricerStatsItem[], key: string): number | null {
@@ -2456,9 +2526,9 @@ function statsAggregate(items: LiveRepricerStatsItem[], key: string): number | n
     return numerator == null || denominator == null || denominator <= 0 ? null : numerator / denominator * 100
   }
   if (key === 'averagePriceKopecks') {
-    const orders = sum('orders')
-    return orders && metrics.every((metric) => metric.averagePriceKopecks != null && metric.orders != null)
-      ? metrics.reduce((total, metric) => total + Number(metric.averagePriceKopecks) * Number(metric.orders), 0) / orders : null
+    const orders = sum('averagePriceOrderCount')
+    return orders && metrics.every((metric) => metric.averagePriceKopecks != null && metric.averagePriceOrderCount != null)
+      ? metrics.reduce((total, metric) => total + Number(metric.averagePriceKopecks) * Number(metric.averagePriceOrderCount), 0) / orders : null
   }
   return sum(key as keyof NonNullable<LiveRepricerStatsItem['metrics']>)
 }
@@ -2490,15 +2560,19 @@ function updateStatsTrends(items = statsVisibleItems()) {
   })
 }
 
-function applyStatsFilters() {
+function applyStatsFilters(resetPage = false) {
   const tab = document.getElementById('tab-repricer-stats')
   const body = document.getElementById('repricerStatsBody')
   if (!tab || !body) return
   const visible = statsVisibleItems()
-  const ids = new Set(visible.map((item) => item.articleId))
-  body.querySelectorAll<HTMLElement>('tr[data-report-row]').forEach((row) => { row.hidden = !ids.has(row.dataset.articleId || '') })
-  body.querySelector('[data-report-empty]')?.remove()
-  if (!visible.length && statsCurrentRows.length) body.insertAdjacentHTML('beforeend', '<tr data-report-empty="1"><td colspan="18"><div class="report-empty-note visible">По выбранным фильтрам товаров нет.</div></td></tr>')
+  const pages = Math.max(1, Math.ceil(visible.length / STATS_TABLE_PAGE_SIZE))
+  statsTablePage = resetPage ? 1 : Math.min(statsTablePage, pages)
+  const start = (statsTablePage - 1) * STATS_TABLE_PAGE_SIZE
+  body.innerHTML = visible.length
+    ? visible.slice(start, start + STATS_TABLE_PAGE_SIZE).map(renderLiveRepricerStatsRow).join('')
+    : `<tr data-report-empty="1"><td colspan="18"><div class="report-empty-note visible">${statsCurrentRows.length ? 'По выбранным фильтрам товаров нет.' : 'За выбранный период пока нет товаров для статистики.'}</div></td></tr>`
+  const pager = tab.querySelector<HTMLElement>('#repricerStatsPager')
+  if (pager) pager.innerHTML = visible.length > STATS_TABLE_PAGE_SIZE ? `<span>${repricerStatsNumber(start + 1)}–${repricerStatsNumber(Math.min(start + STATS_TABLE_PAGE_SIZE, visible.length))} из ${repricerStatsNumber(visible.length)} · страница ${statsTablePage} из ${pages}</span><div><button type="button" class="btn btn-default btn-sm" data-stats-page="prev" ${statsTablePage === 1 ? 'disabled' : ''}>← Назад</button><button type="button" class="btn btn-default btn-sm" data-stats-page="next" ${statsTablePage === pages ? 'disabled' : ''}>Далее →</button></div>` : ''
   Object.keys(statsColumnNames).forEach((key) => tab.querySelectorAll<HTMLElement>(`[data-stats-column="${key}"]`).forEach((cell) => { cell.hidden = statsFilters.hiddenColumns.includes(key) }))
   const unfiltered = (document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')?.value.trim().toLowerCase() || '') === statsLoadedQuery
     && statsFilters.segment === 'all' && statsFilters.manager === 'all' && statsFilters.status === 'all'
@@ -2517,10 +2591,67 @@ function applyStatsFilters() {
   updateStatsTrends(visible)
 }
 
+function ensureStatsCards(tab: HTMLElement) {
+  const container = tab.querySelector<HTMLElement>('#repricerStatsCards')
+  if (!container || container.childElementCount) return container
+  const cards = [
+    ['baskets', 'Добавили в корзину'], ['canRecalculate', 'Готовы к пересчёту'],
+    ['priceBlocked', 'Цена заблокирована'], ['sources', 'Источники для пересчёта'],
+    ...statsMetricColumns.filter((key) => key !== 'baskets').map((key) => [key, statsColumnNames[key]]),
+  ]
+  container.innerHTML = cards.map(([key, label]) => `<div class="stat" data-stats-card="${key}"><div class="stat-label">${label}${statsMetricSources[key] ? ` <span class="stat-tip" data-tip="${escapeHtml(statsMetricSources[key])}">?</span>` : ''}</div><div class="stat-val">—</div><div class="stat-delta neutral"></div></div>`).join('')
+  return container
+}
+
 function updateLiveRepricerStatsKpis(payload: LiveRepricerStatsResponse) {
   const tab = document.getElementById('tab-repricer-stats')
   if (!tab) return
   const summary = payload.summary ?? {}
+  const container = ensureStatsCards(tab)
+  if (container) {
+    const skuCount = Number(summary.skuCount ?? payload.total ?? statsCurrentRows.length)
+    const loadingSubset = summary !== statsBaseSummary && statsCurrentRows.length < Number(tab.dataset.reportTotal || 0)
+    const totals = summary.metricTotals ?? {}
+    const set = (key: string, value: string, detail: string, tone = 'neutral') => {
+      const card = container.querySelector<HTMLElement>(`[data-stats-card="${key}"]`)
+      if (!card) return
+      const val = card.querySelector<HTMLElement>('.stat-val')
+      const delta = card.querySelector<HTMLElement>('.stat-delta')
+      if (val) val.textContent = value
+      if (delta) { delta.textContent = detail; delta.className = `stat-delta ${tone}` }
+    }
+    set('canRecalculate', `${repricerStatsNumber(summary.canRecalculate)} товаров`, `из ${repricerStatsNumber(skuCount)} товаров · правила пересчёта`, 'up')
+    set('priceBlocked', `${repricerStatsNumber(summary.priceBlocked)} товаров`, 'заблокированы проверкой цены', Number(summary.priceBlocked) ? 'down' : 'neutral')
+    set('sources', `${repricerStatsNumber(summary.sourceReady)} из ${repricerStatsNumber(skuCount)} готовы`, `частично ${repricerStatsNumber(summary.sourcePartial)} · заблокировано ${repricerStatsNumber(summary.sourceBlocked)}`, Number(summary.sourceBlocked) ? 'down' : 'neutral')
+    for (const key of statsMetricColumns) {
+      const metric = totals[key]
+      const legacy = key === 'baskets' ? summary.baskets : key === 'impressions' ? summary.impressions
+        : key === 'clicks' ? summary.clicks : key === 'orders' ? summary.orders
+        : key === 'adSpendKopecks' ? summary.adSpendKopecks : key === 'ctrPct' ? summary.adCtrPct
+        : key === 'cartToOrderCrPct' ? summary.cartToOrderCrPct : key === 'drrPct' ? summary.drrPct : null
+      const value = metric ? metric.value : legacy ?? null
+      const covered = metric?.coveredSku ?? (value == null ? 0 : skuCount)
+      const partial = metric?.partialSku ?? 0
+      const display = key.endsWith('Pct') ? repricerStatsPct(value)
+        : key.endsWith('Kopecks') ? repricerStatsRubFromKopecks(value)
+        : key === 'stockUnits' && value != null ? `${repricerStatsNumber(value)} шт`
+        : repricerStatsNumber(value)
+      const detail = covered === 0 ? loadingSubset ? 'загрузка товаров продолжается' : 'нет данных WB по выбранному периоду'
+        : `${key === 'stockUnits' ? 'текущий остаток · ' : ''}${value == null ? 'нет базы для расчёта · ' : ''}данные по ${repricerStatsNumber(covered)} из ${repricerStatsNumber(skuCount)} товаров${partial ? ` · ${repricerStatsNumber(partial)} за часть периода` : ''}${loadingSubset ? ' · загрузка продолжается' : ''}`
+      set(key, display, detail)
+    }
+    tab.querySelector<HTMLElement>('.report-source-strip.report-source-compact')?.remove()
+    const freshness = tab.querySelector<HTMLElement>('#repricerStatsFreshness')
+    if (freshness) {
+      const cache = statsBaseCache as Record<string, unknown> | null
+      const sources = [['basketsFetchedAt', 'Воронка'], ['adsFetchedAt', 'Реклама'], ['financeFetchedAt', 'Финансы'], ['stocksFetchedAt', 'Остатки']] as const
+      freshness.textContent = cache ? sources.flatMap(([field, label]) => {
+        const date = typeof cache[field] === 'string' ? new Date(cache[field]) : null
+        return date && !Number.isNaN(date.getTime()) ? [`${label}: ${new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date)}`] : []
+      }).join(' · ') : ''
+    }
+    return
+  }
   const stats = Array.from(tab.querySelectorAll<HTMLElement>('.stats .stat'))
   const values = [
     [repricerStatsNumber(summary.baskets), `${repricerStatsNumber(summary.orders)} заказов · конверсия ${repricerStatsPct(summary.cartToOrderCrPct)}`],
@@ -2554,19 +2685,13 @@ function renderLiveRepricerStats(payload: LiveRepricerStatsResponse, append = fa
   const rows = Array.isArray(payload.items) ? payload.items : []
   statsCurrentRows = append ? [...statsCurrentRows, ...rows] : rows
   statsBaseSummary = payload.summary
-  const html = rows.length
-    ? rows.map(renderLiveRepricerStatsRow).join('')
-    : '<tr data-report-state="empty"><td colspan="18"><div class="report-empty-note visible">За выбранный период пока нет товаров для статистики.</div></td></tr>'
-  body.querySelectorAll('[data-report-state], [data-report-empty]').forEach(row => row.remove())
-  if (append) body.insertAdjacentHTML('beforeend', html)
-  else body.innerHTML = html
+  statsBaseCache = payload.cache
   tab.dataset.reportTotal = String(payload.total ?? rows.length)
-  renderStatsFiltersMenu()
-  if (statsCurrentRows.length === rows.length && !document.querySelector<HTMLInputElement>('#tab-repricer-stats .search input')?.value && !Number(tab.querySelector('.products-filter-trigger-count')?.textContent)) updateLiveRepricerStatsKpis(payload)
+  if (!tab.querySelector<HTMLElement>('#repricerStatsFilters')?.hidden) renderStatsFiltersMenu()
   const summary = tab.querySelector<HTMLElement>('[data-filter-summary] span')
   if (summary) summary.innerHTML = `Показано <b>${repricerStatsNumber(payload.itemsReturned ?? rows.length)}</b> из ${repricerStatsNumber(payload.total)}`
   applyStatsFilters()
-  window.initTooltips?.()
+  if (!append) window.initTooltips?.()
 }
 
 function clearLiveRepricerStatsAggregates() {
@@ -2576,7 +2701,10 @@ function clearLiveRepricerStatsAggregates() {
   statsCurrentRows = []
   statsPreviousRows = null
   statsBaseSummary = null
+  statsBaseCache = null
+  statsTablePage = 1
   updateStatsTrends([])
+  ensureStatsCards(tab)
   tab.querySelectorAll<HTMLElement>('.stats .stat-val').forEach(value => { value.textContent = '—' })
   tab.querySelectorAll<HTMLElement>('.stats .stat-delta').forEach(delta => {
     delta.textContent = ''
@@ -2584,6 +2712,10 @@ function clearLiveRepricerStatsAggregates() {
   })
   const summary = tab.querySelector<HTMLElement>('[data-filter-summary] span')
   if (summary) summary.textContent = ''
+  const pager = tab.querySelector<HTMLElement>('#repricerStatsPager')
+  if (pager) pager.innerHTML = ''
+  const freshness = tab.querySelector<HTMLElement>('#repricerStatsFreshness')
+  if (freshness) freshness.textContent = ''
 }
 
 function renderLiveRepricerStatsLoading() {
@@ -2614,14 +2746,17 @@ export function installRepricerStatsLiveBridge(accessToken: string | null, manag
   const panel = tab?.querySelector<HTMLElement>('#repricerStatsFilters')
   const search = tab?.querySelector<HTMLInputElement>('.search input')
   const reset = tab?.querySelector<HTMLButtonElement>('#repricerStatsReset')
+  const pager = tab?.querySelector<HTMLElement>('#repricerStatsPager')
+  const table = tab?.querySelector<HTMLTableElement>('.report-table-wrap table')
+  let searchTimer: ReturnType<typeof setTimeout> | null = null
   const closePanel = () => { if (panel) panel.hidden = true; trigger?.setAttribute('aria-expanded', 'false') }
-  const togglePanel = () => { if (panel) panel.hidden = !panel.hidden; trigger?.setAttribute('aria-expanded', String(!panel?.hidden)) }
-  const resetFilters = () => { statsFilters = defaultStatsFilters(); if (search) search.value = ''; statsChangedError = ''; renderStatsFiltersMenu(); applyStatsFilters(); closePanel(); if (statsLoadedQuery) void load() }
+  const togglePanel = () => { if (panel) { panel.hidden = !panel.hidden; if (!panel.hidden) renderStatsFiltersMenu() } trigger?.setAttribute('aria-expanded', String(!panel?.hidden)) }
+  const resetFilters = () => { statsFilters = defaultStatsFilters(); if (search) search.value = ''; statsChangedError = ''; applyStatsFilters(true); closePanel(); if (statsLoadedQuery) void load() }
   const onPanelClick = (event: Event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-stats-key], button[data-stats-action]')
     if (!button) return
     if (button.dataset.statsAction === 'clear') { resetFilters(); return }
-    if (button.dataset.statsAction === 'apply') { applyStatsFilters(); closePanel(); return }
+    if (button.dataset.statsAction === 'apply') { applyStatsFilters(true); closePanel(); return }
     const key = button.dataset.statsKey as keyof StatsFilters
     const value = button.dataset.statsValue || ''
     if (key === 'types' || key === 'attrs') {
@@ -2631,7 +2766,7 @@ export function installRepricerStatsLiveBridge(accessToken: string | null, manag
       (statsFilters as unknown as Record<string, unknown>)[key] = value
     }
     renderStatsFiltersMenu()
-    applyStatsFilters()
+    applyStatsFilters(true)
     if (key === 'segment' && value === 'changes24h' && statsChangedIds == null) void loadChanges()
   }
   const onPanelChange = (event: Event) => {
@@ -2642,7 +2777,7 @@ export function installRepricerStatsLiveBridge(accessToken: string | null, manag
     if (input.dataset.statsColumnToggle) statsFilters.hiddenColumns = input.checked
       ? statsFilters.hiddenColumns.filter((key) => key !== input.dataset.statsColumnToggle)
       : [...statsFilters.hiddenColumns, input.dataset.statsColumnToggle]
-    applyStatsFilters()
+    applyStatsFilters(true)
   }
   const loadChanges = async () => {
     try {
@@ -2660,11 +2795,46 @@ export function installRepricerStatsLiveBridge(accessToken: string | null, manag
       }
       statsChangedIds = ids
     } catch (error) { statsChangedError = `Не удалось получить журнал изменений: ${error instanceof Error ? error.message : 'ошибка сети'}` }
-    if (!disposed) { renderStatsFiltersMenu(); applyStatsFilters() }
+    if (!disposed) { if (panel && !panel.hidden) renderStatsFiltersMenu(); applyStatsFilters(true) }
   }
+  const onSearchInput = () => {
+    if (searchTimer) clearTimeout(searchTimer)
+    searchTimer = setTimeout(() => { if (!disposed) applyStatsFilters(true) }, 120)
+  }
+  const onPagerClick = (event: Event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-stats-page]')
+    if (!button) return
+    statsTablePage += button.dataset.statsPage === 'next' ? 1 : -1
+    applyStatsFilters()
+    tab?.querySelector('.report-table-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  const onSort = (event: Event) => {
+    if (event instanceof KeyboardEvent && event.key !== 'Enter' && event.key !== ' ') return
+    const header = (event.target as HTMLElement).closest<HTMLTableCellElement>('th[data-stats-column]')
+    if (!header) return
+    if (event instanceof KeyboardEvent) event.preventDefault()
+    const column = header.dataset.statsColumn || ''
+    statsSortDirection = statsSortColumn === column && statsSortDirection === 'desc' ? 'asc' : 'desc'
+    statsSortColumn = column
+    table?.querySelectorAll<HTMLTableCellElement>('thead th[data-stats-column]').forEach((cell) => {
+      const active = cell.dataset.statsColumn === column
+      cell.setAttribute('aria-sort', active ? statsSortDirection === 'asc' ? 'ascending' : 'descending' : 'none')
+      const arrow = cell.querySelector<HTMLElement>('.sort-arrow')
+      if (arrow) arrow.textContent = active ? statsSortDirection === 'asc' ? '↑' : '↓' : '↕'
+    })
+    applyStatsFilters(true)
+  }
+  table?.querySelectorAll<HTMLTableCellElement>('thead th[data-stats-column]').forEach((header) => {
+    header.tabIndex = 0
+    header.setAttribute('aria-sort', 'none')
+    if (!header.querySelector('.sort-arrow')) header.insertAdjacentHTML('beforeend', ' <span class="sort-arrow">↕</span>')
+  })
   trigger?.addEventListener('click', togglePanel)
-  search?.addEventListener('input', applyStatsFilters)
+  search?.addEventListener('input', onSearchInput)
   reset?.addEventListener('click', resetFilters)
+  pager?.addEventListener('click', onPagerClick)
+  table?.querySelector('thead')?.addEventListener('click', onSort)
+  table?.querySelector('thead')?.addEventListener('keydown', onSort)
   panel?.addEventListener('click', onPanelClick)
   panel?.addEventListener('change', onPanelChange)
   const load = async () => {
@@ -2703,7 +2873,7 @@ export function installRepricerStatsLiveBridge(accessToken: string | null, manag
           if (page === 1) {
             firstPayload = payload
             applyRepricerStatsCachePeriod(payload)
-            pageCount = Math.ceil(Math.min(Number(payload.total || 0), REPRICER_STATS_MAX_ROWS) / REPRICER_STATS_PAGE_SIZE)
+            pageCount = Math.ceil(Number(payload.total || 0) / REPRICER_STATS_PAGE_SIZE)
           }
           renderLiveRepricerStats({ ...payload, summary: firstPayload?.summary }, page > 1)
           page += 1
@@ -2727,7 +2897,7 @@ export function installRepricerStatsLiveBridge(accessToken: string | null, manag
                   if (!isCurrent()) return null
                   if (prior.dateFrom?.slice(0, 10) !== previousFrom || prior.dateTo?.slice(0, 10) !== previousTo) break
                   previousRows.push(...prior.items)
-                  previousPages = Math.ceil(Math.min(prior.total, REPRICER_STATS_MAX_ROWS) / REPRICER_STATS_PAGE_SIZE)
+                  previousPages = Math.ceil(prior.total / REPRICER_STATS_PAGE_SIZE)
                   previousPage++
                 }
                 if (previousPage > previousPages && isCurrent()) { statsPreviousRows = previousRows; updateStatsTrends() }
@@ -2752,9 +2922,13 @@ export function installRepricerStatsLiveBridge(accessToken: string | null, manag
   return () => {
     disposed = true
     controller?.abort()
+    if (searchTimer) clearTimeout(searchTimer)
     trigger?.removeEventListener('click', togglePanel)
-    search?.removeEventListener('input', applyStatsFilters)
+    search?.removeEventListener('input', onSearchInput)
     reset?.removeEventListener('click', resetFilters)
+    pager?.removeEventListener('click', onPagerClick)
+    table?.querySelector('thead')?.removeEventListener('click', onSort)
+    table?.querySelector('thead')?.removeEventListener('keydown', onSort)
     panel?.removeEventListener('click', onPanelClick)
     panel?.removeEventListener('change', onPanelChange)
     if (window.__vellaLoadLiveRepricerStats === load) delete window.__vellaLoadLiveRepricerStats
@@ -36847,6 +37021,28 @@ export function VellaHtmlParityPage() {
           background: var(--brand-light);
           color: var(--brand);
         }
+        .vella-html-parity-root #tab-repricer-stats .stats-overview {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          border-top: 1px solid var(--gray-100);
+        }
+        .vella-html-parity-root #tab-repricer-stats .stats-overview .stat {
+          min-width: 0; min-height: 108px; border-bottom: 1px solid var(--gray-100);
+        }
+        .vella-html-parity-root #tab-repricer-stats .stats-overview .stat-label { white-space: normal; }
+        .vella-html-parity-root #tab-repricer-stats .stats-overview .stat-val { font-size: clamp(19px, 2vw, 25px); }
+        .vella-html-parity-root #tab-repricer-stats .stats-overview .stat-delta { line-height: 1.35; white-space: normal; }
+        .vella-html-parity-root #tab-repricer-stats .stats-freshness {
+          padding: 8px 20px; border-bottom: 1px solid var(--gray-100);
+          color: var(--gray-500); font-size: 12px;
+        }
+        .vella-html-parity-root #tab-repricer-stats .stats-freshness:empty { display: none; }
+        .vella-html-parity-root #tab-repricer-stats .stats-pager {
+          display: flex; align-items: center; justify-content: space-between; gap: 12px;
+          padding: 12px 20px; color: var(--gray-600); font-size: 12px;
+        }
+        .vella-html-parity-root #tab-repricer-stats .stats-pager > div { display: flex; gap: 8px; }
+        @media (max-width: 1100px) { .vella-html-parity-root #tab-repricer-stats .stats-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 560px) { .vella-html-parity-root #tab-repricer-stats .stats-overview { grid-template-columns: 1fr; } .vella-html-parity-root #tab-repricer-stats .stats-pager { align-items: flex-start; flex-direction: column; } }
         .vella-html-parity-root #tab-repricer-stats #repricerStatsFilters[hidden],
         .vella-html-parity-root #tab-repricer-stats [data-stats-column][hidden],
         .vella-html-parity-root #tab-repricer-stats tr[hidden] { display: none !important; }

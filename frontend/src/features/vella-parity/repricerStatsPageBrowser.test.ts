@@ -54,8 +54,16 @@ it('loads live statistics through the actual React route and clears them on sess
       if (requests.length === 1) await firstPage
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
         items: [{ articleId: url.searchParams.get('dateFrom') === '2026-08-01' ? 'NEW-PERIOD-REACT-STATS-SKU' : 'ACTUAL-REACT-STATS-SKU', nmId: 101, name: 'Synthetic route product', brand: 'Synthetic', managerName: '',
-          metrics: {}, decision: {}, sources: {}, priceProtection: {}, flags: [] }],
-        total: 1, itemsReturned: 1, page: 1, pageSize: 500, summary: { baskets: 902, orders: 10 },
+          metrics: { baskets: 902, orders: 10, impressions: 123, clicks: 10 }, decision: {}, sources: {}, priceProtection: {}, flags: [] }],
+        total: 1, itemsReturned: 1, page: 1, pageSize: 500, summary: {
+          skuCount: 1, baskets: 902, orders: 10, sourceReady: 0, sourcePartial: 0, sourceBlocked: 1,
+          metricTotals: {
+            baskets: { value: 902, coveredSku: 1, partialSku: 0 },
+            impressions: { value: 123, coveredSku: 1, partialSku: 0 },
+            ctrPct: { value: 8.1, coveredSku: 1, partialSku: 0 },
+            totalImpressions: { value: null, coveredSku: 0, partialSku: 0 },
+          },
+        }, cache: { basketsFetchedAt: '2026-08-07T12:00:00Z' },
       }) })
     })
     await page.goto('http://satorna.test/wb/repricer/stats')
@@ -69,6 +77,11 @@ it('loads live statistics through the actual React route and clears them on sess
     expect(await page.locator('#tab-repricer-stats').isVisible()).toBe(true)
     expect(await page.title()).toBe('Satorna — Репрайсер WB')
     expect(await page.locator('#tab-repricer-stats .stat-val').first().innerText()).toBe('902')
+    expect(await page.locator('#repricerStatsCards .stat').count()).toBe(16)
+    expect(await page.locator('#repricerStatsCards [data-stats-card="totalImpressions"] .stat-val').innerText()).toBe('—')
+    expect(await page.locator('#repricerStatsCards [data-stats-card="impressions"] .stat-val').innerText()).toBe('123')
+    expect(await page.locator('#repricerStatsCards [data-stats-card="ctrPct"] .stat-val').innerText()).toBe('8,1%')
+    expect(await page.locator('#repricerStatsFreshness').innerText()).toContain('Воронка:')
     expect(requests).toHaveLength(1)
     expect(new URLSearchParams(requests[0]).get('pageSize')).toBe('500')
     await page.locator('#repricerStatsFiltersTrigger').click()
@@ -85,7 +98,7 @@ it('loads live statistics through the actual React route and clears them on sess
     await page.locator('#repricerStatsBody').getByText('Статистика репрайсера недоступна', { exact: false }).waitFor()
     expect(await page.getByText('ACTUAL-REACT-STATS-SKU', { exact: true }).count()).toBe(0)
     expect(await page.getByText('NEW-PERIOD-REACT-STATS-SKU', { exact: true }).count()).toBe(0)
-    expect(await page.locator('#tab-repricer-stats .stat-val').allTextContents()).toEqual(['—', '—', '—', '—'])
+    expect(await page.locator('#tab-repricer-stats .stat-val').allTextContents()).toEqual(Array(16).fill('—'))
     expect(requests).toHaveLength(2)
     expect(unexpected, `Unexpected fixture requests: ${JSON.stringify(unexpected)}`).toEqual([])
     expect(errors).toEqual([])

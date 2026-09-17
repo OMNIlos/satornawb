@@ -5433,7 +5433,7 @@ body.avito-popup-open { overflow: hidden; }
     </div>
     <div class="nav-item" data-tab="repricer-stats" onclick="goSubtab('repricer-stats')">
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-      <span class="nav-label">Статистика</span><span class="nav-badge warn">черновик</span>
+      <span class="nav-label">Статистика</span>
     </div>
     <div class="nav-item" data-tab="templates" onclick="goSubtab('templates')">
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
@@ -5701,7 +5701,7 @@ body.avito-popup-open { overflow: hidden; }
   </div>
   <div class="subtab" data-tab="repricer-stats" onclick="goSubtab('repricer-stats')">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-    Статистика <span class="subtab-count">черновик</span>
+    Статистика
   </div>
   <div class="subtab" data-tab="templates" onclick="goSubtab('templates')">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
@@ -8875,12 +8875,8 @@ body.avito-popup-open { overflow: hidden; }
 </div>
 
 <div class="tab-content" id="tab-repricer-stats">
-  <div class="stats">
-    <div class="stat"><div class="stat-label">Добавили в корзину <span class="stat-tip" data-tip="Главный сигнал спроса: рост корзин важнее разовой продажи.">?</span></div><div class="stat-val">472</div><div class="stat-delta up">↑ +9.1% к периоду</div><svg class="stat-spark" width="44" height="22" viewBox="0 0 44 22"><polyline points="0,18 6,15 12,13 18,14 24,10 30,11 36,8 44,6" fill="none" stroke="#10B981" stroke-width="1.5"/></svg></div>
-    <div class="stat"><div class="stat-label">Готовы к пересчёту</div><div class="stat-val">18 товаров</div><div class="stat-delta up">без ограничений цены</div><svg class="stat-spark" width="44" height="22" viewBox="0 0 44 22"><polyline points="0,16 7,15 14,12 21,10 28,11 35,8 44,7" fill="none" stroke="#2563EB" stroke-width="1.5"/></svg></div>
-    <div class="stat"><div class="stat-label">Нужна настройка цены <span class="stat-tip" data-tip="Цена не меняется, если не хватает минимальной цены, комиссии, цены покупателя или финансов.">?</span></div><div class="stat-val">7 товаров</div><div class="stat-delta down">проверьте данные WB</div><svg class="stat-spark" width="44" height="22" viewBox="0 0 44 22"><polyline points="0,10 6,11 12,14 18,13 24,15 30,17 36,16 44,18" fill="none" stroke="#EF4444" stroke-width="1.5"/></svg></div>
-    <div class="stat"><div class="stat-label">Данные WB <span class="stat-tip" data-tip="Показывает, достаточно ли данных Wildberries для расчёта цены.">?</span></div><div class="stat-val">частично готово</div><div class="stat-delta neutral">цены не применяются автоматически</div><svg class="stat-spark" width="44" height="22" viewBox="0 0 44 22"><polyline points="0,12 6,12 12,11 18,13 24,12 30,11 36,12 44,10" fill="none" stroke="#F59E0B" stroke-width="1.5"/></svg></div>
-  </div>
+  <div class="stats stats-overview" id="repricerStatsCards"></div>
+  <div class="stats-freshness" id="repricerStatsFreshness" aria-live="polite"></div>
   <div class="toolbar">
     <div class="search"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" placeholder="Артикул, товар или статус..."></div>
     <div class="chips products-filter-compact"><button class="btn btn-default btn-sm products-filter-trigger" id="repricerStatsFiltersTrigger" type="button" aria-expanded="false" aria-controls="repricerStatsFilters">Фильтры <span class="products-filter-trigger-count">0</span></button><span class="products-filter-summary" id="repricerStatsFilterLabel">Все · Все бренды · Все акции</span><button class="help-btn" type="button" onclick="showHelp('table-fields')" aria-label="Справка по показателям">?</button></div>
@@ -8894,6 +8890,7 @@ body.avito-popup-open { overflow: hidden; }
       <tbody id="repricerStatsBody"></tbody>
     </table>
   </div>
+  <nav class="stats-pager" id="repricerStatsPager" aria-label="Страницы статистики"></nav>
 </div>
 
 <div class="tab-content" id="tab-expenses">
@@ -22303,7 +22300,7 @@ function renderSecondaryReports(){
     return `<tr ${reportDataAttrs(r, [i % 4 === 0 ? 'Ниже порога' : 'Рост', below ? 'Маржа ниже' : '', wasOs ? 'был ОС' : ''])}><td>${reportProductCell(r)}</td><td class="num"><span class="metric-stack"><strong>${(3420 + i * 1440).toLocaleString('ru-RU')} ₽</strong><span class="subline">${i % 4 === 0 ? '−' + (6 + i) : '+' + (5 + i)}%</span></span></td><td class="num"><span class="metric-stack"><strong>${orders} шт</strong><span class="subline">${i % 4 === 0 ? '−6%' : '+9%'}</span></span></td><td class="num"><span class="metric-stack"><strong>${sales + 8} корз.</strong><span class="subline">${i % 5 === 0 ? '−18%' : '+' + (8 + i) + '%'}</span></span></td><td class="num"><span class="metric-stack"><strong>${18 + i % 9}%</strong><span class="subline">${i % 3 === 0 ? '−2.' + i % 9 : '+1.' + i % 7} пп</span></span></td><td class="num"><span class="metric-stack"><strong>${(sales * 860).toLocaleString('ru-RU')} ₽</strong><span class="subline">${i % 3 ? '+4%' : '−7%'}</span></span></td><td><span class="report-tag ${wasOs ? 'warn' : 'ok'}">${wasOs ? 'был ОС' : 'нет'}</span></td><td class="num"><span class="stock-days" data-tip="7 daily snapshots по доступному остатку">${days}</span></td><td class="num">${stockOutDays}</td><td class="num">100%</td><td><span class="report-tag ${below ? 'warn' : 'ok'}">${wasOs ? stockOutDays + ' дн. ОС, сравнение искажено' : i % 4 === 0 ? 'ниже прошлого периода' : 'в пределах порога'}</span></td><td>${reportCommentCell(r, 'Неделя')}</td></tr>`;
   });
 
-  document.querySelectorAll('#tab-repricer-stats .report-table-wrap table, #tab-expenses .report-table-wrap table, #tab-sources .report-table-wrap table, #tab-rnp .report-table-wrap table, #tab-pnl .report-table-wrap table, #tab-ads .report-table-wrap table, #tab-stock .report-table-wrap table, #tab-week .report-table-wrap table').forEach(enhanceReportTableSorting);
+  document.querySelectorAll('#tab-expenses .report-table-wrap table, #tab-sources .report-table-wrap table, #tab-rnp .report-table-wrap table, #tab-pnl .report-table-wrap table, #tab-ads .report-table-wrap table, #tab-stock .report-table-wrap table, #tab-week .report-table-wrap table').forEach(enhanceReportTableSorting);
   ['repricer-stats', 'expenses', 'sources', 'rnp', 'pnl', 'ads', 'stock', 'week'].forEach(tab => applyGenericReportFilter(document.getElementById('tab-' + tab)));
   applyReportTrendTone();
 }

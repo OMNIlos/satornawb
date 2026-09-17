@@ -2178,7 +2178,7 @@ def _repricer_sku_snapshot_key(
 ) -> str:
     safe_scenario = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(scenario or "complete")).strip("_") or "complete"
     flags = f"promo{1 if include_promotions else 0}_content{1 if include_content else 0}"
-    return f"{view}_list_snapshot_v{version}_{safe_scenario}_{period_suffix}_{flags}"
+    return f"{view}_list_snapshot_v{version}_{safe_scenario}_{period_suffix}_{flags}{'_metrics2' if view == 'stats' else ''}"
 
 
 def _repricer_sku_snapshot_chunk_key(snapshot_key: str, chunk_index: int) -> str:
@@ -3010,6 +3010,7 @@ def _repricer_list_summary_from_source_caches(
         analytics.update(
             {
                 "ordersUnits": funnel_order_count if funnel_order_count is not None else _int_or_zero(period.get("ordersUnits")),
+                "ordersSource": "sales_funnel.orderCount" if funnel_order_count is not None else "supplier.orders" if nm_key in period_aggregates else None,
                 "cancelledOrdersUnits": _int_or_zero(period.get("cancelledOrdersUnits")),
                 "funnelOrderCount": funnel_order_count,
                 "buyoutUnits": finance.get("salesUnits") if finance else None,
@@ -3039,6 +3040,7 @@ def _repricer_list_summary_from_source_caches(
                 "acquiringKopecks": acquiring_kopecks,
                 "adSpendKopecks": ad_spend_kopecks,
                 "adDataAvailable": bool(ads) or bool(finance.get("financeAdSpendAuthoritative")),
+                "adMetricsAvailable": bool(ads),
                 "adImpressions": _int_or_zero(ads.get("adImpressions")),
                 "adClicks": _int_or_zero(ads.get("adClicks")),
                 "adCartAdds": _int_or_zero(ads.get("adCartAdds")),
@@ -3224,24 +3226,26 @@ def _repricer_stats_metrics(row: dict[str, Any]) -> dict[str, Any]:
     analytics = row.get("analytics") or {}
     ad_data_available = analytics.get("adDataAvailable")
     has_ad_data = True if ad_data_available is None else bool(ad_data_available)
+    has_ad_metrics = bool(analytics.get("adMetricsAvailable", has_ad_data))
     impressions = _int_or_zero(analytics.get("adImpressions") or analytics.get("impressions") or analytics.get("views"))
     clicks = _int_or_zero(analytics.get("adClicks") or analytics.get("clicks"))
     baskets_raw = analytics.get("baskets")
     baskets = _int_or_zero(baskets_raw) if baskets_raw is not None else None
-    orders = _int_or_zero(analytics.get("ordersUnits") or analytics.get("funnelOrderCount"))
-    revenue_kopecks = _int_or_zero(analytics.get("revenueKopecks") or analytics.get("sellerRevenueKopecks"))
+    orders_source = analytics.get("ordersSource", "explicit")
+    orders = _int_or_zero(analytics.get("ordersUnits") or analytics.get("funnelOrderCount")) if orders_source not in {None, "finance_sales_fallback", "fallback"} else None
+    revenue_kopecks = _int_or_zero(analytics.get("revenueKopecks") or analytics.get("sellerRevenueKopecks")) if analytics.get("financeState", "ok") in {"ok", "fallback"} else None
     ad_spend_kopecks = _int_or_zero(analytics.get("adSpendKopecks"))
-    display_impressions: int | None = impressions if has_ad_data else None
-    display_clicks: int | None = clicks if has_ad_data else None
+    display_impressions: int | None = impressions if has_ad_metrics else None
+    display_clicks: int | None = clicks if has_ad_metrics else None
     display_ad_spend_kopecks: int | None = ad_spend_kopecks if has_ad_data else None
     return {
         "totalImpressions": analytics.get("totalImpressions"),
-        "totalClicks": analytics.get("totalClicks"),
+        "totalClicks": analytics.get("totalClicks") if analytics.get("basketsState", "ok") in {"ok", "fallback", "partial"} else None,
         "impressions": display_impressions,
         "clicks": display_clicks,
-        "ctrPct": _pct_or_none(clicks, impressions) if has_ad_data else None,
-        "adCartAdds": _int_or_zero(analytics.get("adCartAdds") or analytics.get("cartAdds") or analytics.get("atbs")) if has_ad_data else None,
-        "adOrders": _int_or_zero(analytics.get("adOrders") or analytics.get("adOrderCount")) if has_ad_data else None,
+        "ctrPct": _pct_or_none(clicks, impressions) if has_ad_metrics else None,
+        "adCartAdds": _int_or_zero(analytics.get("adCartAdds") or analytics.get("cartAdds") or analytics.get("atbs")) if has_ad_metrics else None,
+        "adOrders": _int_or_zero(analytics.get("adOrders") or analytics.get("adOrderCount")) if has_ad_metrics else None,
         "baskets": baskets,
         "orders": orders,
         "cartToOrderCrPct": _pct_or_none(orders, baskets),
@@ -3253,12 +3257,13 @@ def _repricer_stats_metrics(row: dict[str, Any]) -> dict[str, Any]:
         "factTaxReason": analytics.get("factTaxReason"),
         "marginPct": _float_or_none(analytics.get("marginPct")),
         "adSpendKopecks": display_ad_spend_kopecks,
-        "adRevenueKopecks": _int_or_zero(analytics.get("adRevenueKopecks")) if has_ad_data else None,
+        "adRevenueKopecks": _int_or_zero(analytics.get("adRevenueKopecks")) if has_ad_metrics else None,
         "drrPct": _pct_or_none(ad_spend_kopecks, revenue_kopecks) if has_ad_data else None,
-        "stockUnits": analytics.get("wbStockUnits"),
+        "stockUnits": analytics.get("wbStockUnits") if analytics.get("stockState", "ok") in {"ok", "fallback"} else None,
         "currentPriceKopecks": meta.get("currentPriceKopecks"),
         "avgPriceWithSppKopecks": analytics.get("avgPriceWithSppKopecks"),
         "averagePriceKopecks": analytics.get("avgPriceWithSppKopecks"),
+        "averagePriceOrderCount": analytics.get("funnelOrderCount"),
         "medianPriceKopecks": analytics.get("medianPriceKopecks") or analytics.get("avgPriceWithSppKopecks") or meta.get("currentPriceKopecks"),
         "sppPct": _float_or_none(analytics.get("sppPct")),
         "buyoutPct": _float_or_none(analytics.get("buyoutPct")),
@@ -3372,6 +3377,37 @@ def _repricer_stats_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
     orders = sum(_int_or_zero((item.get("metrics") or {}).get("orders")) for item in items)
     ad_spend_kopecks = sum(_int_or_zero((item.get("metrics") or {}).get("adSpendKopecks")) for item in items)
     revenue_kopecks = sum(_int_or_zero((item.get("metrics") or {}).get("revenueKopecks")) for item in items)
+    metric_fields = (
+        "totalImpressions", "impressions", "totalClicks", "clicks", "adCartAdds", "baskets",
+        "ctrPct", "cartToOrderCrPct", "orders", "adSpendKopecks", "drrPct", "stockUnits", "averagePriceKopecks",
+    )
+    ratio_fields = {
+        "ctrPct": ("clicks", "impressions"),
+        "cartToOrderCrPct": ("orders", "baskets"),
+        "drrPct": ("adSpendKopecks", "revenueKopecks"),
+    }
+    funnel_fields = {"totalImpressions", "totalClicks", "baskets", "cartToOrderCrPct", "averagePriceKopecks"}
+    metric_totals = {}
+    for field in metric_fields:
+        if field in ratio_fields:
+            numerator, denominator = ratio_fields[field]
+            covered = [item for item in items if all((item.get("metrics") or {}).get(key) is not None for key in (numerator, denominator))]
+            value = _pct_or_none(
+                sum((item["metrics"][numerator] for item in covered), 0),
+                sum((item["metrics"][denominator] for item in covered), 0),
+            )
+        elif field == "averagePriceKopecks":
+            covered = [item for item in items if (item.get("metrics") or {}).get(field) is not None and _int_or_zero((item.get("metrics") or {}).get("averagePriceOrderCount")) > 0]
+            order_count = sum(_int_or_zero(item["metrics"]["averagePriceOrderCount"]) for item in covered)
+            value = round(sum(item["metrics"][field] * item["metrics"]["averagePriceOrderCount"] for item in covered) / order_count) if order_count else None
+        else:
+            covered = [item for item in items if (item.get("metrics") or {}).get(field) is not None]
+            value = sum(item["metrics"][field] for item in covered) if covered else None
+        metric_totals[field] = {
+            "value": value,
+            "coveredSku": len(covered),
+            "partialSku": sum(1 for item in covered if field in funnel_fields and (item.get("sources") or {}).get("states", {}).get("baskets") == "partial"),
+        }
     return {
         "skuCount": len(items),
         "canRecalculate": sum(1 for item in items if (item.get("decision") or {}).get("id") == "can_recalculate"),
@@ -3388,6 +3424,7 @@ def _repricer_stats_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
         "adSpendKopecks": ad_spend_kopecks,
         "revenueKopecks": revenue_kopecks,
         "drrPct": _pct_or_none(ad_spend_kopecks, revenue_kopecks),
+        "metricTotals": metric_totals,
     }
 
 

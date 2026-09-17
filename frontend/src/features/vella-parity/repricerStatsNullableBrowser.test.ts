@@ -101,7 +101,7 @@ it('renders unknown and zero baskets honestly in both actual statistics pages', 
     expect(await page.locator('#repricerStatsBody tr').first().locator('td').nth(8).innerText()).toBe('—')
     expect(await page.locator('#repricerStatsBody tr').first().locator('td').nth(10).innerText()).toBe('—')
     expect(await page.locator('#tab-repricer-stats .stat-val').first().innerText()).toBe('—')
-    expect(await page.locator('#tab-repricer-stats .stat-delta').first().innerText()).toContain('конверсия —')
+    expect(await page.locator('#tab-repricer-stats .stat-delta').first().innerText()).toContain('нет данных WB')
     await expectRow(page, 'ZERO-STATS-SKU', 8, 10, '0', '0%')
     await expectRow(page, 'NULL-CR-STATS-SKU', 8, 10, '5', '—')
     await expectRow(page, 'POSITIVE-STATS-SKU', 8, 10, '7', '42,9%')

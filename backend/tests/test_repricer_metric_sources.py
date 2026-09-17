@@ -47,6 +47,7 @@ def test_missing_funnel_orders_retains_existing_fallback(selected, period_orders
     assert row["analytics"]["ordersUnits"] == expected
     assert row["analytics"]["ordersSource"] == source
     assert row["analytics"]["funnelOrderCount"] is None
+    assert router._repricer_stats_metrics(row)["orders"] == (expected if source == "supplier.orders" else None)
 
 
 def test_invalid_negative_funnel_orders_does_not_gain_priority():
