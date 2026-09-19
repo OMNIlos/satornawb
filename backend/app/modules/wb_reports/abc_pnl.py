@@ -461,6 +461,7 @@ class WbAbcPnlService:
         blockers: tuple[str, ...],
         *,
         approved_tax_policy: bool = False,
+        advertising_complete: bool = True,
     ) -> AbcPnlRow:
         penalty = max(0, fact.penalty_kopecks)
         deduction = max(0, fact.deduction_kopecks)
@@ -496,7 +497,7 @@ class WbAbcPnlService:
         )
         profit_before_loyalty = (
             None
-            if profit_before_ads_and_loyalty is None or advertising_spend is None
+            if profit_before_ads_and_loyalty is None or advertising_spend is None or not advertising_complete
             else profit_before_ads_and_loyalty - advertising_spend
         )
         cashback_amount = fact.cashback_amount_kopecks if loyalty_canonical else None
@@ -523,7 +524,7 @@ class WbAbcPnlService:
             logistics_kopecks=fact.logistics_kopecks,
             storage_kopecks=fact.storage_kopecks,
             acceptance_kopecks=fact.acceptance_kopecks,
-            advertising_kopecks=advertising_spend,
+            advertising_kopecks=advertising_spend if advertising_complete else None,
             penalty_kopecks=penalty,
             tax_basis_points=750 if approved_tax_policy else None,
             resolved_tax_kopecks=tax if approved_tax_policy else None,
@@ -865,11 +866,12 @@ class WbAbcPnlService:
                     (
                         advertising.spend_by_nm.get(fact.nm_id, 0)
                         if advertising_complete
-                        else None
+                        else advertising.spend_by_nm.get(fact.nm_id)
                     ),
                     loyalty_canonical,
                     sales_classes.get(fact.nm_id),
-                    (*cost_blockers, *economics_blockers),
+                    (*cost_blockers, *economics_blockers, *advertising.blocker_ids),
+                    advertising_complete=advertising_complete,
                     approved_tax_policy=bool(economics_daily_by_nm.get(fact.nm_id))
                     and tax is not None
                     and all(

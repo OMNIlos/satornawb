@@ -441,6 +441,7 @@ describe('canonical ABC/P&L contract', () => {
     expect(html).toContain('Уточните себестоимость и её даты')
     expect(html).toContain('WB API не передал')
     expect(html).toContain('КТР не получен')
+    expect(renderAbcRowHtml({ ...mapped, adsKnown: true, blockerIds: ['WB_PNL_ADVERTISING_UNATTRIBUTED'] }, 0)).toContain('без нераспределённых расходов')
     const absent = mapBackendAbcRowToParity(adaptCanonicalAbcReport(parseCanonicalAbcPnlPage(page())).rows[0])
     expect(absent).toMatchObject({ baskets: '—', orders: '—', stock: '—', ordersKnown: false })
   })

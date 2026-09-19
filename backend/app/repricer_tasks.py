@@ -16,7 +16,9 @@ from app.avito.price_apply import LiveAvitoPriceClient
 from app.cabinet.store import get_organization_avito_credentials_secret, get_organization_wb_token_secret, get_user_wb_token_secret
 from app.config import get_settings
 from app.infra.celery_app import REPRICER_SCHEDULER_POLL_MINUTES, celery_app
+from app.infra.db import get_session_factory
 from app.platform.advertising.raw_backfill import backfill_raw_advertising
+from app.platform.economics.backfill import LegacyCostSnapshot, apply_cost_backfill
 from app.platform.period import Period
 from app.repricer_cache.store import (
     cached_goods_meta,
@@ -297,6 +299,19 @@ def refresh_report_sources_for_org(self, organization_id: int, user_id: str, rep
                 refresh_result = {**refresh_result, "canonicalAdvertising": advertising}
                 if advertising.get("state") != "ready":
                     raise RuntimeError("WB не завершил загрузку рекламы. Повторите обновление после снятия лимита запросов.")
+                with get_session_factory()() as session:
+                    apply_cost_backfill(
+                        session,
+                        organization_id=organization_id,
+                        marketplace_account_id=advertising["marketplaceAccountId"],
+                        snapshot=LegacyCostSnapshot(
+                            captured_at=datetime.now(timezone.utc),
+                            goods=list_cached_goods(organization_id),
+                            content_cards=(get_source_cache(organization_id, "content_cards", slim=False) or {}).get("cards", []),
+                            runtime_state={}, algorithm_settings={}, costs_excel={},
+                        ),
+                        include_costs=False,
+                    )
             save_job("building_report", "Источники обновлены, собираем отчет", 78, sync=refresh_result)
         else:
             refresh_result = {"state": "skipped", "steps": [], "reason": "no_wb_sources_for_report"}

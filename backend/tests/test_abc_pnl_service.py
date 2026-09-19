@@ -656,9 +656,12 @@ def test_unattributed_raw_spend_keeps_summary_but_not_row_profit(
     row = page.items[0]
     assert page.summary.advertising_spend_kopecks == 12_350
     assert page.summary.unattributed_advertising_spend_kopecks == 50
-    assert row.advertising_spend_kopecks is None
+    assert row.advertising_spend_kopecks == 12_300
     assert row.profit_before_loyalty_kopecks is None
     assert row.profit_after_loyalty_kopecks is None
+    assert row.profit_before_internal_expenses_kopecks is None
+    assert row.net_profit_kopecks is None
+    assert "WB_PNL_ADVERTISING_UNATTRIBUTED" in row.blocker_ids
     assert page.blocker_ids == (
         "WB_PNL_ADVERTISING_UNATTRIBUTED",
         "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",

@@ -1,6 +1,7 @@
 """Source refresh must hand off to a real Celery request with its own retry."""
 
 from copy import deepcopy
+from contextlib import nullcontext
 from datetime import date
 from types import SimpleNamespace
 
@@ -180,14 +181,21 @@ def test_abc_refresh_collects_raw_advertising_before_report_handoff(runtime, mon
 
     def collect(org, period, *, wb_token):
         calls.append((org, period.date_from, period.date_to, wb_token))
-        return {"state": "ready", "factCount": 1}
+        return {"state": "ready", "factCount": 1, "marketplaceAccountId": 31}
 
     monkeypatch.setattr(tasks, "backfill_raw_advertising", collect)
+    bindings = []
+    monkeypatch.setattr(tasks, "get_session_factory", lambda: lambda: nullcontext(None))
+    monkeypatch.setattr(tasks, "list_cached_goods", lambda org: [{"nmID": 123, "vendorCode": "SKU"}])
+    monkeypatch.setattr(tasks, "apply_cost_backfill", lambda session, **kwargs: bindings.append(kwargs))
     args = (*refresh_args("abc")[:7], True, None)
     with pytest.raises(Ignore):
         run_as_worker(tasks.refresh_report_sources_for_org, args)
     assert calls == [(1, date(2026, 8, 17), date(2026, 8, 23), "synthetic")]
     assert runtime.queue[0][1]["source_refresh"]["canonicalAdvertising"]["state"] == "ready"
+    assert bindings[0]["marketplace_account_id"] == 31
+    assert bindings[0]["snapshot"].goods == [{"nmID": 123, "vendorCode": "SKU"}]
+    assert bindings[0]["include_costs"] is False
 
 
 def test_standalone_build_keeps_existing_contract(runtime):

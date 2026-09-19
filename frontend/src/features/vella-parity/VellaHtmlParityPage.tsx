@@ -6816,11 +6816,12 @@ function renderAbcTrafficCells(ctx: AbcRowRenderContext) {
 
 function renderAbcFinancialCells(ctx: AbcRowRenderContext) {
   const { row, text } = ctx
+  const adsPartial = Array.isArray(row.blockerIds) && row.blockerIds.includes('WB_PNL_ADVERTISING_UNATTRIBUTED') && row.adsKnown
   const profitTip = row.canonical ? 'Продажи за вычетом возвратов минус комиссия, логистика, хранение, приёмка, реклама, штрафы, налог и себестоимость' : 'Чистая прибыль товара'
   return [
     abcRowCell('abc-orders-cell', window.pairMetricCell?.(text('orders'), 'Заказы за выбранный период', 'сумма/динамика') ?? '', 'class="num"'),
     abcRowCell('abc-sales-cell', window.pairMetricCell?.(text('sales'), 'Продажи из финансового отчёта WB (retailAmount)', 'сумма/динамика') ?? '', 'class="num"', 'data-tip="Продажи из финансового отчёта WB (retailAmount, возвраты со знаком)"'),
-    abcRowCell('abc-ads-cell', text('ads'), 'class="num"', 'data-tip="Расход рекламы и ДРР"'),
+    abcRowCell('abc-ads-cell', `${text('ads')}${adsPartial ? '<span class="sub">без нераспределённых расходов</span>' : ''}`, 'class="num"', 'data-tip="Расход рекламы по товару из WB fullstats и ДРР. Нераспределённые расходы не включены в товар; при их наличии прибыль не подтверждается"'),
     abcRowCell('abc-net-cell', `<span class="${text('netCls')}" data-tip="${profitTip}">${text('net')}</span><span class="sub">${text('netSub')}</span>`, 'class="num"'),
   ].join('\n    ')
 }
@@ -7577,7 +7578,7 @@ function ExportDropdownIsland({ replacementKey }: { replacementKey: string }) {
         document.body.append(anchor)
         anchor.click()
       } finally { anchor.remove(); URL.revokeObjectURL(url) }
-      window.showToast?.(`Скачана копия таблицы: ${payload.rows.length} строк. Прибыль предварительная.`, 'info')
+      window.showToast?.(`Скачана копия таблицы: ${payload.rows.length} строк.`, 'info')
     } catch (error) {
       if (!controller.signal.aborted && requestScope === scope()) window.showToast?.(error instanceof Error ? error.message : 'Не удалось выгрузить XLSX.', 'warn')
     } finally {
@@ -7611,7 +7612,7 @@ function ExportDropdownIsland({ replacementKey }: { replacementKey: string }) {
           type="button"
           className="dd-item"
           style={{ width: '100%', border: 0, textAlign: 'left', fontFamily: 'inherit' }}
-          title="Копия всех строк текущей таблицы с фильтрами; прибыль предварительная"
+          title="Копия всех строк текущей таблицы с фильтрами и статусом подтверждения прибыли"
           disabled={pending}
           data-vella-react-handlers="onclick"
           onClick={() => void exportTable()}

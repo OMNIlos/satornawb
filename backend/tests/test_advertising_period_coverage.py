@@ -264,6 +264,47 @@ def test_signed_documents_remain_separate_from_operational_spend(session, raw_bu
     assert result.unknown_spend_kopecks == 0
 
 
+def test_period_reconciles_each_day_without_accumulating_rounding_as_spend(
+    session, raw_bundle
+):
+    _map_nm(session)
+    service = AdvertisingService(session, 1, now=lambda: NOW)
+    for offset in (-1, 1):
+        bundle = _bundle(raw_bundle, PERIOD, 150)
+        campaign = bundle["fullstats"][0]["payload"][0]
+        second_day = json.loads(json.dumps(campaign["days"][0]))
+        second_day["date"] = "2026-09-02T00:00:00Z"
+        campaign["days"].append(second_day)
+        for day in campaign["days"]:
+            day["sum"] = (150 + offset) / 100
+        for metric in ("views", "clicks", "atbs", "orders", "sum_price", "canceled"):
+            campaign[metric] *= 2
+        campaign["sum"] = (300 + 3 * offset) / 100
+        snapshot = service.ingest_raw_payload(
+            31, PERIOD, bundle, source_reference="test:rounding",
+            observed_at=NOW + timedelta(minutes=offset),
+        )
+        source = service.get_pnl_source(31, PERIOD)
+        assert (source.total_spend_kopecks, source.spend_by_nm) == (300, {2001: 300})
+        assert source.unattributed_spend_kopecks == 0
+        assert "WB_ADS_HIERARCHY_TOLERANCE_APPLIED" in service.get_raw_reconciliation(
+            31, PERIOD
+        ).diagnostics
+
+        period_row = session.scalar(
+            select(WbAdvertisingFactRow).where(
+                WbAdvertisingFactRow.sync_run_id == snapshot.sync_run_id,
+                WbAdvertisingFactRow.campaign_id == 1001,
+                WbAdvertisingFactRow.grain == "period",
+            )
+        )
+        period_row.spend_kopecks = 300 + 2 * offset - 2
+        session.commit()
+        invalid = service.get_pnl_source(31, PERIOD)
+        assert invalid.total_spend_kopecks is None
+        assert invalid.blocker_ids == ("WB_ADS_HIERARCHY_RECONCILIATION_FAILED",)
+
+
 @pytest.mark.parametrize("scope", ["facts", "documents"])
 def test_campaign_coverage_requires_same_run_and_interval(session, raw_bundle, scope):
     service = AdvertisingService(session, 1, now=lambda: NOW)

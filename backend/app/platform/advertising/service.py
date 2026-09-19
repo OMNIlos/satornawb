@@ -164,7 +164,24 @@ def _combine_totals(
 def _campaign_residual(
     campaign: WbAdvertisingFactRow,
     source_rows: list[WbAdvertisingFactRow],
+    daily_rows: list[WbAdvertisingFactRow] | None = None,
 ) -> tuple[AdvertisingMetricTotals, bool, bool]:
+    if daily_rows:
+        # WB rounds each level independently; validate the stored daily totals
+        # before combining them instead of widening the period's tolerance.
+        levels = [_campaign_residual(campaign, daily_rows)]
+        levels.extend(
+            _campaign_residual(
+                day,
+                [row for row in source_rows if row.business_date == day.business_date],
+            )
+            for day in daily_rows
+        )
+        return (
+            _combine_totals([residual for residual, _, _ in levels]),
+            any(invalid for _, invalid, _ in levels),
+            any(tolerated for _, _, tolerated in levels),
+        )
     parent = _metric_totals([campaign])
     children = _metric_totals(source_rows)
     values: dict[str, int | None] = {}
@@ -181,6 +198,9 @@ def _campaign_residual(
         if difference < -tolerance:
             values[name] = None
             invalid = True
+        elif source_rows and abs(difference) <= tolerance:
+            values[name] = 0
+            tolerance_applied |= difference != 0
         else:
             values[name] = max(0, difference)
             tolerance_applied |= difference < 0
@@ -1086,6 +1106,12 @@ class AdvertisingService:
             if fact.fact_scope == "campaign" and fact.grain == "period"
         ]
         source_rows = [fact for fact in facts if fact.fact_scope == "source_sku"]
+        daily_by_campaign: dict[tuple[str, int], list[WbAdvertisingFactRow]] = {}
+        for fact in facts:
+            if fact.fact_scope == "campaign" and fact.grain == "day":
+                daily_by_campaign.setdefault(
+                    (fact.sync_run_id, int(fact.campaign_id)), []
+                ).append(fact)
         source_by_campaign: dict[tuple[str, int], list[WbAdvertisingFactRow]] = {}
         source_by_nm: dict[int, list[WbAdvertisingFactRow]] = {}
         for fact in source_rows:
@@ -1108,6 +1134,14 @@ class AdvertisingService:
                     )
                     if fact.date_from >= campaign.date_from
                     and fact.date_to <= campaign.date_to
+                ],
+                [
+                    day
+                    for day in daily_by_campaign.get(
+                        (campaign.sync_run_id, int(campaign.campaign_id)), []
+                    )
+                    if day.date_from >= campaign.date_from
+                    and day.date_to <= campaign.date_to
                 ],
             )
             residuals.append(residual)
