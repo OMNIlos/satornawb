@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AuthContext, type AuthContextValue } from '@/features/auth/authContext'
-import { AbcKpiStripIsland, installAbcLiveDataBridge } from '@/features/vella-parity/VellaHtmlParityPage'
+import { AbcKpiStripIsland, installAbcLiveDataBridge, mapBackendAbcRowToParity, renderAbcRowHtml } from '@/features/vella-parity/VellaHtmlParityPage'
 
 import {
   adaptCanonicalAbcReport,
@@ -71,10 +71,10 @@ describe('canonical ABC bridge lifecycle', () => {
     await window.__vellaLoadLiveAbcReport?.()
     now += 299_999
     await window.__vellaLoadLiveAbcReport?.()
-    expect(request).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledTimes(2)
     now += 1
     await window.__vellaLoadLiveAbcReport?.()
-    expect(request).toHaveBeenCalledTimes(2)
+    expect(request).toHaveBeenCalledTimes(4)
     expect(window.__vellaAbcLiveError).toBeUndefined()
   })
 
@@ -107,7 +107,9 @@ describe('canonical ABC bridge lifecycle', () => {
   it.each(['account', 'period'] as const)('ignores a late %s response even when transport ignores abort', async (changed) => {
     installBridgeWindow()
     const resolvers: Array<(response: Response) => void> = []
-    const request = vi.fn(() => new Promise<Response>((resolve) => resolvers.push(resolve)))
+    const request = vi.fn((input: RequestInfo | URL) => String(input).includes('/latest-cache?')
+      ? Promise.resolve(jsonResponse({ rows: [] }))
+      : new Promise<Response>((resolve) => resolvers.push(resolve)))
     vi.stubGlobal('fetch', request)
     installAbcLiveDataBridge(`race-test-${changed}`, { organizationId: 7, marketplaceAccountId: 31 })
     const oldLoad = window.__vellaLoadLiveAbcReport?.()
@@ -133,7 +135,7 @@ describe('canonical ABC bridge lifecycle', () => {
     expect(window.__vellaAbcLiveReport).toBe(currentReport)
     expect(window.__vellaAbcLiveLoading).toBe(false)
     expect(window.__vellaAbcLiveError).toBeUndefined()
-    expect(request).toHaveBeenCalledTimes(2)
+    expect(request).toHaveBeenCalledTimes(3)
   })
 })
 
@@ -404,6 +406,39 @@ describe('canonical ABC/P&L contract', () => {
       blockerIds: ['WB_PNL_COST_ASSUMED'],
     })
     expect(pnl.canonicalSummary.netProfitKopecks).toBeNull()
+  })
+
+  it('enriches canonical ABC by WB id without hiding operations or replacing missing finance', () => {
+    installBridgeWindow()
+    const supplemental = [
+      { nmId: 99, sku: row.sellerArticle, baskets: 999 },
+      {
+        nmId: String(row.nmId), sku: 'Actual article', productName: 'Товар WB', productStatus: 'new',
+        managerId: 'manager-1', manager: 'Менеджер', promotionStatus: 'yes', promotionName: 'Акция WB',
+        priceBeforeSppKopecks: 150_000, priceWithSppKopecks: 100_000, clicks: 12, baskets: 0,
+        ordersComposite: { units: 0, kopecks: 0 }, wbStockUnits: 8,
+        ruleEvaluation: { status: 'risk' as const },
+        // Supplemental financial values must never override canonical nulls or amounts.
+        cogsKopecks: 999, netTotalKopecks: 999, marginPct: 999, adSpendKopecks: 999,
+      },
+    ]
+    const report = adaptCanonicalAbcReport(parseCanonicalAbcPnlPage(page()), supplemental)
+    expect(report.rows[0]).toMatchObject({
+      sku: 'Actual article', productName: 'Товар WB', baskets: 0, clicks: 12, wbStockUnits: 8,
+      adSpendKopecks: row.advertisingSpendKopecks, cogsKopecks: null, marginPct: null,
+      profitBeforeInternalExpensesKopecks: null, netProfitKopecks: null,
+    })
+    expect(report.rows[0].commissionCostPct).toBeCloseTo(row.commissionKopecks / row.revenueKopecks * 100)
+    const mapped = mapBackendAbcRowToParity(report.rows[0])
+    expect(mapped).toMatchObject({
+      status: 'новинка', action: 'аудит', baskets: '0', clicks: '12', stock: '8 шт',
+      price: '1 500 ₽', spp: 'с СПП 1 000 ₽', ordersKnown: true, profitKnown: false, net: '—',
+    })
+    const html = renderAbcRowHtml(mapped, 0)
+    expect(html).toContain('Акция WB')
+    expect(html).toContain('Менеджер')
+    const absent = mapBackendAbcRowToParity(adaptCanonicalAbcReport(parseCanonicalAbcPnlPage(page())).rows[0])
+    expect(absent).toMatchObject({ baskets: '—', orders: '—', stock: '—', ordersKnown: false })
   })
 
   it('renders partial and blocked canonical P&L rows as partial', () => {

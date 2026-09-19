@@ -351,33 +351,103 @@ function compatibilityMeta(page: CanonicalAbcPnlPage): CanonicalCompatibilityMet
   }
 }
 
-export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage) {
+export type AbcOperationalRow = {
+  nmId?: string | number | null
+  sku?: string | null
+  photoUrl?: string | null
+  productName?: string | null
+  productStatus?: string | null
+  managerId?: string | null
+  manager?: string | null
+  brand?: string | null
+  category?: string | null
+  priceBeforeSppKopecks?: number | null
+  priceWithSppKopecks?: number | null
+  impressions?: number | null
+  clicks?: number | null
+  clicksDeltaPct?: number | null
+  ctrPct?: number | null
+  baskets?: number | null
+  basketsDeltaPct?: number | null
+  cartCrPct?: number | null
+  ordersComposite?: { units?: number | null; kopecks?: number | null; deltaPct?: number | null } | null
+  ktrIndex?: number | null
+  localizationPct?: number | null
+  wbStockUnits?: number | null
+  wbStockKopecks?: number | null
+  promotionStatus?: string | null
+  promotionStatusText?: string | null
+  promotionName?: string | null
+  buyoutPct?: number | null
+  ruleEvaluation?: { status?: 'unknown' | 'risk' | 'opportunity' | 'normal' | null } | null
+}
+
+export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage, operationalRows: AbcOperationalRow[] = []) {
+  const byNm = new Map(operationalRows.filter((row) => Number(row.nmId) > 0).map((row) => [Number(row.nmId), row]))
   return {
-    rows: page.items.map((item) => ({
-      sku: item.sellerArticle,
-      nmId: item.nmId,
-      sppPct: item.sppPct ?? null,
-      sppBuyerPriceKopecks: item.sppBuyerPriceKopecks ?? null,
-      sppObservedOn: item.sppObservedOn ?? null,
-      sppSource: item.sppSource ?? null,
-      sppHistory: item.sppHistory ?? [],
-      cogsKopecks: item.cogsKopecks,
-      cogsPerUnitKopecks: item.cogsKopecks !== null && item.netUnits > 0 ? Math.round(item.cogsKopecks / item.netUnits) : null,
-      salesComposite: { units: item.netUnits, kopecks: item.revenueKopecks, deltaPct: null },
-      adSpendKopecks: item.advertisingSpendKopecks,
-      profitAfterLoyaltyKopecks: item.profitAfterLoyaltyKopecks,
-      profitBeforeInternalExpensesKopecks: item.profitBeforeInternalExpensesKopecks,
-      internalExpensesKopecks: item.internalExpensesKopecks,
-      netProfitKopecks: item.netProfitKopecks,
-      salesClass: item.salesClass,
-      abcCode: item.abcCode,
-      costValueState: item.costValueState,
-      costEvidenceStatus: item.costEvidenceStatus,
-      economicsValueState: item.economicsValueState,
-      economicsEvidenceStatus: item.economicsEvidenceStatus,
-      blockerIds: item.blockerIds,
-      canonicalSourceState: page.meta.state,
-    })),
+    rows: page.items.map((item) => {
+      const operational = item.nmId === null ? undefined : byNm.get(item.nmId)
+      const revenuePct = (value: number | null) => value !== null && item.revenueKopecks > 0 ? value / item.revenueKopecks * 100 : null
+      return {
+        // Only operational fields may come from the supplemental report; finance stays canonical.
+        operationalAvailable: !!operational,
+        sku: operational?.sku ?? item.sellerArticle,
+        nmId: item.nmId,
+        photoUrl: operational?.photoUrl,
+        productName: operational?.productName,
+        productStatus: operational?.productStatus,
+        managerId: operational?.managerId,
+        manager: operational?.manager,
+        brand: operational?.brand,
+        category: operational?.category,
+        priceBeforeSppKopecks: operational?.priceBeforeSppKopecks,
+        priceWithSppKopecks: item.sppSource === 'current_buyer_price' ? item.sppBuyerPriceKopecks : operational?.priceWithSppKopecks,
+        impressions: operational?.impressions,
+        clicks: operational?.clicks,
+        clicksDeltaPct: operational?.clicksDeltaPct,
+        ctrPct: operational?.ctrPct,
+        baskets: operational?.baskets,
+        basketsDeltaPct: operational?.basketsDeltaPct,
+        cartCrPct: operational?.cartCrPct,
+        ordersComposite: operational?.ordersComposite,
+        ktrIndex: operational?.ktrIndex,
+        localizationPct: operational?.localizationPct,
+        wbStockUnits: operational?.wbStockUnits,
+        wbStockKopecks: operational?.wbStockKopecks,
+        promotionStatus: operational?.promotionStatus,
+        promotionStatusText: operational?.promotionStatusText,
+        promotionName: operational?.promotionName,
+        buyoutPct: operational?.buyoutPct,
+        ruleEvaluation: operational?.ruleEvaluation,
+        sppPct: item.sppPct ?? null,
+        sppBuyerPriceKopecks: item.sppBuyerPriceKopecks ?? null,
+        sppObservedOn: item.sppObservedOn ?? null,
+        sppSource: item.sppSource ?? null,
+        sppHistory: item.sppHistory ?? [],
+        cogsKopecks: item.cogsKopecks,
+        cogsPerUnitKopecks: item.cogsKopecks !== null && item.netUnits > 0 ? Math.round(item.cogsKopecks / item.netUnits) : null,
+        salesComposite: { units: item.netUnits, kopecks: item.revenueKopecks, deltaPct: null },
+        adSpendKopecks: item.advertisingSpendKopecks,
+        drrSalesPct: revenuePct(item.advertisingSpendKopecks),
+        logisticsCostPct: revenuePct(item.logisticsKopecks),
+        commissionCostPct: revenuePct(item.commissionKopecks),
+        storageCostPct: revenuePct(item.storageKopecks),
+        marginKopecks: item.profitBeforeInternalExpensesKopecks !== null && item.netUnits > 0 ? Math.round(item.profitBeforeInternalExpensesKopecks / item.netUnits) : null,
+        marginPct: revenuePct(item.profitBeforeInternalExpensesKopecks),
+        profitAfterLoyaltyKopecks: item.profitAfterLoyaltyKopecks,
+        profitBeforeInternalExpensesKopecks: item.profitBeforeInternalExpensesKopecks,
+        internalExpensesKopecks: item.internalExpensesKopecks,
+        netProfitKopecks: item.netProfitKopecks,
+        salesClass: item.salesClass,
+        abcCode: item.abcCode,
+        costValueState: item.costValueState,
+        costEvidenceStatus: item.costEvidenceStatus,
+        economicsValueState: item.economicsValueState,
+        economicsEvidenceStatus: item.economicsEvidenceStatus,
+        blockerIds: item.blockerIds,
+        canonicalSourceState: page.meta.state,
+      }
+    }),
     filteredSummary: {
       salesKopecks: page.summary.revenueKopecks,
       salesCount: page.summary.netUnits,
