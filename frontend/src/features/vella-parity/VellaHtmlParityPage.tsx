@@ -6417,7 +6417,7 @@ function useAbcLiveState() {
   // compare the selected scope during render, before the bridge's effect runs.
   if (!auth) return published.state
   const rollout = resolveCanonicalAbcPnlRollout(auth.cabinetMe?.organization.organizationId)
-  const rolloutKey = rollout ? `canonical:${rollout.organizationId}:${rollout.marketplaceAccountId}` : 'legacy'
+  const rolloutKey = !auth.cabinetMe ? 'identity-pending' : rollout ? `canonical:${rollout.organizationId}:${rollout.marketplaceAccountId}` : 'legacy'
   const period = readReportPeriodState('abc')
   const requestKey = `${rolloutKey}:${period.fromIso}:${period.toIso}:sku`
   return selectScopedReportState<AbcLiveState>(JSON.stringify([auth.accessToken, rolloutKey, requestKey]), published, {
@@ -6476,8 +6476,8 @@ function cacheAbcReport(requestKey: string, report: AbcBackendReport, rows: AbcR
   abcReportMemoryCache.set(requestKey, { report, rows, cachedAt: now })
 }
 
-export function installAbcLiveDataBridge(accessToken: string | null, canonicalRollout: CanonicalAbcPnlRollout | null = null) {
-  const rolloutKey = canonicalRollout ? `canonical:${canonicalRollout.organizationId}:${canonicalRollout.marketplaceAccountId}` : 'legacy'
+export function installAbcLiveDataBridge(accessToken: string | null, canonicalRollout: CanonicalAbcPnlRollout | null = null, identityReady = true) {
+  const rolloutKey = !identityReady ? 'identity-pending' : canonicalRollout ? `canonical:${canonicalRollout.organizationId}:${canonicalRollout.marketplaceAccountId}` : 'legacy'
   if (abcReportMemoryToken !== accessToken || abcReportMemoryRolloutKey !== rolloutKey) {
     window.__vellaAbcLiveAbortController?.abort()
     abcReportMemoryCache.clear()
@@ -6524,12 +6524,14 @@ export function installAbcLiveDataBridge(accessToken: string | null, canonicalRo
     window.__vellaAbcLiveAccessDenied = false
     window.__vellaPublishAbcRowsSnapshot?.()
     emitAbcLiveStateUpdated()
-    if (!accessToken) {
+    if (!accessToken || !identityReady) {
       controller.abort()
       window.__vellaAbcLiveAbortController = undefined
       window.__vellaAbcLiveLoading = false
-      window.__vellaAbcLiveError = 'Сессия истекла. Войдите снова, чтобы открыть ABC-отчет.'
-      window.__vellaAbcLiveAuthExpired = true
+      window.__vellaAbcLiveError = !accessToken
+        ? 'Сессия истекла. Войдите снова, чтобы открыть ABC-отчет.'
+        : 'Данные кабинета ещё не загружены. Если загрузка не завершится, обновите страницу.'
+      window.__vellaAbcLiveAuthExpired = !accessToken
       emitAbcLiveStateUpdated()
       return []
     }
@@ -34528,14 +34530,14 @@ export function VellaHtmlParityPage() {
 
   useEffect(() => {
     installDigestLiveDataBridge(accessToken)
-    installAbcLiveDataBridge(accessToken, canonicalAbcPnlRollout)
+    installAbcLiveDataBridge(accessToken, canonicalAbcPnlRollout, !!cabinetMe)
     if (effectiveActiveParityTab === 'digest') void window.__vellaLoadLiveDigestReport?.()
     if (effectiveActiveParityTab === 'abc') void window.__vellaLoadLiveAbcReport?.()
     return () => {
       window.__vellaDigestLiveAbortController?.abort()
       window.__vellaAbcLiveAbortController?.abort()
     }
-  }, [accessToken, canonicalAbcPnlRollout, effectiveActiveParityTab])
+  }, [accessToken, cabinetMe?.organization.organizationId, canonicalAbcPnlRollout, effectiveActiveParityTab])
 
   useEffect(() => {
     if (!runtime) return

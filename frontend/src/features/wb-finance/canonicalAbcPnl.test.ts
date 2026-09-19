@@ -40,6 +40,18 @@ function jsonResponse(payload: unknown, status = 200) {
 }
 
 describe('canonical ABC bridge lifecycle', () => {
+  it('does not fall back to legacy profit while the cabinet identity is unavailable', async () => {
+    installBridgeWindow()
+    const request = vi.fn()
+    vi.stubGlobal('fetch', request)
+    installAbcLiveDataBridge('pending-cabinet-token', null, false)
+    await window.__vellaLoadLiveAbcReport?.()
+    expect(request).not.toHaveBeenCalled()
+    expect(window.__vellaAbcLiveReport).toBeNull()
+    expect(window.__vellaAbcLiveRows).toEqual([])
+    expect(window.__vellaAbcLiveError).toContain('Данные кабинета ещё не загружены')
+  })
+
   it.each(['session', 'account', 'period'] as const)('hides old ABC KPI on the first %s render before bridge effects', async (changed) => {
     installBridgeWindow()
     vi.stubEnv('VITE_CANONICAL_WB_ABC_PNL_ROLLOUT', '7:31,8:32')
