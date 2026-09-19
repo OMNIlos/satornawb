@@ -6714,7 +6714,7 @@ function updateAbcSummaryFromRows(rows: AbcReportRow[], state: AbcFilterState) {
   const orderRub = rows.reduce((sum, row) => sum + parseAbcSecondNumber(row.orders), 0)
   const profitRub = rows.reduce((sum, row) => sum + parseAbcNumber(row.net), 0)
   const adsRub = rows.reduce((sum, row) => sum + parseAbcFirstNumber(row.ads), 0)
-  const marginPct = orderRub ? (profitRub / orderRub) * 100 : NaN
+  const marginPct = profitKnown && ordersKnown && orderRub ? (profitRub / orderRub) * 100 : NaN
   const filterLabel = state.chip === 'Все товары' && !state.query
     ? 'все товары'
     : [state.chip, state.query ? `поиск: ${state.query}` : ''].filter(Boolean).join(' · ')
@@ -6807,7 +6807,7 @@ function renderAbcCommercialCells(ctx: AbcRowRenderContext) {
 function renderAbcTrafficCells(ctx: AbcRowRenderContext) {
   const { text, baskets } = ctx
   return [
-    abcRowCell('abc-impressions-cell', text('views', '—'), 'class="num"', 'data-tip="Показы карточки WB; прочерк означает, что источник не отдал показатель"'),
+    abcRowCell('abc-impressions-cell', `${text('views', '—')}${text('views', '—') === '—' ? '<span class="sub">WB API не передал</span>' : ''}`, 'class="num"', 'data-tip="Общие показы карточки. Рекламные показы не заменяют этот показатель"'),
     abcRowCell('abc-clicks-cell', `<span>${text('clicks')}</span><span class="sub">${text('clicksSub')}</span>`, 'class="num"', 'data-tip="Переходы в карточку WB и CTR"'),
     abcRowCell('abc-baskets-cell', `<span class="${baskets.includes('↓') ? 'metric-down' : 'metric-up'}" data-tip="Корзины — главный сигнал спроса для репрайсера">${baskets}</span><span class="sub">${text('basketDelta')}</span>`, 'class="num"'),
     abcRowCell('abc-cr-cell', text('cr'), 'class="num"', 'data-tip="Конверсия корзины в заказ"'),
@@ -6829,9 +6829,9 @@ function renderAbcWarehouseCells(ctx: AbcRowRenderContext) {
   const { text, costParts, costDeltaParts } = ctx
   return [
     abcRowCell('abc-logistics-cell', `<span>${costParts[0] || '—'}</span><span class="sub">${costDeltaParts[0] || '—'}</span>`, 'class="num"', 'data-tip="Текущий процент логистики и динамика к периоду"'),
-    abcRowCell('abc-commission-cell', `<span>${costParts[1] || '—'}</span><span class="sub">${costDeltaParts[1] || '—'}</span>`, 'class="num"', 'data-tip="Текущий процент комиссии WB и динамика"'),
+    abcRowCell('abc-commission-cell', `<span>${costParts[1] || '—'}</span><span class="sub">${costDeltaParts[1] || '—'}</span>`, 'class="num"', 'data-tip="Комиссия WB без эквайринга. В финансовом отчёте CodeMP эквайринг включён в комиссию"'),
     abcRowCell('abc-storage-cell', `<span>${costParts[2] || '—'}</span><span class="sub">${costDeltaParts[2] || '—'}</span>`, 'class="num"', 'data-tip="Текущий процент хранения и динамика"'),
-    abcRowCell('abc-warehouse-cell', `<span class="${text('warehouseCls')}">${text('warehouse', '—')}</span><span class="sub">лок. ${text('localization', '—')}</span>`, 'class="num"', 'data-tip="КТР и локализация по данным WB; недоступный показатель отмечен прочерком"'),
+    abcRowCell('abc-warehouse-cell', `<span class="${text('warehouseCls')}">${text('warehouse', '—')}</span>${text('warehouse', '—') === '—' ? '<span class="sub">КТР не получен</span>' : ''}<span class="sub">лок. ${text('localization', '—')}</span>`, 'class="num"', 'data-tip="Локализация заказов за выбранный период по WB. Она не подтверждает тарифный коэффициент КТР"'),
     abcRowCell('abc-stock-cell', `${text('stock')}<span class="sub">${text('stockRub')}</span>`, 'class="num"', 'data-tip="Суммарный остаток WB. Детализация по складам — во вкладке Остатки"'),
   ].join('\n    ')
 }
@@ -6846,9 +6846,10 @@ function renderAbcCommentCell(ctx: AbcRowRenderContext) {
       else if (blocker.includes('ECONOMICS') || blocker.includes('TAX')) reasons.add('Уточните налог и расходы')
       else if (blocker.includes('OPERATIONS_UNRECONCILED')) reasons.add('Нужна сверка финансовых операций')
       else if (blocker.includes('ADS')) reasons.add('Не загружена реклама за период')
+      else if (blocker.includes('ADVERTISING_UNATTRIBUTED')) reasons.add('Часть рекламы не связана с товаром')
       else reasons.add('Не все исходные данные подтверждены')
     }
-    return abcRowCell('abc-comment-cell', blockers.length ? `<span class="report-tag warn" title="${escapeHtml([...reasons].join('. '))}">Расчёт неполный</span>` : '<span class="report-tag good">Данные подтверждены</span>')
+    return abcRowCell('abc-comment-cell', blockers.length ? `<span class="report-tag warn" title="${escapeHtml([...reasons].join('. '))}">Прибыль не подтверждена</span><span class="sub">${escapeHtml([...reasons].slice(0, 2).join(' · '))}</span>` : '<span class="report-tag good">Данные подтверждены</span>')
   }
   return abcRowCell('abc-comment-cell', window.reportCommentCell?.(ctx.row, 'ABC') ?? '')
 }

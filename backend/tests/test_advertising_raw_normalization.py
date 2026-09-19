@@ -141,13 +141,14 @@ def test_raw_accepts_contained_source_subwindows(raw_bundle):
     }
 
 
-def test_raw_rejects_dates_outside_their_source_subwindow(raw_bundle):
+def test_raw_excludes_spend_documents_outside_their_source_subwindow(raw_bundle):
     period = Period(date(2026, 9, 1), date(2026, 9, 2))
     raw_bundle["period"] = {"dateFrom": "2026-09-01", "dateTo": "2026-09-02"}
     raw_bundle["upd"][0]["payload"][0]["updTime"] = "2026-09-02T12:00:00+03:00"
 
-    with pytest.raises(AdvertisingNormalizationError, match="outside period"):
-        normalize_raw_advertising(period, raw_bundle)
+    evidence = normalize_raw_advertising(period, raw_bundle)
+    assert all(document.business_date == date(2026, 9, 1) for document in evidence.spend_documents)
+    assert len(evidence.spend_documents) == len(raw_bundle["upd"][0]["payload"]) - 1
 
 
 def test_empty_complete_bundle_does_not_require_unmade_fullstats_request(raw_bundle):

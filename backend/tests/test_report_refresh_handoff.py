@@ -171,6 +171,25 @@ def test_failed_replacement_remains_a_failed_refresh(runtime):
     assert reports._report_job_is_finished_refresh(failed)
 
 
+def test_abc_refresh_collects_raw_advertising_before_report_handoff(runtime, monkeypatch):
+    monkeypatch.setattr(tasks, "get_settings", lambda: SimpleNamespace(
+        advertising_shadow_ingest_enabled=True,
+        advertising_shadow_ingest_organization_ids=[1],
+    ))
+    calls = []
+
+    def collect(org, period, *, wb_token):
+        calls.append((org, period.date_from, period.date_to, wb_token))
+        return {"state": "ready", "factCount": 1}
+
+    monkeypatch.setattr(tasks, "backfill_raw_advertising", collect)
+    args = (*refresh_args("abc")[:7], True, None)
+    with pytest.raises(Ignore):
+        run_as_worker(tasks.refresh_report_sources_for_org, args)
+    assert calls == [(1, date(2026, 8, 17), date(2026, 8, 23), "synthetic")]
+    assert runtime.queue[0][1]["source_refresh"]["canonicalAdvertising"]["state"] == "ready"
+
+
 def test_standalone_build_keeps_existing_contract(runtime):
     runtime.ready = True
     result = run_as_worker(tasks.build_report_for_org, refresh_args("ads"))

@@ -16,6 +16,8 @@ from app.avito.price_apply import LiveAvitoPriceClient
 from app.cabinet.store import get_organization_avito_credentials_secret, get_organization_wb_token_secret, get_user_wb_token_secret
 from app.config import get_settings
 from app.infra.celery_app import REPRICER_SCHEDULER_POLL_MINUTES, celery_app
+from app.platform.advertising.raw_backfill import backfill_raw_advertising
+from app.platform.period import Period
 from app.repricer_cache.store import (
     cached_goods_meta,
     finance_cache_uses_current_revenue_basis,
@@ -278,6 +280,23 @@ def refresh_report_sources_for_org(self, organization_id: int, user_id: str, rep
             refresh_error = _report_refresh_error(refresh_result)
             if refresh_error:
                 raise RuntimeError(refresh_error)
+            settings = get_settings()
+            if (
+                report_id in {"abc", "pnl"}
+                and finance_allowed
+                and settings.advertising_shadow_ingest_enabled
+                and organization_id in settings.advertising_shadow_ingest_organization_ids
+            ):
+                save_job("advertising_evidence", "Проверяем расходы рекламы WB", 76)
+                # ponytail: reuse the raw collector; share its responses with legacy sync if refresh latency becomes a bottleneck.
+                advertising = backfill_raw_advertising(
+                    organization_id,
+                    Period(date_from, date_to),
+                    wb_token=resolved_wb_token,
+                )
+                refresh_result = {**refresh_result, "canonicalAdvertising": advertising}
+                if advertising.get("state") != "ready":
+                    raise RuntimeError("WB не завершил загрузку рекламы. Повторите обновление после снятия лимита запросов.")
             save_job("building_report", "Источники обновлены, собираем отчет", 78, sync=refresh_result)
         else:
             refresh_result = {"state": "skipped", "steps": [], "reason": "no_wb_sources_for_report"}

@@ -432,7 +432,10 @@ def _normalize_upd(period: Period, upd: Any) -> tuple[RawAdvertisingSpendDocumen
             campaign_id = _positive_integer(row.get("advertId"), "advertId")
             upd_time = _timestamp(row.get("updTime"), "updTime")
             business_date = upd_time.astimezone(MOSCOW).date()
-            _require_date_in_period(page_period, business_date)
+            if not page_period.date_from <= business_date <= page_period.date_to:
+                # WB can include a posting just after midnight on the following day.
+                # Keep its raw response checksum, but never charge another business day.
+                continue
             spend_kopecks = _money(row.get("updSum"), "updSum", nonnegative=False)
             if spend_kopecks is None:
                 raise AdvertisingNormalizationError("invalid updSum")
