@@ -234,21 +234,7 @@ class CostsService:
     def get_cost_at(self, catalog_sku_id: int, at: datetime) -> CostValue:
         effective_at = _aware_utc(at)
         self._sku(catalog_sku_id)
-        row = self.session.scalar(
-            select(CatalogCostVersionRow)
-            .where(
-                CatalogCostVersionRow.organization_id == self.organization_id,
-                CatalogCostVersionRow.catalog_sku_id == catalog_sku_id,
-                CatalogCostVersionRow.effective_from <= effective_at,
-            )
-            .order_by(
-                CatalogCostVersionRow.effective_from.desc(),
-                CatalogCostVersionRow.created_at.desc(),
-                CatalogCostVersionRow.cost_version_id.desc(),
-            )
-            .limit(1)
-        )
-        return _view(row) if row is not None else CostValue(None, catalog_sku_id, None, "missing")
+        return self.get_costs_for_points([(catalog_sku_id, effective_at)])[(catalog_sku_id, effective_at)]
 
     def get_current_cost(self, catalog_sku_id: int) -> CostValue:
         return self.get_cost_at(catalog_sku_id, self.now())
@@ -294,36 +280,9 @@ class CostsService:
         sku_ids = sorted(set(catalog_sku_ids))
         if not sku_ids:
             return {}
-        self._prepare()
-        ranked = (
-            select(
-                CatalogCostVersionRow.cost_version_id.label("cost_version_id"),
-                func.row_number()
-                .over(
-                    partition_by=CatalogCostVersionRow.catalog_sku_id,
-                    order_by=(
-                        CatalogCostVersionRow.effective_from.desc(),
-                        CatalogCostVersionRow.created_at.desc(),
-                        CatalogCostVersionRow.cost_version_id.desc(),
-                    ),
-                )
-                .label("position"),
-            )
-            .where(
-                CatalogCostVersionRow.organization_id == self.organization_id,
-                CatalogCostVersionRow.catalog_sku_id.in_(sku_ids),
-                CatalogCostVersionRow.effective_from <= effective_at,
-            )
-            .subquery()
-        )
-        rows = self.session.scalars(
-            select(CatalogCostVersionRow)
-            .join(ranked, CatalogCostVersionRow.cost_version_id == ranked.c.cost_version_id)
-            .where(ranked.c.position == 1)
-        ).all()
-        resolved = {row.catalog_sku_id: _view(row) for row in rows}
+        resolved = self.get_costs_for_points([(sku_id, effective_at) for sku_id in sku_ids])
         return {
-            sku_id: resolved.get(sku_id, CostValue(None, sku_id, None, "missing"))
+            sku_id: resolved[(sku_id, effective_at)]
             for sku_id in sku_ids
         }
 
@@ -385,17 +344,25 @@ class CostsService:
         for sku_id in sku_ids:
             versions = history.get(sku_id, [])
             position = 0
-            current: CatalogCostVersionRow | None = None
             current_value = CostValue(None, sku_id, None, "missing")
             for instant in instants_by_sku[sku_id]:
-                previous = current
                 while position < len(versions) and _db_utc(
                     versions[position].effective_from
                 ) <= instant:
-                    current = versions[position]
+                    candidate = _view(versions[position])
+                    repeated_legacy_value = (
+                        current_value.value_state == "configured"
+                        and current_value.evidence_status == "dated"
+                        and candidate.amount_kopecks == current_value.amount_kopecks
+                        and candidate.value_state == "assumed"
+                        and candidate.evidence_status == "undated"
+                        and (candidate.source or "").startswith("legacy_")
+                    )
+                    # Reimporting the same value cannot revoke its dated evidence.
+                    # A changed amount or an explicit missing value still takes effect.
+                    if not repeated_legacy_value:
+                        current_value = candidate
                     position += 1
-                if current is not previous and current is not None:
-                    current_value = _view(current)
                 resolved[(sku_id, instant)] = current_value
         return resolved
 

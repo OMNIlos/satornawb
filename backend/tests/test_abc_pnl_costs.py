@@ -21,6 +21,34 @@ AT_20 = datetime(2026, 8, 20, 20, 59, 59, tzinfo=timezone.utc)
 AT_21 = datetime(2026, 8, 21, 20, 59, 59, tzinfo=timezone.utc)
 
 
+def test_same_undated_legacy_import_preserves_confirmed_cost_in_all_readers(session):
+    service = CostsService(session, 1)
+    confirmed = service.set_cost(
+        catalog_sku_id=11, amount_kopecks=10000, value_state="configured",
+        effective_from=AT_20, source="manual", source_reference="confirmed",
+        evidence_status="dated",
+    )
+    service.set_cost(
+        catalog_sku_id=11, amount_kopecks=10000, value_state="assumed",
+        effective_from=AT_21, source="legacy_sku_override", source_reference="reimport",
+        evidence_status="undated",
+    )
+    assert service.get_cost_at(11, AT_21) == confirmed
+    assert service.get_costs_at([11], AT_21)[11] == confirmed
+    assert service.get_costs_on_dates([11], [AT_20, AT_21]) == {
+        (11, AT_20): confirmed, (11, AT_21): confirmed,
+    }
+    assert len(service.list_cost_history(11)) == 2
+    for day, amount, state in [(1, 20000, "assumed"), (2, 10000, "assumed"), (3, None, "missing")]:
+        instant = datetime(2026, 9, day, tzinfo=timezone.utc)
+        changed = service.set_cost(
+            catalog_sku_id=11, amount_kopecks=amount, value_state=state,
+            effective_from=instant, source="legacy_sku_override", source_reference=f"change-{day}",
+            evidence_status="undated",
+        )
+        assert service.get_cost_at(11, instant) == changed
+
+
 @pytest.fixture
 def session() -> Session:
     engine = create_engine("sqlite+pysqlite:///:memory:")
