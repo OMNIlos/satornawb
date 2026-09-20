@@ -13,7 +13,7 @@ from app.wb_api.ads_runtime import AdsAttributionRow
 from app.wb_api.client import RateLimitedWbApiClient, WbApiRequest, build_wb_analytics_client
 
 
-RNP_REPORT_CACHE_VERSION = "v6"
+RNP_REPORT_CACHE_VERSION = "v7"
 RNP_FUNNEL_CACHE_VERSION = "v2"
 RNP_FUNNEL_PAGE_LIMIT = 1000
 RNP_FUNNEL_MAX_ATTEMPTS = 3
@@ -416,7 +416,11 @@ def _cached_funnel_rows(organization_id: int, date_from: date, date_to: date) ->
                 "sku": str(aggregate.get("sku") or aggregate.get("vendorCode") or nm_id),
                 "productName": str(aggregate.get("productName") or aggregate.get("name") or aggregate.get("title") or nm_id),
                 "brandName": aggregate.get("brandName") or aggregate.get("brand"),
-                "categoryName": aggregate.get("categoryName") or aggregate.get("subjectName") or aggregate.get("subject"),
+                "categoryName": aggregate.get("categoryName") or aggregate.get("subjectName") or aggregate.get("subject") or aggregate.get("category"),
+                **{key: aggregate.get(key) for key in (
+                    "openCountDeltaPct", "cartCountDeltaPct", "orderCountDeltaPct",
+                    "orderSumDeltaPct", "buyoutCountDeltaPct", "buyoutSumDeltaPct",
+                )},
                 "openCount": open_count,
                 "impressions": impressions,
                 "cartCount": cart_count,
@@ -449,13 +453,13 @@ def _cached_ads_rows(organization_id: int, date_from: date, date_to: date) -> tu
         clicks = _nonnegative(_first_value(aggregate, "adClicks", "clicks"))
         cart_adds = _nonnegative(_first_value(aggregate, "adCartAdds", "cartAdds", "cartCount", "baskets"))
         orders_count = _nonnegative(_first_value(aggregate, "adOrders", "ordersCount", "orderCount", "orders"))
-        orders_kopecks = _nonnegative(_first_value(aggregate, "adSalesKopecks", "ordersKopecks", "orderSumKopecks", "salesKopecks"))
+        orders_kopecks = _as_optional_nonnegative(_first_value(aggregate, "adSalesKopecks", "ordersKopecks", "orderSumKopecks", "salesKopecks"))
         totals["ad_spend_kopecks"] += ad_spend
         totals["impressions"] += impressions
         totals["clicks"] += clicks
         totals["cart_adds"] += cart_adds
         totals["orders_count"] += orders_count
-        totals["orders_kopecks"] += orders_kopecks
+        totals["orders_kopecks"] += orders_kopecks or 0
         rows.append(
             AdsAttributionRow(
                 campaign_id=str(aggregate.get("campaignId") or aggregate.get("advertId") or "") or None,
@@ -506,7 +510,7 @@ def _ads_by_nm(rows: list[AdsAttributionRow]) -> dict[int, dict[str, int]]:
         bucket["adClicks"] += row.clicks or 0
         bucket["adCartAdds"] += row.cart_adds or 0
         bucket["adOrders"] += row.orders_count or 0
-        bucket["adSalesKopecks"] += row.orders_kopecks or 0
+        bucket["adSalesKopecks"] = bucket["adSalesKopecks"] + row.orders_kopecks if bucket["adSalesKopecks"] is not None and row.orders_kopecks is not None else None
         bucket["adSpendKopecks"] += row.ad_spend_kopecks or 0
     return result
 
@@ -804,7 +808,7 @@ def _rnp_row_from_sources(
     ad_clicks = _nonnegative(ads_payload.get("adClicks")) if ads_available else None
     ad_cart_adds = _nonnegative(ads_payload.get("adCartAdds")) if ads_available else None
     ad_orders = _nonnegative(ads_payload.get("adOrders")) if ads_available else None
-    ad_sales = _nonnegative(ads_payload.get("adSalesKopecks")) if ads_available else None
+    ad_sales = _as_optional_nonnegative(ads_payload.get("adSalesKopecks")) if ads_available else None
     ad_spend = _nonnegative(ads_payload.get("adSpendKopecks")) if ads_available else None
     reasons = ["estimated_organic"] if ads_available else ["ads_source_partial"]
     if source_status != "fresh":
@@ -842,7 +846,9 @@ def _rnp_row_from_sources(
         orderSumKopecks=order_sum,
         orderSumDeltaPct=_as_float(funnel.get("orderSumDeltaPct")),
         buyoutCount=_nonnegative(funnel.get("buyoutCount")),
+        buyoutCountDeltaPct=_as_float(funnel.get("buyoutCountDeltaPct")),
         buyoutSumKopecks=_nonnegative(funnel.get("buyoutSumKopecks")),
+        buyoutSumDeltaPct=_as_float(funnel.get("buyoutSumDeltaPct")),
         buyoutPct=_as_float(funnel.get("buyoutPct")),
         ctrPct=_pct(open_count, impressions or 0),
         atcrPct=_as_float(funnel.get("atcrPct")),
@@ -857,7 +863,7 @@ def _rnp_row_from_sources(
         adSpendKopecks=ad_spend,
         adSpendDeltaPct=None,
         drrPct=_pct(ad_spend or 0, order_sum) if ads_available else None,
-        roiPct=round(((ad_sales or 0) - (ad_spend or 0)) / (ad_spend or 1) * 100, 2) if ads_available and (ad_spend or 0) > 0 else None,
+        roiPct=round(((ad_sales or 0) - (ad_spend or 0)) / (ad_spend or 1) * 100, 2) if ad_sales is not None and (ad_spend or 0) > 0 else None,
         acooPct=_pct(ad_spend or 0, ad_sales or 0) if ads_available else None,
         tacooPct=_pct(ad_spend or 0, order_sum) if ads_available else None,
         marginPct=None,
@@ -865,7 +871,7 @@ def _rnp_row_from_sources(
         organicOpenCountEstimated=max(0, open_count - (ad_clicks or 0)) if ads_available else None,
         organicCartCountEstimated=max(0, cart_count - (ad_cart_adds or 0)) if ads_available else None,
         organicOrderCountEstimated=max(0, order_count - (ad_orders or 0)) if ads_available else None,
-        organicSalesKopecksEstimated=max(0, order_sum - (ad_sales or 0)) if ads_available else None,
+        organicSalesKopecksEstimated=max(0, order_sum - ad_sales) if ad_sales is not None else None,
         organicEstimate=ads_available,
         reasons=reasons,
         comments=[],
@@ -885,7 +891,12 @@ def build_rnp_snapshot(
     force_refresh: bool = False,
     progress_callback: ProgressCallback | None = None,
 ) -> RnpSnapshot:
+    from app.repricer_cache.store import get_source_cache_fetched_at
     report_key = rnp_report_cache_key(date_from, date_to, group_by)
+    imported_at = get_source_cache_fetched_at(organization_id, f"funnel_seller_{date_from}_{date_to}")
+    report_at = get_source_cache_fetched_at(organization_id, report_key)
+    if imported_at and (not report_at or imported_at > report_at):
+        force_refresh = True
     if not force_refresh:
         cached_report = get_source_cache(organization_id, report_key, slim=False) or {}
         cached_rows = cached_report.get("rows")

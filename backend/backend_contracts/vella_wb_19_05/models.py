@@ -219,6 +219,9 @@ class RnpRow(BaseModel):
     brandName: Optional[str] = None
     categoryName: Optional[str] = None
     photoUrl: Optional[str] = None
+    colorName: Optional[str] = None
+    managerName: Optional[str] = None
+    strategyName: Optional[str] = None
     warehouseId: Optional[int] = Field(default=None, ge=0)
     warehouseName: Optional[str] = None
     warehouses: List[Dict[str, Any]] = Field(default_factory=list)
@@ -237,7 +240,9 @@ class RnpRow(BaseModel):
     orderSumKopecks: Optional[int] = Field(default=None, ge=0)
     orderSumDeltaPct: Optional[float] = None
     buyoutCount: Optional[int] = Field(default=None, ge=0)
+    buyoutCountDeltaPct: Optional[float] = None
     buyoutSumKopecks: Optional[int] = Field(default=None, ge=0)
+    buyoutSumDeltaPct: Optional[float] = None
     buyoutPct: Optional[float] = None
     ctrPct: Optional[float] = None
     atcrPct: Optional[float] = None

@@ -10,7 +10,7 @@ import logging
 import os
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import DateTime, cast, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -378,25 +378,33 @@ def append_changelog_entry(*, organization_id: int, entry: dict[str, Any]) -> bo
     return bool(_run_db(_db))
 
 
-def list_changelog_entries(
+def list_changelog_page(
     *,
     organization_id: int,
     article_id: str | None = None,
+    triggers: list[str] | None = None,
+    from_date: datetime | None = None,
+    page: int = 1,
     limit: int = 50,
-) -> list[dict[str, Any]]:
-    def _db(session: Session) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
+    def _db(session: Session) -> dict[str, Any]:
+        timestamp = cast(WbRepricerChangelogRow.entry_payload["timestamp"].as_string(), DateTime(timezone=True))
         query = (
             select(WbRepricerChangelogRow)
             .where(WbRepricerChangelogRow.organization_id == organization_id)
-            .order_by(WbRepricerChangelogRow.created_at.desc())
-            .limit(max(1, limit))
         )
         if article_id:
             query = query.where(WbRepricerChangelogRow.article_id == article_id)
-        rows = session.scalars(query).all()
-        return [dict(row.entry_payload or {}) for row in rows]
+        if triggers:
+            query = query.where(WbRepricerChangelogRow.entry_payload["trigger"].as_string().in_(triggers))
+        if from_date is not None:
+            query = query.where(timestamp >= from_date)
+        total = session.scalar(select(func.count()).select_from(query.subquery())) or 0
+        rows = session.scalars(query.order_by(timestamp.desc(), WbRepricerChangelogRow.row_id.desc())
+                               .offset((max(1, page) - 1) * max(1, limit)).limit(max(1, limit))).all()
+        return {"items": [dict(row.entry_payload or {}) for row in rows], "total": total}
 
-    return _run_db(_db) or []
+    return _run_db(_db) or {"items": [], "total": 0}
 
 
 def hydrate_repricer_bff_state(organization_id: int, repricer_bff_module: Any) -> None:

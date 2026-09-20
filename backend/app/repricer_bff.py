@@ -7446,15 +7446,13 @@ def list_repricer_changelog(
     organization_id: int | None = None,
 ) -> dict[str, Any]:
     if organization_id is not None:
-        items = []
-    else:
-        items = list(CHANGELOG_ENTRIES)
-    if organization_id is not None:
-        from app.repricer_persistence.store import list_changelog_entries
+        from app.repricer_persistence.store import list_changelog_page
 
-        persisted = list_changelog_entries(organization_id=organization_id, article_id=article_id, limit=500)
-        if persisted:
-            items = persisted
+        return list_changelog_page(
+            organization_id=organization_id, article_id=article_id, triggers=triggers,
+            from_date=_parse_iso(from_iso), page=page, limit=limit,
+        )
+    items = list(CHANGELOG_ENTRIES)
     items = sorted(items, key=lambda row: row["timestamp"], reverse=True)
     if article_id:
         items = [row for row in items if row["articleId"] == article_id]

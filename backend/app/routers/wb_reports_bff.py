@@ -32,6 +32,7 @@ from app.report_rules.store import ProfileVersionConflict, activate_profile, lis
 from app.repricer_cache.store import (
     finance_cache_uses_current_revenue_basis,
     get_covering_source_cache,
+    get_source_cache_fetched_at,
     get_source_cache,
     list_cached_goods,
     list_source_cache_by_prefix,
@@ -1629,9 +1630,9 @@ def _stock_manual_status(
     local_orders_exact_missing = _is_source_missing(sources, "local_orders_exact")
     warnings: list[str] = []
     if local_orders_exact_missing and not has_derived_local_orders:
-        warnings.append("нет exact localOrders из seller portal")
+        warnings.append("WB не передал долю локальных заказов")
     if ktr_missing:
-        warnings.append("нет KTR table из seller portal")
+        warnings.append("WB не передал КТР")
     return (ktr_missing or (local_orders_exact_missing and not has_derived_local_orders)), warnings
 
 
@@ -1728,6 +1729,7 @@ def _stock_product_rows_from_snapshot(
     sources: dict[str, dict[str, Any]],
     catalog_meta: dict[int, dict[str, Any]],
     history: dict[int, list[Any]],
+    funnel_by_nm: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     grouped: dict[int, dict[str, Any]] = {}
     for row in stock_rows:
@@ -1795,7 +1797,8 @@ def _stock_product_rows_from_snapshot(
             decision = "снизить поставку"
         else:
             decision = "норма"
-        has_derived_local_orders = orders_count > 0
+        localization = _as_float(funnel_by_nm.get(str(nm_id), {}).get("localizationPct"))
+        has_derived_local_orders = localization is not None
         manual_missing, manual_warnings = _stock_manual_status(
             sources,
             has_derived_local_orders=has_derived_local_orders,
@@ -1818,7 +1821,7 @@ def _stock_product_rows_from_snapshot(
                 "brand": meta.get("brand"),
                 "category": meta.get("category"),
                 "warehouseName": f"{len(warehouses)} складов" if len(warehouses) != 1 else top_warehouse.get("warehouseName"),
-                "clusterName": ", ".join(regions[:2]) if regions else "unknown",
+                "clusterName": ", ".join(regions) if regions else None,
                 "wbStockUnits": wb_stock_units,
                 "marketplaceStockUnits": marketplace_stock_units,
                 "totalStockUnits": total_stock_units,
@@ -1828,16 +1831,16 @@ def _stock_product_rows_from_snapshot(
                 "ordersPerDay": round(float(orders_per_day), 2),
                 "ordersCount": orders_count,
                 "allOrdersCount": orders_count,
-                "localOrdersCount": 0,
+                "localOrdersCount": None,
                 "daysToOos": days_to_oos,
-                "ktrIndex": None,
-                "localizationPct": None,
+                "ktrIndex": _manual_ktr_value(sources, localization),
+                "localizationPct": localization,
                 "logisticsPerUnitKopecks": logistics_per_unit,
                 "decision": decision,
                 "decisionStatus": "source_partial" if manual_missing or decision_rules_missing else "confirmed",
                 "comment": "; ".join(comment_parts) if comment_parts else "источники подтверждены",
                 "historyCoverageDays": min(7, len(history_days) or len(stock_history)),
-                "historySource": "captured" if stock_history and all(item.source == "captured" for item in stock_history) else "backfilled",
+                "historySource": "captured" if stock_history else "missing",
                 "warehouseCount": len(warehouses),
                 "warehouses": warehouses,
             }
@@ -1847,7 +1850,7 @@ def _stock_product_rows_from_snapshot(
 
 def _build_stock_report_payload(date_range: dict[str, str], snapshot: Any, *, organization_id: int, wb_token: str | None) -> dict[str, Any]:
     snapshot_date = date.fromisoformat(date_range["to"])
-    history = ensure_daily_stock_history(snapshot_date, snapshot.stocks)
+    history = ensure_daily_stock_history(snapshot_date, snapshot.stocks, organization_id=organization_id)
     date_from = date.fromisoformat(date_range["from"])
     days = max((snapshot_date - date_from).days + 1, 1)
     sources = _build_stock_source_bundle(
@@ -1871,6 +1874,7 @@ def _build_stock_report_payload(date_range: dict[str, str], snapshot: Any, *, or
         sources=sources,
         catalog_meta=_catalog_meta_by_nm(organization_id),
         history=history,
+        funnel_by_nm=_cache_aggregates(_period_cache(organization_id, "baskets", date_from, snapshot_date)),
     )
     total_available = sum(row["availableUnits"] for row in rows)
     total_wb_stock = sum(row["wbStockUnits"] for row in rows)
@@ -1903,7 +1907,7 @@ def _build_stock_report_payload(date_range: dict[str, str], snapshot: Any, *, or
             _kpi("from_client_units", "От клиента, шт", str(total_from_client)),
             _kpi("to_client_units", "К клиенту, шт", str(total_to_client)),
             _kpi("oos_risk", "Риск OOS", str(oos_risk)),
-            _kpi("history_days", "История, дней", "7"),
+            _kpi("history_days", "История, дней", str(max((row.get("historyCoverageDays", 0) for row in rows), default=0))),
         ],
         "chart": {
             "title": "Доступность по складам",
@@ -1959,21 +1963,27 @@ def _build_week_over_week_payload(
     profit_by_nm = _profit_by_nm(snapshot, ads_by_nm)
     previous_profit_by_nm = _profit_by_nm(previous_snapshot, previous_ads_by_nm) if previous_snapshot is not None else {}
     catalog_meta = _catalog_meta_by_nm(organization_id)
+    current_from, snapshot_date = date.fromisoformat(date_range["from"]), date.fromisoformat(date_range["to"])
+    previous_to = current_from - timedelta(days=1)
+    previous_from = previous_to - (snapshot_date - current_from)
+    current_funnel = _week_funnel_metrics_by_nm(organization_id=organization_id, date_from=current_from, date_to=snapshot_date, wb_token=None) if organization_id else {}
+    previous_funnel = _week_funnel_metrics_by_nm(organization_id=organization_id, date_from=previous_from, date_to=previous_to, wb_token=None) if organization_id else {}
     rows: list[dict[str, Any]] = []
-    snapshot_date = date.fromisoformat(date_range["to"])
-    history = ensure_daily_stock_history(snapshot_date, snapshot.stocks)
+    history = ensure_daily_stock_history(snapshot_date, snapshot.stocks, organization_id=organization_id)
     for nm_id, agg in base.items():
         previous_agg = previous.get(nm_id, {})
-        ads_agg = ads_by_nm.get(nm_id, {})
-        previous_ads_agg = previous_ads_by_nm.get(nm_id, {})
         profit_agg = profit_by_nm.get(nm_id, {})
         previous_profit_agg = previous_profit_by_nm.get(nm_id, {})
-        current_price = round(agg["orders_revenue"] / agg["orders_qty"]) if agg["orders_qty"] else None
-        previous_price = round(previous_agg.get("orders_revenue", 0) / previous_agg.get("orders_qty", 0)) if previous_agg.get("orders_qty") else None
+        funnel = current_funnel.get(str(nm_id), {})
+        prior_funnel = previous_funnel.get(str(nm_id), {})
+        orders, orders_amount = funnel.get("orderCount"), funnel.get("orderSumKopecks")
+        prior_orders, prior_amount = prior_funnel.get("orderCount"), prior_funnel.get("orderSumKopecks")
+        current_price = round(orders_amount / orders) if orders and orders_amount is not None else None
+        previous_price = round(prior_amount / prior_orders) if prior_orders and prior_amount is not None else None
         stock_history = history.get(nm_id, [])
-        availability_7d = [not item.wasOutOfStock for item in stock_history] if stock_history else [True] * 7
-        was_oos = any(not value for value in availability_7d)
-        history_source = "captured" if stock_history and all(item.source == "captured" for item in stock_history) else "backfilled"
+        availability_7d = [not item.wasOutOfStock for item in stock_history]
+        was_oos = any(not value for value in availability_7d) if availability_7d else None
+        history_source = "captured" if len(stock_history) == 7 else "partial" if stock_history else "missing"
         meta = catalog_meta.get(nm_id, {})
         sku = str(meta.get("sku") or f"NM_{nm_id}")
         rows.append(
@@ -1984,20 +1994,20 @@ def _build_week_over_week_payload(
                 "photoUrl": meta.get("photoUrl") or _extract_wb_media_url(meta, nm_id),
                 "brand": meta.get("brand"),
                 "category": meta.get("category"),
-                "productStatus": "средний",
-                "abcCode": "BB",
-                "orders": {"units": agg["orders_qty"], "kopecks": agg["orders_revenue"], "deltaPct": _delta_pct(agg["orders_qty"], previous_agg.get("orders_qty"))},
-                "sales": {"units": agg["sales_qty"], "kopecks": agg["sales_revenue"], "deltaPct": _delta_pct(agg["sales_qty"], previous_agg.get("sales_qty"))},
-                "baskets": {"units": ads_agg.get("baskets"), "kopecks": None, "deltaPct": _delta_pct(ads_agg.get("baskets"), previous_ads_agg.get("baskets"))},
+                "productStatus": meta.get("productStatus"),
+                "abcCode": None,
+                "orders": {"units": orders, "kopecks": orders_amount, "deltaPct": _delta_pct(orders, prior_orders)},
+                "sales": {"units": agg["sales_qty"], "kopecks": agg["sales_revenue"], "deltaPct": _delta_pct(agg["sales_revenue"], previous_agg.get("sales_revenue"))},
+                "baskets": {"units": funnel.get("cartCount"), "kopecks": None, "deltaPct": _delta_pct(funnel.get("cartCount"), prior_funnel.get("cartCount"))},
                 "marginPct": {"percent": profit_agg.get("margin"), "deltaPct": _delta_pct(profit_agg.get("margin"), previous_profit_agg.get("margin"))},
                 "profit": {"kopecks": profit_agg.get("profit"), "deltaPct": _delta_pct(profit_agg.get("profit"), previous_profit_agg.get("profit"))},
                 "price": {"kopecks": current_price, "deltaPct": _delta_pct(current_price, previous_price)},
                 "wasOutOfStock": was_oos,
                 "stockAvailability7d": availability_7d,
-                "stockOutDays": sum(1 for available in availability_7d if not available),
+                "stockOutDays": sum(1 for available in availability_7d if not available) if availability_7d else None,
                 "stockSnapshotCoveragePct": round(len(stock_history) / 7 * 100),
                 "historySource": history_source,
-                "conclusion": "История остатков еще накапливается: недостающие дни будут заполнены по мере новых снимков WB." if history_source == "backfilled" else "Остатки сравниваются по сохраненным ежедневным снимкам WB.",
+                "conclusion": f"Сохранены остатки за {len(stock_history)} из 7 дней. Прошлые остатки WB не предоставлены." if history_source != "captured" else "Остатки подтверждены ежедневными снимками WB.",
             }
         )
     return {
@@ -2008,7 +2018,7 @@ def _build_week_over_week_payload(
         "kpis": [
             _kpi("sku_rows", "SKU в отчете", str(len(rows))),
             _kpi("oos_count", "SKU с OOS", str(sum(1 for row in rows if row["wasOutOfStock"]))),
-            _kpi("history_days", "История, дней", "7"),
+            _kpi("history_days", "История, дней", str(max((len(row.get("stockAvailability7d") or []) for row in rows), default=0))),
         ],
         "chart": {
             "title": "WoW: цены, маржа, прибыль, продажи, заказы, корзины",
@@ -2131,7 +2141,7 @@ def _abc_row_profit(row: dict[str, Any]) -> int | None:
     for key in ("netTotalKopecks", "profitKopecks"):
         if key in row:
             return _int_value(row[key]) if row[key] is not None else None
-    return None if row.get("factTaxState") else 0
+    return None
 
 
 def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
@@ -2154,8 +2164,7 @@ def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dic
         previous_profit = _abc_row_profit(previous) if previous else None
         price = _int_value(row.get("priceWithSppKopecks") or row.get("priceKopecks"))
         previous_price = _int_value(previous.get("priceWithSppKopecks") or previous.get("priceKopecks")) if previous else None
-        stock_units = _int_value(row.get("wbStockUnits"))
-        availability = ([False] * 7) if stock_units <= 0 else ([True] * 7)
+        availability = row.get("stockAvailability7d") or []
         result.append(
             {
                 "sku": str(row.get("sku") or row.get("label") or f"NM_{row.get('nmId') or 'unknown'}"),
@@ -2174,9 +2183,9 @@ def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dic
                 "factTaxReason": row.get("factTaxReason"),
                 "previousFactTaxReason": previous.get("factTaxReason"),
                 "price": {"kopecks": price, "deltaPct": _delta_pct(price, previous_price)},
-                "wasOutOfStock": stock_units <= 0,
+                "wasOutOfStock": any(value is False for value in availability) if availability else None,
                 "stockAvailability7d": availability,
-                "stockOutDays": sum(1 for available in availability if not available),
+                "stockOutDays": sum(1 for available in availability if available is False) if availability else None,
                 "stockSnapshotCoveragePct": 0,
                 "historySource": row.get("historySource") or "abc_cache",
                 "conclusion": row.get("conclusion") or "WoW row is normalized from period metrics for the selected current and previous ranges.",
@@ -2194,7 +2203,7 @@ def _week_over_week_shell(date_range: dict[str, str], rows: list[dict[str, Any]]
         "kpis": [
             _kpi("sku_rows", "SKU в отчете", str(len(rows))),
             _kpi("oos_count", "SKU с OOS", str(sum(1 for row in rows if row.get("wasOutOfStock")))),
-            _kpi("history_days", "История, дней", "7"),
+            _kpi("history_days", "История, дней", str(max((len(row.get("stockAvailability7d") or []) for row in rows), default=0))),
         ],
         "chart": {
             "title": "WoW: цены, маржа, прибыль, продажи, заказы, корзины",
@@ -2992,7 +3001,7 @@ def _map_rnp_to_report_response(payload: Any, date_range: dict[str, str]) -> dic
         item["salesComposite"] = {
             "units": item.get("buyoutCount"),
             "kopecks": item.get("buyoutSumKopecks"),
-            "deltaPct": item.get("orderSumDeltaPct"),
+            "deltaPct": item.get("buyoutSumDeltaPct"),
         }
         item["sourceStatus"] = item.get("sourceStatus") or payload.sourceStatus
         rows.append(item)
@@ -3395,12 +3404,12 @@ BACKGROUND_REPORT_JOB_STALE_AFTER = timedelta(minutes=15)
 BACKGROUND_REPORT_QUEUED_STALE_AFTER = timedelta(seconds=30)
 DIGEST_CACHE_TTL = timedelta(hours=24)
 REPORT_PAYLOAD_CACHE_TTL = timedelta(hours=24)
-ABC_REPORT_PAYLOAD_VERSION = "v21"
+ABC_REPORT_PAYLOAD_VERSION = "v22"
 PNL_REPORT_PAYLOAD_VERSION = "v6"
 EXPENSES_REPORT_PAYLOAD_VERSION = "v1"
-RNP_REPORT_PAYLOAD_VERSION = "v4"
-STOCK_REPORT_PAYLOAD_VERSION = "v5"
-WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v4"
+RNP_REPORT_PAYLOAD_VERSION = "v5"
+STOCK_REPORT_PAYLOAD_VERSION = "v6"
+WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v5"
 
 
 def _abc_economics_version(organization_id: int) -> str:
@@ -3570,6 +3579,13 @@ def _report_tax_unavailable(report: dict[str, Any]) -> bool:
 def _report_payload_cache_is_usable(report_id: str, cache: dict[str, Any], *, organization_id: int | None = None) -> bool:
     if not _report_payload_cache_is_fresh(cache):
         return False
+    if organization_id is not None:
+        start, end, _ = _date_range_from_report_cache(cache)
+        if start and end:
+            imported = _parse_report_job_timestamp(get_source_cache_fetched_at(organization_id, f"funnel_seller_{start}_{end}"))
+            cached_at = _parse_report_job_timestamp(cache.get("fetchedAt") or cache.get("completedAt"))
+            if imported and (not cached_at or imported > cached_at):
+                return False
     if report_id in {"abc", "pnl", "week-over-week"} and organization_id is not None:
         tax_revision = legacy_finance_tax_revision(organization_id)
         if tax_revision == "unavailable" or cache.get("taxRevision") != tax_revision or _report_tax_unavailable(cache.get("report") or {}):

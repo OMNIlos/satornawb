@@ -26,7 +26,7 @@ from vella_wb_19_05.models import (
     SourceEvidence,
     utc_now,
 )
-from app.repricer_bff import DEFAULT_ALGORITHM_SETTINGS, TYPE_DEFAULTS, _article_type, _extract_wb_media_url
+from app.repricer_bff import DEFAULT_ALGORITHM_SETTINGS, TYPE_DEFAULTS, FRONTEND_STRATEGY_BY_ID, _article_type, _extract_wb_media_url
 from app.repricer_cache.store import (
     finance_cache_uses_current_revenue_basis,
     get_source_cache,
@@ -1615,6 +1615,23 @@ def build_rnp_report(
         force_refresh=force_refresh,
         progress_callback=progress_callback,
     )
+    goods = _goods_index(organization_id)
+    runtime = load_runtime_state(organization_id) or {}
+    for row in snapshot.rows:
+        good = goods.get(row.nmId, {})
+        article = str(good.get("vendorCode") or row.sku or "")
+        meta = _sku_meta_from_state(article, runtime=runtime)
+        row.categoryName = good.get("subjectName") or row.categoryName
+        row.photoUrl = _photo_url_for_good(good, row.nmId or 0) or row.photoUrl
+        row.managerId = meta.get("managerId")
+        row.managerName = meta.get("managerName") or row.managerId
+        assignment = (runtime.get("assignments") or {}).get(article) or {}
+        row.strategyName = assignment.get("strategyName") or assignment.get("name") or FRONTEND_STRATEGY_BY_ID.get(assignment.get("strategyId"), {}).get("name")
+        for characteristic in good.get("characteristics") or []:
+            if isinstance(characteristic, dict) and str(characteristic.get("name", "")).lower() == "цвет":
+                value = characteristic.get("value")
+                row.colorName = ", ".join(map(str, value)) if isinstance(value, list) else str(value or "") or None
+                break
     return RnpReportResponse(
         sourceStatus=snapshot.source_status,
         confidence=snapshot.confidence,

@@ -894,6 +894,10 @@ def _covered_cache_from_daily(
     }
     if prefix == "ads":
         payload["totals"] = _ads_cache_totals(payload)
+    elif prefix == "finance":
+        # Period-wide unassigned charges cannot be copied into a shorter range.
+        payload["diagnostics"] = repricer_bff_module.build_finance_diagnostics_from_aggregates(aggregates)
+        payload["diagnostics"].update(dateFrom=payload["dateFrom"], dateTo=payload["dateTo"])
     return payload
 
 
@@ -938,6 +942,9 @@ def _load_period_source_cache(
         prefix,
         get_source_cache(organization_id, exact_key, slim=slim) or {},
     )
+    if exact and (prefix == "finance" or exact.get("source") == "seller_export") and _cache_matches_range(exact, range_start, range_end):
+        # This report includes unassigned charges for precisely the requested dates.
+        return exact
     if exact and prefer_freshest_covering:
         latest = _parse_utc_datetime(get_source_cache_range_revision(
             organization_id, f"{prefix}_", date_from=range_start.date(), date_to=range_end.date(),
@@ -2163,7 +2170,7 @@ def _list_repricer_skus_from_cached_sources(
     )
 
 
-SKU_LIST_SNAPSHOT_VERSION = 15
+SKU_LIST_SNAPSHOT_VERSION = 16
 SKU_LIST_SNAPSHOT_CHUNK_SIZE = 150
 
 
@@ -2782,7 +2789,7 @@ def _repricer_list_summary(
         "settlementFormulaVersion": repricer_bff_module.SETTLEMENT_PROFIT_VERSION,
         "settlementProfitKopecks": settlement_profit,
         "finalPayoutKopecks": None if settlement_blockers else sum(row["finalPayoutKopecks"] for row in settlement_rows) - settlement_residual,
-        "settlementCogsKopecks": None if settlement_blockers else sum(row["settlementCogsKopecks"] for row in settlement_rows),
+        "settlementCogsKopecks": sum(row["settlementCogsKopecks"] for row in settlement_rows) if settlement_rows and all(type(row.get("settlementCogsKopecks")) is int for row in settlement_rows) else None,
         "settlementBlockers": settlement_blockers,
         "revenueKopecks": revenue_kopecks,
         "sellerRevenueKopecks": revenue_kopecks,

@@ -478,6 +478,12 @@ def get_source_cache(
     slim: bool = False,
     strict: bool = False,
 ) -> dict[str, Any] | None:
+    if source_key.startswith("baskets_"):
+        start, end = _source_cache_range_from_key(source_key)
+        if start and end:
+            exported = get_source_cache(organization_id, f"funnel_seller_{start}_{end}", strict=strict)
+            if exported and exported.get("source") == "seller_export":
+                return exported
     redis_key = _source_cache_key(organization_id, source_key, slim=slim)
     redis_allowed = _source_cache_redis_allowed(source_key, slim=slim)
     if redis_allowed:
@@ -725,7 +731,7 @@ def get_repricer_sources_revision(organization_id: int) -> str | None:
                 WbRepricerSourceCacheRow.organization_id == organization_id,
                 or_(
                     WbRepricerSourceCacheRow.source_key.in_(("content_cards", "commission_tariffs", "stocks", "promotions", "promotion_thresholds", CONNECTION_KEY)),
-                    *(WbRepricerSourceCacheRow.source_key.like(f"{prefix}_%") for prefix in ("finance", "baskets", "period_stats", "ads")),
+                    *(WbRepricerSourceCacheRow.source_key.like(f"{prefix}_%") for prefix in ("finance", "baskets", "period_stats", "ads", "funnel_seller")),
                 ),
                 ~WbRepricerSourceCacheRow.source_key.like("baskets_detail_%"),
             )
@@ -814,6 +820,10 @@ def get_source_cache_meta_fields(organization_id: int, source_key: str) -> dict[
 
 
 def save_source_cache(organization_id: int, source_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if source_key == "stocks":
+        from zoneinfo import ZoneInfo
+        observed_day = datetime.now(ZoneInfo("Europe/Moscow")).date()
+        save_source_cache(organization_id, f"stock_history_{observed_day.isoformat()}", payload)
     stored_payload = dict(payload)
     if source_key.startswith("finance_"):
         stored_payload.pop("rows", None)

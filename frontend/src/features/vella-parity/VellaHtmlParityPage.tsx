@@ -52,6 +52,8 @@ import {
   canonicalAbcPnlEmptyMessage,
   canonicalPnlRowStatus,
   fetchCanonicalAbcPnl,
+  previousCanonicalPeriod,
+  financeBlockerReasons,
   resolveCanonicalAbcPnlRollout,
   shouldUseCanonicalAbcPnl,
   type AbcOperationalRow,
@@ -6564,7 +6566,14 @@ export function installAbcLiveDataBridge(accessToken: string | null, canonicalRo
             // A source refresh also imports the financial and advertising snapshots.
             if (sourcesRefreshed && operational) page = await fetchCanonicalAbcPnl(canonicalRequest)
           }
-          latest = { ...adaptCanonicalAbcReport(page, operational?.rows ?? []), warning }
+          let previousPage
+          try {
+            previousPage = await fetchCanonicalAbcPnl({ ...canonicalRequest, includeSpp: false, period: previousCanonicalPeriod(period) })
+          } catch (error) {
+            if (controller.signal.aborted || isAbcAuthExpiredError(error)) throw error
+            warning = 'Данные предыдущего периода не загрузились. Динамика расходов недоступна.'
+          }
+          latest = { ...adaptCanonicalAbcReport(page, operational?.rows ?? [], previousPage), warning }
         } else {
           latest = await loadLatestReportCache<AbcBackendReport>('abc', 'abc', authToken, 'sku', period, 'operational', {
             signal: controller.signal,
@@ -6842,16 +6851,7 @@ function renderAbcWarehouseCells(ctx: AbcRowRenderContext) {
 function renderAbcCommentCell(ctx: AbcRowRenderContext) {
   if (ctx.row.canonical) {
     const blockers = Array.isArray(ctx.row.blockerIds) ? ctx.row.blockerIds.map(String) : []
-    const reasons = new Set<string>()
-    for (const blocker of blockers) {
-      if (blocker.includes('COST')) reasons.add('Уточните себестоимость и её даты')
-      else if (blocker.includes('INTERNAL_EXPENSES')) reasons.add('Не заданы внутренние расходы')
-      else if (blocker.includes('ECONOMICS') || blocker.includes('TAX')) reasons.add('Уточните налог и расходы')
-      else if (blocker.includes('OPERATIONS_UNRECONCILED')) reasons.add('Нужна сверка финансовых операций')
-      else if (blocker.includes('ADS')) reasons.add('Не загружена реклама за период')
-      else if (blocker.includes('ADVERTISING_UNATTRIBUTED')) reasons.add('Часть рекламы не связана с товаром')
-      else reasons.add('Не все исходные данные подтверждены')
-    }
+    const reasons = financeBlockerReasons(blockers)
     return abcRowCell('abc-comment-cell', blockers.length ? `<span class="report-tag warn" title="${escapeHtml([...reasons].join('. '))}">Прибыль не подтверждена</span><span class="sub">${escapeHtml([...reasons].slice(0, 2).join(' · '))}</span>` : '<span class="report-tag good">Данные подтверждены</span>')
   }
   return abcRowCell('abc-comment-cell', window.reportCommentCell?.(ctx.row, 'ABC') ?? '')
@@ -8651,7 +8651,7 @@ export function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }
     {
       ...ABC_KPI_STATS[0],
       label: isCanonical ? 'Продажи / до внутренних расходов' : ABC_KPI_STATS[0].label,
-      help: isCanonical ? 'Вторая сумма — прибыль до внутренних расходов компании. Налог 7,5% применяется с 1 сентября 2026 года.' : ABC_KPI_STATS[0].help,
+      help: isCanonical ? 'Вторая сумма — прибыль до внутренних расходов компании. Используется подтверждённая налоговая ставка за выбранный период.' : ABC_KPI_STATS[0].help,
       value: `${formatAbcKopecks(salesKopecks)} / ${formatAbcKopecks(profitKopecks)}`,
       delta: statusText,
       deltaClass: state.error ? 'down' : state.loading || profitKopecks === null ? 'neutral' : profitKopecks < 0 ? 'down' : 'up',
@@ -9655,7 +9655,7 @@ function rnpProductColor(row: RnpBackendRow, runtimeProduct: Record<string, unkn
 function rnpProductStrategy(row: RnpBackendRow, runtimeProduct: Record<string, unknown> | null) {
   return rnpRowString(row, ['strategyName', 'strategy_name', 'activeStrategyName', 'active_strategy_name', 'repricerStrategyName', 'repricer_strategy_name'])
     || rnpRuntimeString(runtimeProduct, ['strategyName', 'activeStrategyName'])
-    || '—'
+    || 'Не назначена'
 }
 
 function rnpProductPhoto(row: RnpBackendRow, runtimeProduct: Record<string, unknown> | null) {
@@ -10277,7 +10277,7 @@ function getStockRows(report: StockBackendReport | null) {
 }
 
 function getStockKpis(report: StockBackendReport | null) {
-  return Array.isArray(report?.kpis) ? report.kpis : []
+  return Array.isArray(report?.kpis) ? report.kpis.filter((kpi) => kpi.id !== 'rules_profile') : []
 }
 
 function formatStockInteger(value: unknown) {
@@ -10565,7 +10565,6 @@ function PnlLiveSourceStripIsland({
   replacementKey,
   state,
   period,
-  source,
 }: {
   replacementKey: string
   state: PnlLiveState
@@ -10579,11 +10578,11 @@ function PnlLiveSourceStripIsland({
     <div key={replacementKey} className="report-source-strip report-source-compact" data-vella-island="pnl-canonical-source-state">
       <div className={`source-state-card ${partial ? 'partial' : 'fresh'}`}>
         <div>
-          <div className="source-state-kicker">canonical WB finance</div>
-          <div className="source-state-title">{partial ? 'Canonical P&L частичный' : `Canonical P&L: ${canonical.state}`}</div>
-          <div className="source-state-meta">{period.fromIso} — {period.toIso} · {canonical.formulaVersion} · реклама: {canonical.advertisingSource ?? 'нет источника'} / {canonical.advertisingEvidenceStatus ?? 'нет evidence'}{canonical.blockerIds.length ? ` · ${canonical.blockerIds.join(' · ')}` : ''}</div>
+          <div className="source-state-kicker">Финансовый отчёт WB</div>
+          <div className="source-state-title">{partial ? 'Для подтверждения прибыли нужны данные' : 'Данные финансового отчёта'}</div>
+          <div className="source-state-meta">{period.fromIso} — {period.toIso}{canonical.blockerIds.length ? ` · ${financeBlockerReasons(canonical.blockerIds).join(' · ')}` : ''}</div>
         </div>
-        <span className={`source-state-action report-tag ${partial ? 'warn' : 'good'}`}>{canonical.blockerIds.length ? `${canonical.blockerIds.length} blockers` : source}</span>
+        <span className={`source-state-action report-tag ${partial ? 'warn' : 'good'}`}>{canonical.blockerIds.length ? 'Расчёт неполный' : 'Загружено'}</span>
       </div>
     </div>
   )
@@ -11020,9 +11019,7 @@ function PnlLiveWorkbenchIsland({ replacementKey, state, rows }: { replacementKe
   const profitKopecks = total(isCanonical ? 'profitBeforeInternalExpensesKopecks' : 'netProfitKopecks')
   const revenue = formatPnlKopecks(revenueKopecks)
   const displayedProfit = formatPnlKopecks(profitKopecks)
-  const margin = isCanonical
-    ? 'нет данных'
-    : formatPnlPercent(profitKopecks !== null && revenueKopecks !== null && revenueKopecks !== 0 ? profitKopecks / revenueKopecks * 100 : null)
+  const margin = formatPnlPercent(profitKopecks !== null && revenueKopecks !== null && revenueKopecks !== 0 ? profitKopecks / revenueKopecks * 100 : null)
   const profitLabel = isCanonical ? 'До внутренних расходов' : 'Прибыль / маржа'
   const profitTip = isCanonical
     ? 'Продажи за вычетом возвратов минус комиссия, логистика, хранение, приёмка, реклама, штрафы, налог и себестоимость. Внутренние расходы компании вычитаются отдельно.'
@@ -11100,7 +11097,7 @@ function PnlLiveWorkbenchIsland({ replacementKey, state, rows }: { replacementKe
                 ['profitBeforeLoyaltyKopecks', 'До лояльности', 'Результат до рекламы и лояльности − реклама.'],
                 ['loyaltyNetCostKopecks', 'Расходы на лояльность', 'Итог API по версии формулы; может быть отрицательным.'],
                 ['profitAfterLoyaltyKopecks', 'После лояльности, предварительно', 'Результат до лояльности − расходы на лояльность. Не финальная чистая прибыль.'],
-                ['profitBeforeInternalExpensesKopecks', 'До внутренних расходов', 'Продажи − комиссия − логистика − хранение − приёмка − реклама − штрафы − налог − себестоимость. Налог 7,5% с 1 сентября 2026 года.'],
+                ['profitBeforeInternalExpensesKopecks', 'До внутренних расходов', 'Продажи − комиссия − логистика − хранение − приёмка − реклама − штрафы − налог − себестоимость. Требуется подтверждённая налоговая ставка за период.'],
                 ['internalExpensesKopecks', 'Внутренние расходы компании', 'Подтверждённые расходы выбранного периода с применимым правилом распределения.'],
                 ['netProfitKopecks', 'Чистая прибыль', 'Не подменяется промежуточным результатом. Пока API не подтверждает итог, значение неизвестно.'],
               ] satisfies Array<[keyof PnlBackendRow, string, string]>).map(([field, label, explanation]) => {
@@ -12002,12 +11999,16 @@ function weekMetricValue(metric: { units?: number | null } | null | undefined) {
 
 function WeekWorkbenchIsland({ replacementKey, state }: { replacementKey: string; state: WeekLiveState }) {
   const rows = state.status === 'ready' ? getWeekRows(state.report) : []
-  const averageDelta = (selector: (row: WeekBackendRow) => unknown) => rows.length ? rows.reduce((sum, row) => sum + (weekNumber(selector(row)) ?? 0), 0) / rows.length : null
+  const averageDelta = (selector: (row: WeekBackendRow) => unknown) => {
+    const values = rows.map((row) => weekNumber(selector(row))).filter((value): value is number => value !== null)
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
+  }
+  const attentionRows = rows.filter((row) => (weekNumber(row.marginPct?.percent) ?? 0) < 0 || (weekNumber(row.sales?.deltaPct) ?? 0) < 0 || row.wasOutOfStock === true)
   const signals = [
     ['Продажи', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.sales?.deltaPct)), state.status === 'ready' ? formatAdsKopecks(rows.reduce((sum, row) => sum + (weekNumber(row.sales?.kopecks) ?? 0), 0)) : 'данные обновляются', 'week-signal', 'Среднее изменение продаж к прошлой неделе. Сумма ниже показывает выкупили на сумму за текущую неделю.'],
-    ['Заказы', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.orders?.deltaPct)), state.status === 'ready' ? `+${rows.reduce((sum, row) => sum + (weekNumber(row.orders?.units) ?? 0), 0)} шт` : 'данные обновляются', 'week-signal', 'Среднее изменение заказов к прошлой неделе. Заказы показывают спрос раньше, чем выкуп.'],
+    ['Заказы', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.orders?.deltaPct)), state.status === 'ready' ? `${rows.reduce((sum, row) => sum + (weekNumber(row.orders?.units) ?? 0), 0)} шт` : 'данные обновляются', 'week-signal', 'Среднее изменение заказов к прошлой неделе. Заказы показывают спрос раньше, чем выкуп.'],
     ['Маржа', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.marginPct?.deltaPct), ' пп'), state.status === 'ready' ? 'по данным P&L/операционных расходов' : 'данные обновляются', 'week-signal warn', 'Изменение маржи в процентных пунктах. Маржа = прибыль / выручка * 100%.'],
-    ['Требуют внимания', state.status === 'ready' ? String(rows.filter((row) => (weekNumber(row.marginPct?.percent) ?? 0) < 0).length) : 'загрузка', state.status === 'ready' ? `${rows.filter((row) => row.productStatus === 'неликвид').length} в статусе неликвид` : 'данные обновляются', 'week-signal danger', 'Товары, которые попали в зону внимания: отрицательная маржа, слабые продажи или проблемный статус.'],
+    ['Требуют внимания', state.status === 'ready' ? String(attentionRows.length) : 'загрузка', state.status === 'ready' ? 'снижение продаж, убыток или отсутствие остатка' : 'данные обновляются', 'week-signal danger', 'Товары, которые попали в зону внимания: отрицательная маржа, слабые продажи или проблемный статус.'],
   ]
   const metrics = ['Цены', 'Маржа', 'Прибыль', 'Продажи', 'Заказы', 'Корзины']
   return (
@@ -12974,7 +12975,7 @@ function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as 
                 <td>{category}</td>
                 <td>{color}</td>
                 <td>{strategy}</td>
-                <td>{row.managerId ?? '—'}</td>
+                <td>{rnpRowString(row, ['managerName', 'managerId']) || 'Не назначен'}</td>
                 <td className="num">{formatAdsInteger(row.impressions)}</td>
                 <td className="num"><span className="metric-stack"><strong>{formatAdsInteger(row.openCount)}</strong>{rnpDeltaNode(row.openCountDeltaPct)}</span></td>
                 <td className="num">{formatAdsPct(row.ctrPct)}</td>
@@ -12992,7 +12993,7 @@ function RnpTableShellIsland({ replacementKey, state = { status: 'loading' } as 
                 <td className="num">{formatAdsInteger(row.adImpressions)}</td>
                 <td className="num"><span className="metric-stack"><strong>{formatAdsInteger(row.adClicks)}</strong><span className="subline">{formatAdsPct(row.adCtrPct)}</span></span></td>
                 <td className="num">{formatAdsKopecks(row.adSpendKopecks)}</td>
-                <td className="num"><span className="metric-stack"><strong>{rnpPercentMetricNode(row.acooPct, 14, true)}</strong><span className={`subline ${rnpThresholdTone(row.tacooPct, 14, true)}`}>{formatAdsPct(row.tacooPct)}</span></span></td>
+                <td className="num">{rnpPercentMetricNode(row.drrPct, 14, true)}</td>
                 <td className="num"><span className="metric-stack"><strong>{formatAdsInteger(row.organicOrderCountEstimated)} шт</strong><span className="subline">{formatAdsKopecks(row.organicSalesKopecksEstimated)}</span></span></td>
                 <td><span className={`report-tag ${businessStatus.className}`}>{businessStatus.label}</span></td>
                 <td>{comment}</td>
@@ -13041,7 +13042,7 @@ function PnlLiveTableShellIsland({ replacementKey, state, rows, mode = 'financia
             <ReportHeaderCell className="num" label="Реклама" tip="Расход рекламы, связанный с товаром или кампанией. Уменьшает прибыль." />
             <ReportHeaderCell className="num" label="Налог" tip="Налог по настройкам организации. Вычитается при расчете чистой прибыли." />
             {showOneCColumns ? <ReportHeaderCell className="num" label="Опер. расходы" tip="Операционные расходы из 1С или настроек распределения. Например зарплата, аренда, сервисы." /> : null}
-            <ReportHeaderCell className="num" label={isCanonical ? 'До внутренних расходов' : 'Прибыль'} tip={isCanonical ? 'Прибыль по утверждённой формуле до внутренних расходов компании. Налог 7,5% с 1 сентября 2026 года.' : 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы.'} />
+            <ReportHeaderCell className="num" label={isCanonical ? 'До внутренних расходов' : 'Прибыль'} tip={isCanonical ? 'Прибыль по утверждённой формуле до внутренних расходов компании. Требуется подтверждённая налоговая ставка за период.' : 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы.'} />
             <ReportHeaderCell className="num" label={isCanonical ? 'Финальная маржа' : 'Маржа'} tip={isCanonical ? 'Не рассчитывается, пока финальная P&L-формула заблокирована.' : 'Маржа = прибыль / выручка * 100%. Показывает, какая доля выручки остается после расходов.'} />
             <ReportHeaderCell label="Статус" tip="Насколько строка готова к использованию: данные подтверждены, рассчитаны оперативно или требуют проверки." />
             <ReportHeaderCell label="Комментарий" tip="Пояснение к строке: почему сумма такая, чего не хватает или что нужно проверить." />
@@ -13118,7 +13119,7 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
             <ReportHeaderCell className="num" label="Заказы" tip="Оформленные заказы за неделю. Подстрока показывает изменение к прошлой неделе." />
             <ReportHeaderCell className="num" label="Корзины" tip="Добавления товара в корзину. Это ранний сигнал спроса до заказа." />
             <ReportHeaderCell className="num" label="Маржа" tip="Маржа = прибыль / выручка * 100%. Подстрока показывает изменение в процентных пунктах." />
-            <ReportHeaderCell className="num" label="Прибыль" tip="Предварительная прибыль после себестоимости, удержаний WB, рекламы и расходов. Подстрока показывает изменение к прошлой неделе." />
+            <ReportHeaderCell className="num" label="Прибыль" tip="Подтверждённая прибыль после себестоимости, удержаний WB, рекламы и расходов. Подстрока показывает изменение к прошлой неделе." />
             <ReportHeaderCell label="Был без остатка" tip="Был ли товар без остатка в течение недели. Это значит, что товар закончился или был недоступен для заказа." />
             <ReportHeaderCell className="num" label="Наличие 7 дней" tip="Сколько дней из последних 7 товар был в наличии. Например 5/7 значит два дня товар отсутствовал." />
             <ReportHeaderCell className="num" label="Дней ОС" tip="Сколько дней за неделю товар был без остатка. Чем больше дней, тем сильнее продажи могли просесть из-за отсутствия товара." />
@@ -13144,9 +13145,9 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
               <td className="num"><span className="metric-stack"><strong>{weekMetricValue(row.baskets)}</strong><span className="subline">{weekSignedPct(row.baskets?.deltaPct)}</span></span></td>
               <td className="num"><span className="metric-stack"><strong>{weekNumber(row.marginPct?.percent) == null ? '—' : `${row.marginPct?.percent}%`}</strong><span className="subline">{weekSignedPct(row.marginPct?.deltaPct, ' пп')}</span></span></td>
               <td className="num"><span className="metric-stack"><strong>{formatAdsKopecks(row.profit?.kopecks)}</strong><span className="subline">{weekSignedPct(row.profit?.deltaPct)}</span></span></td>
-              <td>{row.wasOutOfStock ? 'был ОС' : 'нет'}</td>
-              <td className="num">{(row.stockAvailability7d ?? []).filter(Boolean).length}/{(row.stockAvailability7d ?? []).length || 7}</td>
-              <td className="num">{row.stockOutDays ?? (row.stockAvailability7d ?? []).filter((day) => day === false).length}</td>
+              <td>{row.wasOutOfStock == null ? 'Нет истории' : row.wasOutOfStock ? 'был ОС' : 'нет за известные дни'}</td>
+              <td className="num">{row.stockAvailability7d?.length ? `${row.stockAvailability7d.filter(Boolean).length}/${row.stockAvailability7d.length}` : '—'}</td>
+              <td className="num">{row.stockOutDays ?? '—'}</td>
               <td className="num">{row.stockSnapshotCoveragePct == null ? row.historySource ?? 'нет истории' : `${row.stockSnapshotCoveragePct}%`}</td>
               <td>{row.conclusion ?? '—'}</td>
               <td>Добавить</td>
@@ -13636,7 +13637,7 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       : canonicalEmptyMessage ?? 'Мы не нашли финансовых строк за этот период. Попробуйте изменить даты или обновить данные отчета.'
 
   useEffect(() => {
-    if (!pnlReportActive) return
+    if (!pnlReportActive || !cabinetMe) return
     let cancelled = false
     const controller = new AbortController()
 
@@ -13649,19 +13650,23 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
         return
       }
       try {
-        const latest: PnlBackendReport | null = canonicalPnlEnabled && canonicalRollout
-          ? adaptCanonicalPnlReport(await fetchCanonicalAbcPnl({
-              accessToken,
-              marketplaceAccountId: canonicalRollout.marketplaceAccountId,
-              period: { fromIso: periodFromIso, toIso: periodToIso },
-              signal: controller.signal,
-            }))
-          : await loadLatestReportCache<PnlBackendReport>('pnl', 'pnl', accessToken, 'sku', { fromIso: periodFromIso, toIso: periodToIso }, pnlSource, {
-              signal: controller.signal,
-              onJob: (job) => {
-                if (!cancelled) setState({ status: 'loading', job })
-              },
-            })
+        let latest: PnlBackendReport | null
+        const period = { fromIso: periodFromIso, toIso: periodToIso }
+        if (canonicalPnlEnabled && canonicalRollout) {
+          const [page, operational] = await Promise.all([
+            fetchCanonicalAbcPnl({ accessToken, marketplaceAccountId: canonicalRollout.marketplaceAccountId, period, signal: controller.signal }),
+            loadLatestReportCache<AbcBackendReport>('abc', 'abc', accessToken, 'sku', period, 'operational', { signal: controller.signal }).catch((error: unknown) => {
+              if (controller.signal.aborted || isAbcAuthExpiredError(error)) throw error
+              return null
+            }),
+          ])
+          latest = adaptCanonicalPnlReport(page, operational?.rows ?? [])
+        } else {
+          latest = await loadLatestReportCache<PnlBackendReport>('pnl', 'pnl', accessToken, 'sku', period, pnlSource, {
+            signal: controller.signal,
+            onJob: (job) => { if (!cancelled) setState({ status: 'loading', job }) },
+          })
+        }
         if (latest && !cancelled) {
           setState({ status: 'ready', report: latest })
           return
@@ -13681,7 +13686,7 @@ function PnlReportActiveIsland({ replacementKey }: { replacementKey: string }) {
       cancelled = true
       controller.abort()
     }
-  }, [accessToken, canonicalPnlEnabled, canonicalRollout, periodFromIso, periodToIso, pnlReportActive, pnlSource, requestScope])
+  }, [accessToken, cabinetMe, canonicalPnlEnabled, canonicalRollout, periodFromIso, periodToIso, pnlReportActive, pnlSource, requestScope])
 
   useEffect(() => {
     const render = (event: Event) => {
@@ -14460,7 +14465,8 @@ function WeekReportIsland({ replacementKey }: { replacementKey: string }) {
 }
 
 function WeekReportActiveIsland({ replacementKey }: { replacementKey: string }) {
-  const { accessToken } = useAuth()
+  const { accessToken, cabinetMe } = useAuth()
+  const canonicalRollout = useMemo(() => resolveCanonicalAbcPnlRollout(cabinetMe?.organization.organizationId), [cabinetMe?.organization.organizationId])
   const activeTab = useContext(ActiveParityTabContext)
   const weekActive = shouldLoadPeriodSurface(activeTab, 'week')
   const [state, setState] = useState<WeekLiveState>({ status: 'loading' })
@@ -14505,6 +14511,27 @@ function WeekReportActiveIsland({ replacementKey }: { replacementKey: string }) 
       })
       if (cancelled) return
       if (report && weekReportMatchesPeriod(report, periodState)) {
+        if (canonicalRollout && shouldUseCanonicalAbcPnl(canonicalRollout, 'abc')) {
+          const request = { accessToken: authToken, marketplaceAccountId: canonicalRollout.marketplaceAccountId, period: periodState, signal: controller.signal }
+          try {
+            const [current, previous] = await Promise.all([fetchCanonicalAbcPnl(request), fetchCanonicalAbcPnl({ ...request, period: previousCanonicalPeriod(periodState) })])
+            const byNm = new Map(current.items.map((item) => [item.nmId, item]))
+            const priorByNm = new Map(previous.items.map((item) => [item.nmId, item]))
+            for (const row of report.rows ?? []) {
+              const item = byNm.get(Number(row.nmId))
+              const prior = priorByNm.get(Number(row.nmId))
+              const profit = item?.netProfitKopecks ?? null
+              const before = prior?.netProfitKopecks ?? null
+              const margin = profit !== null && item && item.revenueKopecks > 0 ? profit / item.revenueKopecks * 100 : null
+              const priorMargin = before !== null && prior && prior.revenueKopecks > 0 ? before / prior.revenueKopecks * 100 : null
+              row.profit = { kopecks: profit, deltaPct: profit !== null && before !== null && before !== 0 ? (profit - before) / Math.abs(before) * 100 : null }
+              row.marginPct = { percent: margin, deltaPct: margin !== null && priorMargin !== null ? margin - priorMargin : null }
+            }
+          } catch (error) {
+            if (controller.signal.aborted || isAbcAuthExpiredError(error)) throw error
+          }
+        }
+        if (cancelled) return
         debug[cacheDebugIndex] = { stage: 'cache', method: 'GET', path: cachePath, status: 'latest-cache' }
         setState({ status: 'ready', report, debug })
       } else {
@@ -14537,7 +14564,7 @@ function WeekReportActiveIsland({ replacementKey }: { replacementKey: string }) 
       cancelled = true
       controller.abort()
     }
-  }, [accessToken, periodState.fromIso, periodState.toIso, weekActive])
+  }, [accessToken, canonicalRollout, periodState.fromIso, periodState.toIso, weekActive])
 
   useEffect(() => {
     const render = (event?: Event) => {
@@ -30794,7 +30821,7 @@ function HistoryIsland({ replacementKey }: { replacementKey: string }) {
   const [search, setSearch] = useState('')
   const [triggerFilter, setTriggerFilter] = useState<HistoryFilterTrigger>('all')
   const [sourceFilter, setSourceFilter] = useState<HistoryFilterSource>('all')
-  const [periodFilter, setPeriodFilter] = useState<HistoryPeriodPreset>('today')
+  const [periodFilter, setPeriodFilter] = useState<HistoryPeriodPreset>('month')
   const [periodFrom, setPeriodFrom] = useState(() => {
     const today = new Date()
     today.setDate(today.getDate() - 30)
@@ -30823,6 +30850,7 @@ function HistoryIsland({ replacementKey }: { replacementKey: string }) {
 
     const controller = new AbortController()
     const requestPage = page
+    setError(null)
     if (page === 1) setLoading(true)
     else setLoadingMore(true)
 

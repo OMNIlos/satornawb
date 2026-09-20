@@ -242,6 +242,12 @@ export function parseCanonicalAbcPnlPage(payload: unknown): CanonicalAbcPnlPage 
   return result.data
 }
 
+export function previousCanonicalPeriod(period: CanonicalPeriod): CanonicalPeriod {
+  const days = Math.round((Date.parse(period.toIso) - Date.parse(period.fromIso)) / 86400000) + 1
+  const end = Date.parse(period.fromIso) - 86400000
+  return { fromIso: new Date(end - (days - 1) * 86400000).toISOString().slice(0, 10), toIso: new Date(end).toISOString().slice(0, 10) }
+}
+
 type CanonicalRequest = (path: string, init?: RequestInit) => Promise<unknown>
 
 function paginationIdentity(page: CanonicalAbcPnlPage) {
@@ -382,11 +388,15 @@ export type AbcOperationalRow = {
   ruleEvaluation?: { status?: 'unknown' | 'risk' | 'opportunity' | 'normal' | null } | null
 }
 
-export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage, operationalRows: AbcOperationalRow[] = []) {
+export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage, operationalRows: AbcOperationalRow[] = [], previous?: CanonicalAbcPnlPage) {
+  const previousByNm = new Map(previous?.items.map((item) => [item.nmId, item]) ?? [])
   const byNm = new Map(operationalRows.filter((row) => Number(row.nmId) > 0).map((row) => [Number(row.nmId), row]))
   return {
     rows: page.items.map((item) => {
       const operational = item.nmId === null ? undefined : byNm.get(item.nmId)
+      const prior = previousByNm.get(item.nmId)
+      const delta = (value: number | null, before: number | null | undefined) => value !== null && before != null && before !== 0 ? (value - before) / Math.abs(before) * 100 : null
+      const costDelta = (value: number | null, before: number | null | undefined) => value !== null && before != null && prior && prior.revenueKopecks > 0 && item.revenueKopecks > 0 ? (value / item.revenueKopecks - before / prior.revenueKopecks) * 100 : null
       const revenuePct = (value: number | null) => value !== null && item.revenueKopecks > 0 ? value / item.revenueKopecks * 100 : null
       return {
         // Only operational fields may come from the supplemental report; finance stays canonical.
@@ -413,7 +423,7 @@ export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage, operationalRo
         ktrIndex: operational?.ktrIndex,
         localizationPct: operational?.localizationPct,
         wbStockUnits: operational?.wbStockUnits,
-        wbStockKopecks: operational?.wbStockKopecks,
+        wbStockKopecks: operational?.wbStockKopecks ?? (operational?.wbStockUnits != null && item.sppSource === 'current_buyer_price' && item.sppBuyerPriceKopecks != null ? operational.wbStockUnits * item.sppBuyerPriceKopecks : null),
         promotionStatus: operational?.promotionStatus,
         promotionStatusText: operational?.promotionStatusText,
         promotionName: operational?.promotionName,
@@ -426,12 +436,16 @@ export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage, operationalRo
         sppHistory: item.sppHistory ?? [],
         cogsKopecks: item.cogsKopecks,
         cogsPerUnitKopecks: item.cogsKopecks !== null && item.netUnits > 0 ? Math.round(item.cogsKopecks / item.netUnits) : null,
-        salesComposite: { units: item.netUnits, kopecks: item.revenueKopecks, deltaPct: null },
+        salesComposite: { units: item.netUnits, kopecks: item.revenueKopecks, deltaPct: delta(item.revenueKopecks, prior?.revenueKopecks) },
         adSpendKopecks: item.advertisingSpendKopecks,
         drrSalesPct: revenuePct(item.advertisingSpendKopecks),
         logisticsCostPct: revenuePct(item.logisticsKopecks),
         commissionCostPct: revenuePct(item.commissionKopecks),
         storageCostPct: revenuePct(item.storageKopecks),
+        logisticsDeltaPct: costDelta(item.logisticsKopecks, prior?.logisticsKopecks),
+        commissionDeltaPct: costDelta(item.commissionKopecks, prior?.commissionKopecks),
+        storageDeltaPct: costDelta(item.storageKopecks, prior?.storageKopecks),
+        marginDeltaPct: costDelta(item.profitBeforeInternalExpensesKopecks, prior?.profitBeforeInternalExpensesKopecks),
         marginKopecks: item.profitBeforeInternalExpensesKopecks !== null && item.netUnits > 0 ? Math.round(item.profitBeforeInternalExpensesKopecks / item.netUnits) : null,
         marginPct: revenuePct(item.profitBeforeInternalExpensesKopecks),
         profitAfterLoyaltyKopecks: item.profitAfterLoyaltyKopecks,
@@ -465,7 +479,20 @@ export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage, operationalRo
   }
 }
 
-export function adaptCanonicalPnlReport(page: CanonicalAbcPnlPage) {
+export function financeBlockerReasons(blockers: string[]) {
+  return [...new Set(blockers.map((blocker) => {
+    if (blocker.includes('COST')) return 'Уточните себестоимость и её даты'
+    if (blocker.includes('INTERNAL_EXPENSES')) return 'Не заданы внутренние расходы'
+    if (blocker.includes('ECONOMICS') || blocker.includes('TAX')) return 'Уточните налог и расходы'
+    if (blocker.includes('OPERATIONS_UNRECONCILED')) return 'Нужна сверка финансовых операций'
+    if (blocker.includes('ADVERTISING_UNATTRIBUTED')) return 'Часть рекламы не связана с товаром'
+    if (blocker.includes('ADS')) return 'Не загружена реклама за период'
+    return 'Не все исходные данные подтверждены'
+  }))]
+}
+
+export function adaptCanonicalPnlReport(page: CanonicalAbcPnlPage, operationalRows: AbcOperationalRow[] = []) {
+  const byNm = new Map(operationalRows.filter((row) => Number(row.nmId) > 0).map((row) => [Number(row.nmId), row]))
   return {
     meta: {
       title: 'Canonical WB ABC/P&L',
@@ -474,13 +501,17 @@ export function adaptCanonicalPnlReport(page: CanonicalAbcPnlPage) {
       sourceType: page.meta.advertisingSource,
       dateRange: { from: page.meta.period.dateFrom, to: page.meta.period.dateTo },
     },
-    headline: page.meta.state === 'partial' ? 'Предварительный P&L: есть блокирующие допущения' : 'Canonical WB P&L',
-    warning: page.meta.blockerIds.length > 0 ? page.meta.blockerIds.join(', ') : null,
+    headline: page.meta.state === 'partial' ? 'Для расчёта прибыли нужны дополнительные данные' : 'Финансовый отчёт WB',
+    warning: page.meta.blockerIds.length > 0 ? financeBlockerReasons(page.meta.blockerIds).join(' · ') : null,
     rows: page.items.map((item) => ({
       label: item.sellerArticle,
       articleId: item.sellerArticle,
       sku: item.sellerArticle,
       nmId: item.nmId,
+      productName: item.nmId === null ? undefined : byNm.get(item.nmId)?.productName,
+      photoUrl: item.nmId === null ? undefined : byNm.get(item.nmId)?.photoUrl,
+      category: item.nmId === null ? undefined : byNm.get(item.nmId)?.category,
+      managerId: item.nmId === null ? undefined : byNm.get(item.nmId)?.managerId,
       revenueKopecks: item.revenueKopecks,
       cogsKopecks: item.cogsKopecks,
       commissionKopecks: item.commissionKopecks,
@@ -506,10 +537,10 @@ export function adaptCanonicalPnlReport(page: CanonicalAbcPnlPage) {
       returnsPenaltyKopecks: item.penaltyKopecks + item.deductionKopecks,
       netProfitKopecks: item.netProfitKopecks,
       profitAfterLoyaltyKopecks: item.profitAfterLoyaltyKopecks,
-      marginPct: null,
+      marginPct: item.netProfitKopecks !== null && item.revenueKopecks > 0 ? item.netProfitKopecks / item.revenueKopecks * 100 : null,
       sourceStatus: page.meta.state,
       confidence: item.blockerIds.length > 0 ? 'blocked' : 'canonical',
-      comment: item.blockerIds.join(', '),
+      comment: financeBlockerReasons(item.blockerIds).join(' · '),
       blockerIds: item.blockerIds,
     })),
     canonical: compatibilityMeta(page),
