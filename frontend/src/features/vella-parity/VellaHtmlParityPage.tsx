@@ -13138,7 +13138,7 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
                   subtitle={weekProductSubtitle(row)}
                   meta={weekProductMeta(row)}
                 />
-                <small>{formatAdsKopecks(row.price?.kopecks)} · {weekSignedPct(row.price?.deltaPct)}</small>
+                <small>Средняя цена: {formatAdsKopecks(row.price?.kopecks)} · {weekSignedPct(row.price?.deltaPct)}</small>
               </td>
               <td className="num"><span className="metric-stack"><strong>{formatAdsKopecks(row.sales?.kopecks)}</strong><span className="subline">{weekSignedPct(row.sales?.deltaPct)}</span></span></td>
               <td className="num"><span className="metric-stack"><strong>{weekMetricValue(row.orders)}</strong><span className="subline">{weekSignedPct(row.orders?.deltaPct)}</span></span></td>

@@ -9,7 +9,7 @@ from zipfile import ZipFile
 from app.wb_funnel_export import parse_funnel_export
 from app.reports_history import ensure_daily_stock_history
 from app.wb_api.rnp_runtime import _cached_funnel_rows
-from app.routers.wb_reports_bff import _build_week_over_week_payload, _empty_background_report
+from app.routers.wb_reports_bff import _build_week_over_week_payload, _empty_background_report, _week_rows_from_abc_rows, _week_rows_with_funnel_metrics
 
 
 def sheet(rows):
@@ -57,4 +57,14 @@ assert row['stockAvailability7d'] == [] and row['wasOutOfStock'] is None
 assert row['marginPct']['percent'] is None and row['stockSnapshotCoveragePct'] == 0
 missing = _empty_background_report('week-over-week', {'from': '2026-09-12', 'to': '2026-09-18'}, 'sku', {'state': 'completed', 'cacheFresh': True})
 assert missing['reportJob']['state'] == 'idle' and missing['reportJob']['cacheFresh'] is False
+prior = {'nmId': 1, 'ordersComposite': {'units': 2, 'kopecks': 40000}, 'salesComposite': {'units': 2, 'kopecks': 40000}}
+current = {**prior, 'ordersComposite': {'units': 2, 'kopecks': 20000}, 'salesComposite': {'units': 2, 'kopecks': 20000}, 'priceWithSppKopecks': 0, 'baskets': 20}
+with patch('app.reports_history.get_source_cache', side_effect=cache):
+    row = _week_rows_from_abc_rows([current], [prior], organization_id=2, snapshot_date=date(2026, 9, 18))[0]
+assert row['price'] == {'kopecks': 10000, 'deltaPct': -50}
+assert row['sales']['deltaPct'] == -50 and row['stockSnapshotCoveragePct'] == 14
+assert row['stockAvailability7d'] == [True] and '1 из 7' in row['conclusion']
+empty = _week_rows_with_funnel_metrics([current], {'1': {'cartCount': 0, 'orderCount': 0, 'orderSumKopecks': 0, 'buyoutCount': 0, 'buyoutSumKopecks': 0}})
+assert empty[0]['baskets'] == 0 and empty[0]['ordersComposite']['units'] == 0
+assert _week_rows_from_abc_rows(empty)[0]['price']['kopecks'] is None
 print('Report data repair: OK')

@@ -2144,8 +2144,12 @@ def _abc_row_profit(row: dict[str, Any]) -> int | None:
     return None
 
 
-def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+def _week_rows_from_abc_rows(
+    rows: list[dict[str, Any]], previous_rows: list[dict[str, Any]] | None = None,
+    *, organization_id: int | None = None, snapshot_date: date | None = None,
+) -> list[dict[str, Any]]:
     previous_by_key = {_week_row_key(row): row for row in previous_rows or [] if _week_row_key(row)}
+    history = ensure_daily_stock_history(snapshot_date, [_int_value(row.get("nmId")) for row in rows], organization_id=organization_id) if organization_id and snapshot_date else {}
     result: list[dict[str, Any]] = []
     for row in rows:
         key = _week_row_key(row)
@@ -2155,27 +2159,29 @@ def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dic
         sales_units = _composite_units(row, "salesComposite", "salesUnits")
         sales_kopecks = _composite_kopecks(row, "salesComposite", "salesKopecks")
         previous_orders_units = _composite_units(previous, "ordersComposite", "ordersUnits") if previous else None
-        previous_sales_units = _composite_units(previous, "salesComposite", "salesUnits") if previous else None
+        previous_orders_kopecks = _composite_kopecks(previous, "ordersComposite", "ordersKopecks") if previous else None
+        previous_sales_kopecks = _composite_kopecks(previous, "salesComposite", "salesKopecks") if previous else None
         baskets = _int_value(row.get("baskets"))
         previous_baskets = _int_value(previous.get("baskets")) if previous else None
         margin = _float_value(row.get("marginPct"))
         previous_margin = _float_value(previous.get("marginPct")) if previous else None
         profit = _abc_row_profit(row)
         previous_profit = _abc_row_profit(previous) if previous else None
-        price = _int_value(row.get("priceWithSppKopecks") or row.get("priceKopecks"))
-        previous_price = _int_value(previous.get("priceWithSppKopecks") or previous.get("priceKopecks")) if previous else None
-        availability = row.get("stockAvailability7d") or []
+        price = round(orders_kopecks / orders_units) if orders_units > 0 and orders_kopecks > 0 else None
+        previous_price = round(previous_orders_kopecks / previous_orders_units) if previous_orders_units and previous_orders_kopecks else None
+        availability = [not item.wasOutOfStock for item in history.get(_int_value(row.get("nmId")), [])]
         result.append(
             {
                 "sku": str(row.get("sku") or row.get("label") or f"NM_{row.get('nmId') or 'unknown'}"),
                 "nmId": row.get("nmId"),
                 "productName": row.get("productName") or row.get("name"),
+                "photoUrl": row.get("photoUrl"),
                 "brand": row.get("brand"),
                 "category": row.get("category"),
                 "productStatus": row.get("productStatus") or "средний",
                 "abcCode": row.get("abcCode") or "CC",
                 "orders": {"units": orders_units, "kopecks": orders_kopecks, "deltaPct": _delta_pct(orders_units, previous_orders_units)},
-                "sales": {"units": sales_units, "kopecks": sales_kopecks, "deltaPct": _delta_pct(sales_units, previous_sales_units)},
+                "sales": {"units": sales_units, "kopecks": sales_kopecks, "deltaPct": _delta_pct(sales_kopecks, previous_sales_kopecks)},
                 "baskets": {"units": baskets, "kopecks": None, "deltaPct": _delta_pct(baskets, previous_baskets)},
                 "marginPct": {"percent": margin, "deltaPct": _delta_pct(margin, previous_margin)},
                 "profit": {"kopecks": profit, "deltaPct": _delta_pct(profit, previous_profit)},
@@ -2186,9 +2192,9 @@ def _week_rows_from_abc_rows(rows: list[dict[str, Any]], previous_rows: list[dic
                 "wasOutOfStock": any(value is False for value in availability) if availability else None,
                 "stockAvailability7d": availability,
                 "stockOutDays": sum(1 for available in availability if available is False) if availability else None,
-                "stockSnapshotCoveragePct": 0,
-                "historySource": row.get("historySource") or "abc_cache",
-                "conclusion": row.get("conclusion") or "WoW row is normalized from period metrics for the selected current and previous ranges.",
+                "stockSnapshotCoveragePct": round(len(availability) / 7 * 100),
+                "historySource": "captured" if len(availability) == 7 else "partial" if availability else "missing",
+                "conclusion": f"Сохранены остатки за {len(availability)} из 7 дней. Прошлые остатки WB не предоставлены." if len(availability) < 7 else "Остатки подтверждены ежедневными снимками WB.",
             }
         )
     return result
@@ -2367,14 +2373,14 @@ def _week_rows_with_funnel_metrics(rows: list[dict[str, Any]], funnel_metrics: d
         order_sum = _int_value(metrics.get("orderSumKopecks"))
         buyout_count = _int_value(metrics.get("buyoutCount"))
         buyout_sum = _int_value(metrics.get("buyoutSumKopecks"))
-        if cart_count > 0:
+        if metrics.get("cartCount") is not None:
             enriched["baskets"] = cart_count
             enriched["cartCount"] = cart_count
-        if order_count > 0 or order_sum > 0:
+        if metrics.get("orderCount") is not None and metrics.get("orderSumKopecks") is not None:
             enriched["ordersUnits"] = order_count
             enriched["ordersKopecks"] = order_sum
             enriched["ordersComposite"] = {"units": order_count, "kopecks": order_sum}
-        if buyout_count > 0 or buyout_sum > 0:
+        if metrics.get("buyoutCount") is not None and metrics.get("buyoutSumKopecks") is not None:
             enriched["salesUnits"] = buyout_count
             enriched["salesKopecks"] = buyout_sum
             enriched["salesComposite"] = {"units": buyout_count, "kopecks": buyout_sum}
@@ -2473,7 +2479,7 @@ def _build_week_over_week_abc_report(
     add_step("previous_period_stats", "period_stats_cache", previous_from, previous_to, len(previous_period_stats), "cached" if previous_period_stats else "empty")
 
     source_status = "fresh" if used_repricer_fallback and current_rows else str(getattr(current_payload, "sourceStatus", None) or "partial")
-    rows = _week_rows_from_abc_rows(current_rows, previous_rows)
+    rows = _week_rows_from_abc_rows(current_rows, previous_rows, organization_id=actor.organization_id, snapshot_date=date_to)
     payload = _week_over_week_shell(date_range, rows, source_status=source_status)
     payload["headline"] = "WoW-отчёт построен прямым запросом из того же источника, что ABC, без ожидания фоновой сборки."
     payload["cache"] = {
@@ -3409,7 +3415,7 @@ PNL_REPORT_PAYLOAD_VERSION = "v6"
 EXPENSES_REPORT_PAYLOAD_VERSION = "v1"
 RNP_REPORT_PAYLOAD_VERSION = "v5"
 STOCK_REPORT_PAYLOAD_VERSION = "v6"
-WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v5"
+WEEK_OVER_WEEK_REPORT_PAYLOAD_VERSION = "v6"
 
 
 def _abc_economics_version(organization_id: int) -> str:

@@ -515,7 +515,7 @@ def build_report_for_org(self, organization_id: int, user_id: str, report_id: st
             )
             current_rows = reports._week_rows_with_funnel_metrics(current_rows, current_funnel_metrics)
             previous_rows = reports._week_rows_with_funnel_metrics(previous_rows, previous_funnel_metrics)
-            rows = reports._week_rows_from_abc_rows(current_rows, previous_rows)
+            rows = reports._week_rows_from_abc_rows(current_rows, previous_rows, organization_id=organization_id, snapshot_date=date_to)
             report = reports._week_over_week_shell(
                 date_range,
                 rows,

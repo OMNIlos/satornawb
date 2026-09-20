@@ -20,13 +20,13 @@ class DailyStockSnapshot:
 
 def ensure_daily_stock_history(
     snapshot_date: date,
-    rows: Iterable[WbStockRow],
+    rows: Iterable[WbStockRow | int],
     *,
     organization_id: int,
     lookback_days: int = 7,
 ) -> dict[int, list[DailyStockSnapshot]]:
     """Read observed days only; today's balance cannot reconstruct past stock."""
-    wanted = {row.nm_id for row in rows}
+    wanted = {row if isinstance(row, int) else row.nm_id for row in rows}
     result: dict[int, list[DailyStockSnapshot]] = {}
     for offset in range(lookback_days - 1, -1, -1):
         day = snapshot_date - timedelta(days=offset)
