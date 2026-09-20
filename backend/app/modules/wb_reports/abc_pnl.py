@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.platform.advertising.service import AdvertisingService, AdvertisingSnapshot
@@ -20,6 +21,7 @@ from app.platform.finance.service import (
     FinanceService,
 )
 from app.platform.period import MOSCOW, Period
+from app.repricer_cache.orm import WbRepricerSourceCacheRow
 
 FORMULA_VERSION = "wb-abc-pnl-payable-v2"
 APPROVED_TAX_BLOCKER = "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750"
@@ -259,6 +261,7 @@ def _empty_summary(
     unattributed_advertising: int | None = None,
     *,
     loyalty_complete: bool = False,
+    internal_expenses_kopecks: int | None = None,
 ) -> AbcPnlSummary:
     return AbcPnlSummary(
         *(0 for _ in range(18)),
@@ -269,6 +272,7 @@ def _empty_summary(
         *((0 if loyalty_complete else None) for _ in range(4)),
         None,
         None,
+        internal_expenses_kopecks=internal_expenses_kopecks,
     )
 
 
@@ -312,6 +316,34 @@ class WbAbcPnlService:
         self.session = session
         self.organization_id = organization_id
         self.now = now
+
+    def _confirmed_zero_internal_expenses(
+        self, marketplace_account_id: int, period: Period
+    ) -> int | None:
+        evidence = self.session.scalar(
+            select(WbRepricerSourceCacheRow.payload).where(
+                WbRepricerSourceCacheRow.organization_id == self.organization_id,
+                WbRepricerSourceCacheRow.source_key
+                == f"wb_internal_expenses_{marketplace_account_id}_{period.cache_key}",
+            )
+        )
+        if not isinstance(evidence, dict):
+            return None
+        amount = evidence.get("internalExpensesKopecks")
+        # Only confirmed zero needs no allocation across SKUs or days.
+        if (
+            evidence.get("source") == "owner_confirmation"
+            and evidence.get("status") == "confirmed"
+            and evidence.get("marketplaceAccountId") == marketplace_account_id
+            and evidence.get("dateFrom") == period.date_from.isoformat()
+            and evidence.get("dateTo") == period.date_to.isoformat()
+            and evidence.get("confirmedAt")
+            and evidence.get("sourceReference")
+            and type(amount) is int
+            and amount == 0
+        ):
+            return amount
+        return None
 
     @staticmethod
     def _cost_result(
@@ -462,6 +494,7 @@ class WbAbcPnlService:
         *,
         approved_tax_policy: bool = False,
         advertising_complete: bool = True,
+        internal_expenses_kopecks: int | None = None,
     ) -> AbcPnlRow:
         penalty = max(0, fact.penalty_kopecks)
         deduction = max(0, fact.deduction_kopecks)
@@ -526,7 +559,8 @@ class WbAbcPnlService:
         )
         if not tax_ready:
             blockers = (*blockers, APPROVED_TAX_BLOCKER)
-        blockers = (*blockers, "WB_PNL_INTERNAL_EXPENSES_MISSING")
+        if internal_expenses_kopecks is None:
+            blockers = (*blockers, "WB_PNL_INTERNAL_EXPENSES_MISSING")
         management = calculate_management_profit(
             sales_kopecks=fact.revenue_kopecks if payable_complete else None,
             commission_kopecks=fact.commission_kopecks,
@@ -543,7 +577,7 @@ class WbAbcPnlService:
                 and cost_evidence_status in {None, "dated"}
                 else None
             ),
-            internal_expenses_kopecks=None,
+            internal_expenses_kopecks=internal_expenses_kopecks,
             sales_basis_confirmed=True,
             unmapped_components={
                 "acquiring": fact.acquiring_kopecks,
@@ -600,9 +634,10 @@ class WbAbcPnlService:
             sales_class,
             None,
             None,
-            management.net_profit_kopecks,
+            management.net_profit_kopecks if not blockers else None,
             blockers,
             profit_before_internal_expenses_kopecks=management.profit_before_internal_kopecks,
+            internal_expenses_kopecks=internal_expenses_kopecks,
         )
 
     @staticmethod
@@ -612,12 +647,14 @@ class WbAbcPnlService:
         unattributed_advertising: int | None,
         *,
         empty_loyalty_complete: bool = False,
+        internal_expenses_kopecks: int | None = None,
     ) -> AbcPnlSummary:
         if not rows:
             return _empty_summary(
                 advertising_total,
                 unattributed_advertising,
                 loyalty_complete=empty_loyalty_complete,
+                internal_expenses_kopecks=internal_expenses_kopecks,
             )
 
         def total(name: str) -> int:
@@ -673,7 +710,7 @@ class WbAbcPnlService:
             tax_basis_points=750 if approved_inputs else None,
             resolved_tax_kopecks=total("tax_kopecks") if approved_inputs else None,
             cogs_kopecks=total("cogs_kopecks") if approved_inputs else None,
-            internal_expenses_kopecks=None,
+            internal_expenses_kopecks=internal_expenses_kopecks,
             sales_basis_confirmed=True,
             unmapped_components=(
                 None
@@ -724,8 +761,9 @@ class WbAbcPnlService:
                 if profit_before_loyalty is not None and loyalty_net_cost is not None
                 else None
             ),
-            management.net_profit_kopecks,
+            management.net_profit_kopecks if all(not row.blocker_ids for row in rows) else None,
             profit_before_internal_expenses_kopecks=management.profit_before_internal_kopecks,
+            internal_expenses_kopecks=internal_expenses_kopecks,
         )
 
     def get_page(
@@ -777,6 +815,7 @@ class WbAbcPnlService:
         economics_service = EconomicsService(self.session, self.organization_id)
         cost_revision = costs_service.revision()
         economics_revision = economics_service.revision()
+        internal_expenses = self._confirmed_zero_internal_expenses(marketplace_account_id, period)
         if not facts:
             return AbcPnlPage(
                 source.state,
@@ -792,6 +831,7 @@ class WbAbcPnlService:
                     advertising.total_spend_kopecks,
                     advertising.unattributed_spend_kopecks,
                     empty_loyalty_complete=loyalty_complete,
+                    internal_expenses_kopecks=internal_expenses,
                 ),
                 [],
                 0,
@@ -881,6 +921,7 @@ class WbAbcPnlService:
                     sales_classes.get(fact.nm_id),
                     (*cost_blockers, *economics_blockers, *advertising.blocker_ids),
                     advertising_complete=advertising_complete,
+                    internal_expenses_kopecks=internal_expenses,
                     approved_tax_policy=bool(economics_daily_by_nm.get(fact.nm_id))
                     and tax is not None
                     and all(
@@ -932,6 +973,7 @@ class WbAbcPnlService:
                 rows,
                 advertising.total_spend_kopecks,
                 advertising.unattributed_spend_kopecks,
+                internal_expenses_kopecks=internal_expenses,
             ),
             rows[offset : offset + limit],
             len(rows),

@@ -1,11 +1,13 @@
 """Run: PYTHONPATH=backend:backend/backend_contracts python backend/scripts/check_report_data_repair.py"""
-from datetime import date
+from datetime import date, datetime, timezone
 from dataclasses import fields, replace
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
 from xml.sax.saxutils import escape
 from zipfile import ZipFile
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from app.wb_funnel_export import parse_funnel_export
 from app.reports_history import ensure_daily_stock_history
@@ -13,6 +15,8 @@ from app.wb_api.rnp_runtime import _cached_funnel_rows
 from app.routers.wb_reports_bff import _build_week_over_week_payload, _empty_background_report, _week_rows_from_abc_rows, _week_rows_with_funnel_metrics
 from app.modules.wb_reports.abc_pnl import APPROVED_TAX_BLOCKER, WbAbcPnlService
 from app.platform.finance.service import FinancePnlFact
+from app.platform.period import Period
+from app.repricer_cache.orm import WbRepricerSourceCacheRow
 
 
 def sheet(rows):
@@ -89,4 +93,40 @@ for fact, tax, confirmed, blocked in (
     assert row.net_profit_kopecks is None and 'WB_PNL_INTERNAL_EXPENSES_MISSING' in row.blocker_ids
     if fact is expense_only and tax == 0:
         assert row.profit_before_internal_expenses_kopecks == -100
+period = Period(date(2026, 9, 12), date(2026, 9, 18))
+evidence = dict(source='owner_confirmation', status='confirmed', marketplaceAccountId=2,
+                dateFrom='2026-09-12', dateTo='2026-09-18', internalExpensesKopecks=0,
+                confirmedAt='2026-09-20T12:00:00+00:00', sourceReference='check')
+engine = create_engine('sqlite://')
+WbRepricerSourceCacheRow.__table__.create(engine)
+with Session(engine) as session:
+    service = WbAbcPnlService(session, 2)
+    assert service._confirmed_zero_internal_expenses(2, period) is None
+    stored = WbRepricerSourceCacheRow(organization_id=2,
+        source_key=f'wb_internal_expenses_2_{period.cache_key}', payload=evidence,
+        fetched_at=datetime.now(timezone.utc))
+    session.add(stored)
+    session.flush()
+    assert service._confirmed_zero_internal_expenses(2, period) == 0
+    assert service._confirmed_zero_internal_expenses(3, period) is None
+    assert WbAbcPnlService(session, 3)._confirmed_zero_internal_expenses(2, period) is None
+    assert service._confirmed_zero_internal_expenses(2, Period(date(2026, 9, 11), period.date_to)) is None
+    for invalid in ({'internalExpensesKopecks': False}, {'internalExpensesKopecks': 100},
+                    {'status': 'revoked'}, {'sourceReference': ''}, {'dateTo': '2026-09-19'}):
+        session.execute(WbRepricerSourceCacheRow.__table__.update().values(payload={**evidence, **invalid}))
+        assert service._confirmed_zero_internal_expenses(2, period) is None
+
+confirmed_row = WbAbcPnlService._row(
+    sale, catalog_sku_id=1, cogs=1000, cost_state='configured', cost_evidence_status='dated',
+    tax=750, other_expenses=0, economics_state='configured', economics_evidence_status='dated',
+    advertising_spend=0, loyalty_canonical=True, sales_class='C', blockers=(),
+    approved_tax_policy=True, internal_expenses_kopecks=0,
+)
+assert confirmed_row.internal_expenses_kopecks == 0 and confirmed_row.net_profit_kopecks == 8150
+assert 'WB_PNL_INTERNAL_EXPENSES_MISSING' not in confirmed_row.blocker_ids
+summary = WbAbcPnlService._summary([confirmed_row], 0, 0, internal_expenses_kopecks=0)
+assert summary.internal_expenses_kopecks == 0 and summary.net_profit_kopecks == 8150
+blocked_row = replace(confirmed_row, blocker_ids=('WB_PNL_ECONOMICS_ASSUMED',), net_profit_kopecks=None)
+assert WbAbcPnlService._summary([blocked_row], 0, 0, internal_expenses_kopecks=0).net_profit_kopecks is None
+assert WbAbcPnlService._summary([], 0, 0, internal_expenses_kopecks=0).internal_expenses_kopecks == 0
 print('Report data repair: OK')
