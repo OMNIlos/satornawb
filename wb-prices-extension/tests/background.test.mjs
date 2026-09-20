@@ -127,6 +127,21 @@ test('queued timeout from the previous card cannot interrupt the new seller page
   assert.equal(h.navigations.at(-1).url, seller)
 })
 
+test('a card without a price does not stop other products; a WB block still pauses', async () => {
+  const h = harness({ offers: [offer(100), offer(200), offer(300)] })
+  await h.popup({ type: 'connect', token: TOKEN }); await h.popup({ type: 'start' })
+  await h.tick(25000)
+  assert.equal(h.navigations.at(-1).url, card(200))
+  assert.equal((await h.popup({ type: 'status' })).state.observedOffers, 0)
+  await h.page({ items: [{ nmId: 200, sizeId: 123, buyerPriceNoWalletKopecks: 130800 }] })
+  assert.equal(h.navigations.at(-1).url, card(300))
+  await h.page({ type: 'blocked', code: 'http_429' })
+  const state = (await h.popup({ type: 'status' })).state
+  assert.equal(state.status, 'paused')
+  assert.equal(state.observedOffers, 1)
+  assert.equal(state.reason, 'http_429')
+})
+
 test('stop during an in-flight chunk preserves its acknowledgement and sends no second chunk', async () => {
   const postGate = gate()
   const offers = Array.from({ length: 101 }, (_, index) => offer(1000 + index))

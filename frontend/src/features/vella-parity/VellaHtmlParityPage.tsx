@@ -14512,6 +14512,10 @@ function WeekReportActiveIsland({ replacementKey }: { replacementKey: string }) 
       if (cancelled) return
       if (report && weekReportMatchesPeriod(report, periodState)) {
         if (canonicalRollout && shouldUseCanonicalAbcPnl(canonicalRollout, 'abc')) {
+          for (const row of report.rows ?? []) {
+            row.profit = { kopecks: null, deltaPct: null }
+            row.marginPct = { percent: null, deltaPct: null }
+          }
           const request = { accessToken: authToken, marketplaceAccountId: canonicalRollout.marketplaceAccountId, period: periodState, signal: controller.signal }
           try {
             const [current, previous] = await Promise.all([fetchCanonicalAbcPnl(request), fetchCanonicalAbcPnl({ ...request, period: previousCanonicalPeriod(periodState) })])

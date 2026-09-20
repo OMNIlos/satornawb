@@ -216,8 +216,11 @@ async function navigate(url) {
 }
 
 async function pageTimeout() {
-  if (C.sellerId(state.pageUrl)) { state.partialSellers += 1; await nextPage() }
-  else await pause('page_timeout')
+  if (C.sellerId(state.pageUrl)) state.partialSellers += 1
+  const nmId = C.cardNmId(state.pageUrl)
+  if (nmId && !state.visited.includes(nmId)) state.visited.push(nmId)
+  // Sold-out cards can have no price. Keep them unknown and continue this pass.
+  await nextPage()
 }
 
 async function waitForPage() {

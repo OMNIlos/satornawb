@@ -3987,10 +3987,13 @@ def _report_job_is_finished_refresh(job: dict[str, Any]) -> bool:
     return state in {"completed", "failed"} and stage in {"completed", "failed"} and kind == "report_source_refresh"
 
 
-def _report_job_for_response(job: dict[str, Any]) -> dict[str, Any]:
+def _report_job_for_response(job: dict[str, Any], *, cache_missing: bool = False) -> dict[str, Any]:
     if not isinstance(job, dict) or not job:
         return job
     state = job.get("state")
+    if cache_missing and state == "completed":
+        return {**job, "state": "idle", "stage": "stale", "cacheFresh": False,
+                "percent": 0, "label": "Данные отчёта изменились. Требуется обновить расчёт."}
     if state == "waiting_1c" and not job.get("taskId"):
         return job  # The expenses view can wait for 1C without a background worker.
     if state not in {"queued", "running", "waiting_1c"} or _report_job_is_reusable(job):
@@ -4005,7 +4008,7 @@ def _report_job_for_response(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def _empty_background_report(report_id: ReportId, date_range: dict[str, str], group_by: str, job: dict[str, Any]) -> dict[str, Any]:
-    job = _report_job_for_response(job)
+    job = _report_job_for_response(job, cache_missing=True)
     return {
         "meta": _meta(report_id, report_id, "Отчёт ожидает фоновое обновление.", "operational", "stale"),
         "headline": "Отчёт ещё не собран для выбранного периода.",
@@ -5121,7 +5124,7 @@ def get_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pn
     job = get_source_cache(actor.organization_id, key, slim=False) or {"state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy}
     if _report_job_is_reusable(job):
         return _report_job_for_response({**job, "reused": True})
-    if _report_job_is_finished_refresh(job):
+    if _report_job_is_finished_refresh(job) and job.get("state") == "failed":
         return _report_job_for_response({**job, "reused": True})
     cached = get_source_cache(
         actor.organization_id,
@@ -5132,7 +5135,7 @@ def get_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pn
         payload = _completed_report_job_from_cache(report_id, date_from, date_to, groupBy, cached, job)
         save_source_cache(actor.organization_id, key, payload)
         return payload
-    return _report_job_for_response(job)
+    return _report_job_for_response(job, cache_missing=True)
 
 
 @router.post("/api/wb/reports/ads/refresh")

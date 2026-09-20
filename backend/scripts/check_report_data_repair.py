@@ -9,7 +9,7 @@ from zipfile import ZipFile
 from app.wb_funnel_export import parse_funnel_export
 from app.reports_history import ensure_daily_stock_history
 from app.wb_api.rnp_runtime import _cached_funnel_rows
-from app.routers.wb_reports_bff import _build_week_over_week_payload
+from app.routers.wb_reports_bff import _build_week_over_week_payload, _empty_background_report
 
 
 def sheet(rows):
@@ -55,4 +55,6 @@ row = report['rows'][0]
 assert row['baskets']['units'] == 40 and row['price']['kopecks'] == 10005
 assert row['stockAvailability7d'] == [] and row['wasOutOfStock'] is None
 assert row['marginPct']['percent'] is None and row['stockSnapshotCoveragePct'] == 0
+missing = _empty_background_report('week-over-week', {'from': '2026-09-12', 'to': '2026-09-18'}, 'sku', {'state': 'completed', 'cacheFresh': True})
+assert missing['reportJob']['state'] == 'idle' and missing['reportJob']['cacheFresh'] is False
 print('Report data repair: OK')

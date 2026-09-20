@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "111",
   "name": "Satorna — цены Wildberries",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Собирает наблюдаемые цены покупателя из обычных страниц WB в ваш каталог Satorna.",
   "permissions": ["storage", "alarms"],
   "host_permissions": ["https://www.wildberries.ru/*", "https://api.elfprint-system.ru/*"],
