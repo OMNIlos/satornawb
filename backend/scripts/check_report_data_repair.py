@@ -1,5 +1,6 @@
 """Run: PYTHONPATH=backend:backend/backend_contracts python backend/scripts/check_report_data_repair.py"""
 from datetime import date
+from dataclasses import fields, replace
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -10,6 +11,8 @@ from app.wb_funnel_export import parse_funnel_export
 from app.reports_history import ensure_daily_stock_history
 from app.wb_api.rnp_runtime import _cached_funnel_rows
 from app.routers.wb_reports_bff import _build_week_over_week_payload, _empty_background_report, _week_rows_from_abc_rows, _week_rows_with_funnel_metrics
+from app.modules.wb_reports.abc_pnl import APPROVED_TAX_BLOCKER, WbAbcPnlService
+from app.platform.finance.service import FinancePnlFact
 
 
 def sheet(rows):
@@ -67,4 +70,23 @@ assert row['stockAvailability7d'] == [True] and '1 из 7' in row['conclusion']
 empty = _week_rows_with_funnel_metrics([current], {'1': {'cartCount': 0, 'orderCount': 0, 'orderSumKopecks': 0, 'buyoutCount': 0, 'buyoutSumKopecks': 0}})
 assert empty[0]['baskets'] == 0 and empty[0]['ordersComposite']['units'] == 0
 assert _week_rows_from_abc_rows(empty)[0]['price']['kopecks'] is None
+
+expense_only = FinancePnlFact(**{field.name: 0 for field in fields(FinancePnlFact)})
+expense_only = replace(expense_only, nm_id=1, seller_article='CHECK', operation_count=1, logistics_kopecks=100)
+sale = replace(expense_only, revenue_kopecks=10000, sales_revenue_kopecks=10000, sales_units=1, net_units=1)
+net_zero = replace(sale, revenue_kopecks=0, returns_revenue_kopecks=10000, returns_units=1, net_units=0)
+for fact, tax, confirmed, blocked in (
+    (expense_only, 0, False, False), (expense_only, None, False, True),
+    (sale, 750, False, True), (sale, 750, True, False), (net_zero, 0, False, True),
+):
+    row = WbAbcPnlService._row(
+        fact, catalog_sku_id=1, cogs=0, cost_state='configured', cost_evidence_status='dated',
+        tax=tax, other_expenses=0, economics_state='assumed', economics_evidence_status='dated',
+        advertising_spend=0, loyalty_canonical=True, sales_class='C', blockers=(),
+        approved_tax_policy=confirmed,
+    )
+    assert (APPROVED_TAX_BLOCKER in row.blocker_ids) is blocked
+    assert row.net_profit_kopecks is None and 'WB_PNL_INTERNAL_EXPENSES_MISSING' in row.blocker_ids
+    if fact is expense_only and tax == 0:
+        assert row.profit_before_internal_expenses_kopecks == -100
 print('Report data repair: OK')

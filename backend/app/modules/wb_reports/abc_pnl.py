@@ -515,7 +515,16 @@ class WbAbcPnlService:
         )
         if loyalty_net_cost is None:
             blockers = (*blockers, "WB_PNL_LOYALTY_NOT_CANONICAL")
-        if not approved_tax_policy:
+        # Expense-only rows have a known zero tax without a daily sales basis.
+        tax_ready = approved_tax_policy or (
+            tax == 0
+            and fact.revenue_kopecks == 0
+            and fact.sales_revenue_kopecks == 0
+            and fact.returns_revenue_kopecks == 0
+            and fact.sales_units == 0
+            and fact.returns_units == 0
+        )
+        if not tax_ready:
             blockers = (*blockers, APPROVED_TAX_BLOCKER)
         blockers = (*blockers, "WB_PNL_INTERNAL_EXPENSES_MISSING")
         management = calculate_management_profit(
@@ -526,8 +535,8 @@ class WbAbcPnlService:
             acceptance_kopecks=fact.acceptance_kopecks,
             advertising_kopecks=advertising_spend if advertising_complete else None,
             penalty_kopecks=penalty,
-            tax_basis_points=750 if approved_tax_policy else None,
-            resolved_tax_kopecks=tax if approved_tax_policy else None,
+            tax_basis_points=750 if tax_ready else None,
+            resolved_tax_kopecks=tax if tax_ready else None,
             cogs_kopecks=(
                 cogs
                 if cost_state == "configured"

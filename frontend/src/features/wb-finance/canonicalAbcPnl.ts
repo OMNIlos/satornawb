@@ -483,7 +483,8 @@ export function financeBlockerReasons(blockers: string[]) {
   return [...new Set(blockers.map((blocker) => {
     if (blocker.includes('COST')) return 'Уточните себестоимость и её даты'
     if (blocker.includes('INTERNAL_EXPENSES')) return 'Не заданы внутренние расходы'
-    if (blocker.includes('ECONOMICS') || blocker.includes('TAX')) return 'Уточните налог и расходы'
+    if (blocker.includes('TAX')) return 'Не подтверждён налог за период'
+    if (blocker.includes('ECONOMICS')) return 'Не подтверждены прочие расходы за период'
     if (blocker.includes('OPERATIONS_UNRECONCILED')) return 'Нужна сверка финансовых операций'
     if (blocker.includes('ADVERTISING_UNATTRIBUTED')) return 'Часть рекламы не связана с товаром'
     if (blocker.includes('ADS')) return 'Не загружена реклама за период'
