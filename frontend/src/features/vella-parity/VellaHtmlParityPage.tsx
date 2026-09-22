@@ -8988,7 +8988,6 @@ function PnlToolbarIsland({
   onManagerChange: (manager: string) => void
 }) {
   const chips: Array<{ label: string; mode: PnlReportMode }> = [
-    { label: 'Операционный 1С', mode: 'operational' },
     { label: 'Финансовый WB', mode: 'financial' },
   ]
   return (
@@ -11017,6 +11016,8 @@ function PnlLiveWorkbenchIsland({ replacementKey, state, rows }: { replacementKe
   }
   const revenueKopecks = total('revenueKopecks')
   const profitKopecks = total('netProfitKopecks')
+  const confirmedRows = isCanonical ? rows.filter((row) => Number.isSafeInteger(row.netProfitKopecks)) : []
+  const confirmedProfitKopecks = sumPnlRows(confirmedRows, 'netProfitKopecks')
   const revenue = formatPnlKopecks(revenueKopecks)
   const displayedProfit = formatPnlKopecks(profitKopecks)
   const margin = formatPnlPercent(profitKopecks !== null && revenueKopecks !== null && revenueKopecks !== 0 ? profitKopecks / revenueKopecks * 100 : null)
@@ -11049,6 +11050,9 @@ function PnlLiveWorkbenchIsland({ replacementKey, state, rows }: { replacementKe
       data-vella-island-status="explicit-jsx"
     >
       <div>Итоги по строкам таблицы · позиций: {rows.length}</div>
+      {confirmedRows.length > 0 && confirmedRows.length < rows.length && Number.isSafeInteger(confirmedProfitKopecks) ? (
+        <div className="pnl-source">Подтверждённая прибыль по {confirmedRows.length} из {rows.length} товаров: {formatPnlKopecks(confirmedProfitKopecks)}. Общий итог пока не подтверждён.</div>
+      ) : null}
       <div className="pnl-flow" aria-label="Разложение прибыли">
         {flowItems.map(([label, value, className, tip]) => (
           <div className={className} key={label}>
