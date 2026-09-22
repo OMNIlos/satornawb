@@ -112,6 +112,19 @@ test('production error envelope invokes one refresh and respects HTTP Retry-Afte
   }
 })
 
+test('the popup can reveal only the owned collector tab after a WB challenge', async () => {
+  const h = harness()
+  await h.popup({ type: 'connect', token: TOKEN })
+  await h.popup({ type: 'start' })
+  await h.page({ type: 'blocked', code: 'challenge' })
+  const result = await h.popup({ type: 'show_tab' })
+  assert.equal(result.ok, true)
+  assert.equal(result.state.status, 'paused')
+  assert.deepEqual(h.navigations.at(-1), { id: 100, active: true })
+  h.tabs.get(100).url = 'https://example.test'
+  assert.equal((await h.popup({ type: 'show_tab' })).code, 'tab_changed')
+})
+
 test('queued timeout from the previous card cannot interrupt the new seller page', async () => {
   const postGate = gate()
   const h = harness({ offers: [offer(1025784485), offer(200)], postGate })

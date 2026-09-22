@@ -9,7 +9,7 @@ const reasons = {
   page_timeout: 'Предыдущий проход остановился на странице без цены. Нажмите «Продолжить».',
   http_403: 'WB ограничил доступ. Сбор остановлен; автоматических повторов нет.',
   http_429: 'WB ограничил частоту запросов. Продолжите позже вручную.',
-  challenge: 'WB запросил проверку. Пройдите её во вкладке сборщика и продолжите вручную.',
+  challenge: 'WB показал страницу проверки в фоновой вкладке. Откройте её кнопкой ниже. Если там уже обычная страница товара, нажмите «Продолжить».',
   token_invalid: 'Вставьте действующий токен расширения из Satorna.',
   crm_http_401: 'Токен недействителен или истёк и удалён из расширения. Подключитесь заново.',
   crm_http_403: 'Satorna не разрешила операцию. Проверьте доступ к кабинету.',
@@ -53,6 +53,7 @@ function render(next = state) {
   element('start').disabled = busy || state.status !== 'ready'
   element('resume').disabled = busy || state.status !== 'paused'
   element('stop').disabled = !active
+  element('show-tab').disabled = busy || !state.collectorTabAvailable
   element('disconnect').disabled = busy
 }
 
@@ -60,7 +61,7 @@ async function request(message) {
   busy = true; render()
   try {
     const result = await chrome.runtime.sendMessage(message)
-    if (result?.state) render(result.state)
+    if (result?.state) render(result.ok ? result.state : { ...result.state, reason: result.code || result.state.reason })
     else state = { ...state, reason: 'background_unavailable' }
   } catch { state = { ...state, reason: 'background_unavailable' } }
   finally { busy = false; render() }
@@ -73,6 +74,7 @@ element('connect-form').addEventListener('submit', async (event) => {
   await request({ type: 'connect', token })
 })
 for (const type of ['start', 'resume', 'stop', 'disconnect']) element(type).addEventListener('click', () => request({ type }))
+element('show-tab').addEventListener('click', () => request({ type: 'show_tab' }))
 
 async function refresh() {
   try {

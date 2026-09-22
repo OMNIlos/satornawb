@@ -85,6 +85,7 @@ function publicState() {
   return { status: state.status, reason: state.reason, totalOffers: items.length,
     observedOffers: items.filter(seenFresh).length, totalProducts: new Set(items.map((item) => item.nmId)).size,
     visitedProducts: new Set([...state.visited, ...items.filter((item) => state.seen[C.key(item)]).map((item) => item.nmId)]).size,
+    collectorTabAvailable: state.tabId !== null && C.pageIdentity(state.pageUrl) !== null,
     sellersVisited: state.sellers.length, partialSellers: state.partialSellers,
     accepted: state.accepted, ignored: state.ignored, unmatched: state.unmatched,
     verifiedAt: state.verifiedAt, lastAckAt: state.lastAckAt, retryAfterSeconds: state.retryAfterSeconds, nextRunAt: state.nextRunAt }
@@ -333,6 +334,14 @@ async function observe(message, sender, receivedAt) {
 
 async function command(message, generation = controlGeneration) {
   if (message.type === 'status') return { ok: true, state: publicState() }
+  if (message.type === 'show_tab') {
+    if (state.tabId === null) return { ok: false, code: 'tab_closed', state: publicState() }
+    let tab
+    try { tab = await chrome.tabs.get(state.tabId) } catch { return { ok: false, code: 'tab_closed', state: publicState() } }
+    if (!C.pageIdentity(state.pageUrl) || C.pageIdentity(tab.url) !== C.pageIdentity(state.pageUrl)) return { ok: false, code: 'tab_changed', state: publicState() }
+    await chrome.tabs.update(state.tabId, { active: true })
+    return { ok: true, state: publicState() }
+  }
   if (message.type === 'stop') { await pause('user_stopped'); return { ok: true, state: publicState() } }
   if (message.type === 'disconnect') {
     stopped = true; clearTimers()

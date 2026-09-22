@@ -60,3 +60,10 @@ test('command transport failure remains visible after busy state clears, without
   assert.match(h.element('reason').textContent, /Фоновый процесс/)
   assert.equal(h.element('reason').textContent.includes('private'), false)
 })
+
+test('paused collection exposes its WB tab through an explicit button', async () => {
+  const h = await load({ ...empty, status: 'paused', reason: 'challenge', collectorTabAvailable: true })
+  assert.equal(h.element('show-tab').disabled, false)
+  await h.element('show-tab').handlers.click()
+  assert.equal(h.sent.at(-1).type, 'show_tab')
+})
