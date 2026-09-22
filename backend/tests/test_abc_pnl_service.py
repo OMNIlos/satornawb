@@ -30,8 +30,6 @@ GLOBAL_BLOCKERS = {
     "WB_PNL_ADS_NOT_CANONICAL",
     "WB_PNL_LOYALTY_NOT_CANONICAL",
     "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
-    "WB_PNL_INTERNAL_EXPENSES_MISSING",
-    "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
 }
 
 
@@ -266,7 +264,7 @@ def test_abc_pnl_base_uses_dated_cogs_and_signed_settlement_formula(
     )
 
     assert page.state == "partial"
-    assert page.formula_version == "wb-abc-pnl-payable-v2"
+    assert page.formula_version == "wb-abc-pnl-payable-v3"
     assert page.cost_ledger_revision == 2
     assert page.economics_revision == 1
     assert set(page.blocker_ids) == GLOBAL_BLOCKERS
@@ -284,8 +282,8 @@ def test_abc_pnl_base_uses_dated_cogs_and_signed_settlement_formula(
     assert row.economics_value_state == "configured"
     assert row.economics_evidence_status == "dated"
     assert row.tax_kopecks == 4_800
-    assert row.other_expenses_kopecks == 6_000
-    assert row.profit_before_ads_and_loyalty_kopecks == 17_500
+    assert row.other_expenses_kopecks == 0
+    assert row.profit_before_ads_and_loyalty_kopecks == 23_500
     assert row.advertising_spend_kopecks is None
     assert row.profit_before_loyalty_kopecks is None
     assert row.net_profit_kopecks is None
@@ -296,8 +294,8 @@ def test_abc_pnl_base_uses_dated_cogs_and_signed_settlement_formula(
     assert page.summary.finance_expenses_kopecks == 36_700
     assert page.summary.settlement_profit_kopecks == 28_300
     assert page.summary.tax_kopecks == 4_800
-    assert page.summary.other_expenses_kopecks == 6_000
-    assert page.summary.profit_before_ads_and_loyalty_kopecks == 17_500
+    assert page.summary.other_expenses_kopecks == 0
+    assert page.summary.profit_before_ads_and_loyalty_kopecks == 23_500
     assert page.summary.advertising_spend_kopecks is None
     assert page.summary.unattributed_advertising_spend_kopecks is None
     assert page.summary.profit_before_loyalty_kopecks is None
@@ -358,24 +356,22 @@ def test_v3_loyalty_evidence_builds_profit_after_loyalty(session: Session) -> No
     )
 
     row = page.items[0]
-    assert page.formula_version == "wb-abc-pnl-payable-v2"
+    assert page.formula_version == "wb-abc-pnl-payable-v3"
     assert row.cashback_amount_kopecks == 800
     assert row.cashback_discount_kopecks == 400
     assert row.cashback_commission_change_kopecks == -100
     assert row.loyalty_net_cost_kopecks == 700
-    assert row.profit_after_loyalty_kopecks == 4_500
+    assert row.profit_after_loyalty_kopecks == 10_500
     assert page.summary.cashback_amount_kopecks == 800
     assert page.summary.cashback_discount_kopecks == 400
     assert page.summary.cashback_commission_change_kopecks == -100
     assert page.summary.loyalty_net_cost_kopecks == 700
-    assert page.summary.profit_after_loyalty_kopecks == 4_500
+    assert page.summary.profit_after_loyalty_kopecks == 10_500
     assert page.summary.net_profit_kopecks is None
     assert "WB_PNL_LOYALTY_NOT_CANONICAL" not in page.blocker_ids
     assert page.blocker_ids == (
         "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
-        "WB_PNL_INTERNAL_EXPENSES_MISSING",
-        "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
-    )
+            )
     assert page.advertising_snapshot.source_kind == "ads_fullstats"
     assert page.advertising_snapshot.evidence_status == "raw"
     assert row.net_profit_kopecks is None
@@ -454,7 +450,7 @@ def test_incomplete_payable_blocks_only_affected_sku_and_summary(
     complete, incomplete = (
         next(row for row in page.items if row.nm_id == nm) for nm in (101, 202)
     )
-    assert complete.profit_after_loyalty_kopecks == 4_500
+    assert complete.profit_after_loyalty_kopecks == 10_500
     assert incomplete.cogs_kopecks == 0
     assert incomplete.settlement_profit_kopecks is None
     assert incomplete.profit_before_ads_and_loyalty_kopecks is None
@@ -590,14 +586,14 @@ def test_exact_advertising_only_sku_joins_report_union(session: Session) -> None
     finance_row = next(row for row in page.items if row.nm_id == 101)
     advertising_row = next(row for row in page.items if row.nm_id == 202)
     assert finance_row.advertising_spend_kopecks == 0
-    assert finance_row.profit_before_loyalty_kopecks == 17_500
+    assert finance_row.profit_before_loyalty_kopecks == 23_500
     assert advertising_row.operation_count == 0
     assert advertising_row.revenue_kopecks == 0
     assert advertising_row.advertising_spend_kopecks == 12_300
     assert advertising_row.profit_before_loyalty_kopecks == -12_300
-    assert advertising_row.profit_before_internal_expenses_kopecks is None
-    assert "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750" in advertising_row.blocker_ids
-    assert page.summary.profit_before_loyalty_kopecks == 5_200
+    assert advertising_row.profit_before_internal_expenses_kopecks == -12_300
+    assert advertising_row.net_profit_kopecks == -12_300
+    assert page.summary.profit_before_loyalty_kopecks == 11_200
 
 
 def test_aggregate_only_settlement_is_not_operational_advertising(
@@ -665,9 +661,7 @@ def test_unattributed_raw_spend_keeps_summary_but_not_row_profit(
     assert page.blocker_ids == (
         "WB_PNL_ADVERTISING_UNATTRIBUTED",
         "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
-        "WB_PNL_INTERNAL_EXPENSES_MISSING",
-        "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
-    )
+            )
 
 
 def test_advertising_source_failure_propagates_without_guessing(
@@ -709,9 +703,7 @@ def test_advertising_source_failure_propagates_without_guessing(
     assert page.blocker_ids == (
         "WB_ADS_SOURCE_METRIC_INCOMPLETE",
         "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
-        "WB_PNL_INTERNAL_EXPENSES_MISSING",
-        "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
-    )
+            )
     assert "WB_PNL_ADVERTISING_UNATTRIBUTED" not in page.blocker_ids
 
 
@@ -974,8 +966,8 @@ def test_mid_period_economics_change_uses_daily_basis(session: Session) -> None:
     row = page.items[0]
     assert page.economics_revision == 2
     assert row.tax_kopecks == 4_500
-    assert row.other_expenses_kopecks == 7_000
-    assert row.profit_before_ads_and_loyalty_kopecks == 16_800
+    assert row.other_expenses_kopecks == 0
+    assert row.profit_before_ads_and_loyalty_kopecks == 23_800
 
 
 def test_overhead_change_does_not_round_an_unchanged_tax_rate_twice(
@@ -1101,8 +1093,8 @@ def test_basis_point_rounding_is_signed_half_even() -> None:
     [
         (750, "configured", "dated", 0, 0, False, 24_800_000),
         (750, "assumed", "undated", 0, 0, True, 24_800_000),
-        (750, "configured", "dated", 0, 333, False, None),
-        (750, "configured", "dated", 1_000, 0, False, 24_700_000),
+        (750, "configured", "dated", 0, 333, False, 24_766_700),
+        (750, "configured", "dated", 1_000, 0, False, None),
         (750, "configured", "dated", None, 0, False, None),
         (600, "configured", "dated", 0, 0, False, None),
         (750, "assumed", "dated", 0, 0, False, None),
@@ -1199,14 +1191,12 @@ def test_approved_profit_uses_confirmed_policy_and_account_advertising_once(
         expected if not residual else None
     )
     assert row.deduction_kopecks == deduction * 100
-    assert ("WB_MANAGEMENT_OPERATIONS_UNRECONCILED" in row.blocker_ids) == (
-        deduction != 0
-    )
-    assert row.internal_expenses_kopecks is None
-    assert page.summary.internal_expenses_kopecks is None
-    assert row.net_profit_kopecks is None
-    assert page.summary.net_profit_kopecks is None
-    assert "WB_PNL_INTERNAL_EXPENSES_MISSING" in page.blocker_ids
+    assert "WB_MANAGEMENT_OPERATIONS_UNRECONCILED" not in row.blocker_ids
+    assert row.internal_expenses_kopecks == 0
+    assert page.summary.internal_expenses_kopecks == 0
+    assert row.net_profit_kopecks == expected
+    assert page.summary.net_profit_kopecks == expected
+    assert "WB_PNL_INTERNAL_EXPENSES_MISSING" not in page.blocker_ids
     tax_confirmed = confirmed_tax or (
         tax_basis_points,
         value_state,

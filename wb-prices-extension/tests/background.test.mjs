@@ -406,3 +406,15 @@ test('stop, disconnect and a worker restart never take control of an existing us
   assert.equal((await restarted.popup({ type: 'status' })).state.status, 'running')
   assert.equal(restarted.navigations.length, 0)
 })
+
+ test('a loaded sold-out card advances without waiting or inventing a price', async () => {
+  const h = harness({ offers: [offer(100), offer(200)] })
+  await h.popup({ type: 'connect', token: TOKEN }); await h.popup({ type: 'start' })
+  await h.page({ items: [], loadedNmId: 100 })
+  const state = (await h.popup({ type: 'status' })).state
+  assert.equal(state.status, 'running')
+  assert.equal(state.observedOffers, 0)
+  assert.equal(state.visitedProducts, 1)
+  assert.equal(h.navigations.at(-1).url, card(200))
+  assert.equal(h.calls.filter((call) => call.url.endsWith('/snapshots')).length, 0)
+})

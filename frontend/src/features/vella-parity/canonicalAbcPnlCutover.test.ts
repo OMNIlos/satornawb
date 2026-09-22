@@ -26,9 +26,9 @@ describe('canonical ABC/P&L cutover wiring', () => {
     expect(island).toContain("loadLatestReportCache<PnlBackendReport>('pnl'")
   })
 
-  it('uses preliminary labels and never aliases canonical profit to final net profit', () => {
-    expect(source.includes('До внутренних расходов')).toBe(true)
-    expect(source.includes('profitBeforeInternalExpensesKopecks')).toBe(true)
+  it('shows confirmed canonical profit', () => {
+    expect(source.includes('До внутренних расходов')).toBe(false)
+    expect(source.includes('row.netProfitKopecks')).toBe(true)
     expect(source).toContain("abc: isCanonical ? (row.salesClass ? `${row.salesClass}·—` : '—')")
   })
 })

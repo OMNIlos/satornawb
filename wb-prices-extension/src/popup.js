@@ -6,7 +6,7 @@ const reasons = {
   submission_unknown: 'Браузер прервал запрос сохранения. Его результат неизвестен; повтор не выполнялся. Продолжите вручную.',
   background_unavailable: 'Фоновый процесс недоступен. Откройте расширение заново.',
   partial_coverage: 'Для части размеров нет свежего наблюдения. Цены для них не подставлены.',
-  page_timeout: 'Страница WB не дала наблюдений за 25 секунд. Проверьте вкладку сборщика и продолжите вручную.',
+  page_timeout: 'Предыдущий проход остановился на странице без цены. Нажмите «Продолжить».',
   http_403: 'WB ограничил доступ. Сбор остановлен; автоматических повторов нет.',
   http_429: 'WB ограничил частоту запросов. Продолжите позже вручную.',
   challenge: 'WB запросил проверку. Пройдите её во вкладке сборщика и продолжите вручную.',
@@ -42,6 +42,7 @@ function render(next = state) {
   element('accepted').textContent = String(state.accepted || 0)
   element('ignored').textContent = String(state.ignored || 0)
   element('partial').textContent = String(state.partialSellers || 0)
+  element('processed').textContent = `${state.visitedProducts || 0} / ${state.totalProducts || 0}`
   element('last-ack').textContent = state.lastAckAt
     ? `Последнее подтверждение: ${new Date(state.lastAckAt).toLocaleTimeString('ru-RU')}` : 'Подтверждений сохранения пока нет.'
   element('next-run').textContent = state.nextRunAt
@@ -77,6 +78,7 @@ async function refresh() {
   try {
     const result = await chrome.runtime.sendMessage({ type: 'status' })
     if (result?.state) render(result.state)
+    else render({ ...state, reason: 'background_unavailable' })
   } catch { element('reason').textContent = 'Не удалось прочитать состояние расширения.' }
 }
 void refresh()

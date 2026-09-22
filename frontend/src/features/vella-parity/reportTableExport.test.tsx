@@ -134,7 +134,7 @@ it.each(['abc', 'pnl'] as const)('downloads every filtered %s row and zero-row r
       expect(request.headers).toHaveLength(tab === 'abc' ? 24 : 13)
       // The calculation breakdown is a separate table, not part of the SKU export.
       expect(request.headers).toEqual(await page.locator(`#tab-${tab} .${tab}-table-workspace thead th`).evaluateAll(cells => cells.map(cell => cell.childNodes[0].textContent?.trim())))
-      expect(request.headers).toContain('До внутренних расходов')
+      expect(request.headers).toContain('Прибыль')
       expect(request.headers).not.toContain('Чистая прибыль')
       expect(request.source).toMatchObject({ state: 'partial', financeSnapshotChecksum: 'synthetic-finance-checksum', blockerIds: ['WB_PNL_COST_MISSING'] })
       if (query === 'SKU-64') {
@@ -168,7 +168,7 @@ it.each(['allocated', 'missing-cost', 'unattributed'] as const)('ties P&L select
     costValueState: 'configured', costEvidenceStatus: 'dated', cogsKopecks: 1000, settlementProfitKopecks: 8590,
     economicsValueState: 'configured', economicsEvidenceStatus: 'dated', taxKopecks: 0, otherExpensesKopecks: 0,
     profitBeforeAdsAndLoyaltyKopecks: 8590, advertisingSpendKopecks: 100,
-    profitBeforeLoyaltyKopecks: 8490, profitBeforeInternalExpensesKopecks: 8490, profitAfterLoyaltyKopecks: 8490, blockerIds: [],
+    profitBeforeLoyaltyKopecks: 8490, profitBeforeInternalExpensesKopecks: 8490, profitAfterLoyaltyKopecks: 8490, internalExpensesKopecks: 0, netProfitKopecks: 8490, blockerIds: [],
   }
   const second: CanonicalAbcPnlPage['items'][number] = {
     ...first, nmId: 500000002, sellerArticle: 'Exact-B', revenueKopecks: -125,
@@ -176,12 +176,12 @@ it.each(['allocated', 'missing-cost', 'unattributed'] as const)('ties P&L select
     salesUnits: 0, returnsUnits: 1, netUnits: -1, commissionKopecks: 0, logisticsKopecks: 0,
     storageKopecks: 0, penaltyKopecks: 0, deductionKopecks: 0, financeExpensesKopecks: 0,
     cogsKopecks: 0, settlementProfitKopecks: -125, profitBeforeAdsAndLoyaltyKopecks: -125,
-    advertisingSpendKopecks: 0, profitBeforeLoyaltyKopecks: -125, profitBeforeInternalExpensesKopecks: -125, profitAfterLoyaltyKopecks: -125,
+    advertisingSpendKopecks: 0, profitBeforeLoyaltyKopecks: -125, profitBeforeInternalExpensesKopecks: -125, profitAfterLoyaltyKopecks: -125, netProfitKopecks: -125,
   }
   const blockerIds = source === 'allocated' ? [] : [source === 'unattributed' ? 'WB_PNL_ADVERTISING_UNATTRIBUTED' : 'WB_PNL_COST_MISSING']
-  if (source === 'missing-cost') Object.assign(second, { costValueState: 'missing', costEvidenceStatus: null, cogsKopecks: null, settlementProfitKopecks: null, profitBeforeAdsAndLoyaltyKopecks: null, profitBeforeLoyaltyKopecks: null, profitBeforeInternalExpensesKopecks: null, profitAfterLoyaltyKopecks: null, blockerIds })
+  if (source === 'missing-cost') Object.assign(second, { costValueState: 'missing', costEvidenceStatus: null, cogsKopecks: null, settlementProfitKopecks: null, profitBeforeAdsAndLoyaltyKopecks: null, profitBeforeLoyaltyKopecks: null, profitBeforeInternalExpensesKopecks: null, profitAfterLoyaltyKopecks: null, netProfitKopecks: null, blockerIds })
   // The real backend keeps account profit but leaves every SKU's advertising/profit unknown when spend is unattributed.
-  if (source === 'unattributed') for (const item of [first, second]) Object.assign(item, { advertisingSpendKopecks: null, profitBeforeLoyaltyKopecks: null, profitBeforeInternalExpensesKopecks: null, profitAfterLoyaltyKopecks: null, blockerIds })
+  if (source === 'unattributed') for (const item of [first, second]) Object.assign(item, { advertisingSpendKopecks: null, profitBeforeLoyaltyKopecks: null, profitBeforeInternalExpensesKopecks: null, profitAfterLoyaltyKopecks: null, netProfitKopecks: null, blockerIds })
   const report: CanonicalAbcPnlPage = {
     ...payload, items: [first, second], total: 2,
     summary: { ...payload.summary, operationCount: 2, skuCount: 2, revenueKopecks: 9925,
@@ -191,7 +191,8 @@ it.each(['allocated', 'missing-cost', 'unattributed'] as const)('ties P&L select
       taxKopecks: 0, otherExpensesKopecks: 0, profitBeforeAdsAndLoyaltyKopecks: source === 'missing-cost' ? null : 8465,
       advertisingSpendKopecks: source === 'unattributed' ? 800 : 100, unattributedAdvertisingSpendKopecks: source === 'unattributed' ? 700 : 0,
       profitBeforeLoyaltyKopecks: source === 'missing-cost' ? null : source === 'unattributed' ? 7665 : 8365,
-      profitBeforeInternalExpensesKopecks: source === 'missing-cost' ? null : source === 'unattributed' ? 7665 : 8365, profitAfterLoyaltyKopecks: source === 'missing-cost' ? null : source === 'unattributed' ? 7665 : 8365,
+      profitBeforeInternalExpensesKopecks: source === 'allocated' ? 8365 : null, profitAfterLoyaltyKopecks: source === 'missing-cost' ? null : source === 'unattributed' ? 7665 : 8365,
+      internalExpensesKopecks: 0, netProfitKopecks: source === 'allocated' ? 8365 : null,
     },
     meta: { ...payload.meta, state: source === 'allocated' ? 'ready' : 'partial', blockerIds,
       advertisingSource: 'finance_promotion', advertisingEvidenceStatus: 'raw', advertisingSnapshotChecksum: 'synthetic-ads-checksum',
@@ -222,12 +223,12 @@ it.each(['allocated', 'missing-cost', 'unattributed'] as const)('ties P&L select
       expect(await surface.getByText(`Итоги по строкам таблицы · позиций: ${selected.length}`, { exact: true }).isVisible()).toBe(true)
       const account = surface.locator('[data-vella-island="pnl-account-summary"]')
       expect(await account.innerText()).toContain('Весь аккаунт · без фильтров')
-      expect(await account.innerText()).toContain(`До внутренних расходов: ${source === 'missing-cost' ? 'нет данных' : source === 'unattributed' ? '77 ₽' : '84 ₽'}`)
+      expect(await account.innerText()).toContain(`Прибыль: ${source === 'allocated' ? '84 ₽' : 'нет данных'}`)
       expect(await account.innerText()).toContain(`Нераспределённая реклама: ${source === 'unattributed' ? '7 ₽' : '0 ₽'}`)
       const download = page.waitForEvent('download')
       await exportTable(page); await download
       const request = evidence.requests.at(-1)!
-      expect(request.rows.map(cells => cells.slice(2, 10))).toEqual(selected.map(item => [item.revenueKopecks / 100, item.cogsKopecks == null ? null : item.cogsKopecks / 100, item.commissionKopecks / 100, item.logisticsKopecks / 100, item.storageKopecks / 100, item.advertisingSpendKopecks == null ? null : item.advertisingSpendKopecks / 100, 0, item.profitBeforeInternalExpensesKopecks == null ? null : item.profitBeforeInternalExpensesKopecks / 100]))
+      expect(request.rows.map(cells => cells.slice(2, 10))).toEqual(selected.map(item => [item.revenueKopecks / 100, item.cogsKopecks == null ? null : item.cogsKopecks / 100, item.commissionKopecks / 100, item.logisticsKopecks / 100, item.storageKopecks / 100, item.advertisingSpendKopecks == null ? null : item.advertisingSpendKopecks / 100, 0, item.netProfitKopecks == null ? null : item.netProfitKopecks / 100]))
       expect(request.rows.every(cells => cells[10] === null)).toBe(true)
       expect(request.source.blockerIds).toEqual(blockerIds)
     }

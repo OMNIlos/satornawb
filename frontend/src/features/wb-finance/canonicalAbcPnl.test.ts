@@ -461,7 +461,7 @@ describe('canonical ABC/P&L contract', () => {
   it('renders partial and blocked canonical P&L rows as partial', () => {
     expect(canonicalPnlRowStatus({ sourceStatus: 'partial', confidence: 'canonical', blockerIds: [] })).toBe('частично')
     expect(canonicalPnlRowStatus({ sourceStatus: 'ready', confidence: 'blocked', blockerIds: [] })).toBe('частично')
-    expect(canonicalPnlRowStatus({ sourceStatus: 'ready', confidence: 'canonical', blockerIds: [] })).toBe('ready')
+    expect(canonicalPnlRowStatus({ sourceStatus: 'ready', confidence: 'canonical', blockerIds: [] })).toBe('подтверждено')
   })
 
   it('gives future, missing, and empty states distinct customer-facing copy', () => {

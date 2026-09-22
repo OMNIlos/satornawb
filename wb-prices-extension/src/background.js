@@ -84,7 +84,8 @@ function publicState() {
   const items = state.catalog?.items || []
   return { status: state.status, reason: state.reason, totalOffers: items.length,
     observedOffers: items.filter(seenFresh).length, totalProducts: new Set(items.map((item) => item.nmId)).size,
-    visitedProducts: state.visited.length, sellersVisited: state.sellers.length, partialSellers: state.partialSellers,
+    visitedProducts: new Set([...state.visited, ...items.filter((item) => state.seen[C.key(item)]).map((item) => item.nmId)]).size,
+    sellersVisited: state.sellers.length, partialSellers: state.partialSellers,
     accepted: state.accepted, ignored: state.ignored, unmatched: state.unmatched,
     verifiedAt: state.verifiedAt, lastAckAt: state.lastAckAt, retryAfterSeconds: state.retryAfterSeconds, nextRunAt: state.nextRunAt }
 }
@@ -92,6 +93,7 @@ function publicState() {
 async function pause(reason) {
   stopped = true
   clearTimers()
+  if (state.tabId !== null) void chrome.tabs.sendMessage(state.tabId, { type: 'stop_scroll' }).catch(() => {})
   state.status = token ? 'paused' : 'disconnected'
   state.reason = reason
   state.nextRunAt = null
@@ -307,7 +309,7 @@ async function observe(message, sender, receivedAt) {
     if (nmIds.has(item.nmId) && C.integer(item.supplierId) && !state.sellers.includes(item.supplierId) && !state.pendingSellers.includes(item.supplierId)) state.pendingSellers.push(item.supplierId)
   }
   const nmId = C.cardNmId(pageUrl)
-  if (nmId && observation.items.some((item) => item.nmId === nmId)) {
+  if (nmId && (observation.loadedNmId === nmId || observation.items.some((item) => item.nmId === nmId))) {
     if (!state.visited.includes(nmId)) state.visited.push(nmId)
     await nextPage()
   } else if (C.sellerId(pageUrl) && observation.catalogPage > state.catalogPage) {

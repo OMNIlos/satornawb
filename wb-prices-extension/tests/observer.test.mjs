@@ -33,7 +33,7 @@ test('passive fetch observer preserves the page response and emits only sanitize
   await flush()
   assert.equal(requests.length, 1)
   assert.equal(requests[0][1], options)
-  assert.deepEqual(sent, [{ origin: 'https://www.wildberries.ru', data: { source: 'satorna-wb-prices-v1', type: 'observations', items: [{ nmId: 1025784485, sizeId: 123, buyerPriceNoWalletKopecks: 130800 }] } }])
+  assert.deepEqual(sent, [{ origin: 'https://www.wildberries.ru', data: { source: 'satorna-wb-prices-v1', type: 'observations', items: [{ nmId: 1025784485, sizeId: 123, buyerPriceNoWalletKopecks: 130800 }], loadedNmId: 1025784485 } }])
 })
 
 test('passive XHR observer handles normal detail responses and does not fetch anything', () => {

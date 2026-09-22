@@ -6268,7 +6268,7 @@ function abcFiltersForBackendRow(row: AbcBackendRow, statusLabel: string) {
   if (statusLabel.includes('нов')) filters.push('Новинки')
   if (statusLabel.includes('нелик')) filters.push('Неликвид')
   if (row.promotionStatus === 'yes') filters.push('В акции')
-  const profit = row.canonicalSourceState ? row.profitBeforeInternalExpensesKopecks : row.netTotalKopecks
+  const profit = row.canonicalSourceState ? row.netProfitKopecks : row.netTotalKopecks
   if ((asAbcNumber(profit) ?? 0) < 0) filters.push('Убыток')
   return filters
 }
@@ -6303,10 +6303,10 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
   const ctrPct = asAbcNumber(row.ctrPct)
   const clicksDelta = asAbcNumber(row.clicksDeltaPct)
   const ktrIndex = asAbcNumber(row.ktrIndex)
-  const displayedProfit = asAbcNumber(isCanonical ? row.profitBeforeInternalExpensesKopecks : row.netTotalKopecks)
+  const displayedProfit = asAbcNumber(isCanonical ? row.netProfitKopecks : row.netTotalKopecks)
   const netPerUnit = row.netPerUnitKopecks ?? (
-    salesUnits > 0
-      ? Math.round((asAbcNumber(row.netTotalKopecks) ?? 0) / salesUnits)
+    salesUnits > 0 && displayedProfit !== null
+      ? Math.round(displayedProfit / salesUnits)
       : null
   )
 
@@ -6345,9 +6345,9 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
     orders: formatAbcMetricPair(row.ordersComposite),
     sales: formatAbcMetricPair(row.salesComposite),
     ads: `${formatAbcKopecks(row.adSpendKopecks)} / ${formatAbcPct(asAbcNumber(row.drrSalesPct) ?? Number.NaN)}`,
-    net: formatAbcKopecks(isCanonical ? row.profitBeforeInternalExpensesKopecks : row.netTotalKopecks),
+    net: formatAbcKopecks(isCanonical ? row.netProfitKopecks : row.netTotalKopecks),
     netCls: displayedProfit === null ? '' : displayedProfit < 0 ? 'metric-down' : 'metric-up',
-    netSub: isCanonical ? `Чистая: ${formatAbcKopecks(row.netProfitKopecks)}` : netPerUnit === null ? 'на товар' : `${formatAbcKopecks(netPerUnit)}/шт`,
+    netSub: netPerUnit === null ? '' : `${formatAbcKopecks(netPerUnit)}/шт`,
     costs: `${formatAbcPct(asAbcNumber(row.logisticsCostPct) ?? Number.NaN)} / ${formatAbcPct(asAbcNumber(row.commissionCostPct) ?? Number.NaN)} / ${formatAbcPct(asAbcNumber(row.storageCostPct) ?? Number.NaN)}`,
     costDeltas: `${formatAbcDeltaPct(row.logisticsDeltaPct, ' пп')} / ${formatAbcDeltaPct(row.commissionDeltaPct, ' пп')} / ${formatAbcDeltaPct(row.storageDeltaPct, ' пп')}`,
     warehouse: ktrIndex === null ? '—' : ktrIndex.toLocaleString('ru-RU'),
@@ -6361,7 +6361,7 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
     operationalKnown,
     blockerIds: row.blockerIds,
     ordersKnown: asAbcNumber(row.ordersComposite?.units) !== null && asAbcNumber(row.ordersComposite?.kopecks) !== null,
-    profitKnown: !isCanonical || asAbcNumber(row.profitBeforeInternalExpensesKopecks) !== null,
+    profitKnown: !isCanonical || asAbcNumber(row.netProfitKopecks) !== null,
     adsKnown: !isCanonical || asAbcNumber(row.adSpendKopecks) !== null,
   }
 }
@@ -7555,7 +7555,7 @@ function ExportDropdownIsland({ replacementKey }: { replacementKey: string }) {
     return {
       reportKind: 'abc', marketplaceAccountId: rollout.marketplaceAccountId, dateFrom: period.fromIso, dateTo: period.toIso,
       source: reportTableSource(state.report?.canonical, rollout.marketplaceAccountId, period, JSON.stringify({ filters: snapshot.filter ?? {}, sort: snapshot.sort ?? [] })),
-      headers: ABC_TABLE_COLUMNS.map(column => column.column === 'net' ? 'До внутренних расходов' : column.column === 'abc' ? 'Класс продаж' : column.label),
+      headers: ABC_TABLE_COLUMNS.map(column => column.column === 'net' ? 'Прибыль' : column.column === 'abc' ? 'Класс продаж' : column.label),
       rows: buildAbcTableRows(abcRawRows(state.report), state.rows, snapshot, ABC_TABLE_COLUMNS.map(column => column.column)),
     }
   }
@@ -8637,7 +8637,7 @@ export function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }
     ? state.report.canonicalSummary?.revenueKopecks ?? null
     : abcLiveRowsComposite(rawRows, 'salesComposite', 'kopecks')
   const profitKopecks = isCanonical
-    ? state.report.canonicalSummary?.profitBeforeInternalExpensesKopecks ?? null
+    ? state.report.canonicalSummary?.netProfitKopecks ?? null
     : abcBackendSummaryNumber(state.report, 'profitKopecks') || abcLiveRowsKopecks(rawRows, 'netTotalKopecks')
   const orderRows = rawRows.filter((row) => asAbcNumber(row.ordersComposite?.units) !== null)
   const basketRows = rawRows.filter((row) => asAbcNumber(row.baskets) !== null)
@@ -8650,16 +8650,16 @@ export function AbcKpiStripIsland({ replacementKey }: { replacementKey: string }
   const stats: AbcKpiStat[] = [
     {
       ...ABC_KPI_STATS[0],
-      label: isCanonical ? 'Продажи / до внутренних расходов' : ABC_KPI_STATS[0].label,
-      help: isCanonical ? 'Вторая сумма — прибыль до внутренних расходов компании. Используется подтверждённая налоговая ставка за выбранный период.' : ABC_KPI_STATS[0].help,
+      label: isCanonical ? 'Продажи / прибыль' : ABC_KPI_STATS[0].label,
+      help: isCanonical ? 'Вторая сумма — подтверждённая прибыль после расходов WB, рекламы, себестоимости и налога.' : ABC_KPI_STATS[0].help,
       value: `${formatAbcKopecks(salesKopecks)} / ${formatAbcKopecks(profitKopecks)}`,
       delta: statusText,
       deltaClass: state.error ? 'down' : state.loading || profitKopecks === null ? 'neutral' : profitKopecks < 0 ? 'down' : 'up',
     },
     {
       ...ABC_KPI_STATS[1],
-      label: isCanonical ? 'До внутренних расходов' : ABC_KPI_STATS[1].label,
-      help: isCanonical ? 'Чистая прибыль появится после подтверждения внутренних расходов за выбранный период.' : ABC_KPI_STATS[1].help,
+      label: isCanonical ? 'Прибыль' : ABC_KPI_STATS[1].label,
+      help: isCanonical ? 'Прибыль рассчитывается по подтверждённым расходам WB, рекламе, себестоимости на дату продажи и налогу.' : ABC_KPI_STATS[1].help,
       value: formatAbcKopecks(profitKopecks),
       delta: `${rawRows.length.toLocaleString('ru-RU')} товаров в отчете`,
       deltaClass: profitKopecks === null ? 'neutral' : profitKopecks < 0 ? 'down' : 'up',
@@ -10521,7 +10521,7 @@ function asPnlNumber(value: unknown) {
 function formatPnlKopecks(value: unknown) {
   const kopecks = asPnlNumber(value)
   if (kopecks === null) return 'нет данных'
-  return `${Math.round(kopecks / 100).toLocaleString('ru-RU')} ₽`
+  return `${(kopecks / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ₽`
 }
 
 function formatPnlPercent(value: unknown) {
@@ -11016,13 +11016,13 @@ function PnlLiveWorkbenchIsland({ replacementKey, state, rows }: { replacementKe
     return sum
   }
   const revenueKopecks = total('revenueKopecks')
-  const profitKopecks = total(isCanonical ? 'profitBeforeInternalExpensesKopecks' : 'netProfitKopecks')
+  const profitKopecks = total('netProfitKopecks')
   const revenue = formatPnlKopecks(revenueKopecks)
   const displayedProfit = formatPnlKopecks(profitKopecks)
   const margin = formatPnlPercent(profitKopecks !== null && revenueKopecks !== null && revenueKopecks !== 0 ? profitKopecks / revenueKopecks * 100 : null)
-  const profitLabel = isCanonical ? 'До внутренних расходов' : 'Прибыль / маржа'
+  const profitLabel = isCanonical ? 'Прибыль' : 'Прибыль / маржа'
   const profitTip = isCanonical
-    ? 'Продажи за вычетом возвратов минус комиссия, логистика, хранение, приёмка, реклама, штрафы, налог и себестоимость. Внутренние расходы компании вычитаются отдельно.'
+    ? 'Выручка за вычетом возвратов, расходов WB, включая эквайринг и удержания, рекламы, датированной себестоимости и налога.'
     : 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы. Маржа = прибыль / выручка * 100%.'
   const flowItems = state.status === 'error'
     ? [
@@ -11085,21 +11085,17 @@ function PnlLiveWorkbenchIsland({ replacementKey, state, rows }: { replacementKe
                 ['acceptanceKopecks', 'Приёмка', 'Входит в расходы WB.'],
                 ['penaltyKopecks', 'Штрафы', 'Входят в расходы WB.'],
                 ['deductionKopecks', 'Удержания без рекламы', 'Входят в расходы WB; продвижение не вычитается повторно.'],
-                ['financeOtherExpensesKopecks', 'Прочие расходы WB', 'Входят в расходы WB. Не внутренние расходы бизнеса.'],
+                ['financeOtherExpensesKopecks', 'Прочие расходы WB', 'Входят в расходы WB.'],
                 ['acquiringKopecks', 'Эквайринг', 'Входит в расходы WB.'],
                 ['compensationKopecks', 'Компенсации WB', 'Уменьшают расходы WB; повторно к прибыли не прибавляются.'],
                 ['financeExpensesKopecks', 'Расходы WB, всего', 'Сумма перечисленных WB-расходов минус компенсации. Детали и итог не вычитаются одновременно.'],
-                ['settlementProfitKopecks', 'Промежуточная прибыль WB', 'Выручка − себестоимость − расходы WB. До налога, прочих расходов, рекламы и лояльности.'],
+                ['settlementProfitKopecks', 'Промежуточная прибыль WB', 'Выручка − себестоимость − расходы WB. До налога, рекламы и лояльности.'],
                 ['taxKopecks', 'Налог', 'Сумма из действующей политики API. Ставка и база не выводятся из этого значения.'],
-                ['otherExpensesKopecks', 'Прочие расходы по политике', 'Не доказывают полноту внутренних расходов бизнеса: нужны источник, период и распределение.'],
-                ['profitBeforeAdsAndLoyaltyKopecks', 'До рекламы и лояльности', 'Промежуточная прибыль WB − налог − прочие расходы по политике.'],
+                ['profitBeforeAdsAndLoyaltyKopecks', 'До рекламы и лояльности', 'Промежуточная прибыль WB − налог.'],
                 ['adSpendKopecks', 'Реклама', 'Вычитается один раз; нераспределённая реклама аккаунта показана отдельно.'],
                 ['profitBeforeLoyaltyKopecks', 'До лояльности', 'Результат до рекламы и лояльности − реклама.'],
                 ['loyaltyNetCostKopecks', 'Расходы на лояльность', 'Итог API по версии формулы; может быть отрицательным.'],
-                ['profitAfterLoyaltyKopecks', 'После лояльности, предварительно', 'Результат до лояльности − расходы на лояльность. Не финальная чистая прибыль.'],
-                ['profitBeforeInternalExpensesKopecks', 'До внутренних расходов', 'Продажи − комиссия − логистика − хранение − приёмка − реклама − штрафы − налог − себестоимость. Требуется подтверждённая налоговая ставка за период.'],
-                ['internalExpensesKopecks', 'Внутренние расходы компании', 'Подтверждённые расходы выбранного периода с применимым правилом распределения.'],
-                ['netProfitKopecks', 'Чистая прибыль', 'Не подменяется промежуточным результатом. Пока API не подтверждает итог, значение неизвестно.'],
+                ['netProfitKopecks', 'Прибыль', 'Выручка − себестоимость − расходы WB − налог − реклама − лояльность. Показана при подтверждении всех исходных данных.'],
               ] satisfies Array<[keyof PnlBackendRow, string, string]>).map(([field, label, explanation]) => {
                 const amount = rows.length ? total(field) : null
                 return <tr key={field}><th scope="row">{label}</th><td className="num">{amount === null || !Number.isSafeInteger(amount) ? 'нет данных' : `${(amount / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`}</td><td>{explanation}</td></tr>
@@ -11112,8 +11108,8 @@ function PnlLiveWorkbenchIsland({ replacementKey, state, rows }: { replacementKe
         <b>Весь аккаунт · без фильтров</b>
         <span>
           Выручка: {isCanonical ? formatPnlKopecks(report.canonicalSummary?.revenueKopecks) : getPnlKpiValue(report, 'revenue')}
-          {' · '}{isCanonical ? 'До внутренних расходов' : 'Прибыль'}: {isCanonical ? formatPnlKopecks(report.canonicalSummary?.profitBeforeInternalExpensesKopecks) : getPnlKpiValue(report, 'net_profit')}
-          {isCanonical ? <> · Нераспределённая реклама: {formatPnlKopecks(report.canonicalSummary?.unattributedAdvertisingSpendKopecks)} (не распределяется по строкам)</> : null}
+          {' · '}Прибыль: {isCanonical ? formatPnlKopecks(report.canonicalSummary?.netProfitKopecks) : getPnlKpiValue(report, 'net_profit')}
+          {isCanonical && (report.canonicalSummary?.unattributedAdvertisingSpendKopecks ?? 0) !== 0 ? <> · Нераспределённая реклама: {formatPnlKopecks(report.canonicalSummary?.unattributedAdvertisingSpendKopecks)} (не распределяется по строкам)</> : null}
         </span>
       </div>
     </div>
@@ -13042,7 +13038,7 @@ function PnlLiveTableShellIsland({ replacementKey, state, rows, mode = 'financia
             <ReportHeaderCell className="num" label="Реклама" tip="Расход рекламы, связанный с товаром или кампанией. Уменьшает прибыль." />
             <ReportHeaderCell className="num" label="Налог" tip="Налог по настройкам организации. Вычитается при расчете чистой прибыли." />
             {showOneCColumns ? <ReportHeaderCell className="num" label="Опер. расходы" tip="Операционные расходы из 1С или настроек распределения. Например зарплата, аренда, сервисы." /> : null}
-            <ReportHeaderCell className="num" label={isCanonical ? 'До внутренних расходов' : 'Прибыль'} tip={isCanonical ? 'Прибыль по утверждённой формуле до внутренних расходов компании. Требуется подтверждённая налоговая ставка за период.' : 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы.'} />
+            <ReportHeaderCell className="num" label="Прибыль" tip={isCanonical ? 'Прибыль после фактических расходов WB, рекламы, датированной себестоимости и налога.' : 'Прибыль = выручка - себестоимость - комиссия - логистика - хранение - реклама - налог - опер. расходы.'} />
             <ReportHeaderCell className="num" label={isCanonical ? 'Финальная маржа' : 'Маржа'} tip={isCanonical ? 'Не рассчитывается, пока финальная P&L-формула заблокирована.' : 'Маржа = прибыль / выручка * 100%. Показывает, какая доля выручки остается после расходов.'} />
             <ReportHeaderCell label="Статус" tip="Насколько строка готова к использованию: данные подтверждены, рассчитаны оперативно или требуют проверки." />
             <ReportHeaderCell label="Комментарий" tip="Пояснение к строке: почему сумма такая, чего не хватает или что нужно проверить." />
@@ -13076,7 +13072,7 @@ function PnlLiveTableShellIsland({ replacementKey, state, rows, mode = 'financia
               <td className="num">{formatPnlKopecks(row.adSpendKopecks)}</td>
               <td className="num">{formatPnlKopecks(row.taxKopecks)}</td>
               {showOneCColumns ? <td className="num">{formatPnlKopecks(row.overheadKopecks)}</td> : null}
-              <td className="num">{formatPnlKopecks(isCanonical ? row.profitBeforeInternalExpensesKopecks : row.netProfitKopecks)}</td>
+              <td className="num">{formatPnlKopecks(row.netProfitKopecks)}</td>
               <td className="num">{formatPnlPercent(row.marginPct)}</td>
               <td>{isCanonical ? canonicalPnlRowStatus(row) : row.sourceStatus === 'blocked' || row.confidence === 'blocked' ? 'требует проверки' : row.sourceStatus === 'partial' || row.confidence === 'partial' ? 'частично' : row.sourceStatus === 'ready' ? 'готово' : row.sourceStatus ?? 'данные загружены'}</td>
               <td>{row.comment ?? ''}</td>
@@ -14678,7 +14674,7 @@ function AbcProfitStatusPanelIsland({ replacementKey }: { replacementKey: string
   if (isCanonical) return null
   const groups = ['Локомотивы', 'Новинки', 'Средний', 'Неликвид', 'Ликвидация'].map((label) => {
     const rows = rawRows.filter((row) => abcStatusGroupLabel(row.productStatus) === label)
-    const values = rows.map((row) => asAbcNumber(isCanonical ? row.profitBeforeInternalExpensesKopecks : row.netTotalKopecks))
+    const values = rows.map((row) => asAbcNumber(isCanonical ? row.netProfitKopecks : row.netTotalKopecks))
     const profit = isCanonical && values.some((value) => value === null)
       ? null
       : values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
@@ -14695,7 +14691,7 @@ function AbcProfitStatusPanelIsland({ replacementKey }: { replacementKey: string
     >
       <div className="report-chart-head" style={{ marginBottom: '10px' }}>
         <div>
-          <div className="report-card-title">{isCanonical ? 'До внутренних расходов по статусам' : 'Чистая прибыль по статусам'}</div>
+          <div className="report-card-title">{isCanonical ? 'Прибыль по статусам' : 'Чистая прибыль по статусам'}</div>
           <div className="report-card-note">
             {state.error ? 'Нет данных для среза' : 'Срез рассчитан по товарам в таблице'}
           </div>
@@ -14745,7 +14741,7 @@ function AbcTableHeaderIsland({ replacementKey }: { replacementKey: string }) {
             data-vella-column={`abc-${column.column}`}
             data-vella-ux-delta="explicit-abc-sort-key"
           >
-            {isCanonical && column.column === 'net' ? 'До внутренних расходов' : isCanonical && column.column === 'abc' ? 'Класс продаж' : column.label} <span className="stat-tip abc-header-help" data-tip={isCanonical && column.column === 'net' ? 'Продажи за вычетом возвратов минус комиссия, логистика, хранение, приёмка, реклама, штрафы, налог и себестоимость.' : isCanonical && column.column === 'abc' ? 'Класс продаж A/B/C. Класс прибыли пока не рассчитан.' : column.help}>?</span> <SortArrow />
+            {isCanonical && column.column === 'net' ? 'Прибыль' : isCanonical && column.column === 'abc' ? 'Класс продаж' : column.label} <span className="stat-tip abc-header-help" data-tip={isCanonical && column.column === 'net' ? 'Продажи за вычетом возвратов минус комиссия, логистика, хранение, приёмка, реклама, штрафы, налог и себестоимость.' : isCanonical && column.column === 'abc' ? 'Класс продаж A/B/C. Класс прибыли пока не рассчитан.' : column.help}>?</span> <SortArrow />
           </th>
         ))}
       </tr>

@@ -98,6 +98,11 @@ test('only an extension popup or the owned top-level WB card can issue their res
   const c = contract()
   assert.equal(c.isTrustedPopupSender({ id: 'ext', url: 'chrome-extension://ext/src/popup.html' }, 'ext'), true)
   assert.equal(c.isTrustedPopupSender({ id: 'ext', url: page, tab: { id: 7 } }, 'ext'), false)
+  const popupUrl = 'chrome-extension://ext/src/popup.html'
+  assert.equal(c.isTrustedPopupSender({ id: 'ext', url: popupUrl, frameId: 0, tab: { id: 8, url: popupUrl } }, 'ext'), true)
+  assert.equal(c.isTrustedPopupSender({ id: 'ext', url: popupUrl, frameId: 1, tab: { id: 8, url: popupUrl } }, 'ext'), false)
+  assert.equal(c.sanitizePageMessage({ source: c.SOURCE, type: 'observations', items: [], loadedNmId: 1025784485 }, page).loadedNmId, 1025784485)
+  assert.equal(c.sanitizePageMessage({ source: c.SOURCE, type: 'observations', items: [], loadedNmId: 999 }, page), null)
   const sender = { id: 'ext', frameId: 0, url: page, tab: { id: 7, url: page } }
   assert.equal(c.isTrustedPageSender(sender, 'ext', 7, 1025784485), true)
   assert.equal(c.isTrustedPageSender({ ...sender, frameId: 1 }, 'ext', 7, 1025784485), false)

@@ -79,7 +79,8 @@
       return { type: 'blocked', code: value.code }
     }
     const isCatalog = Boolean(sellerId(page) && integer(value.catalogPage) && Number.isSafeInteger(value.productCount) && value.productCount >= 0 && value.productCount <= 1000)
-    if (value.type !== 'observations' || !Array.isArray(value.items) || (!value.items.length && !isCatalog) || value.items.length > 10000) return null
+    const loadedNmId = integer(value.loadedNmId) && value.loadedNmId === cardNmId(page) ? value.loadedNmId : null
+    if (value.type !== 'observations' || !Array.isArray(value.items) || (!value.items.length && !isCatalog && !loadedNmId) || value.items.length > 10000) return null
     const seen = new Set()
     const items = []
     for (const item of value.items) {
@@ -89,7 +90,7 @@
       if (integer(item.supplierId)) clean.supplierId = item.supplierId
       items.push(clean)
     }
-    return { type: 'observations', items, ...(isCatalog ? { catalogPage: value.catalogPage, productCount: value.productCount } : {}) }
+    return { type: 'observations', items, ...(isCatalog ? { catalogPage: value.catalogPage, productCount: value.productCount } : {}), ...(loadedNmId ? { loadedNmId } : {}) }
   }
 
   function validateCatalogPage(value, page, expected = null, now = Date.now()) {
@@ -126,7 +127,9 @@
   }
 
   function isTrustedPopupSender(sender, extensionId) {
-    return sender?.id === extensionId && !sender.tab && sender.url === `chrome-extension://${extensionId}/src/popup.html`
+    const url = `chrome-extension://${extensionId}/src/popup.html`
+    return sender?.id === extensionId && sender.url === url
+      && (!sender.tab || (sender.frameId === 0 && sender.tab.url === url))
   }
 
   function isTrustedPageSender(sender, extensionId, tabId, page) {

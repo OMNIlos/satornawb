@@ -12,7 +12,13 @@
     const catalogPage = contract.catalogPage(requestUrl, location.href)
     if (catalogPage && Array.isArray(payload?.products) && payload.products.length <= 1000) {
       emit({ type: 'observations', items, catalogPage, productCount: payload.products.length })
-    } else if (items.length) emit({ type: 'observations', items })
+    } else {
+      const nmId = contract.cardNmId(location.href)
+      const requested = new URL(requestUrl, location.href).searchParams.get('nm')?.split(';').map(Number) || []
+      const loadedNmId = nmId && requested.includes(nmId) && Array.isArray(payload?.products)
+        && (payload.products.length === 0 || payload.products.some((product) => product.id === nmId && Array.isArray(product.sizes))) ? nmId : null
+      if (items.length || loadedNmId) emit({ type: 'observations', items, ...(loadedNmId ? { loadedNmId } : {}) })
+    }
   }
 
   const originalFetch = globalThis.fetch

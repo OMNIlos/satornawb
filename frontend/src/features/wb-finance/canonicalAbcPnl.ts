@@ -123,7 +123,7 @@ const metaSchema = z.object({
   marketplaceAccountId: z.number().int().safe().positive(),
   period: periodSchema,
   snapshot: snapshotSchema.nullable(),
-  formulaVersion: z.enum(['wb-abc-pnl-fullstats-loyalty-v1', 'wb-abc-pnl-payable-v2']),
+  formulaVersion: z.enum(['wb-abc-pnl-fullstats-loyalty-v1', 'wb-abc-pnl-payable-v2', 'wb-abc-pnl-payable-v3']),
   costLedgerRevision: z.number().int().safe().nonnegative(),
   economicsRevision: z.number().int().safe().nonnegative(),
   advertisingSource: z.enum(['finance_promotion', 'ads_fullstats']).nullable(),
@@ -168,7 +168,7 @@ export function canonicalPnlRowStatus(row: {
   blockerIds?: string[] | null
 }) {
   if (row.blockerIds?.length || row.confidence === 'blocked' || row.sourceStatus === 'partial') return 'частично'
-  return row.sourceStatus ?? 'canonical'
+  return row.sourceStatus === 'ready' || row.confidence === 'canonical' ? 'подтверждено' : 'нет данных'
 }
 
 export function canonicalAbcPnlEmptyMessage(
@@ -445,9 +445,9 @@ export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage, operationalRo
         logisticsDeltaPct: costDelta(item.logisticsKopecks, prior?.logisticsKopecks),
         commissionDeltaPct: costDelta(item.commissionKopecks, prior?.commissionKopecks),
         storageDeltaPct: costDelta(item.storageKopecks, prior?.storageKopecks),
-        marginDeltaPct: costDelta(item.profitBeforeInternalExpensesKopecks, prior?.profitBeforeInternalExpensesKopecks),
-        marginKopecks: item.profitBeforeInternalExpensesKopecks !== null && item.netUnits > 0 ? Math.round(item.profitBeforeInternalExpensesKopecks / item.netUnits) : null,
-        marginPct: revenuePct(item.profitBeforeInternalExpensesKopecks),
+        marginDeltaPct: costDelta(item.netProfitKopecks, prior?.netProfitKopecks),
+        marginKopecks: item.netProfitKopecks !== null && item.netUnits > 0 ? Math.round(item.netProfitKopecks / item.netUnits) : null,
+        marginPct: revenuePct(item.netProfitKopecks),
         profitAfterLoyaltyKopecks: item.profitAfterLoyaltyKopecks,
         profitBeforeInternalExpensesKopecks: item.profitBeforeInternalExpensesKopecks,
         internalExpensesKopecks: item.internalExpensesKopecks,
@@ -482,9 +482,8 @@ export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage, operationalRo
 export function financeBlockerReasons(blockers: string[]) {
   return [...new Set(blockers.map((blocker) => {
     if (blocker.includes('COST')) return 'Уточните себестоимость и её даты'
-    if (blocker.includes('INTERNAL_EXPENSES')) return 'Не заданы внутренние расходы'
     if (blocker.includes('TAX')) return 'Не подтверждён налог за период'
-    if (blocker.includes('ECONOMICS')) return 'Не подтверждены прочие расходы за период'
+    if (blocker.includes('ECONOMICS')) return 'Не подтверждён налог за период'
     if (blocker.includes('OPERATIONS_UNRECONCILED')) return 'Нужна сверка финансовых операций'
     if (blocker.includes('ADVERTISING_UNATTRIBUTED')) return 'Часть рекламы не связана с товаром'
     if (blocker.includes('ADS')) return 'Не загружена реклама за период'
@@ -539,7 +538,7 @@ export function adaptCanonicalPnlReport(page: CanonicalAbcPnlPage, operationalRo
       netProfitKopecks: item.netProfitKopecks,
       profitAfterLoyaltyKopecks: item.profitAfterLoyaltyKopecks,
       marginPct: item.netProfitKopecks !== null && item.revenueKopecks > 0 ? item.netProfitKopecks / item.revenueKopecks * 100 : null,
-      sourceStatus: page.meta.state,
+      sourceStatus: item.netProfitKopecks !== null && item.blockerIds.length === 0 ? 'ready' : 'partial',
       confidence: item.blockerIds.length > 0 ? 'blocked' : 'canonical',
       comment: financeBlockerReasons(item.blockerIds).join(' · '),
       blockerIds: item.blockerIds,

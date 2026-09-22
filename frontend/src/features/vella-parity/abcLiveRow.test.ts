@@ -146,12 +146,12 @@ describe('ABC live row', () => {
       profitKnown: false,
       adsKnown: true,
     })
-    expect(renderAbcRowHtml(unavailable, 0)).toContain('Чистая: —')
+    expect(renderAbcRowHtml(unavailable, 0)).toContain('Прибыль не подтверждена')
 
     const zero = mapBackendAbcRowToParity({
       salesClass: null,
       abcCode: null,
-      profitBeforeInternalExpensesKopecks: 0,
+      netProfitKopecks: 0,
       canonicalSourceState: 'ready',
     })
     expect(zero).toMatchObject({ abc: '—', net: '0 ₽', profitKnown: true })

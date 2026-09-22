@@ -6,8 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from xml.sax.saxutils import escape
 from zipfile import ZipFile
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
 
 from app.wb_funnel_export import parse_funnel_export
 from app.reports_history import ensure_daily_stock_history
@@ -16,7 +14,6 @@ from app.routers.wb_reports_bff import _build_week_over_week_payload, _empty_bac
 from app.modules.wb_reports.abc_pnl import APPROVED_TAX_BLOCKER, WbAbcPnlService
 from app.platform.finance.service import FinancePnlFact
 from app.platform.period import Period
-from app.repricer_cache.orm import WbRepricerSourceCacheRow
 
 
 def sheet(rows):
@@ -90,32 +87,10 @@ for fact, tax, confirmed, blocked in (
         approved_tax_policy=confirmed,
     )
     assert (APPROVED_TAX_BLOCKER in row.blocker_ids) is blocked
-    assert row.net_profit_kopecks is None and 'WB_PNL_INTERNAL_EXPENSES_MISSING' in row.blocker_ids
+    assert 'WB_PNL_INTERNAL_EXPENSES_MISSING' not in row.blocker_ids
+    assert (row.net_profit_kopecks is None) is blocked
     if fact is expense_only and tax == 0:
         assert row.profit_before_internal_expenses_kopecks == -100
-period = Period(date(2026, 9, 12), date(2026, 9, 18))
-evidence = dict(source='owner_confirmation', status='confirmed', marketplaceAccountId=2,
-                dateFrom='2026-09-12', dateTo='2026-09-18', internalExpensesKopecks=0,
-                confirmedAt='2026-09-20T12:00:00+00:00', sourceReference='check')
-engine = create_engine('sqlite://')
-WbRepricerSourceCacheRow.__table__.create(engine)
-with Session(engine) as session:
-    service = WbAbcPnlService(session, 2)
-    assert service._confirmed_zero_internal_expenses(2, period) is None
-    stored = WbRepricerSourceCacheRow(organization_id=2,
-        source_key=f'wb_internal_expenses_2_{period.cache_key}', payload=evidence,
-        fetched_at=datetime.now(timezone.utc))
-    session.add(stored)
-    session.flush()
-    assert service._confirmed_zero_internal_expenses(2, period) == 0
-    assert service._confirmed_zero_internal_expenses(3, period) is None
-    assert WbAbcPnlService(session, 3)._confirmed_zero_internal_expenses(2, period) is None
-    assert service._confirmed_zero_internal_expenses(2, Period(date(2026, 9, 11), period.date_to)) is None
-    for invalid in ({'internalExpensesKopecks': False}, {'internalExpensesKopecks': 100},
-                    {'status': 'revoked'}, {'sourceReference': ''}, {'dateTo': '2026-09-19'}):
-        session.execute(WbRepricerSourceCacheRow.__table__.update().values(payload={**evidence, **invalid}))
-        assert service._confirmed_zero_internal_expenses(2, period) is None
-
 confirmed_row = WbAbcPnlService._row(
     sale, catalog_sku_id=1, cogs=1000, cost_state='configured', cost_evidence_status='dated',
     tax=750, other_expenses=0, economics_state='configured', economics_evidence_status='dated',
@@ -130,3 +105,36 @@ blocked_row = replace(confirmed_row, blocker_ids=('WB_PNL_ECONOMICS_ASSUMED',), 
 assert WbAbcPnlService._summary([blocked_row], 0, 0, internal_expenses_kopecks=0).net_profit_kopecks is None
 assert WbAbcPnlService._summary([], 0, 0, internal_expenses_kopecks=0).internal_expenses_kopecks == 0
 print('Report data repair: OK')
+
+# Known WB charges must be subtracted once, with signed reimbursements retained.
+charged = replace(sale, acquiring_kopecks=125, deduction_kopecks=200,
+                  additional_payment_kopecks=50, acceptance_kopecks=25)
+row = WbAbcPnlService._row(
+    charged, catalog_sku_id=1, cogs=1000, cost_state='configured', cost_evidence_status='dated',
+    tax=750, other_expenses=0, economics_state='configured', economics_evidence_status='dated',
+    advertising_spend=300, loyalty_canonical=True, sales_class='C', blockers=(),
+    approved_tax_policy=True, internal_expenses_kopecks=99999,
+)
+assert row.net_profit_kopecks == 7550
+assert row.net_profit_kopecks == row.profit_after_loyalty_kopecks
+assert row.internal_expenses_kopecks == 0 and not row.blocker_ids
+assert WbAbcPnlService._summary([row], 300, 0).net_profit_kopecks == 7550
+from app.platform.economics.policies import EconomicsPolicy
+from app.platform.finance.service import FinancePnlDailyBasis
+instant = datetime(2026, 9, 12, tzinfo=timezone.utc)
+policy = EconomicsPolicy(1, 750, 500, None, 'assumed', 'undated', instant, 1, None,
+                         'configured', 'dated', instant)
+resolved = WbAbcPnlService._economics_result(
+    sale, catalog_sku_id=1, ambiguous=False,
+    daily=[(instant, FinancePnlDailyBasis(revenue_kopecks=10000, sales_units=1))],
+    policies={(1, instant): policy},
+)
+assert resolved == (750, 0, 'configured', 'dated', ())
+from app.platform.advertising.service import _campaign_residual, _RECONCILIATION_METRICS
+from types import SimpleNamespace
+def ads_fact(spend):
+    return SimpleNamespace(**{key: (spend if key == 'spend_kopecks' else 0) for key in _RECONCILIATION_METRICS})
+residual, invalid, tolerance = _campaign_residual(ads_fact(206399), [ads_fact(v) for v in [26,26,22840,59484,45476,38353,40192]])
+assert residual.spend_kopecks == 0 and tolerance and not invalid
+assert _campaign_residual(ads_fact(206500), [ads_fact(206397)])[0].spend_kopecks == 103
+print('Report calculation checks passed')

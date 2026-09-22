@@ -194,7 +194,9 @@ def _campaign_residual(
             values[name] = None
             continue
         difference = parent_value - child_value
-        tolerance = 1 if name in _RECONCILIATION_MONEY else 0
+        # Parent and each child are rounded to kopecks independently. Seven
+        # daily totals can differ by several kopecks even with full coverage.
+        tolerance = max(1, (len(source_rows) + 1) // 2) if name in _RECONCILIATION_MONEY else 0
         if difference < -tolerance:
             values[name] = None
             invalid = True

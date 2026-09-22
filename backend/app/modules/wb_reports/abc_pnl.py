@@ -4,7 +4,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.platform.advertising.service import AdvertisingService, AdvertisingSnapshot
@@ -21,9 +20,8 @@ from app.platform.finance.service import (
     FinanceService,
 )
 from app.platform.period import MOSCOW, Period
-from app.repricer_cache.orm import WbRepricerSourceCacheRow
 
-FORMULA_VERSION = "wb-abc-pnl-payable-v2"
+FORMULA_VERSION = "wb-abc-pnl-payable-v3"
 APPROVED_TAX_BLOCKER = "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750"
 
 
@@ -178,6 +176,7 @@ def calculate_management_profit(
     sales_basis_confirmed: bool = False,
     unmapped_components: dict[str, int | None] | None = None,
     resolved_tax_kopecks: int | None = None,
+    other_wb_expenses_kopecks: int | None = 0,
 ) -> ManagementProfitCalculation:
     """Pure calculation, not policy activation or evidence of financial readiness.
 
@@ -198,6 +197,7 @@ def calculate_management_profit(
         "advertising": advertising_kopecks,
         "penalty": penalty_kopecks,
         "cogs": cogs_kopecks,
+        "other_wb_expenses": other_wb_expenses_kopecks,
     }
     amounts = [
         sales_kopecks,
@@ -317,34 +317,6 @@ class WbAbcPnlService:
         self.organization_id = organization_id
         self.now = now
 
-    def _confirmed_zero_internal_expenses(
-        self, marketplace_account_id: int, period: Period
-    ) -> int | None:
-        evidence = self.session.scalar(
-            select(WbRepricerSourceCacheRow.payload).where(
-                WbRepricerSourceCacheRow.organization_id == self.organization_id,
-                WbRepricerSourceCacheRow.source_key
-                == f"wb_internal_expenses_{marketplace_account_id}_{period.cache_key}",
-            )
-        )
-        if not isinstance(evidence, dict):
-            return None
-        amount = evidence.get("internalExpensesKopecks")
-        # Only confirmed zero needs no allocation across SKUs or days.
-        if (
-            evidence.get("source") == "owner_confirmation"
-            and evidence.get("status") == "confirmed"
-            and evidence.get("marketplaceAccountId") == marketplace_account_id
-            and evidence.get("dateFrom") == period.date_from.isoformat()
-            and evidence.get("dateTo") == period.date_to.isoformat()
-            and evidence.get("confirmedAt")
-            and evidence.get("sourceReference")
-            and type(amount) is int
-            and amount == 0
-        ):
-            return amount
-        return None
-
     @staticmethod
     def _cost_result(
         fact: FinancePnlFact,
@@ -430,34 +402,24 @@ class WbAbcPnlService:
         values = [policies.get((catalog_sku_id, instant)) for instant, _basis in daily]
         if any(
             policy is None
-            or policy.value_state == "missing"
-            or any(value is None for value in policy.amounts)
+            or policy.tax_value_state == "missing"
+            or policy.tax_basis_points is None
             for policy in values
         ):
             return None, None, "missing", None, ("WB_PNL_ECONOMICS_MISSING",)
 
-        groups: dict[tuple[int, int, int], list[int]] = {}
         tax_bases: dict[int, int] = {}
         for (_day, basis), policy in zip(daily, values, strict=True):
             assert policy is not None
-            key = tuple(int(value) for value in policy.amounts)
-            totals = groups.setdefault(key, [0, 0])
-            totals[0] += basis.revenue_kopecks
-            totals[1] += basis.sales_units
-            tax_bases[key[0]] = tax_bases.get(key[0], 0) + basis.revenue_kopecks
+            rate = int(policy.tax_basis_points)
+            tax_bases[rate] = tax_bases.get(rate, 0) + basis.revenue_kopecks
         tax = sum(
             _round_basis_points(revenue, tax_basis_points)
             for tax_basis_points, revenue in tax_bases.items()
         )
-        other = sum(
-            _round_basis_points(revenue, other_basis_points) + sales * per_sale
-            for (_tax_basis_points, other_basis_points, per_sale), (
-                revenue,
-                sales,
-            ) in groups.items()
-        )
-        assumed = any(policy.value_state == "assumed" for policy in values)
-        evidence = {policy.evidence_status for policy in values}
+        # Company expenses are excluded; only the dated tax policy is required.
+        assumed = any(policy.tax_value_state == "assumed" for policy in values)
+        evidence = {policy.tax_evidence_status for policy in values}
         evidence_status = (
             "period_end_fallback"
             if "period_end_fallback" in evidence
@@ -470,7 +432,7 @@ class WbAbcPnlService:
             blockers.append("WB_PNL_ECONOMICS_EVIDENCE_UNDATED")
         return (
             tax,
-            other,
+            0,
             "assumed" if assumed else "configured",
             evidence_status,
             tuple(blockers),
@@ -494,7 +456,7 @@ class WbAbcPnlService:
         *,
         approved_tax_policy: bool = False,
         advertising_complete: bool = True,
-        internal_expenses_kopecks: int | None = None,
+        internal_expenses_kopecks: int | None = 0,
     ) -> AbcPnlRow:
         penalty = max(0, fact.penalty_kopecks)
         deduction = max(0, fact.deduction_kopecks)
@@ -559,8 +521,6 @@ class WbAbcPnlService:
         )
         if not tax_ready:
             blockers = (*blockers, APPROVED_TAX_BLOCKER)
-        if internal_expenses_kopecks is None:
-            blockers = (*blockers, "WB_PNL_INTERNAL_EXPENSES_MISSING")
         management = calculate_management_profit(
             sales_kopecks=fact.revenue_kopecks if payable_complete else None,
             commission_kopecks=fact.commission_kopecks,
@@ -577,18 +537,15 @@ class WbAbcPnlService:
                 and cost_evidence_status in {None, "dated"}
                 else None
             ),
-            internal_expenses_kopecks=internal_expenses_kopecks,
+            internal_expenses_kopecks=0,
             sales_basis_confirmed=True,
-            unmapped_components={
-                "acquiring": fact.acquiring_kopecks,
-                "deduction": deduction,
-                "finance_other": finance_other,
-                "compensation": compensation,
-                "loyalty": loyalty_net_cost,
-            },
+            other_wb_expenses_kopecks=(
+                fact.acquiring_kopecks + deduction + finance_other
+                - compensation + loyalty_net_cost
+                if loyalty_net_cost is not None else None
+            ),
+            unmapped_components={},
         )
-        if "WB_MANAGEMENT_OPERATIONS_UNRECONCILED" in management.blocker_ids:
-            blockers = (*blockers, "WB_MANAGEMENT_OPERATIONS_UNRECONCILED")
         return AbcPnlRow(
             fact.nm_id,
             fact.seller_article,
@@ -636,8 +593,8 @@ class WbAbcPnlService:
             None,
             management.net_profit_kopecks if not blockers else None,
             blockers,
-            profit_before_internal_expenses_kopecks=management.profit_before_internal_kopecks,
-            internal_expenses_kopecks=internal_expenses_kopecks,
+            profit_before_internal_expenses_kopecks=management.net_profit_kopecks if not blockers else None,
+            internal_expenses_kopecks=0,
         )
 
     @staticmethod
@@ -647,7 +604,7 @@ class WbAbcPnlService:
         unattributed_advertising: int | None,
         *,
         empty_loyalty_complete: bool = False,
-        internal_expenses_kopecks: int | None = None,
+        internal_expenses_kopecks: int | None = 0,
     ) -> AbcPnlSummary:
         if not rows:
             return _empty_summary(
@@ -710,16 +667,14 @@ class WbAbcPnlService:
             tax_basis_points=750 if approved_inputs else None,
             resolved_tax_kopecks=total("tax_kopecks") if approved_inputs else None,
             cogs_kopecks=total("cogs_kopecks") if approved_inputs else None,
-            internal_expenses_kopecks=internal_expenses_kopecks,
+            internal_expenses_kopecks=0,
             sales_basis_confirmed=True,
-            unmapped_components=(
-                None
-                if any(
-                    "WB_MANAGEMENT_OPERATIONS_UNRECONCILED" in row.blocker_ids
-                    for row in rows
-                )
-                else {}
+            other_wb_expenses_kopecks=(
+                total("acquiring_kopecks") + total("deduction_kopecks")
+                + total("finance_other_expenses_kopecks") - total("compensation_kopecks")
+                + loyalty_net_cost if loyalty_net_cost is not None else None
             ),
+            unmapped_components={},
         )
         return AbcPnlSummary(
             total("operation_count"),
@@ -762,8 +717,8 @@ class WbAbcPnlService:
                 else None
             ),
             management.net_profit_kopecks if all(not row.blocker_ids for row in rows) else None,
-            profit_before_internal_expenses_kopecks=management.profit_before_internal_kopecks,
-            internal_expenses_kopecks=internal_expenses_kopecks,
+            profit_before_internal_expenses_kopecks=management.net_profit_kopecks if all(not row.blocker_ids for row in rows) else None,
+            internal_expenses_kopecks=0,
         )
 
     def get_page(
@@ -815,7 +770,7 @@ class WbAbcPnlService:
         economics_service = EconomicsService(self.session, self.organization_id)
         cost_revision = costs_service.revision()
         economics_revision = economics_service.revision()
-        internal_expenses = self._confirmed_zero_internal_expenses(marketplace_account_id, period)
+        internal_expenses = 0
         if not facts:
             return AbcPnlPage(
                 source.state,
