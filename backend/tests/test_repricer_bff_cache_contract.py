@@ -41,7 +41,8 @@ def test_cached_sku_uses_demo_only_in_explicit_fake_mode(monkeypatch, mode, toke
         assert analytics["ordersUnits"] == 0
         assert analytics["baskets"] is None
         assert analytics["netProfitKopecks"] is None
-        assert analytics["abcCode"] is None
+        assert analytics["abcCode"] == "——"
+        assert analytics["salesClass"] is analytics["profitClass"] is None
 
 
 @pytest.mark.parametrize("mode", ["fake", "real"])

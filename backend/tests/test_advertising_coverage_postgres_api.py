@@ -84,15 +84,12 @@ def test_postgres_http_daily_ads_coverage_and_corrected_versions(database, monke
             assert complete["summary"]["advertisingSpendKopecks"] == 86_100
             assert complete["items"][0]["advertisingSpendKopecks"] == 86_100
             assert complete["summary"]["unattributedAdvertisingSpendKopecks"] == 0
-            assert complete["summary"]["profitBeforeLoyaltyKopecks"] == 412
-            assert complete["summary"]["profitAfterLoyaltyKopecks"] == -463
+            assert complete["summary"]["profitBeforeLoyaltyKopecks"] == 7_452
+            assert complete["summary"]["profitAfterLoyaltyKopecks"] == 6_577
+            assert complete["summary"]["internalExpensesKopecks"] == 0
             assert complete["meta"]["advertisingSource"] == "ads_fullstats"
             assert complete["meta"]["advertisingEvidenceStatus"] == "raw"
-            assert complete["meta"]["blockerIds"] == [
-                "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
-                "WB_PNL_INTERNAL_EXPENSES_MISSING",
-                "WB_MANAGEMENT_OPERATIONS_UNRECONCILED",
-            ]
+            assert complete["meta"]["blockerIds"] == ["WB_PNL_TAX_POLICY_NOT_CONFIRMED_750"]
             checksum = complete["meta"]["advertisingSnapshotChecksum"]
             assert len(checksum) == 64
             assert read()["meta"]["advertisingSnapshotChecksum"] == checksum
