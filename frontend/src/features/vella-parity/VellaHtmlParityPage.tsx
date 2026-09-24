@@ -31911,7 +31911,7 @@ const shellReplacements = [
   },
   {
     selector: '#tab-notifications',
-    render: (key: string) => <ActiveParityTabIsland tab="notifications"><NotificationsIsland replacementKey={key} /></ActiveParityTabIsland>,
+    render: (key: string) => <ActiveParityTabIsland tab={['notifications', 'avito-notifications']}><NotificationsIsland replacementKey={key} /></ActiveParityTabIsland>,
   },
   {
     selector: '#tab-settings-profile',
