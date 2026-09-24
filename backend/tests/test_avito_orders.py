@@ -326,7 +326,7 @@ def test_avito_orders_endpoint_uses_saved_credentials_period_statuses_and_cache(
     assert recording_client.access_token == "avito-bearer-token"
     assert recording_client.requests[0].dateFrom == date(2026, 7, 1)
     assert recording_client.requests[0].statuses == ["ready_to_ship", "delivered"]
-    assert cached_payloads[0][1] == "avito_orders:2026-07-01:ready_to_ship,delivered:p2:l20"
+    assert cached_payloads[0][1].startswith("avito_orders:2026-07-01:ready_to_ship,delivered:p2:l20:")
 
 
 def test_avito_orders_endpoint_adds_return_reuse_suggestion(monkeypatch):

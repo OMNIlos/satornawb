@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.avito.auth import resolve_user_avito_access_token
+from app.avito.auth import resolve_user_avito_access_token, scoped_avito_cache_key
 from app.avito.chats import AvitoChatsFetchRequest, build_avito_chats_client
 from app.avito.listings import AvitoListingsFetchRequest, build_avito_listings_client
 from app.avito.reviews import AvitoReviewsFetchRequest, build_avito_reviews_client
@@ -219,7 +219,7 @@ def _active_rate_limit(cooldown: dict[str, Any] | None) -> dict[str, Any] | None
     }
 
 
-def _save_rate_limit(organization_id: int, account_ids: list[str], *, message: str | None = None) -> dict[str, Any]:
+def _save_rate_limit(organization_id: int, account_ids: list[str], access_token: str, *, message: str | None = None) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     retry_after_until = now + timedelta(seconds=AVITO_OVERVIEW_RATE_LIMIT_COOLDOWN_SECONDS)
     payload = {
@@ -228,7 +228,7 @@ def _save_rate_limit(organization_id: int, account_ids: list[str], *, message: s
         "retryAfterUntil": retry_after_until.isoformat(),
         "savedAt": now.isoformat(),
     }
-    save_source_cache(organization_id, _rate_limit_key(account_ids), payload)
+    save_source_cache(organization_id, scoped_avito_cache_key(_rate_limit_key(account_ids), access_token), payload)
     return payload
 
 
@@ -388,16 +388,6 @@ def get_avito_overview(
     if not has_permission(actor, "cabinet:read"):
         raise HTTPException(status_code=403, detail="NO_ACCESS:cabinet:read")
     start, end, days = _date_range(date_from, date_to, period_days)
-    source_key = _cache_key(start, end, account_id)
-    cached = get_source_cache(actor.organization_id, source_key, slim=False) or None
-    active_rate_limit = _active_rate_limit(get_source_cache(actor.organization_id, _rate_limit_key(account_id), slim=False) or None)
-    if active_rate_limit is not None:
-        if isinstance(cached, dict) and cached.get("summary"):
-            return _stale_cached_payload(cached, {"stats": active_rate_limit})
-        return _empty_rate_limited_payload(start, end, days, active_rate_limit)
-    if not force_refresh and isinstance(cached, dict) and cached.get("summary"):
-        return _cache_hit_payload(cached)
-
     credentials = get_user_avito_credentials_secret(actor.user_id) or get_organization_avito_credentials_secret(actor.organization_id)
     if credentials is None:
         raise HTTPException(status_code=409, detail="AVITO_CREDENTIALS_REQUIRED")
@@ -412,6 +402,17 @@ def get_avito_overview(
         )
     except Exception as exc:
         raise HTTPException(status_code=409, detail="AVITO_OAUTH_FAILED") from exc
+
+    source_key = scoped_avito_cache_key(_cache_key(start, end, account_id), access_token)
+    cached = get_source_cache(actor.organization_id, source_key, slim=False) or None
+    rate_limit_key = scoped_avito_cache_key(_rate_limit_key(account_id), access_token)
+    active_rate_limit = _active_rate_limit(get_source_cache(actor.organization_id, rate_limit_key, slim=False) or None)
+    if active_rate_limit is not None:
+        if isinstance(cached, dict) and cached.get("summary"):
+            return _stale_cached_payload(cached, {"stats": active_rate_limit})
+        return _empty_rate_limited_payload(start, end, days, active_rate_limit)
+    if not force_refresh and isinstance(cached, dict) and cached.get("summary"):
+        return _cache_hit_payload(cached)
 
     section_errors: dict[str, Any] = {}
     accounts: list[Any] = []
@@ -431,11 +432,11 @@ def get_avito_overview(
         if stats_result.error is not None:
             section_errors["stats"] = _safe_section_error(stats_result.error)
             if _is_rate_limited_error(section_errors["stats"]):
-                _save_rate_limit(actor.organization_id, account_id, message=section_errors["stats"].get("message"))
+                _save_rate_limit(actor.organization_id, account_id, access_token, message=section_errors["stats"].get("message"))
     except Exception as exc:
         section_errors["stats"] = _section_error(exc)
         if _is_rate_limited_error(section_errors["stats"]):
-            _save_rate_limit(actor.organization_id, account_id, message=section_errors["stats"].get("message"))
+            _save_rate_limit(actor.organization_id, account_id, access_token, message=section_errors["stats"].get("message"))
 
     listings_summary = {
         "total": sum(int(account.itemCount or 0) for account in accounts) or len(stats_rows),
@@ -465,11 +466,11 @@ def get_avito_overview(
             if listings_result.error is not None:
                 section_errors["listings"] = _safe_section_error(listings_result.error)
                 if _is_rate_limited_error(section_errors["listings"]):
-                    _save_rate_limit(actor.organization_id, account_id, message=section_errors["listings"].get("message"))
+                    _save_rate_limit(actor.organization_id, account_id, access_token, message=section_errors["listings"].get("message"))
         except Exception as exc:
             section_errors["listings"] = _section_error(exc)
             if _is_rate_limited_error(section_errors["listings"]):
-                _save_rate_limit(actor.organization_id, account_id, message=section_errors["listings"].get("message"))
+                _save_rate_limit(actor.organization_id, account_id, access_token, message=section_errors["listings"].get("message"))
 
     chats_summary = {"total": 0, "unread": 0, "withItems": 0}
     try:

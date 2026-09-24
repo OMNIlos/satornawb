@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from app.cabinet.store import AvitoCredentialsSecret, cache_user_avito_access_token
+
+
+def scoped_avito_cache_key(source_key: str, access_token: str) -> str:
+    # ponytail: token refresh creates new rows; use credential generations after account-owned migration.
+    digest = sha256(f"{access_token}\0{source_key}".encode()).hexdigest()
+    scoped = f"{source_key}:{digest}"
+    return scoped if len(scoped) <= 255 else f"{source_key.partition(':')[0]}:{digest}"
+
 
 try:
     import httpx
