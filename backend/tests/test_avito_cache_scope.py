@@ -46,25 +46,30 @@ def test_cache_scope_changes_with_token_and_query_and_fits_database_key():
     assert first != scoped_avito_cache_key(source + "x", "first-token")
 
 
-def test_notification_read_marks_stay_with_the_current_token(monkeypatch):
+def test_notification_read_marks_survive_token_refresh_but_not_credential_change(monkeypatch):
     token = ["first-token"]
+    credentials = [AvitoCredentialsSecret(
+        client_id="first-client", client_secret="first-secret", cached_access_token=None, access_token_expires_at=None,
+    )]
     cache: dict[str, dict] = {}
     router = "app.routers.avito_notifications"
     monkeypatch.setattr(f"{router}.actor_from_request", lambda _request: SimpleNamespace(user_id="viewer", organization_id=10))
     monkeypatch.setattr(f"{router}.has_permission", lambda _actor, _permission: True)
-    monkeypatch.setattr(f"{router}.get_user_avito_credentials_secret", lambda _user: AvitoCredentialsSecret(
-        client_id="synthetic-client", client_secret="synthetic-secret", cached_access_token=None, access_token_expires_at=None,
-    ))
+    monkeypatch.setattr(f"{router}.get_user_avito_credentials_secret", lambda _user: credentials[0])
     monkeypatch.setattr(f"{router}.resolve_user_avito_access_token", lambda **_kwargs: token[0])
     monkeypatch.setattr(f"{router}.get_source_cache", lambda _org, key, **_kwargs: cache.get(key))
     monkeypatch.setattr(f"{router}.save_source_cache", lambda _org, key, payload: cache.update({key: payload}))
     api = TestClient(create_app())
 
     assert api.post("/api/v1/avito/notifications/n-1/read").status_code == 200
-    token[0] = "second-token"
-    assert api.post("/api/v1/avito/notifications/read-all").status_code == 200
+    token[0] = "refreshed-token"
+    assert api.post("/api/v1/avito/notifications/n-2/read").status_code == 200
+    assert len(cache) == 1
+    assert set(next(iter(cache.values()))["marks"]) == {"n-1", "n-2"}
 
-    first_key = scoped_avito_cache_key("avito_notifications:read_marks", "first-token")
-    second_key = scoped_avito_cache_key("avito_notifications:read_marks", "second-token")
-    assert set(cache[first_key]["marks"]) == {"n-1"}
-    assert cache[second_key]["marks"] == {}
+    credentials[0] = AvitoCredentialsSecret(
+        client_id="second-client", client_secret="second-secret", cached_access_token=None, access_token_expires_at=None,
+    )
+    token[0] = "second-token"
+    assert api.post("/api/v1/avito/notifications/n-3/read").status_code == 200
+    assert sorted(sorted(row["marks"]) for row in cache.values()) == [["n-1", "n-2"], ["n-3"]]
