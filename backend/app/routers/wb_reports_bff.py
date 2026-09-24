@@ -5130,7 +5130,7 @@ def get_report_job(request: Request, report_id: Literal["abc", "rnp", "ads", "pn
     job = get_source_cache(actor.organization_id, key, slim=False) or {"state": "idle", "reportId": report_id, "dateFrom": date_from.isoformat(), "dateTo": date_to.isoformat(), "groupBy": groupBy}
     if _report_job_is_reusable(job):
         return _report_job_for_response({**job, "reused": True})
-    if _report_job_is_finished_refresh(job) and job.get("state") == "failed":
+    if _report_job_is_finished_refresh(job):
         return _report_job_for_response({**job, "reused": True})
     cached = get_source_cache(
         actor.organization_id,

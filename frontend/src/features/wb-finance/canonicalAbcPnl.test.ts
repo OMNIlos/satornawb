@@ -83,10 +83,10 @@ describe('canonical ABC bridge lifecycle', () => {
     await window.__vellaLoadLiveAbcReport?.()
     now += 299_999
     await window.__vellaLoadLiveAbcReport?.()
-    expect(request).toHaveBeenCalledTimes(2)
+    expect(request).toHaveBeenCalledTimes(3)
     now += 1
     await window.__vellaLoadLiveAbcReport?.()
-    expect(request).toHaveBeenCalledTimes(4)
+    expect(request).toHaveBeenCalledTimes(6)
     expect(window.__vellaAbcLiveError).toBeUndefined()
   })
 
@@ -121,7 +121,9 @@ describe('canonical ABC bridge lifecycle', () => {
     const resolvers: Array<(response: Response) => void> = []
     const request = vi.fn((input: RequestInfo | URL) => String(input).includes('/latest-cache?')
       ? Promise.resolve(jsonResponse({ rows: [] }))
-      : new Promise<Response>((resolve) => resolvers.push(resolve)))
+      : !String(input).includes('includeSpp=true')
+        ? Promise.resolve(jsonResponse(page()))
+        : new Promise<Response>((resolve) => resolvers.push(resolve)))
     vi.stubGlobal('fetch', request)
     installAbcLiveDataBridge(`race-test-${changed}`, { organizationId: 7, marketplaceAccountId: 31 })
     const oldLoad = window.__vellaLoadLiveAbcReport?.()
@@ -147,7 +149,7 @@ describe('canonical ABC bridge lifecycle', () => {
     expect(window.__vellaAbcLiveReport).toBe(currentReport)
     expect(window.__vellaAbcLiveLoading).toBe(false)
     expect(window.__vellaAbcLiveError).toBeUndefined()
-    expect(request).toHaveBeenCalledTimes(3)
+    expect(request).toHaveBeenCalledTimes(4)
   })
 })
 

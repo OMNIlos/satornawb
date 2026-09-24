@@ -267,10 +267,12 @@ describe('vella source of truth', () => {
   it('runs period-scoped network effects only for the active WB surface', () => {
     const parityPage = read('src/features/vella-parity/VellaHtmlParityPage.tsx')
 
-    for (const report of ['rnp', 'pnl', 'ads', 'stock']) {
+    for (const report of ['rnp', 'ads', 'stock']) {
       expect(parityPage).toContain(`const ${report}ReportActive = shouldLoadPeriodSurface(activeTab, '${report}')`)
       expect(parityPage).toContain(`if (!${report}ReportActive) return`)
     }
+    expect(parityPage).toContain("const pnlReportActive = shouldLoadPeriodSurface(activeTab, 'pnl')")
+    expect(parityPage).toContain('if (!pnlReportActive || !cabinetMe) return')
     expect(parityPage).toContain('const ActiveParityTabContext = createContext<string | null>(null)')
     expect(parityPage).toContain('const activeTab = useContext(ActiveParityTabContext)')
     // Actual route-mounted Ads/Stock and other report browser tests assert

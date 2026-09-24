@@ -65,7 +65,7 @@ describe('ABC live row', () => {
     expect(ABC_TABLE_COLUMNS.map((column) => column.label)).toContain('Показы')
     expect(cells).toEqual([
       'abc-product-cell', 'abc-wb-cell', 'abc-status-cell', 'abc-code-cell', 'abc-action-cell', 'abc-promo-cell',
-      'abc-manager-cell', 'abc-price-cell', 'abc-cogs-cell', 'abc-margin-cell', 'abc-impressions-cell', 'abc-clicks-cell',
+      'abc-manager-cell', 'abc-price-cell', 'abc-spp-cell', 'abc-cogs-cell', 'abc-margin-cell', 'abc-impressions-cell', 'abc-clicks-cell',
       'abc-baskets-cell', 'abc-cr-cell', 'abc-orders-cell', 'abc-sales-cell', 'abc-ads-cell', 'abc-net-cell',
       'abc-logistics-cell', 'abc-commission-cell', 'abc-storage-cell', 'abc-warehouse-cell', 'abc-stock-cell', 'abc-comment-cell',
     ])

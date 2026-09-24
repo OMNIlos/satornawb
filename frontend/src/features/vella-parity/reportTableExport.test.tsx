@@ -84,6 +84,7 @@ async function mount(page: Page, tab: 'abc' | 'pnl', responseMode: 'xlsx' | '403
       if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: { data: { userId: '1', hasToken: false, tokenMasked: null, updatedAt: null } } })
       if (url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: { data: { userId: '1', hasCredentials: false, clientIdMasked: null, clientSecretMasked: null, accessTokenExpiresAt: null, updatedAt: null } } })
       if (url.pathname === '/api/wb/reports/pnl/latest-cache') return route.fulfill({ json: { meta: { dateRange: { from: '2026-09-01', to: '2026-09-07' }, sourceType: 'operational' }, rows: [], cashFlow: null, reportJob: null } })
+      if (url.pathname === '/api/wb/reports/abc/latest-cache') return route.fulfill({ json: { rows: [] } })
     }
     if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
     if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
@@ -129,9 +130,9 @@ it.each(['abc', 'pnl'] as const)('downloads every filtered %s row and zero-row r
       expect(request.rows).toHaveLength(count)
       if (tab === 'pnl') {
         expect(await page.locator('#tab-pnl .pnl-flow-item b').allTextContents())
-          .toEqual([query ? '0 ₽' : '-79 ₽', count ? 'нет данных' : '0 ₽', '0 ₽', '0 ₽', '0 ₽', '0 ₽'])
+          .toEqual([query ? '0 ₽' : '-78,72 ₽', count ? 'нет данных' : '0 ₽', '0 ₽', '0 ₽', '0 ₽', count ? 'нет данных' : '0 ₽'])
       }
-      expect(request.headers).toHaveLength(tab === 'abc' ? 24 : 13)
+      expect(request.headers).toHaveLength(tab === 'abc' ? 25 : 13)
       // The calculation breakdown is a separate table, not part of the SKU export.
       expect(request.headers).toEqual(await page.locator(`#tab-${tab} .${tab}-table-workspace thead th`).evaluateAll(cells => cells.map(cell => cell.childNodes[0].textContent?.trim())))
       expect(request.headers).toContain('Прибыль')
@@ -139,8 +140,9 @@ it.each(['abc', 'pnl'] as const)('downloads every filtered %s row and zero-row r
       expect(request.source).toMatchObject({ state: 'partial', financeSnapshotChecksum: 'synthetic-finance-checksum', blockerIds: ['WB_PNL_COST_MISSING'] })
       if (query === 'SKU-64') {
         expect(JSON.stringify(request.rows[0])).toContain('SKU-64')
-        expect(request.rows[0][tab === 'abc' ? 17 : 9]).toBe(0)
-        expect(request.rows[0][tab === 'abc' ? 8 : 3]).toBeNull()
+        expect(request.rows[0][request.headers.indexOf('Прибыль')]).toBeNull()
+        expect(request.rows[0][request.headers.indexOf('Себестоимость')]).toBeNull()
+        if (tab === 'pnl') expect(request.rows[0][request.headers.indexOf('Выручка')]).toBe(0)
         if (process.env.SATORNA_EXPORT_SCREENSHOTS) {
           await download.saveAs(`${process.env.SATORNA_EXPORT_SCREENSHOTS}/${tab}.xlsx`)
           await page.screenshot({ path: `${process.env.SATORNA_EXPORT_SCREENSHOTS}/${tab}-desktop.png` })
@@ -206,10 +208,10 @@ it.each(['allocated', 'missing-cost', 'unattributed'] as const)('ties P&L select
     const surface = page.locator('#tab-pnl'), search = surface.locator('.search input')
     const totals = surface.locator('.pnl-flow-item b')
     for (const [query, selected, expected] of [
-      ['Exact-A', [first], ['101 ₽', '10 ₽', '1 ₽', '2 ₽', '1 ₽', source === 'unattributed' ? 'нет данных' : '85 ₽']],
-      ['Exact-B', [second], ['-1 ₽', source === 'missing-cost' ? 'нет данных' : '0 ₽', '0 ₽', '0 ₽', '0 ₽', source === 'allocated' ? '-1 ₽' : 'нет данных']],
+      ['Exact-A', [first], ['100,5 ₽', '10 ₽', '1,2 ₽', '2,2 ₽', '1,2 ₽', source === 'unattributed' ? 'нет данных' : '84,9 ₽']],
+      ['Exact-B', [second], ['-1,25 ₽', source === 'missing-cost' ? 'нет данных' : '0 ₽', '0 ₽', '0 ₽', '0 ₽', source === 'allocated' ? '-1,25 ₽' : 'нет данных']],
       ['absent', [], Array(6).fill('0 ₽')],
-      ['', [first, second], ['99 ₽', source === 'missing-cost' ? 'нет данных' : '10 ₽', '1 ₽', '2 ₽', '1 ₽', source === 'allocated' ? '84 ₽' : 'нет данных']],
+      ['', [first, second], ['99,25 ₽', source === 'missing-cost' ? 'нет данных' : '10 ₽', '1,2 ₽', '2,2 ₽', '1,2 ₽', source === 'allocated' ? '83,65 ₽' : 'нет данных']],
     ] as const) {
       await search.fill(query)
       await expect.poll(() => surface.locator('[data-report-row="pnl"]').count()).toBe(selected.length)
@@ -223,20 +225,23 @@ it.each(['allocated', 'missing-cost', 'unattributed'] as const)('ties P&L select
       expect(await surface.getByText(`Итоги по строкам таблицы · позиций: ${selected.length}`, { exact: true }).isVisible()).toBe(true)
       const account = surface.locator('[data-vella-island="pnl-account-summary"]')
       expect(await account.innerText()).toContain('Весь аккаунт · без фильтров')
-      expect(await account.innerText()).toContain(`Прибыль: ${source === 'allocated' ? '84 ₽' : 'нет данных'}`)
-      expect(await account.innerText()).toContain(`Нераспределённая реклама: ${source === 'unattributed' ? '7 ₽' : '0 ₽'}`)
+      expect(await account.innerText()).toContain(`Прибыль: ${source === 'allocated' ? '83,65 ₽' : 'нет данных'}`)
+      if (source === 'unattributed') expect(await account.innerText()).toContain('Нераспределённая реклама: 7 ₽')
+      else expect(await account.innerText()).not.toContain('Нераспределённая реклама')
       const download = page.waitForEvent('download')
       await exportTable(page); await download
       const request = evidence.requests.at(-1)!
       expect(request.rows.map(cells => cells.slice(2, 10))).toEqual(selected.map(item => [item.revenueKopecks / 100, item.cogsKopecks == null ? null : item.cogsKopecks / 100, item.commissionKopecks / 100, item.logisticsKopecks / 100, item.storageKopecks / 100, item.advertisingSpendKopecks == null ? null : item.advertisingSpendKopecks / 100, 0, item.netProfitKopecks == null ? null : item.netProfitKopecks / 100]))
-      expect(request.rows.every(cells => cells[10] === null)).toBe(true)
+      expect(request.rows.map(cells => cells[10])).toEqual(selected.map(item =>
+        item.netProfitKopecks != null && item.revenueKopecks > 0
+          ? item.netProfitKopecks / item.revenueKopecks * 100 : null))
       expect(request.source.blockerIds).toEqual(blockerIds)
     }
     await surface.locator('select.adv-select').selectOption('mine')
     await expect.poll(() => totals.allTextContents()).toEqual(Array(6).fill('0 ₽'))
     await surface.locator('select.adv-select').selectOption('unassigned')
     await expect.poll(() => surface.locator('[data-report-row="pnl"]').count()).toBe(2)
-    expect((await totals.allTextContents())[0]).toBe('99 ₽')
+    expect((await totals.allTextContents())[0]).toBe('99,25 ₽')
     expect(page.url()).toBe('http://satorna.test/wb/reports/pnl')
     expect(await page.title()).toBe('Satorna — Отчёты WB')
     expect(await page.locator('vite-error-overlay').count()).toBe(0)
@@ -244,7 +249,7 @@ it.each(['allocated', 'missing-cost', 'unattributed'] as const)('ties P&L select
   } finally { await browser.close() }
 }, 45_000)
 
-it.each([['pnl', 'period'], ['pnl', 'mode'], ['pnl', 'token'], ['pnl', 'account'], ['pnl', 'logout'], ['pnl', 'tab'], ['abc', 'period'], ['abc', 'account'], ['abc', 'token']] as const)('cancels a pending %s export after %s changes', async (tab, change) => {
+it.each([['pnl', 'period'], ['pnl', 'token'], ['pnl', 'account'], ['pnl', 'logout'], ['pnl', 'tab'], ['abc', 'period'], ['abc', 'account'], ['abc', 'token']] as const)('cancels a pending %s export after %s changes', async (tab, change) => {
   const browser = await chromium.launch({ headless: true })
   try {
     const page = await browser.newPage({ serviceWorkers: 'block' })
@@ -253,7 +258,6 @@ it.each([['pnl', 'period'], ['pnl', 'mode'], ['pnl', 'token'], ['pnl', 'account'
     await exportTable(page)
     await expect.poll(() => evidence.requests.length).toBe(1)
     expect(await page.locator('#ddExport').getByRole('button', { name: 'Формируем XLSX…' }).isDisabled()).toBe(true)
-    if (change === 'mode') await page.locator('#tab-pnl .chip').filter({ hasText: 'Операционный 1С' }).click()
     if (change === 'logout') await page.getByText('Clear synthetic report session', { exact: true }).click()
     if (change === 'token') await page.getByText('Replace synthetic token', { exact: true }).click()
     if (change === 'account') await page.getByText('Change synthetic account', { exact: true }).click()
@@ -266,7 +270,6 @@ it.each([['pnl', 'period'], ['pnl', 'mode'], ['pnl', 'token'], ['pnl', 'account'
     await expect.poll(() => page.locator('#ddExport').getByRole('button', { name: 'Формируем XLSX…' }).count()).toBe(0)
     await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 100)))
     expect(downloads).toEqual([])
-    if (change === 'mode') { await exportTable(page); await page.getByText('Экспорт доступен для загруженных ABC и финансового P&L. Выберите соответствующий отчёт.', { exact: true }).waitFor() }
     expect(evidence.requests).toHaveLength(1)
     expect(await page.evaluate(() => Reflect.get(window, 'exportRevoked'))).toBe(0)
   } finally { await browser.close() }
