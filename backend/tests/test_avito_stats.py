@@ -5,7 +5,8 @@ from datetime import date
 from fastapi.testclient import TestClient
 import httpx
 
-from app.avito.stats import AvitoStatsAccount, AvitoStatsClient, AvitoStatsFetchRequest, AvitoStatsFetchResult, AvitoStatsItem, LiveAvitoStatsClient
+from app.avito.stats import AvitoStatsAccount, AvitoStatsFetchRequest, AvitoStatsFetchResult, AvitoStatsItem, LiveAvitoStatsClient
+from app.cabinet.store import AvitoCredentialsSecret
 from app.main import create_app
 from tests.auth_helpers import auth_headers
 
@@ -579,7 +580,7 @@ def test_avito_stats_endpoint_uses_saved_avito_credentials_and_caches_payload(mo
     assert recording_client.requests[0].dateFrom == date(2026, 7, 1)
     assert recording_client.requests[0].dateTo == date(2026, 7, 28)
     assert cached_payloads
-    assert cached_payloads[0][1] == "avito_stats:2026-07-01:2026-07-28:all"
+    assert cached_payloads[0][1].startswith("avito_stats:2026-07-01:2026-07-28:all:")
     assert cached_payloads[0][2]["rows"][0]["itemId"] == "8098482225"
 
 
@@ -594,7 +595,7 @@ def test_avito_stats_endpoint_reports_missing_avito_credentials():
     assert response.json()["error"]["message"] == "AVITO_CREDENTIALS_REQUIRED"
 
 
-def test_avito_stats_endpoint_returns_exact_period_cache_before_calling_avito(monkeypatch):
+def test_avito_stats_endpoint_reuses_exact_period_cache_for_current_token(monkeypatch):
     cached_payload = {
         "status": "synced",
         "period": {"dateFrom": "2026-07-01", "dateTo": "2026-07-28", "days": 28},
@@ -616,12 +617,12 @@ def test_avito_stats_endpoint_returns_exact_period_cache_before_calling_avito(mo
         "source": {"mode": "live", "cache": {"status": "fresh", "savedAt": "2026-07-28T00:00:00+00:00"}},
     }
 
-    monkeypatch.setattr("app.routers.avito_stats.get_source_cache", lambda *_args, **_kwargs: cached_payload)
-
-    def fail_if_called(**_kwargs):
-        raise AssertionError("Avito OAuth must not be called while exact cached stats exist")
-
-    monkeypatch.setattr("app.routers.avito_stats.resolve_user_avito_access_token", fail_if_called)
+    keys = []
+    monkeypatch.setattr("app.routers.avito_stats.get_source_cache", lambda _org, key, **_kwargs: keys.append(key) or cached_payload)
+    monkeypatch.setattr("app.routers.avito_stats.get_user_avito_credentials_secret", lambda _user: AvitoCredentialsSecret(
+        client_id="synthetic-client", client_secret="synthetic-secret", cached_access_token=None, access_token_expires_at=None,
+    ))
+    monkeypatch.setattr("app.routers.avito_stats.resolve_user_avito_access_token", lambda **_kwargs: "current-token")
     api = TestClient(create_app())
     headers = auth_headers(api, "viewer")
 
@@ -635,3 +636,4 @@ def test_avito_stats_endpoint_returns_exact_period_cache_before_calling_avito(mo
     payload = response.json()
     assert payload["rows"][0]["itemId"] == "cached-1"
     assert payload["source"]["cache"]["status"] == "hit"
+    assert keys[0].startswith("avito_stats:2026-07-01:2026-07-28:all:")
