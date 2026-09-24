@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.avito.auth import resolve_user_avito_access_token
+from app.avito.auth import resolve_user_avito_access_token, scoped_avito_cache_key
 from app.avito.stats import AvitoStatsClient, AvitoStatsDailyPoint, AvitoStatsFetchRequest, AvitoStatsItem, build_avito_stats_client
 from app.cabinet.store import get_organization_avito_credentials_secret, get_user_avito_credentials_secret
 from app.config import get_settings
@@ -223,15 +223,8 @@ def get_avito_stats(
     if not has_permission(actor, "cabinet:read"):
         raise HTTPException(status_code=403, detail="NO_ACCESS:cabinet:read")
     start, end, days = _date_range(date_from, date_to, period_days)
-    source_key = _cache_key(start, end, account_id)
-    cached = get_source_cache(actor.organization_id, source_key, slim=False) or None
-    if not force_refresh and isinstance(cached, dict) and cached.get("rows"):
-        return _cache_hit_payload(cached)
-
     credentials = get_user_avito_credentials_secret(actor.user_id) or get_organization_avito_credentials_secret(actor.organization_id)
     if credentials is None:
-        if isinstance(cached, dict) and cached.get("rows"):
-            return _stale_cached_payload(cached, {"code": "credentials_required", "message": "AVITO_CREDENTIALS_REQUIRED"})
         raise HTTPException(status_code=409, detail="AVITO_CREDENTIALS_REQUIRED")
 
     settings = get_settings()
@@ -243,9 +236,12 @@ def get_avito_stats(
             timeout_seconds=settings.avito_api_timeout_seconds,
         )
     except Exception as exc:
-        if isinstance(cached, dict) and cached.get("rows"):
-            return _stale_cached_payload(cached, {"code": "oauth_error", "message": str(exc)})
         raise HTTPException(status_code=409, detail="AVITO_OAUTH_FAILED") from exc
+
+    source_key = scoped_avito_cache_key(_cache_key(start, end, account_id), access_token)
+    cached = get_source_cache(actor.organization_id, source_key, slim=False) or None
+    if not force_refresh and isinstance(cached, dict) and cached.get("rows"):
+        return _cache_hit_payload(cached)
 
     result = _client(access_token).fetch_stats(AvitoStatsFetchRequest(dateFrom=start, dateTo=end, accountIds=account_id, grouping="totals"))
     if result.status == "blocked":

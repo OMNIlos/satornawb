@@ -219,4 +219,4 @@ def test_avito_listings_endpoint_uses_saved_credentials_period_and_cache(monkeyp
     assert recording_client is not None
     assert recording_client.access_token == "avito-bearer-token"
     assert recording_client.requests[0].dateFrom == date(2026, 7, 1)
-    assert cached_payloads[0][1] == "avito_listings_v2:2026-07-01:2026-07-28:all"
+    assert cached_payloads[0][1].startswith("avito_listings_v2:2026-07-01:2026-07-28:all:")

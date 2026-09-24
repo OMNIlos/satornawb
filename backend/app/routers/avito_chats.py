@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from hashlib import sha256
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.avito.auth import resolve_user_avito_access_token
+from app.avito.auth import resolve_user_avito_access_token, scoped_avito_cache_key
 from app.avito.chats import AvitoChatsFetchRequest, AvitoChatsUpstreamError, AvitoChatRow, AvitoMessageRow, build_avito_chats_client
 from app.cabinet.store import get_organization_avito_credentials_secret, get_user_avito_credentials_secret
 from app.config import get_settings
@@ -29,8 +28,7 @@ class AvitoChatActionPayload(BaseModel):
 
 def _cache_key(limit: int, offset: int, unread_only: bool, account_ids: list[str], access_token: str) -> str:
     account_part = ",".join(sorted(account_ids)) if account_ids else "all"
-    token_scope = sha256(access_token.encode()).hexdigest()
-    return f"avito_chats:{token_scope}:{limit}:{offset}:{'unread' if unread_only else 'all'}:{account_part}"
+    return scoped_avito_cache_key(f"avito_chats:{limit}:{offset}:{'unread' if unread_only else 'all'}:{account_part}", access_token)
 
 
 def _response_payload(

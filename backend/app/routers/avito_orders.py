@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
-from app.avito.auth import resolve_user_avito_access_token
+from app.avito.auth import resolve_user_avito_access_token, scoped_avito_cache_key
 from app.avito.listings import AvitoListingDetailsFetchRequest, AvitoListingsFetchRequest, build_avito_listings_client
 from app.avito.orders import (
     AVITO_ORDER_STATUSES,
@@ -631,8 +631,9 @@ def _listing_cache_key(start: date, end: date) -> str:
     return f"avito_listings_v2:{start.isoformat()}:{end.isoformat()}:all"
 
 
-def _listing_dicts_from_cache(organization_id: int, start: date, end: date) -> list[dict[str, Any]]:
-    cached = get_source_cache(organization_id, _listing_cache_key(start, end), slim=False) or None
+def _listing_dicts_from_cache(organization_id: int, start: date, end: date, access_token: str) -> list[dict[str, Any]]:
+    key = scoped_avito_cache_key(_listing_cache_key(start, end), access_token)
+    cached = get_source_cache(organization_id, key, slim=False) or None
     rows = cached.get("rows") if isinstance(cached, dict) else None
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
@@ -674,7 +675,7 @@ def _missing_detail_item_ids(rows: list[AvitoOrderRow]) -> list[str]:
 
 def _enrich_orders_for_picking(rows: list[AvitoOrderRow], *, organization_id: int, access_token: str, start: date) -> None:
     end = date.today()
-    listing_rows = _listing_dicts_from_cache(organization_id, start, end)
+    listing_rows = _listing_dicts_from_cache(organization_id, start, end, access_token)
     settings = get_settings()
     client = None
     if not listing_rows:
@@ -814,15 +815,12 @@ def get_avito_orders(
     limit: int = Query(default=20, ge=1, le=20),
     force_refresh: bool = Query(default=False, alias="forceRefresh"),
 ) -> dict[str, Any]:
-    actor = actor_from_request(request)
-    if not has_permission(actor, "cabinet:read"):
-        raise HTTPException(status_code=403, detail="NO_ACCESS:cabinet:read")
+    actor, client, access_token = _orders_client_for_request(request)
     start, days = _date_from(date_from, period_days)
     statuses = _statuses(status)
     browser_snapshot = _browser_snapshot_from_cache(actor.organization_id)
     if browser_snapshot is not None:
         try:
-            _actor, client, _access_token = _orders_client_for_request(request)
             all_rows, total, result_status, diagnostics, error = _fetch_orders_filtered_by_snapshot(
                 client,
                 snapshot=browser_snapshot,
@@ -875,12 +873,11 @@ def get_avito_orders(
             }
             fallback["source"] = source
             return _attach_return_inventory_payload(fallback, organization_id=actor.organization_id)
-    source_key = _cache_key(start, statuses, page, limit)
+    source_key = scoped_avito_cache_key(_cache_key(start, statuses, page, limit), access_token)
     cached = get_source_cache(actor.organization_id, source_key, slim=False) or None
     if not force_refresh and isinstance(cached, dict) and cached.get("status") != "blocked" and cached.get("rows") is not None:
         return _merge_browser_snapshot_payload(_cache_hit_payload(cached), organization_id=actor.organization_id)
 
-    _actor, client, _access_token = _orders_client_for_request(request)
     result = client.fetch_orders(AvitoOrdersFetchRequest(dateFrom=start, statuses=statuses, limit=limit, page=page))
     browser_snapshot = _browser_snapshot_from_cache(actor.organization_id)
     merge_browser_snapshot_orders(result.orders, browser_snapshot)
@@ -914,11 +911,8 @@ def get_avito_orders_picking_list_xlsx(
 ) -> Response:
     start, _days = _date_from(date_from, period_days)
     statuses = _statuses(status)
-    actor = actor_from_request(request)
-    if not has_permission(actor, "cabinet:read"):
-        raise HTTPException(status_code=403, detail="NO_ACCESS:cabinet:read")
-    browser_snapshot = _browser_snapshot_from_cache(actor.organization_id)
     actor, client, access_token = _orders_client_for_request(request)
+    browser_snapshot = _browser_snapshot_from_cache(actor.organization_id)
     if browser_snapshot is not None:
         rows, _total, result_status, _diagnostics, error = _fetch_orders_filtered_by_snapshot(
             client,

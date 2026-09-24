@@ -271,7 +271,7 @@ def test_avito_chats_endpoint_uses_saved_credentials_and_caches_payload(monkeypa
     assert payload["source"]["api"]["chatsEndpoint"] == "GET /messenger/v2/accounts/{user_id}/chats"
     assert recording_client is not None
     assert recording_client.access_token == "avito-live-token"
-    assert cached_payloads[0][1].endswith(":50:0:all:all")
+    assert cached_payloads[0][1].startswith("avito_chats:50:0:all:all:")
     assert "avito-live-token" not in cached_payloads[0][1]
     assert "cacheKey" not in payload["source"]["diagnostics"]
 
@@ -326,7 +326,7 @@ def test_avito_chats_endpoint_ignores_period_params_because_messenger_is_current
     assert response.json()["summary"]["total"] == 1
     assert "period" not in response.json()
     assert response.json()["source"]["diagnostics"]["dateFiltering"] == "disabled"
-    assert cached_payloads[0][1].endswith(":50:0:all:all")
+    assert cached_payloads[0][1].startswith("avito_chats:50:0:all:all:")
 
 
 def test_avito_chats_endpoint_sends_text_message_and_marks_read(monkeypatch):
