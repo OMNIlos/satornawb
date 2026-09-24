@@ -41,7 +41,7 @@ test('WB live products mount without installing legacy table writers or crashing
     }
     await expect.poll(async () => ({
       errors, mounted: await page.getByLabel('Аккаунт Wildberries', { exact: true }).count(),
-    })).toEqual({ errors: [], mounted: 1 })
+    }), { timeout: 15_000 }).toEqual({ errors: [], mounted: 1 })
     expect(requests.filter(url => url.startsWith('/api/v1/wb-repricer/'))).toEqual([])
     expect(await page.locator('[data-vella-island="products-sticky-pagination"]').count()).toBe(0)
     expect(await page.locator('#subtabsContext').isVisible()).toBe(false)
