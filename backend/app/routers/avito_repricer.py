@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.avito.auth import resolve_user_avito_access_token
+from app.avito.auth import resolve_user_avito_access_token, scoped_avito_cache_key
 from app.avito.listings import AvitoListingRow, AvitoListingsFetchRequest, build_avito_listings_client
 from app.avito.price_apply import LiveAvitoPriceClient
 from app.cabinet.store import get_organization_avito_credentials_secret, get_user_avito_credentials_secret
@@ -316,7 +316,7 @@ def _active_rate_limit(cooldown: dict[str, Any] | None) -> dict[str, Any] | None
     }
 
 
-def _save_rate_limit(organization_id: int, account_ids: list[str], *, message: str | None = None) -> dict[str, Any]:
+def _save_rate_limit(organization_id: int, account_ids: list[str], access_token: str, *, message: str | None = None) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     retry_after_until = now + timedelta(seconds=AVITO_REPRICER_RATE_LIMIT_COOLDOWN_SECONDS)
     payload = {
@@ -325,7 +325,7 @@ def _save_rate_limit(organization_id: int, account_ids: list[str], *, message: s
         "retryAfterUntil": retry_after_until.isoformat(),
         "savedAt": now.isoformat(),
     }
-    save_source_cache(organization_id, _rate_limit_key(account_ids), payload)
+    save_source_cache(organization_id, scoped_avito_cache_key(_rate_limit_key(account_ids), access_token), payload)
     return payload
 
 
@@ -736,26 +736,6 @@ def get_avito_repricer(
     if not has_permission(actor, "cabinet:read"):
         raise HTTPException(status_code=403, detail="NO_ACCESS:cabinet:read")
     start, end, days = _date_range(date_from, date_to, period_days)
-    source_key = _cache_key(start, end, account_id)
-    cached = get_source_cache(actor.organization_id, source_key, slim=False) or None
-    active_rate_limit = _active_rate_limit(get_source_cache(actor.organization_id, _rate_limit_key(account_id), slim=False) or None)
-    if active_rate_limit is not None:
-        if isinstance(cached, dict) and cached.get("rows"):
-            return _stale_cached_payload(cached, active_rate_limit, actor.organization_id)
-        return _response_payload(
-            status="blocked",
-            start=start,
-            end=end,
-            days=days,
-            rows=[],
-            accounts=[],
-            cache_status="cooldown",
-            error=active_rate_limit,
-            organization_id=actor.organization_id,
-        )
-    if not force_refresh and isinstance(cached, dict) and cached.get("rows"):
-        return _cache_hit_payload(cached, actor.organization_id)
-
     credentials = get_user_avito_credentials_secret(actor.user_id) or get_organization_avito_credentials_secret(actor.organization_id)
     if credentials is None:
         raise HTTPException(status_code=409, detail="AVITO_CREDENTIALS_REQUIRED")
@@ -774,6 +754,27 @@ def get_avito_repricer(
     if oauth_failed:
         raise HTTPException(status_code=409, detail="AVITO_OAUTH_FAILED") from None
 
+    source_key = scoped_avito_cache_key(_cache_key(start, end, account_id), access_token)
+    cached = get_source_cache(actor.organization_id, source_key, slim=False) or None
+    rate_limit_key = scoped_avito_cache_key(_rate_limit_key(account_id), access_token)
+    active_rate_limit = _active_rate_limit(get_source_cache(actor.organization_id, rate_limit_key, slim=False) or None)
+    if active_rate_limit is not None:
+        if isinstance(cached, dict) and cached.get("rows"):
+            return _stale_cached_payload(cached, active_rate_limit, actor.organization_id)
+        return _response_payload(
+            status="blocked",
+            start=start,
+            end=end,
+            days=days,
+            rows=[],
+            accounts=[],
+            cache_status="cooldown",
+            error=active_rate_limit,
+            organization_id=actor.organization_id,
+        )
+    if not force_refresh and isinstance(cached, dict) and cached.get("rows"):
+        return _cache_hit_payload(cached, actor.organization_id)
+
     client = build_avito_listings_client(
         access_token=access_token,
         base_url=settings.avito_api_base_url,
@@ -784,7 +785,7 @@ def get_avito_repricer(
     rate_limited = _is_rate_limited_error(error_payload)
     error_payload = _safe_source_error(error_payload)
     if rate_limited:
-        saved_limit = _save_rate_limit(actor.organization_id, account_id)
+        saved_limit = _save_rate_limit(actor.organization_id, account_id, access_token)
         error_payload = {**_rate_limit_error(), **saved_limit}
         if isinstance(cached, dict) and cached.get("rows"):
             return _stale_cached_payload(cached, error_payload, actor.organization_id)

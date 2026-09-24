@@ -81,7 +81,12 @@ it.each(reports.flatMap(report => ['empty', 'failure'].map(outcome => ({ ...repo
 it('does not report an empty P&L when polling expires without a ready cache', async () => {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const result = await build({
-    configFile: false, envFile: false, root, logLevel: 'silent', plugins: [react()],
+    configFile: false, envFile: false, root, logLevel: 'silent', plugins: [{
+      name: 'synthetic-cabinet', enforce: 'pre', transform(code, id) {
+        if (!id.endsWith('/__fixtures__/reportLoadingBrowser.tsx')) return
+        return code.replace('cabinetMe: null', `cabinetMe: ({ organization: { organizationId: 7 }, user: { userId: 1, permissions: [] } } as AuthContextValue['cabinetMe'])`)
+      },
+    }, react()],
     define: { 'process.env.NODE_ENV': JSON.stringify('test'), 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('') },
     resolve: { alias: { '@': path.join(root, 'src') } },
     build: { write: false, minify: false, lib: {
@@ -109,6 +114,9 @@ it('does not report an empty P&L when polling expires without a ready cache', as
       if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/wb/reports/pnl') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
+      if (url.pathname === '/api/v1/cabinet/team/users') return route.fulfill({ json: { data: [] } })
+      if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: { data: { hasToken: false } } })
+      if (url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: { data: { hasCredentials: false } } })
       if (url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/pnl/latest-cache' && request.method() === 'GET') {
         cacheReads += 1
         return readyEmpty
@@ -155,6 +163,7 @@ it.each(['abc', 'pnl', 'ads'])('stops a cold %s report poll after navigating to 
       transform(code, id) {
         if (!id.endsWith('/__fixtures__/reportLoadingBrowser.tsx')) return null
         return code.replaceAll('MemoryRouter', 'BrowserRouter').replace(' initialEntries={[window.location.pathname]}', '')
+          .replace('cabinetMe: null', `cabinetMe: ({ organization: { organizationId: 7 }, user: { userId: 1, permissions: [] } } as AuthContextValue['cabinetMe'])`)
       },
     }, react()],
     define: { 'process.env.NODE_ENV': '"test"', 'import.meta.env.VITE_API_BASE_URL': '""' },
@@ -177,6 +186,9 @@ it.each(['abc', 'pnl', 'ads'])('stops a cold %s report poll after navigating to 
       if (request.resourceType() === 'document') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
+      if (url.pathname === '/api/v1/cabinet/team/users') return route.fulfill({ json: { data: [] } })
+      if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: { data: { hasToken: false } } })
+      if (url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: { data: { hasCredentials: false } } })
       if (url.origin === 'http://satorna.test' && url.pathname === `/api/wb/reports/${report}/latest-cache` && request.method() === 'GET') {
         return route.fulfill({ status: 404, json: { error: { code: 'HTTP_404', message: 'REPORT_LATEST_CACHE_MISSING' } } })
       }
