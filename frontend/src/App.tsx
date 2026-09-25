@@ -170,6 +170,7 @@ function RoutedApp() {
               <Route path="/avito/stats" element={<VellaHtmlParityPage />} />
               <Route path="/avito/statistics" element={<VellaHtmlParityPage />} />
               <Route path="/avito/notifications" element={<VellaHtmlParityPage />} />
+              <Route path="/avito/privacy" element={<VellaHtmlParityPage />} />
               <Route path="/orders/archive" element={<VellaHtmlParityPage />} />
               <Route path="/settings/profile" element={<VellaHtmlParityPage />} />
               <Route path="/settings/access" element={<VellaHtmlParityPage />} />

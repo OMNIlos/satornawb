@@ -922,6 +922,7 @@ const ROUTE_TAB_CONTENT_IDS: Record<string, string> = {
   'avito-repricer': 'tab-avito-repricer',
   'avito-stats': 'tab-avito-stats',
   'avito-notifications': 'tab-notifications',
+  'avito-privacy': 'tab-avito-privacy',
   notifications: 'tab-notifications',
   'settings-profile': 'tab-settings-profile',
   'settings-access': 'tab-settings-access',
@@ -1242,7 +1243,7 @@ function syncRouteNavigationSelection(root: HTMLElement, targetTab: string) {
 const REPORT_ROUTE_TABS = new Set(['digest', 'report-rules', 'abc', 'rnp', 'pnl', 'expenses', 'ads', 'stock', 'week'])
 const DATA_ROUTE_TABS = new Set(['sources'])
 const REVIEW_ROUTE_TABS = new Set(['reviews'])
-const AVITO_ROUTE_TABS = new Set(['avito-overview', 'avito-inbox', 'avito-reviews', 'orders-avito', 'avito-listings', 'avito-repricer', 'avito-stats', 'avito-notifications'])
+const AVITO_ROUTE_TABS = new Set(['avito-overview', 'avito-inbox', 'avito-reviews', 'orders-avito', 'avito-listings', 'avito-repricer', 'avito-stats', 'avito-notifications', 'avito-privacy'])
 const SYSTEM_ROUTE_TABS = new Set(['settings-profile', 'settings-imports', 'notifications', 'settings-access'])
 
 function routeModuleForTab(tab: string) {
@@ -3148,10 +3149,17 @@ function installNotificationsReactBridge() {
     window.__vellaNotificationsSnapshot = function(){
       var workspace = document.getElementById('avitoNotifWorkspace');
       var rows = typeof getFilteredNotifications === 'function' ? getFilteredNotifications() : [];
+      var scope = NOTIFS.filter(function(n){ return notifSourceOk(n); });
       var selected = rows.find(function(n){ return n.id === selectedNotificationId; }) || rows[0] || null;
       return {
         rows: rows.map(function(n){ return __vellaNotificationSnapshotFor(n, n.id === selectedNotificationId); }),
         bodyCount: rows.length,
+        kpis: {
+          unread: scope.filter(function(n){ return !n.read; }).length,
+          critical: scope.filter(function(n){ return n.severity === 'critical' && !n.read; }).length,
+          period: rows.length,
+          periodLabel: notifFilters.period === 'all' ? 'всё время' : 'последние ' + notifFilters.period + ' дн.'
+        },
         detail: __vellaNotificationDetailSnapshotFor(selected),
         workspace: __vellaAvitoNotificationWorkspaceSnapshot(),
         workspaceClassName: workspace ? workspace.className : 'avito-notif-workspace'
@@ -17341,6 +17349,10 @@ const AVITO_NOTIFICATION_KPIS = [
   ['Разделы', 'Чаты, отзывы, объявления и статистика', '', 'Авито', '', 'только Авито', 'neutral'],
 ] as const
 
+const AVITO_NOTIFICATION_CATEGORY_CHIPS = [
+  ['category', 'Авито', 'Все Авито', true],
+] as const
+
 const NOTIFICATION_MODE_BUTTONS = [
   ['all', 'Все'],
   ['wb', 'WB'],
@@ -17603,6 +17615,7 @@ type AvitoNotificationWorkspaceSnapshot = {
 type NotificationsSnapshot = {
   rows: NotificationEventSnapshot[]
   bodyCount: number
+  kpis: { unread: number; critical: number; period: number; periodLabel: string } | null
   detail: NotificationDetailSnapshot | null
   workspace: AvitoNotificationWorkspaceSnapshot
   workspaceClassName: string
@@ -19032,7 +19045,6 @@ function AvitoOverviewReportShellIsland() {
   const live = useAvitoOverviewLiveState()
   const [selectedItemId, setSelectedItemId] = useState('')
   const data = avitoOverviewDataForPeriod(state, live)
-  const summary = data?.summary
   const query = state.query.trim().toLocaleLowerCase('ru-RU')
   const topItems = (data?.topItems ?? []).filter((row) => !query || `${row.title} ${row.itemId} ${row.accountName} ${row.category ?? ''}`.toLocaleLowerCase('ru-RU').includes(query))
   const events = (data?.events ?? []).map(avitoOverviewFriendlyEvent).filter((event) => {
@@ -19043,7 +19055,6 @@ function AvitoOverviewReportShellIsland() {
     if (!query) return true
     return `${event.source} ${event.title} ${event.meta}`.toLocaleLowerCase('ru-RU').includes(query)
   })
-  const spendPerView = summary?.spendKopecks != null && summary.views ? `${formatAvitoRub(summary.spendKopecks / summary.views)} за просмотр` : 'ждём расходы'
   const eventClass = (severity: string) => severity === 'danger' ? 'danger' : severity === 'warn' ? 'warn' : 'new'
   const eventColor = (severity: string) => severity === 'danger' ? '#DC2626' : severity === 'warn' ? '#F59E0B' : '#2563EB'
   const selectedItem = (data?.topItems ?? []).find((row) => row.itemId === selectedItemId)
@@ -19070,20 +19081,9 @@ function AvitoOverviewReportShellIsland() {
           <div className="avito-period-group-grid">
             <section className="report-panel report-panel-pad">
               <div className="report-chart-head">
-                <div><div className="report-card-title">Операционный обзор Авито</div><div className="report-card-note">Аккаунты, чаты, объявления, кошельки и заказы.</div></div>
-              </div>
-              <div className="report-mini-grid">
-                <div className="report-mini-card"><div className="report-mini-label">Просмотры</div><div className="report-mini-value">{summary ? formatAvitoMetric(summary.views) : '—'}</div><div className="report-mini-note">{summary ? `${formatAvitoPctNullable(summary.conversionPct)} в контакт` : 'ждём данные'}</div></div>
-                <div className="report-mini-card"><div className="report-mini-label">Контакты</div><div className="report-mini-value">{summary ? formatAvitoMetric(summary.contacts) : '—'}</div><div className="report-mini-note">{summary ? `${formatAvitoMetric(summary.orders)} заказов · ${formatAvitoPctNullable(summary.orderConversionPct)} в заказ` : 'ждём данные'}</div></div>
-                <div className="report-mini-card"><div className="report-mini-label">Избранное</div><div className="report-mini-value">{summary ? formatAvitoMetric(summary.favorites) : '—'}</div><div className="report-mini-note">{summary ? `${formatAvitoMetric(summary.impressions)} показов` : 'ждём данные'}</div></div>
-                <div className="report-mini-card"><div className="report-mini-label">Расходы</div><div className="report-mini-value">{summary ? formatAvitoRubNullable(summary.spendKopecks) : '—'}</div><div className="report-mini-note">{spendPerView}</div></div>
-              </div>
-            </section>
-            <section className="report-panel report-panel-pad">
-              <div className="report-chart-head">
                 <div><div className="report-card-title">Позиции по метрикам</div><div className="report-card-note">Объявления по просмотрам и контактам за выбранный период.</div></div>
               </div>
-              <div className="attention-list">
+              <div className="attention-list avito-overview-items">
                 {topItems.length ? topItems.map((row) => (
                   <div
                     className="attention-item"
@@ -19165,12 +19165,14 @@ function AvitoOverviewReportShellIsland() {
             if (event.target === event.currentTarget) setSelectedItemId('')
           }}
         >
-          <div className="modal xl" style={{ width: 'min(920px, calc(100vw - 48px))', maxHeight: 'calc(100vh - 72px)', overflow: 'auto' }}>
+          <div className="modal xl">
             <div className="modal-head">
               <div className="modal-icon brand">A</div>
-              <h2>{selectedItem.title}</h2>
-              <p>{selectedItem.category ?? 'Категория Авито'} · {selectedItem.accountName}</p>
-              <button className="icon-btn" type="button" data-tip="Закрыть" onClick={() => setSelectedItemId('')}>×</button>
+              <div className="avito-overview-item-heading">
+                <h2>{selectedItem.title}</h2>
+                <p>{selectedItem.category ?? 'Категория Авито'} · {selectedItem.accountName}</p>
+              </div>
+              <button className="icon-btn" type="button" aria-label="Закрыть карточку объявления" onClick={() => setSelectedItemId('')}>×</button>
             </div>
             <div className="modal-body">
               <div className="avito-detail-grid five">
@@ -19188,7 +19190,7 @@ function AvitoOverviewReportShellIsland() {
               </div>
             </div>
             <div className="modal-foot">
-              <button className="btn btn-default" type="button" onClick={() => window.goSubtab?.('avito-listings')}>Открыть объявления</button>
+              <a className="btn btn-default" href="/avito/listings">Открыть объявления</a>
               <button className="btn btn-primary" type="button" onClick={() => setSelectedItemId('')}>Закрыть</button>
             </div>
           </div>
@@ -19223,7 +19225,7 @@ function AvitoOverviewIsland({ replacementKey }: { replacementKey: string }) {
         if (controller.signal.aborted) return
         if (!data) throw new Error('Пустой ответ обзора Авито')
         setAvitoOverviewLiveState({ loading: false, error: null, data })
-        if (state.forceRefresh) window.__vellaSetAvitoOverviewState?.({ forceRefresh: false })
+        if (state.forceRefresh && window.__vellaAvitoOverviewState) window.__vellaAvitoOverviewState.forceRefresh = false
       })
       .catch((error) => {
         if (controller.signal.aborted) return
@@ -19907,7 +19909,7 @@ function AvitoInboxIsland({ replacementKey }: { replacementKey: string }) {
         setAvitoChatsLiveState({ loading: false, error: null, data })
         const selectedExists = data.chats.some((chat) => chat.chatId === window.__vellaAvitoChatsState?.selectedChatId)
         if (!selectedExists && data.chats[0]?.chatId) window.__vellaSetAvitoChatsState?.({ selectedChatId: data.chats[0].chatId })
-        if (state.forceRefresh) window.__vellaSetAvitoChatsState?.({ forceRefresh: false })
+        if (state.forceRefresh && window.__vellaAvitoChatsState) window.__vellaAvitoChatsState.forceRefresh = false
       })
       .catch((error) => {
         if (controller.signal.aborted) return
@@ -20656,7 +20658,7 @@ function AvitoListingsIsland({
         if (controller.signal.aborted) return
         if (!data) throw new Error('Пустой ответ объявлений Авито')
         setAvitoListingsLiveState({ loading: false, error: null, data })
-        if (state.forceRefresh) window.__vellaSetAvitoListingsState?.({ forceRefresh: false })
+        if (state.forceRefresh && window.__vellaAvitoListingsState) window.__vellaAvitoListingsState.forceRefresh = false
       })
       .catch((error) => {
         if (controller.signal.aborted) return
@@ -23908,8 +23910,9 @@ function LegacyAvitoStatsIsland({
       .then((data) => {
         if (controller.signal.aborted) return
         if (!data) throw new Error('Пустой ответ статистики Авито')
-        setAvitoStatsLiveState({ loading: false, error: null, data })
-        if (state.forceRefresh) window.__vellaSetAvitoStatsState?.({ forceRefresh: false })
+        setAvitoStatsLiveState({ loading: false, error: avitoBackendErrorMessage(data), data })
+        // Clearing the one-shot flag must not dispatch a second API request.
+        if (state.forceRefresh && window.__vellaAvitoStatsState) window.__vellaAvitoStatsState.forceRefresh = false
       })
       .catch((error) => {
         if (controller.signal.aborted) return
@@ -23940,19 +23943,21 @@ function LegacyAvitoStatsIsland({
 
 function NotificationKpiStripIsland() {
   const location = useLocation()
+  const snapshot = useNotificationsSnapshot()
   const isAvitoNotificationsRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'avito-notifications'
   const kpis = isAvitoNotificationsRoute ? AVITO_NOTIFICATION_KPIS : NOTIFICATION_KPIS
+  const values = snapshot.kpis ? [snapshot.kpis.unread, snapshot.kpis.critical, snapshot.kpis.period] : []
   return (
     <div
       className="stats notif-kpis"
       data-vella-island="notifications-kpi-strip"
       data-vella-island-status="explicit-jsx"
     >
-      {kpis.map(([label, tip, valueId, value, deltaId, delta, deltaClass]) => (
+      {kpis.map(([label, tip, valueId, value, deltaId, delta, deltaClass], index) => (
         <div className="stat" key={label}>
           <div className="stat-label">{label} <span className="stat-tip" data-tip={tip}>i</span></div>
-          <div className="stat-val" {...(valueId ? { id: valueId } : {})}>{value}</div>
-          <div className={`stat-delta ${deltaClass}`} {...(deltaId ? { id: deltaId } : {})}>{delta}</div>
+          <div className="stat-val" {...(valueId ? { id: valueId } : {})}>{values[index] ?? value}</div>
+          <div className={`stat-delta ${deltaClass}`} {...(deltaId ? { id: deltaId } : {})}>{deltaId && snapshot.kpis ? snapshot.kpis.periodLabel : delta}</div>
         </div>
       ))}
     </div>
@@ -24106,7 +24111,9 @@ function NotificationContextBannerIsland() {
 }
 
 function NotificationCategoryChipsIsland() {
-  const renderChip = ([filter, value, label, active]: typeof NOTIFICATION_CATEGORY_CHIPS[number] | typeof NOTIFICATION_SEVERITY_CHIPS[number]) => (
+  const location = useLocation()
+  const isAvitoNotificationsRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'avito-notifications'
+  const renderChip = ([filter, value, label, active]: readonly [string, string, string, boolean]) => (
     <div
       className={active ? 'chip active' : 'chip'}
       data-filter={filter}
@@ -24123,10 +24130,11 @@ function NotificationCategoryChipsIsland() {
     <div
       className="chips"
       id="notifCategoryChips"
+      data-context={isAvitoNotificationsRoute ? 'avito' : undefined}
       data-vella-island="notifications-category-chips"
       data-vella-island-status="explicit-jsx"
     >
-      {NOTIFICATION_CATEGORY_CHIPS.map(renderChip)}
+      {(isAvitoNotificationsRoute ? AVITO_NOTIFICATION_CATEGORY_CHIPS : NOTIFICATION_CATEGORY_CHIPS).map(renderChip)}
       <div className="subtab-divider"></div>
       {NOTIFICATION_SEVERITY_CHIPS.map(renderChip)}
     </div>
@@ -24136,6 +24144,7 @@ function NotificationCategoryChipsIsland() {
 const EMPTY_NOTIFICATIONS_SNAPSHOT: NotificationsSnapshot = {
   rows: [],
   bodyCount: 0,
+  kpis: null,
   detail: null,
   workspace: {
     active: false,
@@ -24549,7 +24558,7 @@ function LegacyNotificationsIsland({ replacementKey }: { replacementKey: string 
       data-vella-island-status="explicit-jsx"
     >
       <div
-        className="notif-page"
+        className={isAvitoNotificationsRoute ? 'notif-page avito-notifications-page' : 'notif-page'}
         id="notifPage"
         data-vella-island="notifications-page"
         data-vella-island-status="explicit-jsx"

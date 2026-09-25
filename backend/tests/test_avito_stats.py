@@ -5,7 +5,7 @@ from datetime import date
 from fastapi.testclient import TestClient
 import httpx
 
-from app.avito.stats import AvitoStatsAccount, AvitoStatsFetchRequest, AvitoStatsFetchResult, AvitoStatsItem, LiveAvitoStatsClient
+from app.avito.stats import AvitoStatsAccount, AvitoStatsFetchError, AvitoStatsFetchRequest, AvitoStatsFetchResult, AvitoStatsItem, LiveAvitoStatsClient
 from app.cabinet.store import AvitoCredentialsSecret
 from app.main import create_app
 from tests.auth_helpers import auth_headers
@@ -593,6 +593,41 @@ def test_avito_stats_endpoint_reports_missing_avito_credentials():
 
     assert response.status_code == 409
     assert response.json()["error"]["message"] == "AVITO_CREDENTIALS_REQUIRED"
+
+
+def test_avito_stats_endpoint_pauses_after_rate_limit(monkeypatch):
+    cache: dict[str, dict] = {}
+    calls = 0
+
+    class RateLimitedClient:
+        def fetch_stats(self, _request):
+            nonlocal calls
+            calls += 1
+            return AvitoStatsFetchResult(
+                status="blocked",
+                error=AvitoStatsFetchError(code="rate_limited", message="Avito HTTP 429", retryable=True,
+                                           blockerIds=["AVITO_RATE_LIMIT"]),
+            )
+
+    monkeypatch.setattr("app.routers.avito_stats.get_user_avito_credentials_secret", lambda _user: AvitoCredentialsSecret(
+        client_id="synthetic-client", client_secret="synthetic-secret", cached_access_token=None, access_token_expires_at=None,
+    ))
+    monkeypatch.setattr("app.routers.avito_stats.resolve_user_avito_access_token", lambda **_kwargs: "current-token")
+    monkeypatch.setattr("app.routers.avito_stats.get_source_cache", lambda _org, key, **_kwargs: cache.get(key))
+    monkeypatch.setattr("app.routers.avito_stats.save_source_cache", lambda _org, key, payload: cache.update({key: payload}))
+    monkeypatch.setattr("app.routers.avito_stats.build_avito_stats_client", lambda **_kwargs: RateLimitedClient())
+
+    api = TestClient(create_app())
+    headers = auth_headers(api, "viewer")
+    params = {"dateFrom": "2026-07-01", "dateTo": "2026-07-28", "forceRefresh": "true"}
+    first = api.get("/api/v1/avito/stats", params=params, headers=headers)
+    second = api.get("/api/v1/avito/stats", params=params, headers=headers)
+
+    assert first.status_code == second.status_code == 200
+    assert calls == 1
+    assert first.json()["source"]["error"]["retryAfterUntil"]
+    assert second.json()["source"]["cache"]["status"] == "cooldown"
+    assert second.json()["source"]["error"]["code"] == "rate_limited"
 
 
 def test_avito_stats_endpoint_reuses_exact_period_cache_for_current_token(monkeypatch):

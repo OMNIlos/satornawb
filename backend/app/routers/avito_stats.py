@@ -14,6 +14,7 @@ from app.repricer_cache.store import get_source_cache, save_source_cache
 
 
 router = APIRouter(tags=["avito-stats"])
+AVITO_STATS_RATE_LIMIT_COOLDOWN_SECONDS = 70
 
 
 def _date_range(date_from: date | None, date_to: date | None, period_days: int) -> tuple[date, date, int]:
@@ -132,6 +133,11 @@ def _cache_key(start: date, end: date, account_ids: list[str]) -> str:
     return f"avito_stats:{start.isoformat()}:{end.isoformat()}:{account_part}"
 
 
+def _rate_limit_key(account_ids: list[str]) -> str:
+    account_part = ",".join(sorted(account_ids)) if account_ids else "all"
+    return f"avito_stats_rate_limit:{account_part}"
+
+
 def _client(access_token: str) -> AvitoStatsClient:
     settings = get_settings()
     try:
@@ -243,10 +249,34 @@ def get_avito_stats(
     if not force_refresh and isinstance(cached, dict) and cached.get("rows"):
         return _cache_hit_payload(cached)
 
+    rate_limit_key = scoped_avito_cache_key(_rate_limit_key(account_id), access_token)
+    cooldown = get_source_cache(actor.organization_id, rate_limit_key, slim=False) or {}
+    retry_after = cooldown.get("retryAfterUntil") if isinstance(cooldown, dict) else None
+    try:
+        retry_at = datetime.fromisoformat(str(retry_after).replace("Z", "+00:00")) if retry_after else None
+        if retry_at and retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+    except ValueError:
+        retry_at = None
+    if retry_at and retry_at > datetime.now(timezone.utc):
+        error = {
+            "code": "rate_limited", "message": "Avito rate limit is active", "retryable": True,
+            "blockerIds": ["AVITO_RATE_LIMIT"], "retryAfterUntil": retry_at.isoformat(),
+        }
+        if isinstance(cached, dict) and cached.get("rows"):
+            return _stale_cached_payload(cached, error)
+        return _response_payload(status="blocked", start=start, end=end, days=days,
+                                 rows=[], accounts=[], error=error, cache_status="cooldown")
+
     result = _client(access_token).fetch_stats(AvitoStatsFetchRequest(dateFrom=start, dateTo=end, accountIds=account_id, grouping="totals"))
     if result.status == "blocked":
+        error = result.error
+        if error and error.code == "rate_limited":
+            retry_at = datetime.now(timezone.utc) + timedelta(seconds=AVITO_STATS_RATE_LIMIT_COOLDOWN_SECONDS)
+            save_source_cache(actor.organization_id, rate_limit_key, {"retryAfterUntil": retry_at.isoformat()})
+            error = {**error.model_dump(mode="json"), "retryAfterUntil": retry_at.isoformat()}
         if isinstance(cached, dict) and cached.get("rows"):
-            return _stale_cached_payload(cached, result.error)
+            return _stale_cached_payload(cached, error)
         return _response_payload(
             status=result.status,
             start=start,
@@ -255,7 +285,7 @@ def get_avito_stats(
             rows=[],
             accounts=[],
             daily=[],
-            error=result.error,
+            error=error,
             cache_status="miss",
         )
 

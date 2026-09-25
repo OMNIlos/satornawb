@@ -73,6 +73,7 @@ it.each(['empty', 'failure'])('keeps actual Avito overview period, loading and %
     const modal = surface.locator('.avito-overview-item-modal')
     await modal.waitFor({ state: 'visible' })
     expect(await modal.locator('#avitoOverviewItemViews').innerText()).toBe('321')
+    expect(await modal.getByRole('link', { name: 'Открыть объявления' }).getAttribute('href')).toBe('/avito/listings')
     await modal.getByRole('button', { name: 'Закрыть', exact: true }).click()
     await modal.waitFor({ state: 'detached' })
     await surface.getByRole('tab', { name: '7 дней', exact: true }).click()

@@ -45,6 +45,12 @@ it('applies Avito statistics draft dates only on Apply on the actual React page'
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       queries.push(url.search)
+      if (queries.length === 3) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+        status: 'blocked', period: { dateFrom: url.searchParams.get('dateFrom'), dateTo: url.searchParams.get('dateTo'), days: 7 },
+        summary: {}, accounts: [], rows: [], source: { error: {
+          code: 'rate_limited', message: 'Avito HTTP 429', retryAfterUntil: new Date(Date.now() + 70_000).toISOString(),
+        } },
+      }) })
       const dateFrom = url.searchParams.get('dateFrom'), dateTo = url.searchParams.get('dateTo')
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
         status: 'synced', period: { dateFrom, dateTo, days: 7 },
@@ -78,10 +84,15 @@ it('applies Avito statistics draft dates only on Apply on the actual React page'
     await surface.getByText('2026-08-01 — 2026-08-07', { exact: true }).waitFor({ state: 'visible' })
     await surface.getByText('За выбранный период данных нет', { exact: true }).waitFor({ state: 'visible' })
     expect([...new URLSearchParams(queries[1]).entries()]).toEqual([['dateFrom', '2026-08-01'], ['dateTo', '2026-08-07']])
+    await surface.locator('.avito-stats-empty-state .is-refresh').click()
+    await surface.getByText('Статистика временно недоступна', { exact: true }).waitFor({ state: 'visible' })
+    expect(await surface.locator('.avito-stats-empty-state').innerText()).toContain('Авито ограничил частые запросы')
+    expect(await surface.locator('.avito-stats-empty-state .is-refresh').isDisabled()).toBe(true)
+    expect(queries).toHaveLength(3)
     await page.getByRole('button', { name: 'Clear synthetic report session', exact: true }).click()
     await surface.getByText('Статистика временно недоступна', { exact: true }).waitFor({ state: 'visible' })
     expect(await surface.locator('#avitoStatsKpiViews').innerText()).toBe('—')
-    expect(queries).toHaveLength(2)
+    expect(queries).toHaveLength(3)
     expect(unexpected, JSON.stringify(unexpected)).toEqual([])
     expect(errors).toEqual([])
   } finally { await browser.close() }

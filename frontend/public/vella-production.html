@@ -2375,8 +2375,22 @@ body.avito-popup-open { overflow: hidden; }
 .avito-period-group-title b { display: block; color: var(--gray-900); font-size: 14px; line-height: 1.25; font-weight: 850; }
 .avito-period-group-title span { display: block; margin-top: 2px; color: var(--gray-500); font-size: 11.5px; line-height: 1.35; font-weight: 650; }
 .avito-period-group .report-period { flex-shrink: 0; }
-.avito-period-group-grid { padding: 12px; display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 12px; }
+.avito-period-group-grid { padding: 12px; }
 .avito-period-group-grid > .report-panel { box-shadow: none; }
+.avito-overview-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#tab-avito-overview > .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 12px 20px 0; overflow: visible; border: 0; background: transparent; }
+#tab-avito-overview > .stats .stat { min-width: 0; padding: 14px 16px; border: 1px solid var(--gray-200); border-radius: 12px; background: var(--white); box-shadow: var(--shadow-sm); }
+#tab-avito-overview > .stats .stat-label { font-size: 12px; }
+#tab-avito-overview > .stats .stat-val { font-size: 24px; }
+#tab-avito-overview > .stats .stat-delta { font-size: 12px; }
+#tab-avito-overview .avito-overview-item-modal .modal { width: min(760px, 100%); max-height: calc(100dvh - 48px); overflow: hidden; }
+#tab-avito-overview .avito-overview-item-modal .modal-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) 32px; gap: 12px; align-items: start; }
+#tab-avito-overview .avito-overview-item-modal .modal-icon { margin: 0; }
+#tab-avito-overview .avito-overview-item-modal .modal-head h2 { font-size: 19px; line-height: 1.3; }
+#tab-avito-overview .avito-overview-item-modal .modal-head .icon-btn { border: 1px solid var(--gray-200); }
+#tab-avito-overview .avito-overview-item-modal .avito-detail-grid.five { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+#tab-avito-privacy { min-height: 0; }
+#tab-avito-privacy iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
 #tab-avito-overview .report-grid { grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); }
 #tab-avito-overview .avito-period-group + .report-panel { grid-column: 1 / -1; }
 .avito-inspector-hint { display: none; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--gray-200); border-radius: 9px; background: var(--gray-50); color: var(--gray-600); font-size: 12px; font-weight: 650; }
@@ -2394,7 +2408,9 @@ body.avito-popup-open { overflow: hidden; }
   .avito-funnel-insights { grid-template-columns: 1fr; }
 }
 @media (max-width: 980px){
-  .avito-period-group-grid { grid-template-columns: 1fr; }
+  .avito-overview-items { grid-template-columns: 1fr; }
+  #tab-avito-overview > .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #tab-avito-overview .avito-overview-item-modal .avito-detail-grid.five { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 1500px){
   .avito-inbox-shell { grid-template-columns: 330px minmax(420px, 1fr) 300px; }
@@ -3108,6 +3124,23 @@ body.avito-popup-open { overflow: hidden; }
 #tab-notifications .notif-page {
   grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
   align-items: start;
+}
+#tab-notifications .avito-notifications-page { grid-template-columns: minmax(0, 1fr); }
+#tab-notifications .avito-notifications-page .notif-side { display: none; }
+#tab-notifications .avito-notifications-page.detail-open { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); }
+#tab-notifications .avito-notifications-page.detail-open .notif-side { display: block; }
+#tab-notifications .avito-notifications-page .notif-table { width: 100%; table-layout: fixed; }
+#tab-notifications .avito-notifications-page .notif-table th:first-child { width: 42%; }
+#tab-notifications .avito-notifications-page .notif-table th:nth-child(2),
+#tab-notifications .avito-notifications-page .notif-table th:nth-child(3) { width: 10%; }
+#tab-notifications .avito-notifications-page .notif-table th:nth-child(4) { width: 18%; }
+#tab-notifications .avito-notifications-page .notif-table th:nth-child(5) { width: 11%; }
+#tab-notifications .avito-notifications-page .notif-table th:nth-child(6) { width: 9%; }
+#tab-notifications .avito-notifications-page .notif-event-title,
+#tab-notifications .avito-notifications-page .notif-event-sub { max-width: none; }
+#tab-notifications .avito-notifications-page #notifCategoryChips { flex-wrap: wrap; overflow: visible; }
+@media (max-width: 1500px) {
+  #tab-notifications .avito-notifications-page.detail-open { grid-template-columns: minmax(0, 1fr); }
 }
 #tab-settings-access .access-shell {
   padding: 18px 22px 28px;
@@ -5524,7 +5557,7 @@ body.avito-popup-open { overflow: hidden; }
     <div class="nav-item" data-tab="avito-repricer" onclick="goSubtab('avito-repricer')"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6 4 4 6-8"/><path d="M14 7h6v6"/></svg><span class="nav-label">Репрайсер</span><span class="nav-badge">чат</span></div>
     <div class="nav-item" data-tab="avito-stats" onclick="goSubtab('avito-stats')"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg><span class="nav-label">Статистика</span><span class="nav-badge">30д</span></div>
     <div class="nav-item" data-tab="avito-notifications" onclick="goSubtab('avito-notifications')"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 10-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg><span class="nav-label">Уведомления</span><span class="nav-badge alert" id="avitoNavNotifCount">5</span></div>
-    <a class="nav-item nav-item-link" href="/avito-privacy.html" target="_blank" rel="noopener noreferrer" data-tip="Политика конфиденциальности" aria-label="Политика конфиденциальности"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg><span class="nav-label">Конфиденциальность</span></a>
+    <div class="nav-item" data-tab="avito-privacy" onclick="goSubtab('avito-privacy')"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg><span class="nav-label">Конфиденциальность</span></div>
   </div>
   <div class="nav-section">Система</div>
   <div class="nav-item" data-module="system" data-tab="settings-profile" data-tip="Профиль" onclick="goSubtab('settings-profile')">
@@ -7125,6 +7158,10 @@ body.avito-popup-open { overflow: hidden; }
       <div class="notif-detail-card" id="notifDetail"></div>
     </aside>
   </div>
+</div>
+
+<div class="tab-content" id="tab-avito-privacy">
+  <iframe src="/avito-privacy.html?embedded=1" title="Политика конфиденциальности Авито" loading="lazy"></iframe>
 </div>
 
 <!-- ========================================================== -->
@@ -15532,6 +15569,7 @@ const TAB_LABELS = {
   'avito-repricer': 'Репрайсер Авито',
   'avito-stats': 'Статистика',
   'avito-notifications': 'Уведомления',
+  'avito-privacy': 'Конфиденциальность',
   sources: 'Источники и загрузки',
   'settings-profile': 'Личный кабинет',
   'settings-imports': 'Импорт данных',
@@ -15542,7 +15580,7 @@ const REPORT_TABS = ['digest', 'report-rules', 'abc', 'rnp', 'pnl', 'expenses', 
 const REPRICER_TABS = ['products', 'repricer-stats', 'algo', 'templates', 'history', 'liq', 'promos'];
 const REVIEWS_TABS = ['reviews'];
 const DATA_TABS = ['sources'];
-const AVITO_TABS = ['avito-overview', 'avito-inbox', 'avito-reviews', 'orders-avito', 'avito-listings', 'avito-repricer', 'avito-stats', 'avito-notifications'];
+const AVITO_TABS = ['avito-overview', 'avito-inbox', 'avito-reviews', 'orders-avito', 'avito-listings', 'avito-repricer', 'avito-stats', 'avito-notifications', 'avito-privacy'];
 const PRODUCTION_TABS = [];
 const SYSTEM_TABS = ['settings-profile', 'settings-imports', 'notifications', 'settings-access'];
 const PATH_TAB_MAP = {
@@ -15588,6 +15626,7 @@ const PATH_TAB_MAP = {
   '/avito/stats': 'avito-stats',
   '/avito/statistics': 'avito-stats',
   '/avito/notifications': 'avito-notifications',
+  '/avito/privacy': 'avito-privacy',
   '/settings/profile': 'settings-profile',
   '/settings/imports': 'settings-imports',
   '/notifications': 'notifications',
@@ -15722,6 +15761,7 @@ function pathForTab(key){
     'avito-reviews': '/avito/reviews',
     'avito-stats': '/avito/stats',
     'avito-notifications': '/avito/notifications',
+    'avito-privacy': '/avito/privacy',
     'settings-profile': '/settings/profile',
     'settings-imports': '/settings/imports',
     notifications: '/notifications',
@@ -20681,6 +20721,7 @@ function syncNotifFilterUi() {
   if (page) page.style.gridTemplateColumns = eventMode ? '' : '1fr';
   const side = document.querySelector('#tab-notifications .notif-side');
   if (side) side.style.display = eventMode ? '' : 'none';
+  if (page?.classList.contains('avito-notifications-page')) return;
   const stats = document.querySelectorAll('#tab-notifications .notif-kpis .stat');
   if (stats.length >= 4) {
     const modePrefix = notifRouteContext === 'avito' ? 'Авито' : notifRouteContext === 'wb' ? 'WB' : '';
