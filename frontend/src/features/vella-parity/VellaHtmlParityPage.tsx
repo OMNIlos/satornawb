@@ -21812,16 +21812,6 @@ function avitoStickerTitle(source: AvitoStickerSource | null) {
   return source?.item.title || 'Товар Авито'
 }
 
-function avitoOrdersBrowserSnapshotMeta(data: AvitoOrdersBackendResponse | null) {
-  return data?.source?.browserSnapshot as {
-    capturedAt?: string | null
-    orders?: number
-    items?: number
-    collector?: Record<string, unknown>
-    aiExtraction?: { status?: string; itemsSent?: number; itemsReturned?: number; itemsUpdated?: number; reason?: string; model?: string } | null
-  } | null | undefined
-}
-
 async function loadAvitoOrdersExtensionTokenStatus(accessToken: string, signal?: AbortSignal) {
   return apiRequest<AvitoOrdersExtensionTokenStatus>('/api/v1/avito/orders/extension-token', {
     headers: authorizationHeaders(accessToken),
@@ -22267,7 +22257,6 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
   const [stickerSettings, setStickerSettings] = useState<AvitoStickerSettings>(() => readAvitoStickerSettings())
   const [live, setLive] = useState<AvitoOrdersLiveState>(EMPTY_AVITO_ORDERS_LIVE_STATE)
   const validData = avitoOrdersDataMatches(live.data, dateFrom, status) ? live.data : null
-  const browserSnapshot = avitoOrdersBrowserSnapshotMeta(validData)
 
   useLayoutEffect(() => {
     if (isAvitoOrdersRoute) scrubAvitoOrdersLegacyMocks(document.body)
@@ -22371,7 +22360,6 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
   const sourceError = live.error || avitoOrdersBackendError(validData)
   const pickingRows = avitoOrderPickingRows(rows)
   const hasSearchQuery = query.trim().length > 0
-  const hasExtensionRows = Boolean(browserSnapshot && (validData?.rows.length ?? 0) > 0)
   const selectedStickerSource = pickingRows.find((row) => row.key === stickerSourceKey)
     ?? pickingRows.find((row) => row.order.orderId === selectedOrderId)
     ?? pickingRows[0]
@@ -22556,16 +22544,6 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
         .vella-html-parity-root .avito-orders-picking-title b { font-size: 15px; color: var(--gray-900); }
         .vella-html-parity-root .avito-orders-picking-title span { font-size: 12px; color: var(--gray-500); }
         .vella-html-parity-root .avito-orders-photo-empty { display: grid; place-items: center; color: var(--gray-400); font-size: 10px; font-weight: 800; }
-        .vella-html-parity-root .avito-orders-extension-empty { min-height: calc(100vh - 190px); display: grid; place-items: center; padding: 28px 0; }
-        .vella-html-parity-root .avito-orders-extension-card { width: min(760px, 100%); border: 1px solid #D7E3F7; border-radius: 12px; background: #fff; box-shadow: 0 16px 40px rgba(15, 23, 42, .08); padding: 26px; }
-        .vella-html-parity-root .avito-orders-extension-title { display: grid; gap: 7px; margin-bottom: 18px; }
-        .vella-html-parity-root .avito-orders-extension-title h2 { margin: 0; color: var(--gray-900); font-size: 22px; line-height: 1.1; letter-spacing: 0; }
-        .vella-html-parity-root .avito-orders-extension-title p { margin: 0; max-width: 560px; color: var(--gray-500); font-size: 14px; line-height: 1.45; }
-        .vella-html-parity-root .avito-orders-extension-steps { display: grid; gap: 8px; margin: 0 0 18px; }
-        .vella-html-parity-root .avito-orders-extension-step { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; align-items: start; padding: 11px; border: 1px solid #EEF2F7; border-radius: 10px; background: #F8FAFC; }
-        .vella-html-parity-root .avito-orders-extension-step span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; background: #EFF6FF; color: #1D4ED8; font-size: 12px; font-weight: 900; }
-        .vella-html-parity-root .avito-orders-extension-step b { display: block; margin-bottom: 2px; color: var(--gray-900); font-size: 13px; }
-        .vella-html-parity-root .avito-orders-extension-step small { color: var(--gray-500); font-size: 12px; line-height: 1.35; }
         .vella-html-parity-root .avito-orders-extension-token { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding-top: 12px; border-top: 1px solid #EEF2F7; }
         .vella-html-parity-root .avito-orders-extension-token code { min-width: 0; display: block; border: 1px solid #D7E3F7; border-radius: 9px; background: #F8FBFF; color: #1E3A8A; padding: 10px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .vella-html-parity-root .avito-orders-extension-token small { display: block; margin-top: 6px; color: var(--gray-500); font-size: 12px; }
@@ -22717,32 +22695,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
           .vella-html-parity-root .avito-order-detail-list { grid-template-columns: 1fr; }
         }
       `}</style>
-      {!hasExtensionRows && (live.loading || sourceError) ? (
-        live.loading ? (
-          <AvitoDataState kind="loading" title="Загружаем лист подбора" subtitle="Собираем заказы и товары Авито." />
-        ) : (
-          <AvitoDataState kind="error" title="Не удалось загрузить заказы" subtitle="Проверьте подключение Авито и обновите данные." />
-        )
-      ) : !hasExtensionRows ? (
-        <section className="avito-orders-extension-empty" aria-label="Подключение расширения Avito Orders">
-          <div className="avito-orders-extension-card">
-            <div className="avito-orders-extension-title">
-              <h2>Подключите расширение Avito Orders</h2>
-              <p>Лист подбора появится после браузерного сбора. Расширение возьмёт фото, размер, цвет и артикул прямо со страницы заказов Avito.</p>
-            </div>
-            <div className="avito-orders-extension-steps">
-              <div className="avito-orders-extension-step"><span>1</span><div><b>Откройте настройки</b><small>Создайте токен и вставьте его в расширение Satorna Avito Orders.</small></div></div>
-              <div className="avito-orders-extension-step"><span>2</span><div><b>Откройте расширение</b><small>В настройках расширения вставьте токен и выберите сбор фото, размера, цвета и артикула.</small></div></div>
-              <div className="avito-orders-extension-step"><span>3</span><div><b>Нажмите “Собрать заказы”</b><small>Расширение само откроет Avito и отправит готовые позиции в Satorna.</small></div></div>
-            </div>
-            <button className="btn btn-primary avito-orders-extension-settings-btn" type="button" onClick={() => setExtensionSettingsOpen(true)}>
-              <Settings aria-hidden="true" />
-              Настройки расширения
-            </button>
-          </div>
-        </section>
-      ) : null}
-      <div className="toolbar" data-vella-event-owner="react" style={!hasExtensionRows ? { display: 'none' } : undefined}>
+      <div className="toolbar" data-vella-event-owner="react">
         <div className="search">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="11" cy="11" r="8" />
@@ -22797,8 +22750,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
           />
         </div>
       </div>
-      {hasExtensionRows ? (
-        <section className="orders-print-shell" aria-label="Лист подбора Авито">
+      <section className="orders-print-shell" aria-label="Лист подбора Авито">
           <section className="orders-print-head">
             <div>
               <h1 className="orders-print-title">Авито лист подбора</h1>
@@ -22914,8 +22866,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
               </table>
             </div>
           </section>
-        </section>
-      ) : null}
+      </section>
       {extensionSettingsOpen ? (
         <div className="avito-orders-extension-settings-overlay" data-vella-react-handlers="onclick" onClick={(event) => { if (event.target === event.currentTarget) setExtensionSettingsOpen(false) }}>
           <div className="modal avito-orders-extension-settings-window" role="dialog" aria-modal="true" aria-label="Настройки расширения Avito Orders">
