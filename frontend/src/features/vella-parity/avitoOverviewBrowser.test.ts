@@ -68,6 +68,8 @@ it.each(['empty', 'failure'])('keeps actual Avito overview period, loading and %
     await page.addScriptTag({ content: bundle.code })
     const surface = page.locator('#tab-avito-overview')
     await surface.getByText('SYNTHETIC-OVERVIEW-ITEM', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 })
+    expect(await surface.locator('[data-vella-island="avito-overview-kpi-strip"]').evaluate(element =>
+      getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(4)
     expect(queries).toHaveLength(1)
     await surface.getByText('SYNTHETIC-OVERVIEW-ITEM', { exact: true }).click()
     const modal = surface.locator('.avito-overview-item-modal')
