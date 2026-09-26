@@ -16644,9 +16644,9 @@ type AvitoOverviewBackendResponse = {
     conversionPct: number | null
     orderConversionPct: number | null
     buyoutPct: number | null
-    totalListings: number
-    activeListings: number
-    inactiveListings: number
+    totalListings: number | null
+    activeListings: number | null
+    inactiveListings: number | null
     removedListings: number
     oldListings: number
     blockedListings: number
@@ -18459,7 +18459,7 @@ function AvitoOverviewKpiStripIsland() {
   const unreadChats = chatsLive.data ? chatsSummary.unread : summary?.unreadChats
   const totalChats = chatsLive.data ? chatsSummary.total : summary?.chats
   const kpis = [
-    ['Активные объявления', 'Активные карточки Авито', summary ? formatAvitoInt(summary.activeListings) : '—', '', summary ? `${formatAvitoInt(summary.inactiveListings)} неактивн.` : 'ждём данные', live.error ? 'down' : 'neutral'],
+    ['Активные объявления', 'Активные карточки Авито', formatAvitoMetric(summary?.activeListings), '', summary ? `${formatAvitoMetric(summary.inactiveListings)} неактивн.` : 'ждём данные', live.error ? 'down' : 'neutral'],
     ['Просмотры', 'Открытия карточек за выбранный период', summary ? formatAvitoMetric(summary.views) : '—', '', summary ? `${formatAvitoPctNullable(summary.conversionPct)} в контакт` : 'ждём данные', 'neutral'],
     ['Контакты', 'Звонки, сообщения и другие контакты Авито', summary ? formatAvitoMetric(summary.contacts) : '—', '', summary ? `${formatAvitoMetric(summary.orders)} заказов` : 'ждём данные', 'neutral'],
     ['Непрочитанные чаты', 'Текущие сообщения Авито', unreadChats == null ? '—' : formatAvitoInt(unreadChats), unreadChats ? 'warn' : '', totalChats == null ? 'ждём данные' : `${formatAvitoInt(totalChats)} всего`, unreadChats ? 'down' : 'neutral'],
@@ -19045,6 +19045,7 @@ function AvitoOverviewReportShellIsland() {
   const live = useAvitoOverviewLiveState()
   const [selectedItemId, setSelectedItemId] = useState('')
   const data = avitoOverviewDataForPeriod(state, live)
+  const statsError = (data?.source.errors as { stats?: { code?: string } } | undefined)?.stats
   const query = state.query.trim().toLocaleLowerCase('ru-RU')
   const topItems = (data?.topItems ?? []).filter((row) => !query || `${row.title} ${row.itemId} ${row.accountName} ${row.category ?? ''}`.toLocaleLowerCase('ru-RU').includes(query))
   const events = (data?.events ?? []).map(avitoOverviewFriendlyEvent).filter((event) => {
@@ -19101,8 +19102,8 @@ function AvitoOverviewReportShellIsland() {
                 )) : (
                   <AvitoDataState
                     kind={live.loading ? 'loading' : 'empty'}
-                    title={live.loading ? 'Загружаем объявления' : 'Нет объявлений за период'}
-                    subtitle={live.loading ? 'Собираем топ по просмотрам и контактам.' : 'Попробуйте другой период или обновите данные из Авито.'}
+                    title={live.loading ? 'Загружаем объявления' : statsError ? 'Топ объявлений обновится позже' : 'Нет объявлений за период'}
+                    subtitle={live.loading ? 'Собираем топ по просмотрам и контактам.' : statsError?.code === 'rate_limited' ? 'Авито временно ограничил запросы. Повторим загрузку автоматически.' : statsError ? 'Статистика Авито временно недоступна. Попробуйте обновить данные.' : 'Попробуйте другой период или обновите данные из Авито.'}
                   />
                 )}
               </div>
@@ -19204,6 +19205,7 @@ function AvitoOverviewIsland({ replacementKey }: { replacementKey: string }) {
   const location = useLocation()
   const { accessToken } = useAuth()
   const state = useAvitoOverviewState()
+  const live = useAvitoOverviewLiveState()
   const isAvitoOverviewRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'avito-overview'
 
   useEffect(() => {
@@ -19243,6 +19245,19 @@ function AvitoOverviewIsland({ replacementKey }: { replacementKey: string }) {
       })
     return () => controller.abort()
   }, [accessToken, isAvitoOverviewRoute, state.dateFrom, state.dateTo, state.forceRefresh, state.requestSeq])
+
+  useEffect(() => {
+    const data = avitoOverviewDataForPeriod(state, live)
+    const statsError = (data?.source.errors as { stats?: { code?: string } } | undefined)?.stats
+    if (!isAvitoOverviewRoute || live.loading || statsError?.code !== 'rate_limited') return
+    const cooldownUntil = avitoCooldownUntilFromPayload(data)
+    const timer = window.setTimeout(() => {
+      const current = window.__vellaAvitoOverviewState
+      if (!current || current.dateFrom !== state.dateFrom || current.dateTo !== state.dateTo) return
+      window.__vellaSetAvitoOverviewState?.({ forceRefresh: true, requestSeq: current.requestSeq + 1 })
+    }, avitoCooldownRemainingMs(cooldownUntil) + 500)
+    return () => window.clearTimeout(timer)
+  }, [isAvitoOverviewRoute, live, state.dateFrom, state.dateTo])
 
   useEffect(() => {
     window.applyAvitoOverviewPeriod = (values) => {

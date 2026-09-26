@@ -5,7 +5,7 @@ import { build } from 'vite'
 import react from '@vitejs/plugin-react'
 import { expect, it } from 'vitest'
 
-it.each(['empty', 'failure'])('keeps actual Avito overview period, loading and %s data aligned', async outcome => {
+it.each(['empty', 'failure', 'rate-limit'])('keeps actual Avito overview period, loading and %s data aligned', async outcome => {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const result = await build({
     configFile: false, envFile: false, root, logLevel: 'silent', plugins: [react()],
@@ -45,18 +45,20 @@ it.each(['empty', 'failure'])('keeps actual Avito overview period, loading and %
       }
       queries.push(url.search)
       const first = queries.length === 1
-      if (!first) await gate
+      if (!first && outcome !== 'rate-limit') await gate
       if (!first && outcome === 'failure') return route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":{"code":"SYNTHETIC_UNAVAILABLE","message":"Источник временно недоступен"}}' })
       const dateFrom = url.searchParams.get('dateFrom')!, dateTo = url.searchParams.get('dateTo')!
+      const rateLimited = outcome === 'rate-limit' && first
+      const hasItem = outcome === 'rate-limit' ? !first : first
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
-        status: 'synced', period: { dateFrom, dateTo, days: (Date.parse(dateTo) - Date.parse(dateFrom)) / 86400000 + 1 },
-        summary: { impressions: 1234, views: first ? 321 : 0, contacts: 12, favorites: 2,
+        status: rateLimited ? 'partial' : 'synced', period: { dateFrom, dateTo, days: (Date.parse(dateTo) - Date.parse(dateFrom)) / 86400000 + 1 },
+        summary: { impressions: 1234, views: hasItem ? 321 : 0, contacts: 12, favorites: 2,
           spendKopecks: 12300, orders: 0, buyouts: 0, conversionPct: null,
-          orderConversionPct: null, buyoutPct: null, totalListings: first ? 1 : 0,
-          activeListings: first ? 1 : 0, inactiveListings: 0, removedListings: 0,
+          orderConversionPct: null, buyoutPct: null, totalListings: rateLimited ? null : hasItem ? 1 : 0,
+          activeListings: rateLimited ? null : hasItem ? 1 : 0, inactiveListings: rateLimited ? null : 0, removedListings: 0,
           oldListings: 0, blockedListings: 0, chats: 0, unreadChats: 0, reviews: 0,
-          unansweredReviews: 0, answeredReviews: 0, lowReviews: 0, ratingScore: null, blockers: 0 },
-        accounts: [], events: [], source: {}, topItems: first ? [{
+          unansweredReviews: 0, answeredReviews: 0, lowReviews: 0, ratingScore: null, blockers: rateLimited ? 1 : 0 },
+        accounts: [], events: [], source: rateLimited ? { errors: { stats: { code: 'rate_limited', retryAfterUntil: '2026-09-09T12:00:00.200Z' } } } : {}, topItems: hasItem ? [{
           itemId: 'synthetic-item', title: 'SYNTHETIC-OVERVIEW-ITEM', accountId: 'synthetic-account',
           accountName: 'Synthetic account', category: null, url: null, views: 321,
           contacts: 12, favorites: 2, spendKopecks: 12300, orders: 0, buyouts: 0,
@@ -67,6 +69,16 @@ it.each(['empty', 'failure'])('keeps actual Avito overview period, loading and %
     await page.goto('http://satorna.test/avito/overview')
     await page.addScriptTag({ content: bundle.code })
     const surface = page.locator('#tab-avito-overview')
+    if (outcome === 'rate-limit') {
+      await surface.getByText('Топ объявлений обновится позже', { exact: true }).waitFor({ state: 'visible' })
+      expect(await surface.locator('.stat-val').first().innerText()).toBe('—')
+      await expect.poll(() => queries.length, { timeout: 15_000 }).toBe(2)
+      expect(new URLSearchParams(queries[1]).get('forceRefresh')).toBe('true')
+      await surface.getByText('SYNTHETIC-OVERVIEW-ITEM', { exact: true }).waitFor({ state: 'visible' })
+      expect(unexpected, JSON.stringify(unexpected)).toEqual([])
+      expect(errors).toEqual([])
+      return
+    }
     await surface.getByText('SYNTHETIC-OVERVIEW-ITEM', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 })
     expect(await surface.locator('[data-vella-island="avito-overview-kpi-strip"]').evaluate(element =>
       getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(4)
