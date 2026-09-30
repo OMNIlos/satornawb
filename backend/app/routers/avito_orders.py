@@ -4,11 +4,13 @@ import hashlib
 import html
 import re
 import secrets
+from threading import Lock
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 
 from app.avito.auth import resolve_user_avito_access_token, scoped_avito_cache_key
 from app.avito.listings import AvitoListingDetailsFetchRequest, AvitoListingsFetchRequest, build_avito_listings_client
@@ -22,8 +24,12 @@ from app.avito.orders import (
 )
 from app.avito.orders_ai import enrich_avito_orders_snapshot_with_ai
 from app.avito.orders_picking_xlsx import build_avito_orders_picking_xlsx
+from app.avito.orders_queue import fetch_full_queue, select_queue
 from app.avito.returns import AvitoReturnCandidate, extract_return_candidates, match_return_candidates
-from app.avito.returns_store import enrich_existing_return_candidates, list_active_return_candidates
+from app.avito.returns_store import (
+    apply_return_operation, enrich_existing_return_candidates, get_return_inventory_item, list_active_return_candidates,
+    list_return_inventory, list_return_inventory_events, release_canceled_reservations, return_pickup_remaining, upsert_return_candidates,
+)
 from app.avito.returns_tasks import (
     AVITO_RETURNS_SYNC_STATUS_KEY,
     get_returns_sync_settings,
@@ -32,6 +38,7 @@ from app.avito.returns_tasks import (
 from app.cabinet.store import get_organization_avito_credentials_secret, get_user_avito_credentials_secret
 from app.config import get_settings
 from app.control_plane.auth import actor_from_request, has_permission
+from app.infra.redis_client import get_redis_client
 from app.repricer_cache.store import get_source_cache, get_source_cache_by_source_key, save_source_cache
 
 
@@ -40,6 +47,15 @@ router = APIRouter(tags=["avito-orders"])
 AVITO_ORDERS_BROWSER_SNAPSHOT_KEY = "avito_orders_browser_snapshot"
 AVITO_ORDERS_EXTENSION_TOKEN_KEY = "avito_orders_extension_token"
 AVITO_ORDERS_EXTENSION_TOKEN_PREFIX = "avito_orders_extension_token_hash_"
+AVITO_ORDERS_QUEUE_KEY = "avito_orders_queue_v1"
+_QUEUE_LOCAL_LOCKS: dict[str, Lock] = {}
+
+
+class ReturnInventoryOperation(BaseModel):
+    operationId: str = Field(min_length=1, max_length=128)
+    action: str
+    quantity: int = Field(ge=1)
+    linkedOrderId: str | None = None
 
 _AVITO_PUBLIC_COLOR_CACHE: dict[str, str | None] = {}
 
@@ -315,20 +331,11 @@ def _return_candidate_order_row(candidate: AvitoReturnCandidate) -> AvitoOrderRo
 
 
 def _enriched_return_candidates(organization_id: int) -> list[AvitoReturnCandidate]:
-    candidates = list_active_return_candidates(organization_id)
-    snapshot = _browser_snapshot_from_cache(organization_id)
-    if snapshot is None or (not snapshot.orders and not snapshot.returns):
-        return candidates
-    rows = [_return_candidate_order_row(candidate) for candidate in candidates]
-    merge_browser_snapshot_orders(rows, snapshot)
-    enriched = extract_return_candidates(rows)
-    for index, candidate in enumerate(candidates):
-        if index >= len(enriched):
-            continue
-        enriched[index].lastSeenAt = candidate.lastSeenAt
-        if not enriched[index].sourceUpdatedAt:
-            enriched[index].sourceUpdatedAt = candidate.sourceUpdatedAt
-    return enriched
+    return list_active_return_candidates(organization_id)
+
+
+def _return_match_key(value: str | None) -> str:
+    return " ".join(re.sub(r"[^\w\s]+", " ", (value or "").casefold().replace("ё", "е")).split())
 
 
 def _enrich_orders_with_return_matches(rows: list[AvitoOrderRow], *, organization_id: int) -> dict[str, Any]:
@@ -336,10 +343,20 @@ def _enrich_orders_with_return_matches(rows: list[AvitoOrderRow], *, organizatio
         candidates = _enriched_return_candidates(organization_id)
     except Exception:
         return {"status": "unavailable", "candidates": 0, "matchedItems": 0, "error": "avito_return_inventory_unavailable"}
+    by_article: dict[str, list[AvitoReturnCandidate]] = {}
+    by_title: dict[str, list[AvitoReturnCandidate]] = {}
+    for candidate in candidates:
+        if candidate.sellerArticle:
+            by_article.setdefault(_return_match_key(candidate.sellerArticle), []).append(candidate)
+        by_title.setdefault(_return_match_key(candidate.title), []).append(candidate)
     matched_items = 0
     for order in rows:
         for item in order.items:
-            matches = match_return_candidates(item, order=order, candidates=candidates)
+            subset = {id(candidate): candidate for candidate in [
+                *by_article.get(_return_match_key(item.sellerArticle), []),
+                *by_title.get(_return_match_key(item.title), []),
+            ]}
+            matches = match_return_candidates(item, order=order, candidates=list(subset.values()))
             item.returnMatches = matches
             item.reuseSuggestion = matches[0] if matches else None
             if matches:
@@ -752,6 +769,15 @@ def save_avito_orders_browser_snapshot(request: Request, snapshot: AvitoOrdersBr
         if not has_permission(actor, "cabinet:read"):
             raise HTTPException(status_code=403, detail="NO_ACCESS:cabinet:read")
         organization_id = actor.organization_id
+    previous = _browser_snapshot_from_cache(organization_id)
+    if previous and previous.capturedAt and snapshot.capturedAt:
+        try:
+            old_time = datetime.fromisoformat(previous.capturedAt.replace("Z", "+00:00"))
+            new_time = datetime.fromisoformat(snapshot.capturedAt.replace("Z", "+00:00"))
+            if new_time < old_time:
+                return {"ok": True, "browserSnapshot": _browser_snapshot_meta(previous), "ignored": "older_snapshot"}
+        except ValueError:
+            pass
     snapshot, ai_extraction = enrich_avito_orders_snapshot_with_ai(snapshot)
     snapshot = snapshot.model_copy(update={"aiExtraction": ai_extraction})
     payload = snapshot.model_dump(mode="json")
@@ -761,6 +787,224 @@ def save_avito_orders_browser_snapshot(request: Request, snapshot: AvitoOrdersBr
         return_rows = _browser_snapshot_rows(snapshot, statuses=["on_return"])
         enrich_existing_return_candidates(organization_id, extract_return_candidates(return_rows))
     return {"ok": True, "browserSnapshot": _browser_snapshot_meta(snapshot)}
+
+
+def _queue_cache_key(access_token: str) -> str:
+    return scoped_avito_cache_key(AVITO_ORDERS_QUEUE_KEY, access_token)
+
+
+def _queue_cached_rows(payload: dict[str, Any]) -> list[AvitoOrderRow]:
+    return [AvitoOrderRow.model_validate(value) for value in payload.get("rows") or [] if isinstance(value, dict)]
+
+
+def _pickup_unreceived(rows: list[AvitoOrderRow], organization_id: int, account_id: str | None) -> list[AvitoOrderRow]:
+    try:
+        remaining = return_pickup_remaining(organization_id, account_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="AVITO_RETURN_STORE_UNAVAILABLE") from exc
+    result: list[AvitoOrderRow] = []
+    for row in rows:
+        copy = row.model_copy(deep=True)
+        available_items = []
+        for item in copy.items:
+            quantity = remaining.get((copy.accountId or "", copy.orderId, item.lineIndex, item.itemId or ""), 0)
+            if quantity > 0:
+                item.quantity = min(item.quantity, quantity)
+                available_items.append(item)
+        copy.items = available_items
+        if copy.items:
+            result.append(copy)
+    return result
+
+
+def _queue_age_seconds(payload: dict[str, Any], now: datetime) -> float:
+    try:
+        value = datetime.fromisoformat(str(payload["lastSuccessfulRefresh"]).replace("Z", "+00:00"))
+        return (now - value).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return float("inf")
+
+
+def _load_orders_queue(organization_id: int, access_token: str, client: Any, *, force: bool = False) -> dict[str, Any]:
+    key = _queue_cache_key(access_token)
+    cached = get_source_cache(organization_id, key, slim=False) or {}
+    now = datetime.now(timezone.utc)
+    try:
+        retry_after = datetime.fromisoformat(str(cached.get("retryAfter") or "").replace("Z", "+00:00"))
+    except ValueError:
+        retry_after = None
+    if retry_after and retry_after > now:
+        return cached
+    if not force and cached.get("complete") and _queue_age_seconds(cached, now) < 300:
+        return cached
+    try:
+        lock = get_redis_client().lock(f"satorna:avito-orders:{organization_id}", timeout=1800, blocking=False)
+        acquired = lock.acquire(blocking=False)
+    except Exception:
+        # ponytail: process lock is a local-dev fallback; production needs Redis for cross-worker exclusion.
+        lock = _QUEUE_LOCAL_LOCKS.setdefault(str(organization_id), Lock())
+        acquired = lock.acquire(blocking=False)
+    if not acquired:
+        return {**cached, "complete": False, "error": {"code": "refresh_in_progress", "retryable": True}}
+    try:
+        cached = get_source_cache(organization_id, key, slim=False) or {}
+        try:
+            latest_retry = datetime.fromisoformat(str(cached.get("retryAfter") or "").replace("Z", "+00:00"))
+        except ValueError:
+            latest_retry = None
+        if latest_retry and latest_retry > datetime.now(timezone.utc):
+            return cached
+        if not force and cached.get("complete") and _queue_age_seconds(cached, datetime.now(timezone.utc)) < 300:
+            return cached
+        previous = _queue_cached_rows(cached)
+        rows, complete, error = fetch_full_queue(
+            client, previous=previous, snapshot=_browser_snapshot_from_cache(organization_id),
+        )
+        if complete:
+            try:
+                upsert_return_candidates(organization_id, extract_return_candidates(rows))
+            except RuntimeError:
+                complete, error = False, {"code": "return_inventory_unavailable", "retryable": True}
+        if complete:
+            release_canceled_reservations(organization_id, {row.orderId for row in rows if row.status == "canceled" and row.statusSource == "avito_api"})
+            payload = {
+                "rows": [row.model_dump(mode="json") for row in rows],
+                "complete": True,
+                "lastSuccessfulRefresh": now.isoformat(),
+                "error": None,
+                "retryAfter": None,
+            }
+        else:
+            payload = {
+                **cached,
+                "rows": cached.get("rows") or [],
+                "complete": False,
+                "error": error,
+                "retryAfter": (now + timedelta(seconds=60 if (error or {}).get("code") == "rate_limited" else 20)).isoformat(),
+            }
+        save_source_cache(organization_id, key, payload)
+        return payload
+    finally:
+        try:
+            lock.release()
+        except Exception:
+            pass
+
+
+@router.get("/api/v1/avito/orders/queue")
+def get_avito_orders_queue(
+    request: Request,
+    mode: str = Query(default="active", pattern="^(active|ready_to_ship|in_transit|returns|return_inbound|return_pickup|history|review)$"),
+    account_id: str | None = Query(default=None, alias="accountId"),
+    search: str = Query(default="", max_length=200),
+    history_from: date | None = Query(default=None, alias="historyFrom"),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    force_refresh: bool = Query(default=False, alias="forceRefresh"),
+) -> dict[str, Any]:
+    actor, client, access_token = _orders_client_for_request(request)
+    cached = _load_orders_queue(actor.organization_id, access_token, client, force=force_refresh)
+    all_rows = _queue_cached_rows(cached)
+    selected = select_queue(all_rows, mode, account_id)
+    if mode == "return_pickup":
+        selected = _pickup_unreceived(selected, actor.organization_id, account_id)
+    if mode == "history" and history_from:
+        selected = [row for row in selected if row.createdAt and row.createdAt[:10] >= history_from.isoformat()]
+    if search.strip():
+        needle = search.strip().casefold()
+        selected = [row for row in selected if needle in " ".join(
+            [row.orderId, row.marketplaceId or "", row.jobNumber or "", row.shipmentNumber or "", row.trackNumber or "", row.buyerName or ""]
+            + [item.title + " " + (item.sellerArticle or "") + " " + (item.itemId or "") for item in row.items]
+        ).casefold()]
+    selected.sort(key=lambda row: row.createdAt or "", reverse=True)
+    start = (page - 1) * limit
+    page_rows = selected[start:start + limit]
+    _enrich_orders_with_return_matches(page_rows, organization_id=actor.organization_id)
+    account_rows = [row for row in all_rows if not account_id or row.accountId == account_id]
+    counts = {name: len(select_queue(account_rows, name)) for name in (
+        "active", "ready_to_ship", "in_transit", "returns", "return_inbound", "return_pickup", "history", "review",
+    )}
+    counts["return_pickup"] = len(_pickup_unreceived(select_queue(account_rows, "return_pickup"), actor.organization_id, account_id))
+    accounts = sorted({(row.accountId, row.accountName or row.accountId) for row in all_rows if row.accountId})
+    return {
+        "status": "synced" if cached.get("complete") else "blocked",
+        "filters": {"mode": mode, "accountId": account_id, "page": page, "limit": limit, "search": search, "historyFrom": history_from.isoformat() if mode == "history" and history_from else None},
+        "accounts": [{"id": key, "name": name} for key, name in accounts],
+        "summary": {**_summary(selected, len(selected)), "total": len(selected), "shown": len(page_rows), "readyToShip": counts["ready_to_ship"], "modeCounts": counts},
+        "rows": [row.model_dump(mode="json") for row in page_rows],
+        "source": {
+            "mode": "avito_api_queue",
+            "complete": bool(cached.get("complete")),
+            "lastSuccessfulRefresh": cached.get("lastSuccessfulRefresh"),
+            "error": cached.get("error"),
+            "retryAfter": cached.get("retryAfter"),
+            "browserSnapshot": _browser_snapshot_meta(_browser_snapshot_from_cache(actor.organization_id)),
+        },
+    }
+
+
+@router.get("/api/v1/avito/orders/returns-inventory")
+def get_avito_returns_inventory(
+    request: Request,
+    account_id: str | None = Query(default=None, alias="accountId"),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, Any]:
+    actor = actor_from_request(request)
+    if not has_permission(actor, "cabinet:read"):
+        raise HTTPException(status_code=403, detail="NO_ACCESS:cabinet:read")
+    try:
+        items, total = list_return_inventory(actor.organization_id, account_id=account_id, page=page, limit=limit)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="AVITO_RETURN_STORE_UNAVAILABLE") from exc
+    return {"items": [item.model_dump(mode="json") for item in items], "total": total, "page": page, "limit": limit}
+
+
+@router.post("/api/v1/avito/orders/returns-inventory/{return_item_id}/operations")
+def post_avito_return_operation(request: Request, return_item_id: int, payload: ReturnInventoryOperation) -> dict[str, Any]:
+    actor = actor_from_request(request)
+    if not has_permission(actor, "integrations:write"):
+        raise HTTPException(status_code=403, detail="NO_ACCESS:integrations:write")
+    candidate = get_return_inventory_item(actor.organization_id, return_item_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="RETURN_ITEM_NOT_FOUND")
+    if payload.action == "reserve":
+        actor, client, access_token = _orders_client_for_request(request)
+        cached = _load_orders_queue(actor.organization_id, access_token, client)
+        if not cached.get("complete") or _queue_age_seconds(cached, datetime.now(timezone.utc)) > 600:
+            raise HTTPException(status_code=503, detail="AVITO_ORDERS_QUEUE_NOT_FRESH")
+        targets = [row for row in select_queue(_queue_cached_rows(cached), "ready_to_ship") if row.orderId == payload.linkedOrderId]
+        target = targets[0] if len(targets) == 1 else None
+        if target is None or not any(
+            match.returnItemId == return_item_id and match.score == 100
+            for item in target.items for match in match_return_candidates(item, order=target, candidates=[candidate])
+        ):
+            raise HTTPException(status_code=409, detail="RETURN_VARIANT_NOT_CONFIRMED")
+    try:
+        result = apply_return_operation(
+            actor.organization_id, return_item_id, operation_id=payload.operationId,
+            action=payload.action, quantity=payload.quantity, actor_id=actor.actor_id,
+            linked_order_id=payload.linkedOrderId,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True, "item": result.model_dump(mode="json")}
+
+
+@router.get("/api/v1/avito/orders/returns-inventory/{return_item_id}/events")
+def get_avito_return_inventory_events(
+    request: Request, return_item_id: int,
+    page: int = Query(default=1, ge=1), limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, Any]:
+    actor = actor_from_request(request)
+    if not has_permission(actor, "cabinet:read"):
+        raise HTTPException(status_code=403, detail="NO_ACCESS:cabinet:read")
+    try:
+        return list_return_inventory_events(actor.organization_id, return_item_id, page=page, limit=limit)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/api/v1/avito/orders/returns-sync")
@@ -905,53 +1149,31 @@ def get_avito_orders(
 @router.get("/api/v1/avito/orders/picking-list.xlsx")
 def get_avito_orders_picking_list_xlsx(
     request: Request,
-    date_from: date | None = Query(default=None, alias="dateFrom"),
-    period_days: int = Query(default=30, alias="periodDays", ge=1, le=183),
-    status: list[str] = Query(default_factory=list, alias="status"),
+    account_id: str | None = Query(default=None, alias="accountId"),
 ) -> Response:
-    start, _days = _date_from(date_from, period_days)
-    statuses = _statuses(status)
-    actor, client, access_token = _orders_client_for_request(request)
-    browser_snapshot = _browser_snapshot_from_cache(actor.organization_id)
-    if browser_snapshot is not None:
-        rows, _total, result_status, _diagnostics, error = _fetch_orders_filtered_by_snapshot(
-            client,
-            snapshot=browser_snapshot,
-            start=start,
-            statuses=statuses,
-        )
-        if result_status == "blocked":
-            rows = _browser_snapshot_rows(browser_snapshot, statuses=statuses)
-        if rows:
-            _enrich_orders_for_picking(rows, organization_id=actor.organization_id, access_token=access_token, start=start)
-            merge_browser_snapshot_orders(rows, browser_snapshot)
-            _enrich_missing_colors_from_public_avito(rows)
-            content = build_avito_orders_picking_xlsx(rows, date_from=start)
-            filename = f"avito-picking-list-{start.isoformat()}.xlsx"
-            return Response(
-                content=content,
-                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-            )
-        if error:
-            raise HTTPException(status_code=502, detail=error)
-    rows: list[AvitoOrderRow] = []
-    total = 0
-    limit = 20
-    for page in range(1, 101):
-        result = client.fetch_orders(AvitoOrdersFetchRequest(dateFrom=start, statuses=statuses, limit=limit, page=page))
-        if result.status == "blocked":
-            raise HTTPException(status_code=502, detail=result.error.model_dump(mode="json") if hasattr(result.error, "model_dump") else result.error)
-        rows.extend(result.orders)
-        total = result.total or total
-        if not result.orders or (total and len(rows) >= total):
-            break
+    return _queue_xlsx_response(request, mode="ready_to_ship", account_id=account_id)
 
-    _enrich_orders_for_picking(rows, organization_id=actor.organization_id, access_token=access_token, start=start)
-    merge_browser_snapshot_orders(rows, _browser_snapshot_from_cache(actor.organization_id))
-    _enrich_missing_colors_from_public_avito(rows)
-    content = build_avito_orders_picking_xlsx(rows, date_from=start)
-    filename = f"avito-picking-list-{start.isoformat()}.xlsx"
+
+@router.get("/api/v1/avito/orders/returns-list.xlsx")
+def get_avito_orders_returns_list_xlsx(
+    request: Request,
+    account_id: str | None = Query(default=None, alias="accountId"),
+) -> Response:
+    return _queue_xlsx_response(request, mode="return_pickup", account_id=account_id)
+
+
+def _queue_xlsx_response(request: Request, *, mode: str, account_id: str | None) -> Response:
+    actor, client, access_token = _orders_client_for_request(request)
+    cached = _load_orders_queue(actor.organization_id, access_token, client)
+    if not cached.get("complete") or _queue_age_seconds(cached, datetime.now(timezone.utc)) > 600:
+        raise HTTPException(status_code=503, detail={"code": "AVITO_ORDERS_QUEUE_NOT_FRESH", "sourceError": cached.get("error")})
+    rows = select_queue(_queue_cached_rows(cached), mode, account_id)
+    if mode == "return_pickup":
+        rows = _pickup_unreceived(rows, actor.organization_id, account_id)
+    as_of = str(cached["lastSuccessfulRefresh"])
+    content = build_avito_orders_picking_xlsx(rows, date_from=date.today(), as_of=as_of, returns=mode == "return_pickup")
+    name = "returns" if mode == "return_pickup" else "picking"
+    filename = f"avito-{name}-list-{as_of[:10]}.xlsx"
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -78,6 +78,11 @@ def test_live_avito_orders_client_gets_order_management_orders_and_normalizes_ro
     assert result.orders[0].availableActions[0].required is True
 
 
+def test_zero_quantity_is_not_turning_into_one_item():
+    items = LiveAvitoOrdersClient("token")._items({"items": [{"id": "returned-line", "quantity": 0}]})
+    assert items[0].quantity == 0
+
+
 def test_live_avito_orders_client_returns_safe_diagnostics_on_avito_error():
     http_client = RecordingAvitoOrdersHttpClient(({"error": {"message": "forbidden"}}, 403))
     client = LiveAvitoOrdersClient(access_token="token", base_url="https://api.avito.ru")
@@ -224,6 +229,7 @@ class RecordingOrdersClient:
                     marketplaceId="123456",
                     accountName="Bless T",
                     status="ready_to_ship",
+                    statusSource="avito_api",
                     deliveryType="pvz",
                     trackNumber="TRACK-1",
                     totalKopecks=159_000,
@@ -393,8 +399,11 @@ def test_avito_orders_endpoint_adds_return_reuse_suggestion(monkeypatch):
                 size="M",
                 color="white",
                 status="on_return",
-                returnStatus="started",
+                returnStatus="ready_for_pickup",
                 lastSeenAt="2026-08-07T09:00:00+00:00",
+                receivedQuantity=1,
+                inspectedQuantity=1,
+                availableQuantity=1,
             )
         ],
     )
@@ -466,6 +475,7 @@ def test_avito_orders_browser_snapshot_enriches_live_rows(monkeypatch):
                             "sellerArticle": "BT-42-BROWSER",
                             "size": "L",
                             "color": "графит",
+                            "sources": {"imageUrl": "order_row", "sellerArticle": "order_detail", "size": "order_detail", "color": "order_detail"},
                         }
                     ],
                 }
@@ -483,7 +493,7 @@ def test_avito_orders_browser_snapshot_enriches_live_rows(monkeypatch):
     payload = response.json()
     item = payload["rows"][0]["items"][0]
     assert item["imageUrl"] == "https://70.img.avito.st/image.jpg"
-    assert item["sellerArticle"] == "BT-42-BROWSER"
+    assert item["sellerArticle"] == "BT-42"
     assert item["size"] == "L"
     assert item["color"] == "графит"
     assert payload["summary"]["total"] == 1
@@ -704,33 +714,39 @@ def test_avito_orders_picking_list_xlsx_matches_avito_order_rows(monkeypatch):
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    assert "avito-picking-list-2026-07-01.xlsx" in response.headers["content-disposition"]
+    assert "avito-picking-list-" in response.headers["content-disposition"]
     assert _xlsx_sheet_names(response.content) == ["Лист подбора"]
     cells = _xlsx_cells(response.content)
-    assert cells["A1"] == "Дата: 01.07.2026"
+    assert cells["A1"].startswith("Снимок: ")
     assert cells["A2"] == "Лист подбора Авито"
-    assert cells["A4"] == "Количество товаров: 1"
-    assert [cells[f"{column}5"] for column in "ABCDEFGHI"] == [
+    assert cells["A4"] == "Количество позиций: 1"
+    assert [cells[f"{column}5"] for column in "ABCDEFGHIJKLM"] == [
+        "Номер заказа",
         "№ задания",
+        "Номер отправления",
         "Фото",
         "Бренд",
         "Наименование",
+        "Кол-во",
         "Размер",
         "Цвет",
         "Артикул продавца",
+        "Доставка",
         "Стикер",
         "Баркод",
     ]
-    assert cells["A6"] == "123456"
-    assert cells["C6"] == "Bless T"
-    assert cells["D6"] == "Худи черный размер M"
-    assert cells["E6"] == "M"
-    assert cells["F6"] == "черный"
-    assert cells["G6"] == "BT-42"
-    assert cells["H6"] == "TRACK-1"
-    assert cells["I6"] == "8098482225"
+    assert cells["A6"] == "ord_1"
+    assert cells["B6"] == "123456"
+    assert cells["C6"] == "—"
+    assert cells["E6"] == "—"
+    assert cells["F6"] == "Худи черный размер M"
+    assert cells["H6"] == "—"
+    assert cells["I6"] == "—"
+    assert cells["J6"] == "BT-42"
+    assert cells["L6"] == "—"
+    assert cells["M6"] == "—"
     assert recording_client is not None
-    assert recording_client.requests[0].statuses == ["ready_to_ship"]
+    assert recording_client.requests[0].statuses == []
 
 
 def test_avito_orders_picking_list_xlsx_uses_browser_snapshot(monkeypatch):
@@ -752,6 +768,7 @@ def test_avito_orders_picking_list_xlsx_uses_browser_snapshot(monkeypatch):
                             "sellerArticle": "BT-42-XLSX",
                             "size": "XL",
                             "color": "молочный",
+                            "sources": {"imageUrl": "order_row", "sellerArticle": "order_detail", "size": "order_detail", "color": "order_detail"},
                         }
                     ],
                 }
@@ -793,9 +810,9 @@ def test_avito_orders_picking_list_xlsx_uses_browser_snapshot(monkeypatch):
 
     assert response.status_code == 200
     cells = _xlsx_cells(response.content)
-    assert cells["E6"] == "XL"
-    assert cells["F6"] == "молочный"
-    assert cells["G6"] == "BT-42-XLSX"
+    assert cells["H6"] == "XL"
+    assert cells["I6"] == "молочный"
+    assert cells["J6"] == "BT-42"
 
 
 def test_avito_orders_endpoint_ignores_blocked_cache_and_refetches(monkeypatch):

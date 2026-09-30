@@ -17731,6 +17731,10 @@ type AvitoOrdersStatus =
   | 'canceled'
   | 'on_return'
   | 'in_dispute'
+  | 'return_inbound'
+  | 'return_pickup'
+  | 'history'
+  | 'review'
 
 type AvitoOrderAction = {
   name: string
@@ -17743,8 +17747,10 @@ type AvitoReturnMatch = {
   accountId?: string | null
   accountName?: string | null
   itemId: string | null
+  lineIndex?: number | null
   title: string
   sellerArticle: string | null
+  brand?: string | null
   size: string | null
   color: string | null
   imageUrl?: string | null
@@ -17755,6 +17761,13 @@ type AvitoReturnMatch = {
   returnStatus?: string | null
   sourceUpdatedAt?: string | null
   lastSeenAt?: string | null
+  returnItemId?: number | null
+  availableQuantity?: number
+  receivedQuantity?: number
+  inspectedQuantity?: number
+  reservedQuantity?: number
+  sentQuantity?: number
+  writtenOffQuantity?: number
 }
 
 type AvitoReturnInventoryItem = Omit<AvitoReturnMatch, 'score' | 'reason'> & {
@@ -17764,13 +17777,16 @@ type AvitoReturnInventoryItem = Omit<AvitoReturnMatch, 'score' | 'reason'> & {
 
 type AvitoOrderItem = {
   itemId: string | null
+  lineIndex?: number | null
   title: string
   quantity: number
   priceKopecks: number | null
   sellerArticle: string | null
+  brand?: string | null
   size: string | null
   color: string | null
   imageUrl: string | null
+  barcode?: string | null
   returnMatches?: AvitoReturnMatch[]
   reuseSuggestion?: AvitoReturnMatch | null
 }
@@ -17778,6 +17794,7 @@ type AvitoOrderItem = {
 type AvitoOrderRow = {
   orderId: string
   marketplaceId: string | null
+  jobNumber?: string | null
   accountId: string | null
   accountName: string | null
   status: string
@@ -17792,6 +17809,12 @@ type AvitoOrderRow = {
   recipientPhone: string | null
   address: string | null
   trackNumber: string | null
+  stickerNumber?: string | null
+  shipmentNumber?: string | null
+  shipmentNumberState?: string | null
+  returnPickupPlace?: string | null
+  returnPickupDeadline?: string | null
+  returnPickupCode?: string | null
   returnStatus: string | null
   totalKopecks: number | null
   items: AvitoOrderItem[]
@@ -17802,8 +17825,8 @@ type AvitoOrderRow = {
 
 type AvitoOrdersBackendResponse = {
   status: 'synced' | 'blocked'
-  period: { dateFrom: string; days: number }
-  filters: { statuses: string[]; page: number; limit: number }
+  filters: { mode: string; page: number; limit: number; accountId: string | null; search: string; historyFrom: string | null }
+  accounts?: Array<{ id: string; name: string }>
   summary: {
     total: number
     shown: number
@@ -17819,6 +17842,7 @@ type AvitoOrdersBackendResponse = {
     items: number
     totalKopecks: number | null
     statusCounts: Record<string, number>
+    modeCounts?: Record<string, number>
   }
   rows: AvitoOrderRow[]
   source: Record<string, unknown>
@@ -17852,8 +17876,14 @@ type AvitoReturnsSyncSettings = {
   items?: AvitoReturnInventoryItem[]
 }
 
-const AVITO_ORDERS_PAGE_LIMIT = 20
-const AVITO_ORDERS_MAX_PAGES = 100
+type AvitoReturnInventoryPage = { items: AvitoReturnInventoryItem[]; total: number; page: number; limit: number }
+type AvitoReturnInventoryEvents = {
+  events: Array<{ action: string; quantity: number; actorId: string; linkedOrderId: string | null; createdAt: string }>
+  reservations: Array<{ linkedOrderId: string; quantity: number }>
+  total: number
+}
+
+const AVITO_ORDERS_PAGE_LIMIT = 50
 
 type AvitoStickerSettings = {
   qrStyle: 'classic' | 'rounded' | 'dots' | 'diamonds' | 'maze' | 'drops'
@@ -21562,86 +21592,31 @@ async function loadLiveAvitoChats(
 
 async function loadLiveAvitoOrders(
   accessToken: string,
-  options: { dateFrom: string; periodDays?: number; status: AvitoOrdersStatus; limit: number; page: number; forceRefresh?: boolean },
+  options: { dateFrom: string; status: AvitoOrdersStatus; limit: number; page: number; forceRefresh?: boolean; accountId?: string; search?: string },
   signal?: AbortSignal,
 ) {
-  const safePeriodDays = Math.max(1, Math.min(183, Math.round(options.periodDays || 30)))
-  const safeDateFrom = clampDateFromNotFuture(options.dateFrom, toLocalIsoDate(addLocalDays(new Date(), -(safePeriodDays - 1))))
   const params = new URLSearchParams({
-    dateFrom: safeDateFrom,
-    periodDays: String(safePeriodDays),
-    limit: String(Math.max(1, Math.min(20, options.limit || 20))),
+    mode: avitoOrdersMode(options.status),
+    limit: String(Math.max(1, Math.min(100, options.limit || 50))),
     page: String(Math.max(1, options.page || 1)),
   })
-  if (options.status && options.status !== 'all') params.append('status', options.status)
+  if (options.status === 'history') params.set('historyFrom', options.dateFrom)
+  if (options.accountId) params.set('accountId', options.accountId)
+  if (options.search) params.set('search', options.search)
   if (options.forceRefresh) params.set('forceRefresh', 'true')
-  return apiRequest<AvitoOrdersBackendResponse>(`/api/v1/avito/orders?${params.toString()}`, {
+  return apiRequest<AvitoOrdersBackendResponse>(`/api/v1/avito/orders/queue?${params.toString()}`, {
     headers: authorizationHeaders(accessToken),
     signal,
     cache: 'no-store',
   })
 }
 
-function buildAvitoOrdersSummary(rows: AvitoOrderRow[], total: number): AvitoOrdersBackendResponse['summary'] {
-  const statusCounts = rows.reduce<Record<string, number>>((acc, row) => {
-    acc[row.status] = (acc[row.status] ?? 0) + 1
-    return acc
-  }, {})
-  const totalKopecksValues = rows.map((row) => row.totalKopecks).filter((value): value is number => value != null)
-  return {
-    total: total || rows.length,
-    shown: rows.length,
-    confirmation: statusCounts.on_confirmation ?? 0,
-    readyToShip: statusCounts.ready_to_ship ?? 0,
-    inTransit: statusCounts.in_transit ?? 0,
-    delivered: statusCounts.delivered ?? 0,
-    closed: statusCounts.closed ?? 0,
-    canceled: statusCounts.canceled ?? 0,
-    returns: rows.filter((row) => row.status === 'on_return' || Boolean(row.returnStatus)).length,
-    disputes: statusCounts.in_dispute ?? 0,
-    requiredActions: rows.filter((row) => row.availableActions.some((action) => action.required)).length,
-    items: rows.reduce((sum, row) => sum + row.items.reduce((itemSum, item) => itemSum + item.quantity, 0), 0),
-    totalKopecks: totalKopecksValues.length ? totalKopecksValues.reduce((sum, value) => sum + value, 0) : null,
-    statusCounts,
-  }
-}
-
 async function loadAllLiveAvitoOrders(
   accessToken: string,
-  options: { dateFrom: string; periodDays?: number; status: AvitoOrdersStatus; forceRefresh?: boolean },
+  options: { dateFrom: string; status: AvitoOrdersStatus; forceRefresh?: boolean; page: number; accountId?: string; search?: string },
   signal?: AbortSignal,
 ): Promise<AvitoOrdersBackendResponse | null> {
-  const first = await loadLiveAvitoOrders(accessToken, { ...options, limit: AVITO_ORDERS_PAGE_LIMIT, page: 1 }, signal)
-  if (!first || first.status === 'blocked') return first
-  const rowsById = new Map<string, AvitoOrderRow>()
-  first.rows.forEach((row) => rowsById.set(row.orderId, row))
-
-  for (let page = 2; page <= AVITO_ORDERS_MAX_PAGES && first.rows.length >= AVITO_ORDERS_PAGE_LIMIT; page += 1) {
-    if (signal?.aborted) throw new Error('Загрузка заказов Авито отменена')
-    const next = await loadLiveAvitoOrders(accessToken, { ...options, limit: AVITO_ORDERS_PAGE_LIMIT, page }, signal)
-    if (!next || next.status === 'blocked' || !next.rows.length) break
-    const previousCount = rowsById.size
-    next.rows.forEach((row) => rowsById.set(row.orderId, row))
-    if (rowsById.size === previousCount) break
-    if (next.rows.length < AVITO_ORDERS_PAGE_LIMIT) break
-  }
-
-  const rows = Array.from(rowsById.values())
-  const total = Math.max(first.summary?.total ?? 0, rows.length)
-  return {
-    ...first,
-    filters: { ...first.filters, page: 1, limit: AVITO_ORDERS_PAGE_LIMIT },
-    summary: buildAvitoOrdersSummary(rows, total),
-    rows,
-    source: {
-      ...first.source,
-      pagination: {
-        pageLimit: AVITO_ORDERS_PAGE_LIMIT,
-        pagesLoaded: Math.max(1, Math.ceil(rows.length / AVITO_ORDERS_PAGE_LIMIT)),
-        total,
-      },
-    },
-  }
+  return loadLiveAvitoOrders(accessToken, { ...options, limit: AVITO_ORDERS_PAGE_LIMIT }, signal)
 }
 
 async function sendLiveAvitoChatMessage(accessToken: string, chatId: string, accountId: string, text: string) {
@@ -21725,18 +21700,33 @@ async function deleteLiveAvitoReviewAnswer(accessToken: string, answerId: string
 }
 
 const AVITO_ORDER_STATUS_OPTIONS: Array<{ value: AvitoOrdersStatus; label: string }> = [
-  { value: 'all', label: 'Все' },
+  { value: 'all', label: 'Все активные' },
   { value: 'on_confirmation', label: 'На подтверждение' },
-  { value: 'ready_to_ship', label: 'К отгрузке' },
+  { value: 'ready_to_ship', label: 'Ждут отправки' },
   { value: 'in_transit', label: 'В пути' },
   { value: 'delivered', label: 'Доставлены' },
   { value: 'closed', label: 'Закрыты' },
   { value: 'canceled', label: 'Отменены' },
   { value: 'on_return', label: 'Возвраты' },
   { value: 'in_dispute', label: 'Споры' },
+  { value: 'return_inbound', label: 'Едут обратно' },
+  { value: 'return_pickup', label: 'Можно забрать' },
+  { value: 'history', label: 'История' },
+  { value: 'review', label: 'Требует проверки' },
 ]
 
+const AVITO_ORDER_QUEUE_OPTIONS = AVITO_ORDER_STATUS_OPTIONS.filter((option) =>
+  ['all', 'ready_to_ship', 'in_transit', 'on_return', 'return_inbound', 'return_pickup', 'history', 'review'].includes(option.value),
+)
+
+function avitoOrdersMode(status: AvitoOrdersStatus) {
+  if (status === 'all') return 'active'
+  if (status === 'on_return') return 'returns'
+  return status
+}
+
 function avitoOrderStatusLabel(status: string | null | undefined) {
+  if (status === 'unknown') return 'Требует проверки'
   return AVITO_ORDER_STATUS_OPTIONS.find((option) => option.value === status)?.label ?? (status ? 'Другой статус' : '—')
 }
 
@@ -21752,24 +21742,6 @@ function avitoOrderActionLabel(action: string | null | undefined) {
   return 'Действие'
 }
 
-function avitoOrderSearchText(row: AvitoOrderRow) {
-  return [
-    row.orderId,
-    row.marketplaceId,
-    row.accountId,
-    row.accountName,
-    row.status,
-    row.buyerName,
-    row.buyerId,
-    row.recipientName,
-    row.address,
-    row.trackNumber,
-    row.deliveryType,
-    row.deliveryService,
-    ...row.items.map((item) => `${item.itemId ?? ''} ${item.title} ${item.sellerArticle ?? ''}`),
-  ].filter(Boolean).join(' ').toLocaleLowerCase('ru-RU')
-}
-
 function avitoOrderDateLabel(value: string | null | undefined) {
   if (!value) return '—'
   const date = new Date(value)
@@ -21777,10 +21749,13 @@ function avitoOrderDateLabel(value: string | null | undefined) {
   return date.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
-function avitoOrdersDataMatches(data: AvitoOrdersBackendResponse | null, dateFrom: string, status: AvitoOrdersStatus) {
-  if (!data || data.period.dateFrom !== dateFrom) return false
-  const statuses = data.filters.statuses ?? []
-  return status === 'all' ? statuses.length === 0 : statuses.length === 1 && statuses[0] === status
+function avitoOrdersDataMatches(data: AvitoOrdersBackendResponse | null, dateFrom: string, status: AvitoOrdersStatus, accountId: string, page: number, search: string) {
+  if (!data) return false
+  return data.filters.mode === avitoOrdersMode(status)
+    && data.filters.accountId === (accountId || null)
+    && data.filters.page === page
+    && data.filters.search === search
+    && (status !== 'history' || data.filters.historyFrom === dateFrom)
 }
 
 function avitoOrdersBackendError(data: AvitoOrdersBackendResponse | null) {
@@ -21791,7 +21766,7 @@ function avitoOrdersBackendError(data: AvitoOrdersBackendResponse | null) {
 
 function avitoOrderPickingRows(rows: AvitoOrderRow[]) {
   return rows.flatMap((row) => (row.items.length ? row.items : [{ itemId: null, title: 'Товар Авито', quantity: 1, priceKopecks: row.totalKopecks, sellerArticle: null, size: null, color: null, imageUrl: null }]).map((item, index) => ({
-    key: `${row.orderId}:${item.itemId ?? index}`,
+    key: `${row.accountId ?? ''}:${row.orderId}:${item.lineIndex ?? index}:${item.itemId ?? ''}`,
     order: row,
     item,
     index,
@@ -21818,7 +21793,7 @@ function avitoStickerQrValue(settings: AvitoStickerSettings, source: AvitoSticke
 function avitoStickerSku(source: AvitoStickerSource | null) {
   if (!source) return 'SKU / цвет / размер'
   const product = avitoPickingProduct(source.item.title)
-  const size = source.item.size || avitoPickingSize(source.item.title, source.item.sellerArticle)
+  const size = source.item.size || '—'
   const color = source.item.color || '—'
   return [source.item.sellerArticle || source.item.itemId || product, color !== '—' ? color : '', size !== '—' ? size : ''].filter(Boolean).join(' / ')
 }
@@ -21848,6 +21823,28 @@ async function loadAvitoReturnsSyncSettings(accessToken: string, signal?: AbortS
     headers: authorizationHeaders(accessToken),
     signal,
     cache: 'no-store',
+  })
+}
+
+async function loadAvitoReturnInventory(accessToken: string, accountId: string, page: number, signal?: AbortSignal) {
+  const params = new URLSearchParams({ page: String(page), limit: '50' })
+  if (accountId) params.set('accountId', accountId)
+  return apiRequest<AvitoReturnInventoryPage>(`/api/v1/avito/orders/returns-inventory?${params}`, {
+    headers: authorizationHeaders(accessToken), signal, cache: 'no-store',
+  })
+}
+
+async function loadAvitoReturnInventoryEvents(accessToken: string, itemId: number) {
+  return apiRequest<AvitoReturnInventoryEvents>(`/api/v1/avito/orders/returns-inventory/${itemId}/events`, {
+    headers: authorizationHeaders(accessToken), cache: 'no-store',
+  })
+}
+
+async function postAvitoReturnOperation(accessToken: string, itemId: number, payload: { operationId: string; action: string; quantity: number; linkedOrderId?: string }) {
+  return apiRequest<{ ok: boolean; item: AvitoReturnInventoryItem }>(`/api/v1/avito/orders/returns-inventory/${itemId}/operations`, {
+    method: 'POST',
+    headers: { ...authorizationHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   })
 }
 
@@ -21901,9 +21898,21 @@ function avitoOrderReturnBadge(item: AvitoOrderItem) {
   const match = avitoOrderReturnSuggestion(item)
   if (!match) return <span className="avito-return-badge is-empty">нет</span>
   const evidence = avitoOrderReturnEvidence(match)
+  const exact = match.score === 100
+  const available = match.availableQuantity ?? 0
+  const returning = Math.max(0, match.quantity - (match.receivedQuantity ?? 0))
+  if (available <= 0 && returning <= 0) return <span className="avito-return-badge is-empty">нет доступных</span>
+  const pickup = ['ready_for_pickup', 'ready_to_pickup', 'pickup_ready', 'can_pickup'].includes(match.returnStatus ?? '')
+  const label = exact && available > 0
+    ? `На возвратном складе: ${available} шт.`
+    : exact && pickup && returning > 0
+      ? `Можно забрать: ${returning} шт.`
+      : exact && match.status === 'on_return' && returning > 0
+        ? `Едет обратно: ${returning} шт.`
+        : 'Возможное совпадение — требуется проверка'
   return (
     <span className="avito-return-cell">
-      <span className="avito-return-badge">есть</span>
+      <span className="avito-return-badge">{label}</span>
       <span className="sub">{evidence || 'совпадение по возврату'}</span>
     </span>
   )
@@ -22235,12 +22244,6 @@ function avitoPickingProduct(title: string) {
   return 'Товар'
 }
 
-function avitoPickingSize(title: string, article?: string | null) {
-  const source = `${title} ${article ?? ''}`.toUpperCase()
-  const match = /\b(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\b/.exec(source)
-  return match?.[1] ?? '—'
-}
-
 function avitoPickingStatusClass(status: string) {
   if (status === 'ready_to_ship' || status === 'on_confirmation') return 'warn'
   if (status === 'canceled' || status === 'in_dispute') return 'blocked'
@@ -22253,12 +22256,16 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
   const isAvitoOrdersRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'orders-avito'
   const defaultDateFrom = toLocalIsoDate(addLocalDays(new Date(), -29))
   const [query, setQuery] = useState('')
+  const [appliedQuery, setAppliedQuery] = useState('')
   const [status, setStatus] = useState<AvitoOrdersStatus>('all')
+  const [accountId, setAccountId] = useState('')
+  const [page, setPage] = useState(1)
   const [dateFrom, setDateFrom] = useState(defaultDateFrom)
   const [dateDraft, setDateDraft] = useState(defaultDateFrom)
   const [requestSeq, setRequestSeq] = useState(0)
   const [forceRefresh, setForceRefresh] = useState(false)
   const [selectedOrderId, setSelectedOrderId] = useState('')
+  const [imagePreviewUrl, setImagePreviewUrl] = useState('')
   const [stickerOpen, setStickerOpen] = useState(false)
   const [stickerSourceKey, setStickerSourceKey] = useState('')
   const [pickingXlsxLoading, setPickingXlsxLoading] = useState(false)
@@ -22268,10 +22275,24 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
   const [returnsSyncSettings, setReturnsSyncSettings] = useState<AvitoReturnsSyncSettings | null>(null)
   const [returnsSyncLoading, setReturnsSyncLoading] = useState(false)
   const [returnsWindowOpen, setReturnsWindowOpen] = useState(false)
+  const [inventoryPage, setInventoryPage] = useState(1)
+  const [returnInventory, setReturnInventory] = useState<AvitoReturnInventoryPage | null>(null)
+  const [returnInventoryError, setReturnInventoryError] = useState('')
+  const [returnHistory, setReturnHistory] = useState<{ itemId: number; data: AvitoReturnInventoryEvents | null; error: string | null } | null>(null)
+  const [returnOperationBusy, setReturnOperationBusy] = useState('')
+  const returnOperationIds = useRef<Record<string, string>>({})
   const [returnsTimerNow, setReturnsTimerNow] = useState(() => Date.now())
   const [stickerSettings, setStickerSettings] = useState<AvitoStickerSettings>(() => readAvitoStickerSettings())
   const [live, setLive] = useState<AvitoOrdersLiveState>(EMPTY_AVITO_ORDERS_LIVE_STATE)
-  const validData = avitoOrdersDataMatches(live.data, dateFrom, status) ? live.data : null
+  const validData = avitoOrdersDataMatches(live.data, dateFrom, status, accountId, page, appliedQuery) ? live.data : null
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPage(1)
+      setAppliedQuery(query.trim())
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [query])
 
   useLayoutEffect(() => {
     if (isAvitoOrdersRoute) scrubAvitoOrdersLegacyMocks(document.body)
@@ -22291,7 +22312,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
       setDateDraft(safeDateFrom)
       return () => controller.abort()
     }
-    void loadAllLiveAvitoOrders(accessToken, { dateFrom: safeDateFrom, status, forceRefresh }, controller.signal)
+    void loadAllLiveAvitoOrders(accessToken, { dateFrom: safeDateFrom, status, forceRefresh, page, accountId, search: appliedQuery }, controller.signal)
       .then((data) => {
         if (controller.signal.aborted) return
         setLive({ loading: false, error: avitoOrdersBackendError(data), data })
@@ -22303,7 +22324,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
         setForceRefresh(false)
       })
     return () => controller.abort()
-  }, [accessToken, dateFrom, forceRefresh, isAvitoOrdersRoute, requestSeq, status])
+  }, [accessToken, dateFrom, forceRefresh, isAvitoOrdersRoute, requestSeq, status, page, accountId, appliedQuery])
 
   useEffect(() => {
     if (!isAvitoOrdersRoute || !accessToken) {
@@ -22362,21 +22383,25 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
     }
   }, [accessToken, isAvitoOrdersRoute, returnsWindowOpen])
 
-  const rows = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase('ru-RU')
-    return (validData?.rows ?? []).filter((row) => {
-      if (status !== 'all' && row.status !== status) return false
-      if (normalizedQuery && !avitoOrderSearchText(row).includes(normalizedQuery)) return false
-      return true
-    })
-  }, [query, status, validData])
-  const selected = rows.find((row) => row.orderId === selectedOrderId) ?? validData?.rows.find((row) => row.orderId === selectedOrderId) ?? null
+  useEffect(() => {
+    if (!returnsWindowOpen || !isAvitoOrdersRoute || !accessToken) return
+    const controller = new AbortController()
+    setReturnInventory(null)
+    setReturnInventoryError('')
+    void loadAvitoReturnInventory(accessToken, accountId, inventoryPage, controller.signal)
+      .then((data) => { if (!controller.signal.aborted) setReturnInventory(data) })
+      .catch(() => { if (!controller.signal.aborted) setReturnInventoryError('Не удалось загрузить возвратный склад. Повторите попытку позже.') })
+    return () => controller.abort()
+  }, [accessToken, accountId, inventoryPage, isAvitoOrdersRoute, returnsWindowOpen])
+
+  const rows = validData?.rows ?? []
+  const selected = rows.find((row) => `${row.accountId ?? ''}:${row.orderId}` === selectedOrderId) ?? null
   const summary = validData?.summary
   const sourceError = live.error || avitoOrdersBackendError(validData)
   const pickingRows = avitoOrderPickingRows(rows)
   const hasSearchQuery = query.trim().length > 0
   const selectedStickerSource = pickingRows.find((row) => row.key === stickerSourceKey)
-    ?? pickingRows.find((row) => row.order.orderId === selectedOrderId)
+    ?? pickingRows.find((row) => `${row.order.accountId ?? ''}:${row.order.orderId}` === selectedOrderId)
     ?? pickingRows[0]
     ?? null
   const stickerPrintSources = avitoStickerPrintSources(pickingRows)
@@ -22441,14 +22466,24 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
     setPickingXlsxLoading(true)
     try {
       const filename = await downloadAvitoOrdersPickingXlsx(accessToken, {
-        dateFrom,
-        periodDays: 30,
-        status,
+        accountId,
       })
       window.showToast?.(`Лист подбора ${filename} скачан`, 'success')
     } catch (error) {
       console.error('Failed to download Avito picking list xlsx', error)
       window.showToast?.('Не удалось скачать лист подбора Авито', 'error')
+    } finally {
+      setPickingXlsxLoading(false)
+    }
+  }
+  const downloadReturnsList = async () => {
+    if (!accessToken) return
+    setPickingXlsxLoading(true)
+    try {
+      const filename = await downloadAvitoOrdersPickingXlsx(accessToken, { accountId, kind: 'returns' })
+      window.showToast?.(`Лист возвратов ${filename} скачан`, 'success')
+    } catch (error) {
+      window.showToast?.(error instanceof Error ? error.message : 'Не удалось скачать лист возвратов', 'error')
     } finally {
       setPickingXlsxLoading(false)
     }
@@ -22511,13 +22546,48 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
     try {
       const next = await runAvitoReturnsSync(accessToken)
       setReturnsSyncSettings(next)
-      setForceRefresh(true)
-      setRequestSeq((value) => value + 1)
-      window.showToast?.('Загрузка возвратов запущена, заказы обновятся после завершения', 'success')
+      window.showToast?.('Загрузка возвратов запущена. Результат появится после завершения.', 'success')
     } catch (error) {
       window.showToast?.(error instanceof Error ? error.message : 'Не удалось запустить загрузку возвратов', 'warn')
     } finally {
       setReturnsSyncLoading(false)
+    }
+  }
+  const openReturnHistory = async (itemId: number) => {
+    if (!accessToken) return
+    if (returnHistory?.itemId === itemId) {
+      setReturnHistory(null)
+      return
+    }
+    setReturnHistory({ itemId, data: null, error: null })
+    try {
+      const data = await loadAvitoReturnInventoryEvents(accessToken, itemId)
+      setReturnHistory((current) => current?.itemId === itemId ? { itemId, data, error: null } : current)
+    } catch (error) {
+      setReturnHistory((current) => current?.itemId === itemId ? { itemId, data: null, error: error instanceof Error ? error.message : 'История недоступна' } : current)
+    }
+  }
+  const performReturnOperation = async (itemId: number, action: string, linkedOrderId?: string) => {
+    if (!accessToken) return
+    const key = `${itemId}:${action}:${linkedOrderId ?? ''}`
+    const operationId = returnOperationIds.current[key] ?? crypto.randomUUID()
+    returnOperationIds.current[key] = operationId
+    setReturnOperationBusy(key)
+    try {
+      const result = await postAvitoReturnOperation(accessToken, itemId, { operationId, action, quantity: 1, linkedOrderId })
+      delete returnOperationIds.current[key]
+      if (result?.item) setReturnInventory((current) => current ? { ...current, items: current.items.map((item) => item.returnItemId === itemId ? result.item : item) } : current)
+      if (returnHistory?.itemId === itemId) {
+        void loadAvitoReturnInventoryEvents(accessToken, itemId)
+          .then((data) => setReturnHistory((current) => current?.itemId === itemId ? { itemId, data, error: null } : current))
+          .catch(() => setReturnHistory((current) => current?.itemId === itemId ? { itemId, data: null, error: 'История временно недоступна' } : current))
+      }
+      setRequestSeq((value) => value + 1)
+      window.showToast?.('Операция возвратного склада сохранена', 'success')
+    } catch (error) {
+      window.showToast?.(error instanceof Error ? error.message : 'Не удалось изменить возвратный склад', 'error')
+    } finally {
+      setReturnOperationBusy('')
     }
   }
 
@@ -22530,9 +22600,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
     )
   }
 
-  const statusCount = (key: string) => status === key && rows.length !== (summary?.statusCounts?.[key] ?? 0)
-    ? rows.length
-    : (summary?.statusCounts?.[key] ?? 0)
+  const statusCount = (key: AvitoOrdersStatus) => summary?.modeCounts?.[avitoOrdersMode(key)] ?? 0
 
   return (
     <div
@@ -22545,6 +22613,14 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
       <style>{`
         .vella-html-parity-root #tab-orders-print[data-vella-island="avito-orders"] { padding: 0 20px 20px; }
         .vella-html-parity-root .avito-orders-table td { vertical-align: top; }
+        .vella-html-parity-root .avito-orders-shipment { white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .vella-html-parity-root .avito-orders-photo-button { padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+        .vella-html-parity-root .avito-orders-preview { position: fixed; inset: 0; z-index: 43000; display: grid; place-items: center; padding: 24px; background: rgba(15,23,42,.8); }
+        .vella-html-parity-root .avito-orders-preview img { max-width: min(92vw,900px); max-height: 85vh; object-fit: contain; background: #fff; }
+        .vella-html-parity-root .avito-orders-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 12px; }
+        .vella-html-parity-root .avito-orders-toolbar { flex-wrap: wrap; }
+        .vella-html-parity-root .avito-orders-toolbar .chips { flex-wrap: wrap; overflow: visible; }
+        .vella-html-parity-root .avito-orders-toolbar .toolbar-right { flex-wrap: wrap; }
         .vella-html-parity-root .avito-order-items { display: grid; gap: 4px; min-width: 220px; }
         .vella-html-parity-root .avito-orders-actions { display: flex; flex-wrap: wrap; gap: 4px; min-width: 130px; }
         .vella-html-parity-root .avito-orders-extension-settings-btn { gap: 7px; border-color: #BFDBFE; background: #EFF6FF; color: #1D4ED8; font-weight: 850; }
@@ -22666,6 +22742,14 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
         .vella-html-parity-root .avito-order-detail-window .modal-body { min-height: 0; overflow: auto; }
         .vella-html-parity-root .avito-order-detail-window .modal-head,
         .vella-html-parity-root .avito-order-detail-window .modal-foot { flex-shrink: 0; }
+        .vella-html-parity-root .avito-order-detail-window .modal-head,
+        .vella-html-parity-root .avito-returns-window .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 24px 14px; border-bottom: 1px solid var(--gray-100); }
+        .vella-html-parity-root .avito-order-detail-window .modal-head h3,
+        .vella-html-parity-root .avito-returns-window .modal-head h3 { margin: 0; font-size: 18px; line-height: 1.25; }
+        .vella-html-parity-root .avito-order-detail-window .modal-head span,
+        .vella-html-parity-root .avito-returns-window .modal-head span { display: block; margin-top: 4px; color: var(--gray-500); font-size: 12px; }
+        .vella-html-parity-root .avito-order-detail-window .modal-close,
+        .vella-html-parity-root .avito-returns-window .modal-close { width: 32px; height: 32px; flex: none; border: 1px solid var(--gray-200); border-radius: 8px; background: #fff; color: var(--gray-600); font-size: 22px; line-height: 1; cursor: pointer; }
         .vella-html-parity-root .avito-order-detail-window .report-table-wrap { max-width: 100%; overflow: auto; }
         .vella-html-parity-root .avito-order-detail-window .report-mid { min-width: 720px; }
         .vella-html-parity-root .avito-order-detail-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -22696,7 +22780,8 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
         .vella-html-parity-root .avito-returns-field { display: grid; gap: 5px; min-width: 170px; color: var(--gray-700); font-size: 12px; font-weight: 750; }
         .vella-html-parity-root .avito-returns-field select { height: 34px; border: 1px solid var(--gray-200); border-radius: 7px; background: #fff; color: var(--gray-900); font: inherit; font-size: 13px; font-weight: 700; padding: 0 10px; }
         .vella-html-parity-root .avito-returns-list { display: grid; gap: 8px; }
-        .vella-html-parity-root .avito-returns-list-row { display: grid; grid-template-columns: minmax(260px, 1fr) 150px 130px 130px; gap: 10px; align-items: center; border: 1px solid var(--gray-100); border-radius: 8px; background: #fff; padding: 10px; }
+        .vella-html-parity-root .avito-returns-list-row { display: grid; grid-template-columns: minmax(250px, 1fr) 135px 130px 200px; gap: 10px; align-items: center; border: 1px solid var(--gray-100); border-radius: 8px; background: #fff; padding: 10px; }
+        .vella-html-parity-root .avito-returns-list-row > div:nth-child(4) .btn { max-width: 100%; white-space: normal; text-align: left; }
         .vella-html-parity-root .avito-returns-product-cell { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center; }
         .vella-html-parity-root .avito-returns-thumb { width: 44px; height: 44px; border-radius: 8px; border: 1px solid var(--gray-100); background: var(--gray-50); object-fit: cover; color: var(--gray-400); font-size: 10px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
         .vella-html-parity-root .avito-returns-list-row b { display: block; color: var(--gray-900); font-size: 13px; line-height: 1.25; }
@@ -22709,52 +22794,48 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
         @media (max-width: 900px) {
           .vella-html-parity-root .avito-order-detail-list { grid-template-columns: 1fr; }
         }
+        @media (max-width: 1120px) {
+          .vella-html-parity-root .avito-orders-toolbar .toolbar-right { margin-left: 0; }
+          .vella-html-parity-root .orders-print-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
       `}</style>
-      <div className="toolbar" data-vella-event-owner="react">
-        <div className="search">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            type="text"
-            aria-label="Поиск по заказам Авито"
-            autoComplete="off"
-            placeholder="Заказ, покупатель, товар, трек или ID"
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-          />
-        </div>
+      <div className="toolbar avito-orders-toolbar" data-vella-event-owner="react">
         <div className="chips">
-          {AVITO_ORDER_STATUS_OPTIONS.map((option) => (
+          {AVITO_ORDER_QUEUE_OPTIONS.map((option) => (
             <button
               className={status === option.value ? 'chip active' : 'chip'}
               type="button"
               key={option.value}
               onClick={() => {
                 setStatus(option.value)
+                setPage(1)
                 setSelectedOrderId('')
               }}
             >
-              {option.label} <span className="chip-count">{option.value === 'all' ? formatAvitoInt(summary?.total ?? 0) : formatAvitoInt(statusCount(option.value))}</span>
+              {option.label} <span className="chip-count">{formatAvitoInt(statusCount(option.value))}</span>
             </button>
           ))}
         </div>
         <div className="toolbar-right">
+          <select aria-label="Аккаунт Авито" value={accountId} onChange={(event) => { setAccountId(event.currentTarget.value); setPage(1) }}>
+            <option value="">Все аккаунты</option>
+            {(live.data?.accounts ?? []).map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+          </select>
           <button className="btn btn-default btn-sm avito-orders-extension-settings-btn" type="button" onClick={() => setExtensionSettingsOpen(true)}>
             <Settings aria-hidden="true" />
             Настройки расширения
           </button>
-          <AvitoDateRangeActions
+          {status === 'history' ? <AvitoDateRangeActions
             from={dateDraft}
-            fromLabel="с даты"
-            fromAria="Заказы Авито с даты"
+            fromLabel="созданы с даты"
+            fromAria="История Авито по дате создания"
             loading={live.loading}
             onFromChange={(nextDate) => setDateDraft(clampDateFromNotFuture(nextDate, defaultDateFrom))}
             onApply={() => {
               const safeDateFrom = clampDateFromNotFuture(dateDraft, defaultDateFrom)
               setDateDraft(safeDateFrom)
               setDateFrom(safeDateFrom)
+              setPage(1)
               setSelectedOrderId('')
               setRequestSeq((value) => value + 1)
             }}
@@ -22762,40 +22843,39 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
               setForceRefresh(true)
               setRequestSeq((value) => value + 1)
             }}
-          />
+          /> : <button className="btn btn-default btn-sm" type="button" disabled={live.loading} onClick={() => { setForceRefresh(true); setRequestSeq((value) => value + 1) }}>Обновить данные</button>}
         </div>
       </div>
       <section className="orders-print-shell" aria-label="Лист подбора Авито">
           <section className="orders-print-head">
             <div>
-              <h1 className="orders-print-title">Авито лист подбора</h1>
-              <div className="orders-print-copy" style={{ display: 'block' }}>Заказы подготовлены для сборки, стикеров и печати.</div>
+              <h1 className="orders-print-title">Авито — {AVITO_ORDER_QUEUE_OPTIONS.find((option) => option.value === status)?.label.toLocaleLowerCase('ru-RU') || 'заказы'}</h1>
+              <div className="orders-print-copy" style={{ display: 'block' }}>
+                Последнее успешное обновление: {avitoOrderDateLabel(validData?.source?.lastSuccessfulRefresh as string | null)}
+                {validData?.source?.complete ? '' : ' · Загрузка неполная — экспорт недоступен'}
+              </div>
             </div>
             <div className="orders-print-actions">
               <button className="btn btn-default btn-sm orders-print-action" type="button" onClick={() => openStickerDesigner(selectedStickerSource)}>Стикеры</button>
               <button
                 className="btn btn-primary btn-sm orders-print-action is-primary"
                 type="button"
-                disabled={pickingXlsxLoading}
+                disabled={pickingXlsxLoading || !validData?.source?.complete}
                 onClick={() => void downloadPickingList()}
               >
-                {pickingXlsxLoading ? 'Готовим XLSX...' : 'Печать'}
+                {pickingXlsxLoading ? 'Готовим XLSX...' : 'Сформировать лист подбора'}
               </button>
+              <button className="btn btn-default btn-sm orders-print-action" type="button" disabled={pickingXlsxLoading || !validData?.source?.complete} onClick={() => void downloadReturnsList()}>Сформировать лист возвратов</button>
             </div>
           </section>
           <section className="orders-print-stats" aria-label="Сводка листа подбора Авито">
-            <div className="orders-print-stat"><span>Заказов</span><b>{formatAvitoInt(rows.length)}</b><small>за выбранный период</small></div>
-            <div className="orders-print-stat"><span>Изделий</span><b>{formatAvitoInt(summary?.items ?? pickingRows.length)}</b><small>к подбору</small></div>
+            <div className="orders-print-stat"><span>Заказов</span><b>{formatAvitoInt(summary?.total ?? 0)}</b><small>во всей выбранной очереди</small></div>
+            <div className="orders-print-stat"><span>Изделий</span><b>{formatAvitoInt(summary?.items ?? pickingRows.length)}</b><small>в выбранной очереди</small></div>
             <div className="orders-print-stat"><span>К отгрузке</span><b>{formatAvitoInt(summary?.readyToShip ?? 0)}</b><small>готовы к передаче</small></div>
-            <div className="orders-print-stat"><span>Проверки</span><b>{formatAvitoInt(rows.filter((row) => row.availableActions.length > 0).length)}</b><small>нужны решения</small></div>
+            <div className="orders-print-stat"><span>Проверки</span><b>{formatAvitoInt(summary?.requiredActions ?? 0)}</b><small>нужны решения</small></div>
           </section>
           <section className="orders-queue-toolbar" aria-label="Фильтры листа подбора Авито">
             <div className="orders-queue-main">
-              <div className="orders-queue-tabs" role="group" aria-label="Фильтры очереди Авито">
-                <button className="orders-queue-chip active" type="button">Все <small>{formatAvitoInt(pickingRows.length)}</small></button>
-                <button className="orders-queue-chip" type="button">Готово <small>{formatAvitoInt(rows.filter((row) => row.status === 'ready_to_ship').length)}</small></button>
-                <button className="orders-queue-chip" type="button">Проблемы <small>{formatAvitoInt(rows.filter((row) => row.status === 'canceled' || row.status === 'in_dispute').length)}</small></button>
-              </div>
               <label className="orders-queue-search">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>
                 <input type="search" autoComplete="off" placeholder="Поиск по номеру, заданию, артикулу, названию" value={query} onChange={(event) => setQuery(event.currentTarget.value)} />
@@ -22814,21 +22894,22 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
           <section className="orders-print-paper">
             <div className="orders-paper-head">
               <div>
-                <div className="orders-paper-title">Авито лист подбора - с {dateFrom}</div>
+                <div className="orders-paper-title">Очередь Авито · {AVITO_ORDER_QUEUE_OPTIONS.find((option) => option.value === status)?.label}</div>
                 <div className="orders-paper-meta">Порядок для производства: заказ, товар, размер и цвет. Поля без данных показаны прочерком.</div>
               </div>
               <div className="orders-paper-summary">
-                <span className="orders-paper-pill">Авито: {formatAvitoInt(rows.length)} заказов</span>
-                <span className="orders-paper-pill">{formatAvitoInt(pickingRows.length)} изделий</span>
+                <span className="orders-paper-pill">Заказы: {formatAvitoInt(summary?.total ?? rows.length)}</span>
+                <span className="orders-paper-pill">Изделия на странице: {formatAvitoInt(pickingRows.length)}</span>
               </div>
             </div>
             <div className="orders-picking-table-wrap">
               <table className="orders-picking-table">
                 <thead>
                   <tr>
-                    <th>Номер</th>
+                    <th>№</th>
                     <th className="orders-inline-actions" aria-label="Редактирование" />
-                    <th className="orders-picking-job">№ задания</th>
+                    <th className="orders-picking-job">Заказ / задание</th>
+                    <th>Номер отправления</th>
                     <th>Фото</th>
                     <th>Бренд</th>
                     <th>Наименование</th>
@@ -22839,32 +22920,43 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                     <th>Возврат</th>
                     <th>Стикер</th>
                     <th>Баркод</th>
-                    <th>QR/штрихкод Авито</th>
+                    <th>ID товара Авито</th>
                     <th>Статус</th>
                   </tr>
                 </thead>
                 <tbody>
                   {pickingRows.length ? pickingRows.map(({ key, order, item }, index) => (
-                    <tr key={key} onClick={() => setSelectedOrderId(order.orderId)} style={{ cursor: 'pointer' }}>
+                    <tr key={key} onClick={() => setSelectedOrderId(`${order.accountId ?? ''}:${order.orderId}`)} style={{ cursor: 'pointer' }}>
                       <td className="num"><b>{index + 1}</b></td>
-                      <td className="orders-inline-actions"><button className="btn btn-default btn-sm" type="button" onClick={(event) => { event.stopPropagation(); setSelectedOrderId(order.orderId) }}>Открыть</button></td>
-                      <td className="orders-picking-job"><span className="orders-print-order">{order.marketplaceId || order.orderId}</span><span className="orders-picking-muted">{order.deliveryService || 'Авито'}</span></td>
-                      <td>{item.imageUrl ? <img className="orders-picking-photo" src={item.imageUrl} alt="" /> : <div className="orders-picking-photo avito-orders-photo-empty">нет</div>}</td>
-                      <td><span className="orders-platform avito">Авито</span></td>
+                      <td className="orders-inline-actions"><button className="btn btn-default btn-sm" type="button" onClick={(event) => { event.stopPropagation(); setSelectedOrderId(`${order.accountId ?? ''}:${order.orderId}`) }}>Открыть</button></td>
+                      <td className="orders-picking-job"><span className="orders-print-order">{order.orderId}</span><span className="orders-picking-muted">Задание: {order.jobNumber || order.marketplaceId || '—'}</span></td>
+                      <td className="avito-orders-shipment" title={order.shipmentNumber ? 'Номер для сдачи отправления' : order.shipmentNumberState === 'ambiguous' ? 'Несколько номеров: требуется проверка' : 'Не загружен из Авито'}>
+                        {order.shipmentNumber ? <button className="btn btn-default btn-sm" type="button" onClick={(event) => { event.stopPropagation(); void copyAvitoExtensionValue(order.shipmentNumber!, 'Номер отправления скопирован') }}>{order.shipmentNumber}</button> : '—'}
+                      </td>
+                      <td>{item.imageUrl ? <button className="avito-orders-photo-button" type="button" aria-label={`Увеличить фото: ${item.title}`} onClick={(event) => { event.stopPropagation(); setImagePreviewUrl(item.imageUrl!) }}><img className="orders-picking-photo" src={item.imageUrl} alt="" loading="lazy" /></button> : <div className="orders-picking-photo avito-orders-photo-empty">—</div>}</td>
+                      <td>{avitoPickingCell(item.brand)}</td>
                       <td className="orders-picking-name"><b>{item.title}</b><span className="orders-picking-muted">{avitoPickingProduct(item.title)} · {formatAvitoRubNullable(item.priceKopecks ?? order.totalKopecks)}</span></td>
                       <td className="num"><b>{item.quantity}</b></td>
-                      <td>{avitoPickingCell(item.size || avitoPickingSize(item.title, item.sellerArticle))}</td>
+                      <td>{avitoPickingCell(item.size)}</td>
                       <td>{avitoPickingCell(item.color)}</td>
-                      <td>{avitoPickingCell(item.sellerArticle || item.itemId)}</td>
-                      <td>{avitoOrderReturnBadge(item)}</td>
-                      <td><button className="btn btn-default btn-sm" type="button" onClick={(event) => { event.stopPropagation(); openStickerDesigner({ key, order, item, index }) }}>Стикеры</button><span className="orders-picking-muted">{order.trackNumber || 'трек не указан'}</span></td>
-                      <td>{avitoPickingCell(order.trackNumber)}</td>
-                      <td>{avitoPickingCell(item.itemId || order.trackNumber)}</td>
+                      <td>{avitoPickingCell(item.sellerArticle)}</td>
+                      <td>
+                        {avitoOrderReturnBadge(item)}
+                        {(() => {
+                          const match = avitoOrderReturnSuggestion(item)
+                          return match?.score === 100 && (match.availableQuantity ?? 0) > 0 && match.returnItemId && order.status === 'ready_to_ship'
+                            ? <button className="btn btn-default btn-sm" type="button" disabled={Boolean(returnOperationBusy)} onClick={(event) => { event.stopPropagation(); void performReturnOperation(match.returnItemId!, 'reserve', order.orderId) }}>Зарезервировать 1 шт.</button>
+                            : null
+                        })()}
+                      </td>
+                      <td><button className="btn btn-default btn-sm" type="button" onClick={(event) => { event.stopPropagation(); openStickerDesigner({ key, order, item, index }) }}>Стикеры</button><span className="orders-picking-muted">{order.stickerNumber || 'номер не загружен'}</span></td>
+                      <td>{avitoPickingCell(item.barcode)}</td>
+                      <td>{avitoPickingCell(item.itemId)}</td>
                       <td><span className={`orders-status ${avitoPickingStatusClass(order.status)}`}>{avitoOrderStatusLabel(order.status)}</span></td>
                     </tr>
                   )) : (
                     <tr className="avito-orders-empty-row">
-                      <td colSpan={15}>
+                      <td colSpan={16}>
                         {live.loading ? (
                           <AvitoDataState kind="loading" title="Загружаем лист подбора" subtitle="Собираем заказы и товары Авито." />
                         ) : sourceError ? (
@@ -22872,7 +22964,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                         ) : hasSearchQuery ? (
                           <AvitoDataState kind="empty" title="Ничего не нашлось" subtitle="Попробуйте изменить запрос или очистить поиск." />
                         ) : (
-                          <AvitoDataState kind="empty" title="Нет позиций для подбора" subtitle="Попробуйте другую дату или статус заказа." />
+                          <AvitoDataState kind="empty" title="Нет заказов в этом режиме" subtitle="Проверьте выбранный аккаунт или обновите данные." />
                         )}
                       </td>
                     </tr>
@@ -22880,8 +22972,14 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                 </tbody>
               </table>
             </div>
+            <div className="avito-orders-pager">
+              <button className="btn btn-default btn-sm" type="button" disabled={page <= 1 || live.loading} onClick={() => setPage((current) => current - 1)}>Назад</button>
+              <span>Страница {page} из {Math.max(1, Math.ceil((summary?.total ?? 0) / AVITO_ORDERS_PAGE_LIMIT))}</span>
+              <button className="btn btn-default btn-sm" type="button" disabled={page * AVITO_ORDERS_PAGE_LIMIT >= (summary?.total ?? 0) || live.loading} onClick={() => setPage((current) => current + 1)}>Далее</button>
+            </div>
           </section>
       </section>
+      {imagePreviewUrl ? <div className="avito-orders-preview" role="dialog" aria-modal="true" aria-label="Фотография товара" onClick={() => setImagePreviewUrl('')}><img src={imagePreviewUrl} alt="Увеличенная фотография товара" /><button className="btn btn-default" type="button" onClick={() => setImagePreviewUrl('')}>Закрыть</button></div> : null}
       {extensionSettingsOpen ? (
         <div className="avito-orders-extension-settings-overlay" data-vella-react-handlers="onclick" onClick={(event) => { if (event.target === event.currentTarget) setExtensionSettingsOpen(false) }}>
           <div className="modal avito-orders-extension-settings-window" role="dialog" aria-modal="true" aria-label="Настройки расширения Avito Orders">
@@ -22906,20 +23004,20 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
       ) : null}
       {returnsWindowOpen ? (
         <div className="avito-returns-modal-overlay" data-vella-react-handlers="onclick" onClick={(event) => { if (event.target === event.currentTarget) setReturnsWindowOpen(false) }}>
-          <div className="modal-content avito-returns-window">
+          <div className="modal-content avito-returns-window" role="dialog" aria-modal="true" aria-label="Возвраты Авито">
             <div className="modal-head">
               <div>
                 <h3>Возвраты Авито</h3>
-                <span>Товары, которые сейчас можно сверять с заказами</span>
+                <span>Получение, проверка, остатки и резервы</span>
               </div>
-              <button className="modal-close" type="button" data-vella-react-handlers="onclick" onClick={() => setReturnsWindowOpen(false)}>×</button>
+              <button className="modal-close" type="button" aria-label="Закрыть возвраты" data-vella-react-handlers="onclick" onClick={() => setReturnsWindowOpen(false)}>×</button>
             </div>
             <div className="modal-body">
               <div className="avito-returns-summary">
                 <div className="avito-returns-summary-card">
                   <span>В возвратах</span>
-                  <b>{formatAvitoInt(returnsSyncSettings?.inventory?.candidates ?? returnsSyncSettings?.items?.length ?? 0)}</b>
-                  <small>товаров сохранено для сравнения</small>
+                  <b>{formatAvitoInt(returnInventory?.total ?? returnsSyncSettings?.inventory?.candidates ?? 0)}</b>
+                  <small>позиций сохранено для сравнения</small>
                 </div>
                 <div className="avito-returns-summary-card">
                   <span>Состояние</span>
@@ -22952,8 +23050,8 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                 </button>
               </div>
               <div className="avito-returns-list" aria-label="Список товаров в возвратах">
-                {returnsSyncSettings?.items?.length ? returnsSyncSettings.items.map((item, index) => (
-                  <div className="avito-returns-list-row" key={`${item.returnOrderId}-${item.itemId ?? index}`}>
+                {returnInventory?.items?.length ? returnInventory.items.map((item, index) => (
+                  <div className="avito-returns-list-row" key={`${item.accountId ?? ''}-${item.returnOrderId}-${item.lineIndex ?? index}-${item.itemId ?? ''}`}>
                     <div className="avito-returns-product-cell">
                       {item.imageUrl ? <img className="avito-returns-thumb" src={item.imageUrl} alt="" loading="lazy" /> : <div className="avito-returns-thumb">нет</div>}
                       <div>
@@ -22963,7 +23061,8 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                     </div>
                     <div>
                       <b>{formatAvitoInt(item.quantity)} шт.</b>
-                      <span>количество</span>
+                      <span>получено: {item.receivedQuantity ?? 0} · проверено: {item.inspectedQuantity ?? 0}</span>
+                      <span>доступно: {item.availableQuantity ?? 0} · резерв: {item.reservedQuantity ?? 0}</span>
                     </div>
                     <div>
                       <b>{item.marketplaceId || item.returnOrderId}</b>
@@ -22972,13 +23071,38 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                     <div>
                       <b>{item.accountName || 'Авито'}</b>
                       <span>{item.lastSeenAt ? avitoOrderDateLabel(item.lastSeenAt) : 'дата не указана'}</span>
+                      {item.returnItemId && ['ready_for_pickup', 'ready_to_pickup', 'pickup_ready', 'can_pickup'].includes(item.returnStatus ?? '') && (item.receivedQuantity ?? 0) < item.quantity
+                        ? <button className="btn btn-default btn-sm" type="button" disabled={Boolean(returnOperationBusy)} onClick={() => void performReturnOperation(item.returnItemId!, 'receive')}>Подтвердить получение 1 шт.</button> : null}
+                      {item.returnItemId && (item.receivedQuantity ?? 0) > (item.inspectedQuantity ?? 0)
+                        ? <button className="btn btn-default btn-sm" type="button" disabled={Boolean(returnOperationBusy)} onClick={() => void performReturnOperation(item.returnItemId!, 'inspect')}>Проверен и пригоден 1 шт.</button> : null}
+                      {item.returnItemId && (item.availableQuantity ?? 0) > 0
+                        ? <button className="btn btn-default btn-sm" type="button" disabled={Boolean(returnOperationBusy)} onClick={() => void performReturnOperation(item.returnItemId!, 'write_off')}>Списать 1 шт.</button> : null}
+                      {item.returnItemId ? <button className="btn btn-default btn-sm" type="button" onClick={() => void openReturnHistory(item.returnItemId!)}>История и резервы</button> : null}
                     </div>
+                    {item.returnItemId && returnHistory?.itemId === item.returnItemId ? <div style={{ gridColumn: '1 / -1', padding: '8px 12px' }}>
+                      {returnHistory.error ? <span role="alert">{returnHistory.error}</span> : !returnHistory.data ? <span>Загружаем историю…</span> : <>
+                        <b>Активные резервы</b>
+                        {returnHistory.data.reservations.length ? returnHistory.data.reservations.map((reservation) => <div key={reservation.linkedOrderId}>
+                          Заказ {reservation.linkedOrderId}: {reservation.quantity} шт.{' '}
+                          <button className="btn btn-default btn-sm" type="button" disabled={Boolean(returnOperationBusy)} onClick={() => void performReturnOperation(item.returnItemId!, 'ship', reservation.linkedOrderId)}>Отметить повторную отправку 1 шт.</button>{' '}
+                          <button className="btn btn-default btn-sm" type="button" disabled={Boolean(returnOperationBusy)} onClick={() => void performReturnOperation(item.returnItemId!, 'release', reservation.linkedOrderId)}>Снять резерв 1 шт.</button>
+                        </div>) : <div>Активных резервов нет</div>}
+                        <b>Операции ({returnHistory.data.total})</b>
+                        {returnHistory.data.events.map((event, eventIndex) => <div key={`${event.createdAt}-${event.action}-${eventIndex}`}>{avitoOrderDateLabel(event.createdAt)} · {event.action} · {event.quantity} шт. · {event.actorId}{event.linkedOrderId ? ` · заказ ${event.linkedOrderId}` : ''}</div>)}
+                        {returnHistory.data.total > returnHistory.data.events.length ? <small>Показаны последние {returnHistory.data.events.length} операций</small> : null}
+                      </>}
+                    </div> : null}
                   </div>
                 )) : (
-                  <div className="avito-returns-empty">
-                    Возвратов пока нет. Нажмите “Обновить сейчас” или дождитесь следующей автоматической загрузки.
+                  <div className="avito-returns-empty" role={returnInventoryError ? 'alert' : undefined}>
+                    {returnInventoryError || (returnInventory ? 'Возвратов пока нет. Обновите данные или проверьте выбранный аккаунт.' : 'Загружаем возвратный склад…')}
                   </div>
                 )}
+                {returnInventory && returnInventory.total > returnInventory.limit ? <div className="avito-orders-pager">
+                  <button className="btn btn-default btn-sm" type="button" disabled={inventoryPage <= 1} onClick={() => setInventoryPage((value) => value - 1)}>Назад</button>
+                  <span>Страница {inventoryPage}</span>
+                  <button className="btn btn-default btn-sm" type="button" disabled={inventoryPage * returnInventory.limit >= returnInventory.total} onClick={() => setInventoryPage((value) => value + 1)}>Далее</button>
+                </div> : null}
               </div>
             </div>
             <div className="modal-foot">
@@ -22989,7 +23113,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
       ) : null}
       {selected ? (
         <div className="avito-order-detail-modal-overlay" data-vella-react-handlers="onclick" onClick={(event) => { if (event.target === event.currentTarget) setSelectedOrderId('') }}>
-          <div className="modal-content avito-order-detail-window">
+          <div className="modal-content avito-order-detail-window" role="dialog" aria-modal="true" aria-label="Заказ Авито">
             <div className="modal-head">
               <div>
                 <h3>Заказ Авито</h3>
@@ -23008,7 +23132,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                 <table className="report-mid">
                   <thead><tr><th>Товар</th><th>ID</th><th>Артикул</th><th>Возврат</th><th>Кол-во</th><th>Цена</th></tr></thead>
                   <tbody>{selected.items.map((item, index) => (
-                    <tr key={`${item.itemId ?? index}`}>
+                    <tr key={`${item.lineIndex ?? index}-${item.itemId ?? ''}`}>
                       <td><b>{item.title}</b></td>
                       <td>{item.itemId || '—'}</td>
                       <td>{item.sellerArticle || '—'}</td>

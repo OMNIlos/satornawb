@@ -7,7 +7,7 @@ describe('downloadAvitoOrdersPickingXlsx', () => {
     vi.unstubAllGlobals()
   })
 
-  it('downloads the Avito picking list xlsx for the selected date and status', async () => {
+  it('downloads the Avito picking list for the selected account', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(new Blob(['xlsx']), {
         status: 200,
@@ -22,18 +22,14 @@ describe('downloadAvitoOrdersPickingXlsx', () => {
     const createObjectUrl = vi.fn(() => 'blob:avito-orders')
     const revokeObjectUrl = vi.fn()
 
-    const filename = await downloadAvitoOrdersPickingXlsx('access-token', {
-      dateFrom: '2026-07-01',
-      periodDays: 30,
-      status: 'ready_to_ship',
-    }, {
+    const filename = await downloadAvitoOrdersPickingXlsx('access-token', { accountId: 'account-1' }, {
       createObjectUrl,
       revokeObjectUrl,
       createLink: () => link,
     })
 
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/api/v1/avito/orders/picking-list.xlsx?dateFrom=2026-07-01&periodDays=30&status=ready_to_ship'),
+      expect.stringContaining('/api/v1/avito/orders/picking-list.xlsx?accountId=account-1'),
       expect.objectContaining({
         headers: { Authorization: 'Bearer access-token' },
         credentials: 'include',

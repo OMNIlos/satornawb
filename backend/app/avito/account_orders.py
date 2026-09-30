@@ -282,7 +282,7 @@ class BoundedAvitoOrderStatusClient:
             ):
                 raise AccountOrderStatusError()
             for parsed, original in zip(result.orders, edge.page.rows):
-                if parsed.orderId != original.order_id or parsed.status != (
+                if parsed.orderId != original.order_id or parsed.rawStatus != (
                     original.raw_status or "unknown"
                 ):
                     raise AccountOrderStatusError()
