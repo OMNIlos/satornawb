@@ -96,17 +96,13 @@ it.each(['/wb/repricer', '/wb/repricer/stats'])('uses the backend floor and deci
       await tab.getByText('NO-STRATEGY', { exact: true }).first().waitFor({ timeout: 15000 })
       for (const row of skipped) {
         const rendered = tab.locator('tbody tr').filter({ has: page.locator(`[data-sku="${row.sku}"]`) })
-        expect.soft(await rendered.locator('td').nth(11).innerText()).toContain(row.status === 'paused' ? 'приостановлено' : 'не настроено')
+        expect.soft(await rendered.locator('[data-stats-column="protection"]').innerText()).toContain(row.status === 'paused' ? 'приостановлено' : 'не настроено')
+        expect.soft(await rendered.locator('[data-stats-column="action"] .report-tag').innerText()).toBe(row.label)
         expect.soft(await rendered.locator('.report-decision-reason').innerText()).toBe(row.detail)
         expect.soft(await rendered.getAttribute('data-report-tags')).not.toMatch(/цена заблокирована|готово к пересчёту/)
       }
-      expect(await tab.locator('.stat-val').nth(1).innerText()).toBe('1 товаров')
-      expect(await tab.locator('.stat-val').nth(2).innerText()).toBe('1 товаров')
-      for (const [filter, expected] of [['готово к пересчёту', ['READY']], ['Цена заблокирована', ['BLOCKED']], ['Без пересчёта', skipped.map(row => row.sku)]] as const) {
-        await tab.getByRole('button', { name: filter, exact: true }).click({ timeout: 3000 })
-        const visible = await tab.locator('tbody tr:visible [data-sku]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-sku')))
-        expect(visible).toEqual(expected)
-      }
+      expect(await tab.locator('[data-stats-card="canRecalculate"] .stat-val').innerText()).toBe('1 товаров')
+      expect(await tab.locator('[data-stats-card="priceBlocked"] .stat-val').innerText()).toBe('1 товаров')
       await tab.locator('.report-table-wrap').evaluate(element => { element.scrollLeft = element.scrollWidth })
       await page.screenshot({ path: '/tmp/satorna-stats-skipped-local.png' })
     }

@@ -23,6 +23,9 @@
 # Shrunk 31 to 27 from complete stabilization worktree JUnit on 2026-09-14:
 # 7918 PASS, 27 FAIL, zero errors/skips; three repaired Avito/Sprint C fixtures
 # and the content-cache None guard are explicit PASS. No new failure IDs accepted.
+# Shrunk 27 to 24 from complete 2026-09-24 JUnit: two repricer stats diagnostics
+# tests now pass; the obsolete available-cache-range test is no longer collected.
+# No new failure IDs accepted.
 tests/test_app.py::test_sprint_d_reports_are_served_through_backend_app
 tests/test_sprint_d_reports.py::test_abc_report_keeps_funnel_opens_separate_when_impressions_missing
 tests/test_sprint_d_reports.py::test_abc_report_prefers_sales_funnel_orders_and_buyouts_for_portal_metrics
@@ -46,7 +49,4 @@ tests/test_wb_repricer_bff.py::test_repricer_bff_sku_settings_match_frontend_sha
 tests/test_wb_repricer_bff.py::test_repricer_list_summary_backfills_missing_other_expenses_from_revenue
 tests/test_wb_repricer_bff.py::test_repricer_sku_list_blocks_cached_goods_without_user_wb_token
 tests/test_wb_repricer_bff.py::test_repricer_sku_list_uses_covering_month_sync_daily_cache_for_week
-tests/test_wb_repricer_bff.py::test_repricer_stats_endpoint_returns_backend_diagnostics
-tests/test_wb_repricer_bff.py::test_repricer_stats_summary_uses_full_filtered_slice_not_first_page
-tests/test_wb_repricer_bff.py::test_repricer_stats_uses_available_cache_range_when_requested_range_is_missing
 tests/test_wb_repricer_bff.py::test_sku_list_page_limits_backend_row_build_for_unfiltered_first_page

@@ -166,7 +166,7 @@ def test_avito_overview_aggregates_live_sections_and_caches(monkeypatch):
     assert stats_client.requests[0].grouping == "item"
     assert chats_client.requests[0].includeMessages is False
     assert listings_client.requests == []
-    assert saved[0][1] == "avito_overview:2026-07-01:2026-07-28:all"
+    assert saved[0][1].startswith("avito_overview:2026-07-01:2026-07-28:all:")
 
 
 def test_avito_overview_reuses_stale_cache_during_rate_limit_cooldown(monkeypatch):

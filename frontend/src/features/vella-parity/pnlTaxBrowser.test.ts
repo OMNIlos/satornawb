@@ -16,7 +16,12 @@ type PnlTaxFixture = {
 it('renders backend P&L tax as unknown, zero or supplied amount under the Tax column', async () => {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const result = await build({
-    configFile: false, envFile: false, root, logLevel: 'silent', plugins: [react()],
+    configFile: false, envFile: false, root, logLevel: 'silent', plugins: [{
+      name: 'synthetic-cabinet', enforce: 'pre', transform(source, id) {
+        if (!id.endsWith('/__fixtures__/reportLoadingBrowser.tsx')) return
+        return source.replace('cabinetMe: null', `cabinetMe: ({ organization: { organizationId: 7 }, user: { userId: 1, permissions: [] } } as AuthContextValue['cabinetMe'])`)
+      },
+    }, react()],
     define: { 'process.env.NODE_ENV': JSON.stringify('test'), 'import.meta.env.VITE_API_BASE_URL': JSON.stringify('') },
     resolve: { alias: { '@': path.join(root, 'src') } },
     build: { write: false, minify: false, lib: {
@@ -37,6 +42,9 @@ it('renders backend P&L tax as unknown, zero or supplied amount under the Tax co
       if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/wb/reports/pnl') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
+      if (url.pathname === '/api/v1/cabinet/team/users') return route.fulfill({ json: { data: [] } })
+      if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: { data: { hasToken: false } } })
+      if (url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: { data: { hasCredentials: false } } })
       if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/wb/reports/pnl/latest-cache') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }

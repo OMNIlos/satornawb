@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.avito.chats import (
@@ -148,13 +149,17 @@ def test_live_avito_chats_client_uses_v2_chats_v3_messages_and_v1_send_payload()
             [
                 {"id": "msg-1", "author_id": 94235311, "direction": "in", "type": "text", "created": 1785230400, "content": {"text": "Здравствуйте"}, "is_read": False}
             ],
+            {"id": 365024549, "name": "Bless T"},
             {"id": "out-1", "direction": "out", "type": "text", "created": 1785230460, "content": {"text": "Да, актуально"}},
+            {"id": 365024549, "name": "Bless T"},
+            {"ok": True},
         ]
     )
     client = LiveAvitoChatsClient(access_token="token", base_url="https://api.avito.ru")
 
     result = client.fetch_chats(AvitoChatsFetchRequest(limit=50, offset=0), http_client=http_client)
     sent = client.send_text_message("365024549", "chat-1", "Да, актуально", http_client=http_client)
+    marked_read = client.mark_chat_read("365024549", "chat-1", http_client=http_client)
 
     assert result.status == "synced"
     assert result.chats[0].chatId == "chat-1"
@@ -167,6 +172,8 @@ def test_live_avito_chats_client_uses_v2_chats_v3_messages_and_v1_send_payload()
     assert http_client.posts[0]["url"] == "https://api.avito.ru/messenger/v1/accounts/365024549/chats/chat-1/messages"
     assert http_client.posts[0]["json"] == {"type": "text", "message": {"text": "Да, актуально"}}
     assert sent.messageId == "out-1"
+    assert marked_read is True
+    assert http_client.posts[1]["url"] == "https://api.avito.ru/messenger/v1/accounts/365024549/chats/chat-1/read"
 
 
 def test_live_avito_chats_client_keeps_chats_when_messages_endpoint_fails():
@@ -203,7 +210,7 @@ def test_live_avito_chats_client_keeps_chats_when_messages_endpoint_fails():
 
 
 def test_live_avito_chats_client_preserves_send_access_errors():
-    http_client = RecordingAvitoChatsHttpClient([({"error": {"message": "subscription required"}}, 403)])
+    http_client = RecordingAvitoChatsHttpClient([{"id": 365024549}, ({"error": {"message": "subscription required"}}, 403)])
     client = LiveAvitoChatsClient(access_token="token", base_url="https://api.avito.ru")
 
     try:
@@ -213,6 +220,28 @@ def test_live_avito_chats_client_preserves_send_access_errors():
         assert exc.error.code == "forbidden_scope"
     else:
         raise AssertionError("Expected AvitoChatsUpstreamError")
+
+
+def test_chat_client_rejects_an_account_outside_the_token_before_read_or_send():
+    client = LiveAvitoChatsClient(access_token="token")
+    fetch_http = RecordingAvitoChatsHttpClient([{"id": 365024549, "name": "Bless T"}])
+    result = client.fetch_chats(AvitoChatsFetchRequest(accountIds=["999"]), http_client=fetch_http)
+    assert result.status == "blocked"
+    assert result.error.code == "account_scope_denied"
+    assert [request["url"] for request in fetch_http.gets] == ["https://api.avito.ru/core/v1/accounts/self"]
+
+    send_http = RecordingAvitoChatsHttpClient([{"id": 365024549, "name": "Bless T"}])
+    with pytest.raises(AvitoChatsUpstreamError) as error:
+        client.send_text_message("999", "chat-1", "Да", http_client=send_http)
+    assert error.value.http_status == 403
+    assert error.value.error.code == "account_scope_denied"
+    assert send_http.posts == []
+
+    read_http = RecordingAvitoChatsHttpClient([{"id": 365024549, "name": "Bless T"}])
+    with pytest.raises(AvitoChatsUpstreamError) as error:
+        client.mark_chat_read("999", "chat-1", http_client=read_http)
+    assert error.value.http_status == 403
+    assert read_http.posts == []
 
 
 def test_avito_chats_endpoint_uses_saved_credentials_and_caches_payload(monkeypatch):
@@ -242,7 +271,37 @@ def test_avito_chats_endpoint_uses_saved_credentials_and_caches_payload(monkeypa
     assert payload["source"]["api"]["chatsEndpoint"] == "GET /messenger/v2/accounts/{user_id}/chats"
     assert recording_client is not None
     assert recording_client.access_token == "avito-live-token"
-    assert cached_payloads[0][1] == "avito_chats:50:0:all:all"
+    assert cached_payloads[0][1].startswith("avito_chats:50:0:all:all:")
+    assert "avito-live-token" not in cached_payloads[0][1]
+    assert "cacheKey" not in payload["source"]["diagnostics"]
+
+
+def test_chat_cache_is_bound_to_the_current_avito_token(monkeypatch):
+    token = ["first-token"]
+    cache: dict[str, dict] = {}
+    fetched: list[str] = []
+
+    def build_client(*_args, **kwargs):
+        fetched.append(kwargs["access_token"])
+        return RecordingAvitoChatsClient(access_token=kwargs["access_token"])
+
+    monkeypatch.setattr("app.routers.avito_chats.build_avito_chats_client", build_client)
+    monkeypatch.setattr("app.routers.avito_chats.resolve_user_avito_access_token", lambda **_kwargs: token[0])
+    monkeypatch.setattr("app.routers.avito_chats.get_source_cache", lambda _org, key, **_kwargs: cache.get(key))
+    monkeypatch.setattr("app.routers.avito_chats.save_source_cache", lambda _org, key, payload: cache.update({key: payload}))
+    _patch_router_auth(monkeypatch)
+    api = TestClient(create_app())
+
+    assert api.get("/api/v1/avito/chats").status_code == 200
+    token[0] = "second-token"
+    assert api.get("/api/v1/avito/chats").status_code == 200
+    assert fetched == ["first-token", "second-token"]
+    assert len(cache) == 2
+    assert all(token_value not in key for key in cache for token_value in token + ["first-token"])
+
+    monkeypatch.setattr("app.routers.avito_chats.get_user_avito_credentials_secret", lambda _user_id: None)
+    assert api.get("/api/v1/avito/chats").status_code == 409
+    assert fetched == ["first-token", "second-token"]
 
 
 def test_avito_chats_endpoint_ignores_period_params_because_messenger_is_current_inbox(monkeypatch):
@@ -267,7 +326,7 @@ def test_avito_chats_endpoint_ignores_period_params_because_messenger_is_current
     assert response.json()["summary"]["total"] == 1
     assert "period" not in response.json()
     assert response.json()["source"]["diagnostics"]["dateFiltering"] == "disabled"
-    assert cached_payloads[0][1] == "avito_chats:50:0:all:all"
+    assert cached_payloads[0][1].startswith("avito_chats:50:0:all:all:")
 
 
 def test_avito_chats_endpoint_sends_text_message_and_marks_read(monkeypatch):

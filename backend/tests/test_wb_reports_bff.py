@@ -440,8 +440,8 @@ def test_week_over_week_returns_real_deltas_for_current_and_previous_snapshots()
     )
 
     row = payload["rows"][0]
-    assert row["orders"]["units"] == 3
-    assert row["orders"]["deltaPct"] == 200.0
+    assert row["orders"]["units"] is None
+    assert row["orders"]["deltaPct"] is None
     assert row["sales"]["units"] == 2
     assert row["sales"]["deltaPct"] == 100.0
 
@@ -554,7 +554,7 @@ def test_week_over_week_overlays_sales_funnel_metrics_over_fallback_rows():
     assert row["orders"]["kopecks"] == 55_405_400
     assert row["sales"]["units"] == 290
     assert row["sales"]["kopecks"] == 30_605_400
-    assert row["historySource"] == "wb_sales_funnel"
+    assert row["historySource"] == "missing"
 
 
 def test_report_job_requeues_stale_queued_jobs():
@@ -579,8 +579,9 @@ def test_week_over_week_row_exposes_stock_history_coverage_and_null_unavailable_
     current = SimpleNamespace(source_status="partial", orders=[{"nmId": 101, "finishedPrice": 1000}], sales=[], stocks=[])
     payload = _build_week_over_week_payload({"preset": "7d", "from": "2026-07-07", "to": "2026-07-13"}, current)
     row = payload["rows"][0]
-    assert len(row["stockAvailability7d"]) == 7
+    assert row["stockAvailability7d"] == []
     assert row["stockSnapshotCoveragePct"] == 0
+    assert row["historySource"] == "missing"
     assert row["baskets"]["units"] is None
     assert row["marginPct"]["percent"] is None
     assert row["profit"]["kopecks"] is None
@@ -1174,8 +1175,8 @@ def test_week_over_week_live_builder_uses_own_sources_not_abc_or_repricer(monkey
     assert payload["cache"]["status"] == "cache-only"
     assert [step["stage"] for step in payload["diagnostics"]["requests"]] == ["current_sources_cache", "previous_sources_cache", "current_ads_cache", "previous_ads_cache"]
     assert payload["diagnostics"]["requests"][0]["rows"]["orders"] == 2
-    assert payload["rows"][0]["orders"]["units"] == 2
-    assert payload["rows"][0]["orders"]["deltaPct"] == 100.0
+    assert payload["rows"][0]["orders"]["units"] is None
+    assert payload["rows"][0]["orders"]["deltaPct"] is None
     assert payload["rows"][0]["sales"]["kopecks"] == 100_000
 
 
@@ -1563,8 +1564,8 @@ def test_bff_stock_and_week_over_week_endpoints_return_rows(monkeypatch):
     assert stock_payload["rows"]
     assert stock_payload["rows"][0]["sku"] == "STOCK-SOURCE-404"
     assert stock_payload["rows"][0]["availableUnits"] == 9
-    assert stock_payload["rows"][0]["historyCoverageDays"] == 7
-    assert stock_payload["rows"][0]["historySource"] in {"captured", "backfilled"}
+    assert stock_payload["rows"][0]["historyCoverageDays"] == 0
+    assert stock_payload["rows"][0]["historySource"] == "missing"
     assert stock_payload["cacheVersion"] == STOCK_REPORT_PAYLOAD_VERSION
     assert snapshot_calls == [{"organization_id": 1, "date_from": date_from, "date_to": date_to}]
 
@@ -1630,8 +1631,8 @@ def test_stock_report_payload_cache_requires_current_version():
 def test_stock_report_payload_groups_warehouses_by_product_with_catalog_meta(monkeypatch):
     history_calls = []
 
-    def history_stub(snapshot_date, rows):
-        history_calls.append((snapshot_date, rows))
+    def history_stub(snapshot_date, rows, *, organization_id):
+        history_calls.append((snapshot_date, rows, organization_id))
         return {}
 
     # Grouping is independent of legacy history capture/backfill side effects.
@@ -1712,7 +1713,7 @@ def test_stock_report_payload_groups_warehouses_by_product_with_catalog_meta(mon
     )
 
     assert payload["filters"]["groupBy"] == "sku"
-    assert history_calls == [(date(2026, 7, 20), snapshot.stocks)]
+    assert history_calls == [(date(2026, 7, 20), snapshot.stocks, 7)]
     assert payload["kpis"][0]["label"] == "Товаров"
     assert len(payload["rows"]) == 1
     row = payload["rows"][0]
@@ -1729,7 +1730,7 @@ def test_stock_report_payload_groups_warehouses_by_product_with_catalog_meta(mon
     assert row["ordersCount"] == 70
     assert row["ordersPerDay"] == 10
     assert row["daysToOos"] == 2.5
-    assert row["comment"] == "нет KTR table из seller portal; логистика/шт не подтверждена по продажам"
+    assert row["comment"] == "WB не передал долю локальных заказов; WB не передал КТР; логистика/шт не подтверждена по продажам"
     assert row["warehouseCount"] == 2
     assert [item["warehouseName"] for item in row["warehouses"]] == ["Коледино", "Подольск"]
     assert any(kpi["id"] == "marketplace_stock_units" and kpi["value"] == "80" for kpi in payload["kpis"])

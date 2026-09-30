@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
@@ -163,6 +164,8 @@ class LiveAvitoChatsClient:
                 return self._fetch_chats_with_client(request, http_client)
             with httpx.Client(timeout=self.timeout_seconds) as client:
                 return self._fetch_chats_with_client(request, client)
+        except AvitoChatsUpstreamError as exc:
+            return AvitoChatsFetchResult(status="blocked", error=exc.error)
         except httpx.HTTPStatusError as exc:
             return AvitoChatsFetchResult(status="blocked", error=self._http_error(exc))
         except Exception:
@@ -205,17 +208,27 @@ class LiveAvitoChatsClient:
         )
 
     def _account(self, client: Any, account_ids: list[str]) -> tuple[str, str]:
-        if account_ids:
-            account_id = str(account_ids[0])
-            return account_id, account_id
+        if len(account_ids) > 1 or any(re.fullmatch(r"[1-9][0-9]{0,19}", value) is None for value in account_ids):
+            raise self._account_scope_error()
         response = client.get(f"{self.base_url}/core/v1/accounts/self", headers=self._headers())
         response.raise_for_status()
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Avito account response is invalid")
         account_id = str(payload.get("id") or payload.get("user_id") or payload.get("userId") or "")
-        if not account_id:
+        if re.fullmatch(r"[1-9][0-9]{0,19}", account_id) is None:
             raise ValueError("Avito account response does not include account id")
+        if account_ids and account_ids[0] != account_id:
+            raise self._account_scope_error()
         account_name = str(payload.get("name") or payload.get("profile", {}).get("name") or account_id)
         return account_id, account_name
+
+    @staticmethod
+    def _account_scope_error() -> AvitoChatsUpstreamError:
+        return AvitoChatsUpstreamError(AvitoChatsFetchError(
+            code="account_scope_denied", message="Аккаунт Авито не совпадает с подключенным.",
+            retryable=False, blockerIds=["AVITO_SCOPE"],
+        ), 403)
 
     @staticmethod
     def _chat_rows(payload: Any) -> list[dict[str, Any]]:
@@ -293,19 +306,26 @@ class LiveAvitoChatsClient:
         body = {"type": "text", "message": {"text": text}}
         try:
             if http_client is not None:
+                self._account(http_client, [account_id])
                 response = http_client.post(f"{self.base_url}/messenger/v1/accounts/{account_id}/chats/{chat_id}/messages", json=body, headers=self._headers())
             else:
                 with httpx.Client(timeout=self.timeout_seconds) as client:
+                    self._account(client, [account_id])
                     response = client.post(f"{self.base_url}/messenger/v1/accounts/{account_id}/chats/{chat_id}/messages", json=body, headers=self._headers())
             response.raise_for_status()
             return self._message_row(chat_id, response.json())
         except httpx.HTTPStatusError as exc:
             raise AvitoChatsUpstreamError(self._http_error(exc), _safe_http_status(exc.response.status_code) or 502) from None
 
-    def mark_chat_read(self, account_id: str, chat_id: str) -> bool:
+    def mark_chat_read(self, account_id: str, chat_id: str, http_client: Any | None = None) -> bool:
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                response = client.post(f"{self.base_url}/messenger/v1/accounts/{account_id}/chats/{chat_id}/read", headers=self._headers())
+            if http_client is not None:
+                self._account(http_client, [account_id])
+                response = http_client.post(f"{self.base_url}/messenger/v1/accounts/{account_id}/chats/{chat_id}/read", headers=self._headers())
+            else:
+                with httpx.Client(timeout=self.timeout_seconds) as client:
+                    self._account(client, [account_id])
+                    response = client.post(f"{self.base_url}/messenger/v1/accounts/{account_id}/chats/{chat_id}/read", headers=self._headers())
             response.raise_for_status()
             payload = response.json()
             return bool(payload.get("ok", True)) if isinstance(payload, dict) else True

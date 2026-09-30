@@ -45,6 +45,7 @@ it('keeps current buyer columns separate and removes only the product margin col
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
       if (url.origin === 'http://satorna.test' && url.pathname === '/api/v2/wb/products/100/current-cost') return route.fulfill({ json: { data: { catalogSkuId: 1, linkedProductCount: 1, canWrite: true, currentCost: { amountKopecks: savedCost, costVersionId: 1, effectiveFrom: '2026-09-17T00:00:00Z' } } } })
+      if (url.origin === 'http://satorna.test' && url.pathname === '/api/v2/catalog/skus/1/cost-history') return route.fulfill({ json: { data: [] } })
       if (url.origin === 'http://satorna.test' && url.pathname === '/api/v2/catalog/skus/1/current-cost' && request.method() === 'POST') {
         const payload = request.postDataJSON()
         expect(payload.expectedCostVersionId).toBe(1)
