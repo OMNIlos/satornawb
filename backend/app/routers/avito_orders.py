@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from app.avito.auth import resolve_user_avito_access_token, scoped_avito_cache_key
@@ -894,6 +894,7 @@ def _load_orders_queue(organization_id: int, access_token: str, client: Any, *, 
 @router.get("/api/v1/avito/orders/queue")
 def get_avito_orders_queue(
     request: Request,
+    background_tasks: BackgroundTasks,
     mode: str = Query(default="active", pattern="^(active|ready_to_ship|in_transit|returns|return_inbound|return_pickup|history|review)$"),
     account_id: str | None = Query(default=None, alias="accountId"),
     search: str = Query(default="", max_length=200),
@@ -903,7 +904,18 @@ def get_avito_orders_queue(
     force_refresh: bool = Query(default=False, alias="forceRefresh"),
 ) -> dict[str, Any]:
     actor, client, access_token = _orders_client_for_request(request)
-    cached = _load_orders_queue(actor.organization_id, access_token, client, force=force_refresh)
+    cached = get_source_cache(actor.organization_id, _queue_cache_key(access_token), slim=False) or {}
+    now = datetime.now(timezone.utc)
+    if force_refresh or not cached.get("complete") or _queue_age_seconds(cached, now) >= 300:
+        try:
+            retry_after = datetime.fromisoformat(str(cached.get("retryAfter") or "").replace("Z", "+00:00"))
+        except ValueError:
+            retry_after = None
+        if retry_after and retry_after.tzinfo is None:
+            retry_after = retry_after.replace(tzinfo=timezone.utc)
+        if not retry_after or retry_after <= now:
+            background_tasks.add_task(_load_orders_queue, actor.organization_id, access_token, client, force=force_refresh)
+            cached = {**cached, "complete": False, "error": {"code": "refresh_in_progress", "retryable": True}}
     all_rows = _queue_cached_rows(cached)
     selected = select_queue(all_rows, mode, account_id)
     if mode == "return_pickup":

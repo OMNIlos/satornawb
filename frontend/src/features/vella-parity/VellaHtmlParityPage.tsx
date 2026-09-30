@@ -21616,7 +21616,15 @@ async function loadAllLiveAvitoOrders(
   options: { dateFrom: string; status: AvitoOrdersStatus; forceRefresh?: boolean; page: number; accountId?: string; search?: string },
   signal?: AbortSignal,
 ): Promise<AvitoOrdersBackendResponse | null> {
-  return loadLiveAvitoOrders(accessToken, { ...options, limit: AVITO_ORDERS_PAGE_LIMIT }, signal)
+  let data: AvitoOrdersBackendResponse | null = null
+  for (let attempt = 0; attempt < 30 && !signal?.aborted; attempt += 1) {
+    data = await loadLiveAvitoOrders(accessToken, { ...options, forceRefresh: attempt === 0 && options.forceRefresh, limit: AVITO_ORDERS_PAGE_LIMIT }, signal)
+    if ((data?.source?.error as { code?: string } | null)?.code !== 'refresh_in_progress') return data
+    await new Promise((resolve) => window.setTimeout(resolve, 2000))
+  }
+  return data && !signal?.aborted
+    ? { ...data, source: { ...data.source, error: { code: 'refresh_timeout', message: 'Обновление Авито занимает больше минуты. Попробуйте ещё раз.' } } }
+    : null
 }
 
 async function sendLiveAvitoChatMessage(accessToken: string, chatId: string, accountId: string, text: string) {
@@ -22883,7 +22891,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
               <div className="avito-returns-sync-control" aria-label="Возвраты товаров">
                 <label>
                   <b>Возвраты</b>
-                  <small>{avitoReturnsSyncStateLabel(returnsSyncSettings?.status?.state ?? returnsSyncSettings?.inventory?.status)} · {formatAvitoInt(returnsSyncSettings?.inventory?.candidates ?? 0)} шт</small>
+                  <small>{formatAvitoInt(returnsSyncSettings?.inventory?.candidates ?? 0)} поз. · синхронизация: {avitoReturnsSyncStateLabel(returnsSyncSettings?.status?.state ?? returnsSyncSettings?.inventory?.status)}</small>
                 </label>
                 <button className="btn btn-default btn-sm" type="button" disabled={!accessToken} data-vella-react-handlers="onclick" onClick={() => setReturnsWindowOpen(true)}>
                   Открыть возвраты

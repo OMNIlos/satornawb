@@ -1,10 +1,14 @@
 from app.avito.orders import AvitoOrderItem, AvitoOrderRow, AvitoOrdersBrowserOrder, AvitoOrdersBrowserSnapshot, AvitoOrdersFetchResult, LiveAvitoOrdersClient
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
+from types import SimpleNamespace
 from zipfile import ZipFile
+
+from fastapi import BackgroundTasks, Request
 
 from app.avito.orders_picking_xlsx import build_avito_orders_picking_xlsx
 from app.avito.orders_queue import fetch_full_queue, merge_queue_rows, select_queue
+from app.routers import avito_orders
 
 
 def order(order_id: str, status: str, updated: str = "2026-09-30T10:00:00+00:00") -> AvitoOrderRow:
@@ -141,3 +145,25 @@ def test_xlsx_preserves_shipment_text_and_embeds_safe_image():
         assert "001 526 8946" in sheet
         assert "<drawing r:id=\"rId1\"/>" in sheet
         assert book.read("xl/media/image1.png") == image
+
+
+def test_stale_queue_returns_existing_rows_and_refreshes_in_background(monkeypatch):
+    cached = {
+        "rows": [order("old", "ready_to_ship").model_dump(mode="json")],
+        "complete": True,
+        "lastSuccessfulRefresh": (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
+    }
+    monkeypatch.setattr(avito_orders, "_orders_client_for_request", lambda _request: (SimpleNamespace(organization_id=1), object(), "test-token"))
+    monkeypatch.setattr(avito_orders, "get_source_cache", lambda *_args, **_kwargs: cached)
+    monkeypatch.setattr(avito_orders, "_enrich_orders_with_return_matches", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(avito_orders, "_pickup_unreceived", lambda rows, *_args: rows)
+    monkeypatch.setattr(avito_orders, "_browser_snapshot_from_cache", lambda *_args: None)
+    tasks = BackgroundTasks()
+    response = avito_orders.get_avito_orders_queue(
+        Request({"type": "http", "headers": []}), tasks,
+        mode="active", account_id=None, search="", history_from=None, page=1, limit=50, force_refresh=False,
+    )
+    assert [row["orderId"] for row in response["rows"]] == ["old"]
+    assert response["source"]["error"]["code"] == "refresh_in_progress"
+    assert response["source"]["complete"] is False
+    assert len(tasks.tasks) == 1
