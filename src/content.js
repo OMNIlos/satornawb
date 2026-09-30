@@ -653,6 +653,8 @@ async function extractCurrentPageDetails(optionsPayload) {
   const description = documentDescription(document)
   const images = options.photoMode === 'none' ? [] : documentImageUrls(document, imageLimit)
   const resolved = resolveItemUrlFromOrderPage(optionsPayload?.orderItemTitle || title || '')
+  const shipment = globalThis.SatornaAvitoShipmentNumber.extract(rawText)
+  const returnDetails = globalThis.SatornaAvitoReturnDetails.extract(rawText)
   const details = {
     ok: true,
     url: location.href,
@@ -671,6 +673,10 @@ async function extractCurrentPageDetails(optionsPayload) {
     status: statusFromText(text),
     deliveryService: deliveryService(text),
     trackNumber: trackNumber(text),
+    shipmentNumber: shipment.number,
+    shipmentNumberState: shipment.state,
+    returnStatus: returnDetails.status,
+    returnPickupCode: returnDetails.pickupCode,
     chatText: null,
     textPreview: rawText.slice(0, 1000),
   }
@@ -767,7 +773,8 @@ async function enrichOrderFromDetails(order, options) {
       requests: direct?.requests || [],
     })
   }
-  const detailUrls = hasRowItemUrl ? [] : [order.pageUrl].filter((url) => url && !url.includes('#'))
+  const needsOrderInstruction = order.status === 'ready_to_ship' || order.status === 'on_return'
+  const detailUrls = [order.pageUrl].filter((url) => url && !url.includes('#') && (!hasRowItemUrl || needsOrderInstruction))
   const imageLimit = options.photoMode === 'two' ? 2 : 1
   let orderDetails = null
   const errors = []
@@ -785,6 +792,14 @@ async function enrichOrderFromDetails(order, options) {
   if (!order.status) order.status = orderDetails.status
   if (!order.deliveryService) order.deliveryService = orderDetails.deliveryService
   if (!order.trackNumber) order.trackNumber = orderDetails.trackNumber
+  if (orderDetails.returnStatus) order.returnStatus = orderDetails.returnStatus
+  if (orderDetails.returnPickupCode) order.returnPickupCode = orderDetails.returnPickupCode
+  if (orderDetails.shipmentNumber) {
+    order.shipmentNumber = orderDetails.shipmentNumber
+    order.shipmentNumberState = 'confirmed'
+  } else if (!order.shipmentNumber && orderDetails.shipmentNumberState === 'ambiguous') {
+    order.shipmentNumberState = 'ambiguous'
+  }
 
   const itemUrls = orderDetails.itemUrls || []
   const orderImages = options.photoMode === 'none' ? [] : (orderDetails.images || []).slice(0, imageLimit)
@@ -1074,19 +1089,27 @@ function collectOrder(root, options) {
   if (!orderId && !marketplaceId) return null
   const itemPhotos = visibleImages.map((image) => image.url).filter(Boolean)
   const photos = itemPhotos.length ? itemPhotos : fallbackPhotos
+  const shipment = globalThis.SatornaAvitoShipmentNumber.extract(text)
+  const returnDetails = globalThis.SatornaAvitoReturnDetails.extract(text)
   return {
     orderId,
     marketplaceId,
     status: statusFromText(text),
     deliveryService: deliveryService(text),
     trackNumber: trackNumber(text),
+    shipmentNumber: shipment.number,
+    shipmentNumberState: shipment.state,
+    returnStatus: returnDetails.status,
+    returnPickupCode: returnDetails.pickupCode,
     buyerName: text.match(/(?:покупатель|получатель)\s*[:—-]\s*([а-яёa-z .-]{2,40})/iu)?.[1]?.trim() || null,
-    pageUrl: absoluteUrl(orderDetailsLink(root)?.getAttribute('href')) || location.href,
+    pageUrl: absoluteUrl(orderDetailsLink(root)?.getAttribute('href'))
+      || (/\/orders\/[^/?#]+/i.test(location.pathname) ? location.href : null),
     items: [{
       itemId: itemIdFromUrl(url) || avitoItemId,
+      lineIndex: 0,
       title,
       itemUrl: url,
-      quantity: Number(text.match(/(?:кол-во|количество)\s*[:—-]?\s*(\d+)/iu)?.[1] || 1),
+      quantity: Number(text.match(/(?:кол-во|количество)\s*[:—-]?\s*(\d+)/iu)?.[1] ?? 1),
       priceKopecks: parseKopecks(text),
       sellerArticle: options.articleFromDescription ? parseArticle(combined) : null,
       size: null,
