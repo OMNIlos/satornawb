@@ -30,6 +30,7 @@ import type {
   ReportKpi,
   TableRow,
 } from '@/features/wb-reports/types'
+import { downloadReportTableXlsx } from '@/features/wb-reports/tableXlsx'
 import {
   getManagerPlan,
   getReportRules,
@@ -1524,6 +1525,28 @@ function setProductsKpisUnavailable() {
 function productNumber(product: Record<string, unknown>, key: string) {
   const value = Number(product[key])
   return Number.isFinite(value) ? value : 0
+}
+
+export function productsMetricTrend(rows: Array<Record<string, unknown>>, currentKey: string, previousKey: string) {
+  let current = 0
+  let previous = 0
+  let comparable = 0
+  rows.forEach((row) => {
+    if (row[previousKey] == null || row[previousKey] === '') return
+    const currentValue = Number(row[currentKey])
+    const previousValue = Number(row[previousKey])
+    if (!Number.isFinite(currentValue) || !Number.isFinite(previousValue)) return
+    current += currentValue
+    previous += previousValue
+    comparable += 1
+  })
+  if (!comparable || current === previous) return null
+  if (previous === 0) return current > 0 ? { className: 'up', label: '↑ рост с нуля к прошлому периоду' } : null
+  const deltaPct = ((current - previous) / previous) * 100
+  const formatted = Math.abs(deltaPct).toLocaleString('ru-RU', { maximumFractionDigits: 1 })
+  return deltaPct > 0
+    ? { className: 'up', label: `↑ +${formatted}% к прошлому периоду` }
+    : { className: 'down', label: `↓ −${formatted}% к прошлому периоду` }
 }
 
 function productsForKpi() {
@@ -6366,6 +6389,39 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
   }
 }
 
+export function buildAbcExportTable(rows: AbcBackendRow[]) {
+  const headers = [
+    'Артикул', 'Артикул WB', 'Товар', 'Статус', 'ABC', 'Менеджер', 'Цена до СПП',
+    'Себестоимость за шт', 'Показы', 'Переходы', 'Корзины', 'Заказы, шт', 'Заказы, ₽',
+    'Продажи, шт', 'Продажи, ₽', 'Выкуп, %', 'Реклама', 'Хранение, %', 'Чистая прибыль', 'Маржа, %',
+  ]
+  return {
+    headers,
+    rows: rows.map((row) => [
+      String(row.sku ?? ''),
+      String(row.nmId ?? ''),
+      String(row.productName ?? ''),
+      statusLabelFromBackend(row.productStatus),
+      String(row.abcCode ?? ''),
+      String(row.manager ?? ''),
+      formatAbcKopecks(row.priceBeforeSppKopecks ?? row.priceKopecks),
+      formatAbcKopecks(row.cogsPerUnitKopecks),
+      formatDigestInt(row.impressions),
+      formatDigestInt(row.clicks),
+      formatDigestInt(row.baskets),
+      formatDigestInt(row.ordersComposite?.units),
+      formatAbcKopecks(row.ordersComposite?.kopecks),
+      formatDigestInt(row.salesComposite?.units),
+      formatAbcKopecks(row.salesComposite?.kopecks),
+      formatAbcPct(asAbcNumber(row.buyoutPct) ?? Number.NaN),
+      formatAbcKopecks(row.adSpendKopecks),
+      formatAbcPct(asAbcNumber(row.storageCostPct) ?? Number.NaN),
+      formatAbcKopecks(row.netTotalKopecks),
+      formatAbcPct(asAbcNumber(row.marginPct) ?? Number.NaN),
+    ]),
+  }
+}
+
 function currentAbcLiveState(): AbcLiveState {
   return {
     loading: !!window.__vellaAbcLiveLoading,
@@ -7924,18 +7980,26 @@ function DigestActionQueueIsland({ replacementKey }: { replacementKey: string })
   )
 }
 
+type DigestPeriodMetrics = Omit<NonNullable<DigestResponse['periodCards']>[number], 'id' | 'label'>
+
+export function digestPeriodRows(period: DigestPeriodMetrics) {
+  return [
+    ['Открыли карточку', formatDigestInt(period.openCount)],
+    ['Добавили в корзину', formatDigestInt(period.cartCount)],
+    ['Заказы, шт', `${formatDigestInt(period.ordersUnits)} шт`],
+    ['Заказы, ₽', formatDigestKopecks(period.ordersKopecks)],
+    ['Выкупили', `${formatDigestInt(period.salesUnits)} шт`],
+    ['Возвраты', `${formatDigestInt(period.returnsUnits)} шт`],
+    ['Выкуп', formatDigestPct(period.buyoutPct)],
+    ['Выручка', formatDigestKopecks(period.revenueKopecks)],
+  ]
+}
+
 function DigestPeriodContextIsland({ replacementKey, compact = false }: { replacementKey: string; compact?: boolean }) {
   const state = useDigestLiveState()
   const periods = (state.digest?.periodCards ?? []).map((period) => ({
     title: period.label,
-    rows: [
-      ['Заказы, шт', `${formatDigestInt(period.ordersUnits)} шт`],
-      ['Заказы, ₽', formatDigestKopecks(period.ordersKopecks)],
-      ['Выкупили', `${formatDigestInt(period.salesUnits)} шт`],
-      ['Возвраты', `${formatDigestInt(period.returnsUnits)} шт`],
-      ['Выкуп', formatDigestPct(period.buyoutPct)],
-      ['Выручка', formatDigestKopecks(period.revenueKopecks)],
-    ],
+    rows: digestPeriodRows(period),
   }))
   return (
     <div
@@ -8722,7 +8786,18 @@ function AbcSourceStateStripIsland({ replacementKey }: { replacementKey: string 
 
 function AbcToolbarIsland({ replacementKey }: { replacementKey: string }) {
   const state = useAbcLiveState()
+  const { accessToken } = useAuth()
+  const [exporting, setExporting] = useState(false)
   if (state.authExpired || state.loading || !state.report || !abcHasReportRows(state)) return null
+  const exportTable = () => {
+    if (!accessToken || exporting) return
+    const table = buildAbcExportTable(state.report?.rows ?? [])
+    setExporting(true)
+    void downloadReportTableXlsx(accessToken, 'abc', table.headers, table.rows)
+      .then((filename) => window.showToast?.(`Выгружен ${filename}`, 'success'))
+      .catch((error) => window.showToast?.(error instanceof Error ? error.message : 'Не удалось выгрузить ABC', 'error'))
+      .finally(() => setExporting(false))
+  }
   return (
     <div
       key={replacementKey}
@@ -8758,6 +8833,22 @@ function AbcToolbarIsland({ replacementKey }: { replacementKey: string }) {
         ))}
       </div>
       <div className="toolbar-right">
+        <button
+          className="btn btn-default btn-sm"
+          type="button"
+          disabled={!accessToken || exporting}
+          data-tip="Выгрузить все строки ABC-анализа в XLSX"
+          data-vella-react-handlers="onclick"
+          data-vella-action-owner="react-export"
+          onClickCapture={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            exportTable()
+          }}
+        >
+          <FileSpreadsheet size={14} />
+          {exporting ? 'Выгружаем...' : 'Экспорт XLSX'}
+        </button>
         <button
           className="btn btn-default btn-sm"
           type="button"
@@ -9125,8 +9216,25 @@ function SimpleReportToolbarIsland({
   )
 }
 
-function AdsToolbarIsland({ replacementKey }: { replacementKey: string }) {
+export function adsDimensionValues(rows: AdsBackendRow[], key: 'campaignStatus' | 'campaignType' | 'paymentType') {
+  return Array.from(new Set(rows.map((row) => String(row[key] ?? '').trim()).filter(Boolean)))
+}
+
+function AdsToolbarIsland({ replacementKey, rows, accessToken }: { replacementKey: string; rows: AdsBackendRow[]; accessToken: string | null }) {
   const chips = ['Все строки', 'Поиск', 'Каталог', 'Медиа', 'Не распределено', 'ДРР выше порога']
+  const [exporting, setExporting] = useState(false)
+  const statuses = adsDimensionValues(rows, 'campaignStatus')
+  const types = adsDimensionValues(rows, 'campaignType')
+  const paymentTypes = adsDimensionValues(rows, 'paymentType')
+  const exportTable = () => {
+    if (!accessToken || exporting) return
+    const table = buildAdsExportTable(rows)
+    setExporting(true)
+    void downloadReportTableXlsx(accessToken, 'ads', table.headers, table.rows)
+      .then((filename) => window.showToast?.(`Выгружен ${filename}`, 'success'))
+      .catch((error) => window.showToast?.(error instanceof Error ? error.message : 'Не удалось выгрузить рекламу', 'error'))
+      .finally(() => setExporting(false))
+  }
   return (
     <div
       key={replacementKey}
@@ -9164,16 +9272,33 @@ function AdsToolbarIsland({ replacementKey }: { replacementKey: string }) {
         ))}
       </div>
       <div className="toolbar-right">
+        <select className="adv-select" defaultValue="all" data-report-filter="campaignStatus" data-vella-react-handlers="onchange" onChange={updateGenericReportSelect}>
+          <option value="all">Все статусы</option>
+          {statuses.map((status) => <option key={status} value={status}>{adsCampaignStatusLabel(status)}</option>)}
+        </select>
+        <select className="adv-select" defaultValue="all" data-report-filter="campaignType" data-vella-react-handlers="onchange" onChange={updateGenericReportSelect}>
+          <option value="all">Все типы</option>
+          {types.map((type) => <option key={type} value={type}>{adsCampaignTypeLabel(type)}</option>)}
+        </select>
+        <select className="adv-select" defaultValue="all" data-report-filter="paymentType" data-vella-react-handlers="onchange" onChange={updateGenericReportSelect}>
+          <option value="all">Все оплаты</option>
+          {paymentTypes.map((paymentType) => <option key={paymentType} value={paymentType}>{adsPaymentTypeLabel(paymentType)}</option>)}
+        </select>
         <span className="report-tag fin">данные backend</span>
         <button
           className="btn btn-default btn-sm"
           type="button"
-          data-tip="Сформировать выгрузку"
+          disabled={!accessToken || exporting}
+          data-tip="Выгрузить все строки рекламы в XLSX"
           data-vella-react-handlers="onclick"
           data-vella-action-owner="react-export"
-          onClickCapture={exportGenericReportXlsx}
+          onClickCapture={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            exportTable()
+          }}
         >
-          Экспорт XLSX
+          {exporting ? 'Выгружаем...' : 'Экспорт XLSX'}
         </button>
       </div>
     </div>
@@ -11997,6 +12122,30 @@ function weekMetricValue(metric: { units?: number | null } | null | undefined) {
   return units == null ? '—' : Math.round(units).toLocaleString('ru-RU')
 }
 
+export function weekMetricPair(metric: { units?: number | null; kopecks?: number | null } | null | undefined) {
+  const units = weekNumber(metric?.units)
+  return {
+    units: units == null ? '—' : `${Math.round(units).toLocaleString('ru-RU')} шт`,
+    money: formatAdsKopecks(metric?.kopecks),
+  }
+}
+
+export function weekRowFilterData(row: WeekBackendRow) {
+  const conclusion = String(row.conclusion ?? '').toLocaleLowerCase('ru-RU')
+  const salesDelta = weekNumber(row.sales?.deltaPct)
+  const ordersDelta = weekNumber(row.orders?.deltaPct)
+  const margin = weekNumber(row.marginPct?.percent)
+  const marginDelta = weekNumber(row.marginPct?.deltaPct)
+  const tags: string[] = []
+  if ((salesDelta ?? 0) > 0 || (ordersDelta ?? 0) > 0 || conclusion.includes('рост')) tags.push('рост')
+  if ((salesDelta ?? 0) < 0 || (ordersDelta ?? 0) < 0 || /ниже|порог|просад/.test(conclusion)) tags.push('ниже порога')
+  if ((margin ?? 0) < 0 || (marginDelta ?? 0) < 0 || /марж.*ниже|низк.*марж/.test(conclusion)) tags.push('маржа ниже')
+  return {
+    search: [row.sku, row.nmId, weekProductTitle(row), weekProductSubtitle(row), row.productStatus, row.conclusion].filter(Boolean).join(' '),
+    tags: tags.join('|'),
+  }
+}
+
 function WeekWorkbenchIsland({ replacementKey, state }: { replacementKey: string; state: WeekLiveState }) {
   const rows = state.status === 'ready' ? getWeekRows(state.report) : []
   const averageDelta = (selector: (row: WeekBackendRow) => unknown) => {
@@ -12004,9 +12153,17 @@ function WeekWorkbenchIsland({ replacementKey, state }: { replacementKey: string
     return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
   }
   const attentionRows = rows.filter((row) => (weekNumber(row.marginPct?.percent) ?? 0) < 0 || (weekNumber(row.sales?.deltaPct) ?? 0) < 0 || row.wasOutOfStock === true)
+  const salesTotal = weekMetricPair({
+    units: rows.reduce((sum, row) => sum + (weekNumber(row.sales?.units) ?? 0), 0),
+    kopecks: rows.reduce((sum, row) => sum + (weekNumber(row.sales?.kopecks) ?? 0), 0),
+  })
+  const ordersTotal = weekMetricPair({
+    units: rows.reduce((sum, row) => sum + (weekNumber(row.orders?.units) ?? 0), 0),
+    kopecks: rows.reduce((sum, row) => sum + (weekNumber(row.orders?.kopecks) ?? 0), 0),
+  })
   const signals = [
-    ['Продажи', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.sales?.deltaPct)), state.status === 'ready' ? formatAdsKopecks(rows.reduce((sum, row) => sum + (weekNumber(row.sales?.kopecks) ?? 0), 0)) : 'данные обновляются', 'week-signal', 'Среднее изменение продаж к прошлой неделе. Сумма ниже показывает выкупили на сумму за текущую неделю.'],
-    ['Заказы', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.orders?.deltaPct)), state.status === 'ready' ? `${rows.reduce((sum, row) => sum + (weekNumber(row.orders?.units) ?? 0), 0)} шт` : 'данные обновляются', 'week-signal', 'Среднее изменение заказов к прошлой неделе. Заказы показывают спрос раньше, чем выкуп.'],
+    ['Продажи', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.sales?.deltaPct)), state.status === 'ready' ? `${salesTotal.units} · ${salesTotal.money}` : 'данные обновляются', 'week-signal', 'Среднее изменение продаж к прошлой неделе. Ниже показаны выкупы в штуках и рублях за текущую неделю.'],
+    ['Заказы', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.orders?.deltaPct)), state.status === 'ready' ? `${ordersTotal.units} · ${ordersTotal.money}` : 'данные обновляются', 'week-signal', 'Среднее изменение заказов к прошлой неделе. Ниже показаны заказы в штуках и рублях за текущую неделю.'],
     ['Маржа', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.marginPct?.deltaPct), ' пп'), state.status === 'ready' ? 'по данным P&L/операционных расходов' : 'данные обновляются', 'week-signal warn', 'Изменение маржи в процентных пунктах. Маржа = прибыль / выручка * 100%.'],
     ['Требуют внимания', state.status === 'ready' ? String(attentionRows.length) : 'загрузка', state.status === 'ready' ? 'снижение продаж, убыток или отсутствие остатка' : 'данные обновляются', 'week-signal danger', 'Товары, которые попали в зону внимания: отрицательная маржа, слабые продажи или проблемный статус.'],
   ]
@@ -12505,6 +12662,40 @@ function adsRecommendationLabel(value: unknown, unallocated?: boolean | null) {
   return ['в пределах порога', 'ok']
 }
 
+export function adsCampaignStatusLabel(value: unknown) {
+  const labels: Record<string, string> = {
+    '-1': 'Удаляется',
+    '4': 'Готова к запуску',
+    '7': 'Завершена',
+    '8': 'Отклонена',
+    '9': 'Активна',
+    '11': 'Приостановлена',
+  }
+  const key = String(value ?? '').trim()
+  return labels[key] ?? (key || 'Не передан')
+}
+
+function adsCampaignStatusClass(value: unknown) {
+  const key = String(value ?? '').trim()
+  if (key === '9') return 'good'
+  if (key === '4' || key === '11') return 'warn'
+  return key ? 'danger' : 'neutral'
+}
+
+export function adsCampaignTypeLabel(value: unknown) {
+  const key = String(value ?? '').trim()
+  if (key === '9') return 'Аукцион'
+  if (key === '8') return 'Единая ставка (архив)'
+  return key || 'Не передан'
+}
+
+export function adsPaymentTypeLabel(value: unknown) {
+  const key = String(value ?? '').trim().toLowerCase()
+  if (key === 'cpm') return 'CPM · за показы'
+  if (key === 'cpc') return 'CPC · за клики'
+  return key || 'Не передан'
+}
+
 function adsTypeTags(row: AdsBackendRow) {
   const typeText = String(row.campaignType ?? '').toLowerCase()
   const nameText = String(row.campaignName ?? '').toLowerCase()
@@ -12515,6 +12706,40 @@ function adsTypeTags(row: AdsBackendRow) {
   if ((row.drrPct ?? 0) >= 14) tags.push('дрр выше порога')
   if (row.unallocatedSpend || row.attributionLevel === 'campaign_only') tags.push('не распределено', 'на проверку')
   return tags.join('|')
+}
+
+export function buildAdsExportTable(rows: AdsBackendRow[]) {
+  const headers = [
+    'ID кампании', 'Кампания', 'Статус', 'Тип', 'Оплата', 'Артикул', 'Артикул WB', 'Товар',
+    'Показы', 'Клики', 'CTR', 'Корзины', 'Заказы, шт', 'Заказы, ₽', 'Продажи, шт', 'Продажи, ₽',
+    'Расход', 'Бюджет', 'ДРР', 'ROMI', 'Рекомендация',
+  ]
+  return {
+    headers,
+    rows: rows.map((row, index) => [
+      String(row.campaignId ?? ''),
+      String(row.campaignName ?? ''),
+      adsCampaignStatusLabel(row.campaignStatus),
+      adsCampaignTypeLabel(row.campaignType),
+      adsPaymentTypeLabel(row.paymentType),
+      String(row.sku ?? ''),
+      String(row.nmId ?? ''),
+      adsPrimaryRowLabel(row, index),
+      formatAdsInteger(row.impressions),
+      formatAdsInteger(row.adClicks ?? row.clicks),
+      formatAdsPct(row.ctrPct),
+      formatAdsInteger(row.baskets),
+      formatAdsInteger(row.orders?.units),
+      formatAdsKopecks(row.orders?.kopecks),
+      formatAdsInteger(row.sales?.units),
+      formatAdsKopecks(row.sales?.kopecks),
+      formatAdsKopecks(row.adSpendKopecks),
+      formatAdsKopecks(row.budgetTotalKopecks),
+      formatAdsPct(row.drrPct),
+      formatAdsPct(adsRowRomiPct(row)),
+      String(row.recommendationReason ?? ''),
+    ]),
+  }
 }
 
 function AdsLoadingLine({ className = '' }: { className?: string }) {
@@ -12720,6 +12945,7 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
             <ReportHeaderCell label="Товар" tip="Название и фото товара WB, по которому собрана строка рекламы." />
             <ReportHeaderCell label="РК / источник" tip="Название рекламной кампании. Если кампанию нельзя определить, показываем товарную строку." />
             <ReportHeaderCell label="Тип РК" tip="Тип рекламной кампании WB: поиск, каталог, автореклама, медиа или другой формат, если WB его передал." />
+            <ReportHeaderCell label="Статус РК" tip="Статус кампании из кабинета WB: активна, приостановлена, завершена, отклонена или готова к запуску." />
             <ReportHeaderCell label="Привязка" tip="Как расход рекламы связан с товаром: точно к товару, по списку товаров кампании или только на уровне кампании." />
             <ReportHeaderCell className="num" label="Оценка (перспектива)" tip="Оценка показывает, насколько надежно расход рекламы привязан к товару. Низкая оценка значит, что строку лучше проверить вручную перед решением." />
             <ReportHeaderCell label="Менеджер" tip="Ответственный за товар или кампанию. Нужен, чтобы понимать, кому смотреть решение." />
@@ -12754,9 +12980,10 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
                   ? 'РК не передана источником'
                   : `РК ${index + 1}`
             const campaignMeta = hasCampaign
-              ? (row.paymentType ? `оплата: ${row.paymentType}` : 'кампания WB')
+              ? (row.paymentType ? `оплата: ${adsPaymentTypeLabel(row.paymentType)}` : 'кампания WB')
               : 'кампания не передана'
-            const campaignType = row.campaignType && String(row.campaignType).toLowerCase() !== 'unknown' ? row.campaignType : '—'
+            const campaignType = row.campaignType && String(row.campaignType).toLowerCase() !== 'unknown' ? adsCampaignTypeLabel(row.campaignType) : '—'
+            const campaignStatus = adsCampaignStatusLabel(row.campaignStatus)
             const runtimeProduct = adsRuntimeProduct(row)
             const productTitle = adsProductTitle(row, index, runtimeProduct)
             const searchText = adsRowSearchText(row, index, runtimeProduct)
@@ -12767,6 +12994,9 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
                 data-search={searchText}
                 data-report-tags={adsTypeTags(row)}
                 data-manager-id={row.managerId ?? 'unassigned'}
+                data-campaign-status={String(row.campaignStatus ?? '')}
+                data-campaign-type={String(row.campaignType ?? '')}
+                data-payment-type={String(row.paymentType ?? '')}
               >
                 <td className="ads-entity-cell report-sticky">
                   <ReportProductCell
@@ -12783,6 +13013,7 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
                   </div>
                 </td>
                 <td>{campaignType}</td>
+                <td><span className={`report-tag ${adsCampaignStatusClass(row.campaignStatus)}`}>{campaignStatus}</span></td>
                 <td><span className={`report-tag ${attributionClass}`}>{attributionLabel}</span></td>
                 <td className="num">{row.confidence ?? '—'}</td>
                 <td>—</td>
@@ -12806,7 +13037,7 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
           })}
           {rows.length === 0 ? (
             <tr data-report-empty="ads-filter">
-              <td colSpan={21}>
+              <td colSpan={22}>
                 <div className="report-empty-note visible">
                   <b>Нет позиций по выбранным фильтрам</b><br />
                   <span>Измените поиск или фильтр кампаний.</span><br />
@@ -12815,7 +13046,7 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
               </td>
             </tr>
           ) : null}
-          <ReportTableMoreRow colSpan={21} shown={visibleRows.length} total={rows.length} onMore={() => setPagination(current => ({ ...current, limit: current.limit + REPORT_TABLE_RENDER_BATCH }))} />
+          <ReportTableMoreRow colSpan={22} shown={visibleRows.length} total={rows.length} onMore={() => setPagination(current => ({ ...current, limit: current.limit + REPORT_TABLE_RENDER_BATCH }))} />
         </tbody>
       </table>
     </div>
@@ -13115,8 +13346,8 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
         >
           <tr>
             <ReportHeaderCell label="Товар" tip="Название и фото товара, по которому сравниваем текущую неделю с прошлой." />
-            <ReportHeaderCell className="num" label="Продажи" tip="Выкупили на сумму за неделю. Подстрока показывает изменение к прошлой неделе." />
-            <ReportHeaderCell className="num" label="Заказы" tip="Оформленные заказы за неделю. Подстрока показывает изменение к прошлой неделе." />
+            <ReportHeaderCell className="num" label="Продажи" tip="Выкупленные продажи в штуках и рублях за неделю. Подстрока показывает изменение к прошлой неделе." />
+            <ReportHeaderCell className="num" label="Заказы" tip="Оформленные заказы в штуках и рублях за неделю. Подстрока показывает изменение к прошлой неделе." />
             <ReportHeaderCell className="num" label="Корзины" tip="Добавления товара в корзину. Это ранний сигнал спроса до заказа." />
             <ReportHeaderCell className="num" label="Маржа" tip="Маржа = прибыль / выручка * 100%. Подстрока показывает изменение в процентных пунктах." />
             <ReportHeaderCell className="num" label="Прибыль" tip="Подтверждённая прибыль после себестоимости, удержаний WB, рекламы и расходов. Подстрока показывает изменение к прошлой неделе." />
@@ -13129,8 +13360,12 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
           </tr>
         </thead>
         <tbody data-vella-island="week-table-body" data-vella-island-status="explicit-jsx" data-vella-row-count={rows.length}>
-          {visibleRows.map((row, index) => (
-            <tr key={`${row.sku ?? 'sku'}-${index}`} data-report-row="week" data-product-status={row.productStatus ?? undefined}>
+          {visibleRows.map((row, index) => {
+            const sales = weekMetricPair(row.sales)
+            const orders = weekMetricPair(row.orders)
+            const filter = weekRowFilterData(row)
+            return (
+            <tr key={`${row.sku ?? 'sku'}-${index}`} data-report-row="week" data-search={filter.search} data-report-tags={filter.tags} data-product-status={row.productStatus ?? undefined}>
               <td className="report-sticky">
                 <ReportProductCell
                   photoUrl={weekProductPhoto(row)}
@@ -13140,8 +13375,8 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
                 />
                 <small>Средняя цена: {formatAdsKopecks(row.price?.kopecks)} · {weekSignedPct(row.price?.deltaPct)}</small>
               </td>
-              <td className="num"><span className="metric-stack"><strong>{formatAdsKopecks(row.sales?.kopecks)}</strong><span className="subline">{weekSignedPct(row.sales?.deltaPct)}</span></span></td>
-              <td className="num"><span className="metric-stack"><strong>{weekMetricValue(row.orders)}</strong><span className="subline">{weekSignedPct(row.orders?.deltaPct)}</span></span></td>
+              <td className="num"><span className="metric-stack"><strong>{sales.units}</strong><span className="subline">{sales.money} · {weekSignedPct(row.sales?.deltaPct)}</span></span></td>
+              <td className="num"><span className="metric-stack"><strong>{orders.units}</strong><span className="subline">{orders.money} · {weekSignedPct(row.orders?.deltaPct)}</span></span></td>
               <td className="num"><span className="metric-stack"><strong>{weekMetricValue(row.baskets)}</strong><span className="subline">{weekSignedPct(row.baskets?.deltaPct)}</span></span></td>
               <td className="num"><span className="metric-stack"><strong>{weekNumber(row.marginPct?.percent) == null ? '—' : `${row.marginPct?.percent}%`}</strong><span className="subline">{weekSignedPct(row.marginPct?.deltaPct, ' пп')}</span></span></td>
               <td className="num"><span className="metric-stack"><strong>{formatAdsKopecks(row.profit?.kopecks)}</strong><span className="subline">{weekSignedPct(row.profit?.deltaPct)}</span></span></td>
@@ -13152,7 +13387,8 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
               <td>{row.conclusion ?? '—'}</td>
               <td>Добавить</td>
             </tr>
-          ))}
+            )
+          })}
           <ReportTableMoreRow colSpan={12} shown={visibleRows.length} total={rows.length} onMore={renderWindow.loadMore} />
         </tbody>
       </table>
@@ -14093,7 +14329,12 @@ function AdsReportActiveIsland({ replacementKey }: { replacementKey: string }) {
   useEffect(() => {
     const root = document.getElementById('tab-ads')
     removeLegacyReportTableFallbacks('ads')
-    if (root) window.applyGenericReportFilter?.(root)
+    if (root) {
+      window.applyGenericReportFilter?.(root)
+      window.enhanceReportTableSorting?.(root.querySelector('table'))
+      const parityRoot = root.closest<HTMLElement>('.vella-html-parity-root')
+      if (parityRoot) installAdsStickyIdentityColumns(parityRoot)
+    }
     window.initTooltips?.()
   }, [state])
 
@@ -14132,6 +14373,10 @@ function AdsReportActiveIsland({ replacementKey }: { replacementKey: string }) {
           margin: 0 20px 12px;
           width: calc(100% - 40px);
           flex: 0 0 auto;
+        }
+        .vella-html-parity-root #tab-ads > .toolbar,
+        .vella-html-parity-root #tab-ads > .toolbar .toolbar-right {
+          flex-wrap: wrap;
         }
         .vella-html-parity-root #tab-ads .ads-live-bars {
           display: grid;
@@ -14287,7 +14532,7 @@ function AdsReportActiveIsland({ replacementKey }: { replacementKey: string }) {
         <>
           <AdsLiveKpiStripIsland replacementKey={`${replacementKey}-kpis`} state={state} />
           <AdsLiveSourceStripIsland replacementKey={`${replacementKey}-source`} state={state} />
-          <AdsToolbarIsland replacementKey={`${replacementKey}-toolbar`} />
+          <AdsToolbarIsland replacementKey={`${replacementKey}-toolbar`} rows={adsRowsForState} accessToken={accessToken} />
           <AdsLiveChartPanelIsland replacementKey={`${replacementKey}-chart`} state={state} />
           <AdsLiveSummaryGridIsland replacementKey={`${replacementKey}-summary`} state={state} />
           <AdsTableShellIsland replacementKey={`${replacementKey}-table`} state={state} />
@@ -14582,7 +14827,10 @@ function WeekReportActiveIsland({ replacementKey }: { replacementKey: string }) 
   useEffect(() => {
     const root = document.getElementById('tab-week')
     removeLegacyReportTableFallbacks('week')
-    if (root) window.applyGenericReportFilter?.(root)
+    if (root) {
+      window.applyGenericReportFilter?.(root)
+      window.enhanceReportTableSorting?.(root.querySelector('table'))
+    }
     window.initTooltips?.()
   }, [state])
 
@@ -27655,6 +27903,11 @@ function ProductsKpiStripIsland() {
   const ratioMargin = settlement ? window.__vellaProductsSummary?.settlementProfitKopecks : kpi.marginRub == null ? null : window.__vellaProductsSummary?.marginKopecks ?? kpi.marginRub * 100
   const marginRatioValue = kpi.revenueAvailable && kpi.marginAvailable && ratioMargin != null && ratioRevenue !== 0 && (settlement || window.__vellaProductsSummary?.avgMarginPct !== null)
     ? `${(ratioMargin / ratioRevenue * 100).toFixed(1)}%` : '—'
+  const productRows = productsForKpi()
+  const trends: Record<string, ReturnType<typeof productsMetricTrend>> = {
+    kpiOrdersUnits: productsMetricTrend(productRows, 'ordersPeriod', 'previousOrdersPeriod'),
+    kpiBaskets: productsMetricTrend(productRows, 'bsk', 'previousBaskets'),
+  }
   const items = [
     ['Выручка за период', 'WB retailAmount: продажи минус возвраты за выбранный период, до вычета расходов', 'kpiRevenue', revenueValue, revenueDelta],
     [settlement ? 'Маржа, ₽ / %' : 'Маржа репрайсера, ₽ / %', settlement ? 'Окончательная выплата после удержаний WB − датированная себестоимость проданных товаров − налог от продаж. Расходы WB повторно не вычитаются. Процент от текущей выручки. Внутренние расходы компании сейчас исключены.' : 'Прежний расчёт: выручка WB + корректировка за единицу × продажи нетто − себестоимость − расходы − налог. Процент от текущей выручки. Новый контракт выплаты ещё не получен.', 'kpiMarginRub', marginValue, marginDelta],
@@ -27676,7 +27929,7 @@ function ProductsKpiStripIsland() {
       {id === 'kpiMarginRub' ? <div className="stat-val"><span id="kpiMarginRub">{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</span> / <span id="kpiMargin">{loading || unavailable ? '—' : marginRatioValue}</span></div>
         : clickable ? <button type="button" className="stat-val products-kpi-link" id={id} onClick={() => window.goSubtab?.('history')} aria-label="Открыть историю изменений цен">{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</button>
         : <div className="stat-val" id={id}>{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</div>}
-      <div className="stat-delta neutral">{delta}</div>
+      <div className={`stat-delta ${trends[id]?.className ?? 'neutral'}`}>{trends[id]?.label ?? delta}</div>
     </div>
   ))
 
@@ -40145,6 +40398,7 @@ declare global {
     openCalendarPopover?: (anchor?: HTMLElement) => void
     toggleDD?: (id: string) => void
     toggleReportColumns?: (button: HTMLElement) => void
+    enhanceReportTableSorting?: (table: HTMLTableElement | null) => void
     applyAdvanced?: () => void
     resetAdvancedFilters?: () => void
     applyGenericReportFilter?: (tab: HTMLElement) => void

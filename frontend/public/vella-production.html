@@ -22664,6 +22664,9 @@ function applyGenericReportFilter(tab){
     tabId: tab.id,
     active: Boolean(query || manager !== 'all' || sku !== 'all' || (normalizedChip && !/^все/.test(normalizedChip) && normalizedChip !== 'sku'))
   } }));
+  const dimensions = [...tab.querySelectorAll('select[data-report-filter]')]
+    .map(select => [select.dataset.reportFilter, select.value])
+    .filter(([key, value]) => key && value && value !== 'all');
   tab.querySelectorAll('tbody tr[data-report-row]').forEach(row => {
     const searchText = ((row.dataset.search || rowText(row)) + (tab.id === 'tab-week' ? ' ' + (row.dataset.productStatus || '') : '')).toLowerCase();
     const queryOk = !query || searchText.includes(query);
@@ -22671,7 +22674,8 @@ function applyGenericReportFilter(tab){
     const managerOk = managerFilterMatches(managerKey, manager);
     const skuOk = sku === 'all' || searchText.includes(sku.toLowerCase());
     const chipOk = rowMatchesChip(tab, row, active);
-    row.style.display = queryOk && managerOk && skuOk && chipOk ? '' : 'none';
+    const dimensionsOk = dimensions.every(([key, value]) => row.dataset[key] === value);
+    row.style.display = queryOk && managerOk && skuOk && chipOk && dimensionsOk ? '' : 'none';
   });
   tab.querySelectorAll('.report-table-wrap table').forEach(updateReportEmptyState);
   updateReportFilterSummary(tab);
