@@ -2,6 +2,9 @@ import { Fragment, createContext, memo, startTransition, type CSSProperties, typ
 import { useLocation } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, FileSpreadsheet, FolderPlus, Settings, Sparkles, Upload, X } from 'lucide-react'
 import QRCode from 'qrcode'
+import { AvitoStatsAnalytics } from './AvitoStatsAnalytics'
+import { AvitoRepricerMetric, AvitoRepricerPhoto, type RepricerTrend } from './AvitoRepricerMetric'
+import { quickPeriod, statsPeriodSelection } from './avitoStatsMetrics'
 import { AuthContext, useAuth } from '@/features/auth/authContext'
 import { WbConnection } from '@/features/wb-live/WbConnection'
 import { CurrentCostEditor } from '@/features/wb-repricer/CurrentCostEditor'
@@ -30,6 +33,7 @@ import type {
   ReportKpi,
   TableRow,
 } from '@/features/wb-reports/types'
+import { downloadReportTableXlsx as downloadSimpleReportTableXlsx } from '@/features/wb-reports/tableXlsx'
 import {
   getManagerPlan,
   getReportRules,
@@ -922,6 +926,7 @@ const ROUTE_TAB_CONTENT_IDS: Record<string, string> = {
   'avito-repricer': 'tab-avito-repricer',
   'avito-stats': 'tab-avito-stats',
   'avito-notifications': 'tab-notifications',
+  'avito-privacy': 'tab-avito-privacy',
   notifications: 'tab-notifications',
   'settings-profile': 'tab-settings-profile',
   'settings-access': 'tab-settings-access',
@@ -1242,7 +1247,7 @@ function syncRouteNavigationSelection(root: HTMLElement, targetTab: string) {
 const REPORT_ROUTE_TABS = new Set(['digest', 'report-rules', 'abc', 'rnp', 'pnl', 'expenses', 'ads', 'stock', 'week'])
 const DATA_ROUTE_TABS = new Set(['sources'])
 const REVIEW_ROUTE_TABS = new Set(['reviews'])
-const AVITO_ROUTE_TABS = new Set(['avito-overview', 'avito-inbox', 'avito-reviews', 'orders-avito', 'avito-listings', 'avito-repricer', 'avito-stats', 'avito-notifications'])
+const AVITO_ROUTE_TABS = new Set(['avito-overview', 'avito-inbox', 'avito-reviews', 'orders-avito', 'avito-listings', 'avito-repricer', 'avito-stats', 'avito-notifications', 'avito-privacy'])
 const SYSTEM_ROUTE_TABS = new Set(['settings-profile', 'settings-imports', 'notifications', 'settings-access'])
 
 function routeModuleForTab(tab: string) {
@@ -1524,6 +1529,28 @@ function setProductsKpisUnavailable() {
 function productNumber(product: Record<string, unknown>, key: string) {
   const value = Number(product[key])
   return Number.isFinite(value) ? value : 0
+}
+
+export function productsMetricTrend(rows: Array<Record<string, unknown>>, currentKey: string, previousKey: string) {
+  let current = 0
+  let previous = 0
+  let comparable = 0
+  rows.forEach((row) => {
+    if (row[previousKey] == null || row[previousKey] === '') return
+    const currentValue = Number(row[currentKey])
+    const previousValue = Number(row[previousKey])
+    if (!Number.isFinite(currentValue) || !Number.isFinite(previousValue)) return
+    current += currentValue
+    previous += previousValue
+    comparable += 1
+  })
+  if (!comparable || current === previous) return null
+  if (previous === 0) return current > 0 ? { className: 'up', label: '↑ рост с нуля к прошлому периоду' } : null
+  const deltaPct = ((current - previous) / previous) * 100
+  const formatted = Math.abs(deltaPct).toLocaleString('ru-RU', { maximumFractionDigits: 1 })
+  return deltaPct > 0
+    ? { className: 'up', label: `↑ +${formatted}% к прошлому периоду` }
+    : { className: 'down', label: `↓ −${formatted}% к прошлому периоду` }
 }
 
 function productsForKpi() {
@@ -3148,10 +3175,17 @@ function installNotificationsReactBridge() {
     window.__vellaNotificationsSnapshot = function(){
       var workspace = document.getElementById('avitoNotifWorkspace');
       var rows = typeof getFilteredNotifications === 'function' ? getFilteredNotifications() : [];
+      var scope = NOTIFS.filter(function(n){ return notifSourceOk(n); });
       var selected = rows.find(function(n){ return n.id === selectedNotificationId; }) || rows[0] || null;
       return {
         rows: rows.map(function(n){ return __vellaNotificationSnapshotFor(n, n.id === selectedNotificationId); }),
         bodyCount: rows.length,
+        kpis: {
+          unread: scope.filter(function(n){ return !n.read; }).length,
+          critical: scope.filter(function(n){ return n.severity === 'critical' && !n.read; }).length,
+          period: rows.length,
+          periodLabel: notifFilters.period === 'all' ? 'всё время' : 'последние ' + notifFilters.period + ' дн.'
+        },
         detail: __vellaNotificationDetailSnapshotFor(selected),
         workspace: __vellaAvitoNotificationWorkspaceSnapshot(),
         workspaceClassName: workspace ? workspace.className : 'avito-notif-workspace'
@@ -4830,6 +4864,28 @@ function installAvitoOverviewReactBridge() {
   }
 }
 
+function updateAvitoStatsState(next?: Partial<AvitoStatsState>) {
+  const current = window.__vellaAvitoStatsState ?? {}
+  const fallbackPeriod = defaultAvitoStatsPeriod()
+  window.__vellaAvitoStatsState = {
+    filter: 'all',
+    query: '',
+    category: 'all',
+    mode: 'traffic',
+    selectedKey: '',
+    dateFrom: fallbackPeriod.from,
+    dateTo: fallbackPeriod.to,
+    dateFromDraft: fallbackPeriod.from,
+    dateToDraft: fallbackPeriod.to,
+    requestSeq: 0,
+    forceRefresh: false,
+    ...current,
+    ...(next ?? {}),
+  }
+  window.dispatchEvent(new CustomEvent('vella:avito-stats-updated'))
+  window.__vellaReactRenderAvitoStats?.()
+}
+
 function installAvitoStatsReactBridge() {
   if (window.__vellaAvitoStatsReactBridgeInstalled) return
   window.__vellaAvitoStatsReactBridgeInstalled = true
@@ -4847,27 +4903,7 @@ function installAvitoStatsReactBridge() {
     requestSeq: 0,
     forceRefresh: false,
   }
-  window.__vellaSetAvitoStatsState = (next) => {
-    const current = window.__vellaAvitoStatsState ?? {}
-    const fallbackPeriod = defaultAvitoStatsPeriod()
-    window.__vellaAvitoStatsState = {
-      filter: 'all',
-      query: '',
-      category: 'all',
-      mode: 'traffic',
-      selectedKey: '',
-      dateFrom: fallbackPeriod.from,
-      dateTo: fallbackPeriod.to,
-      dateFromDraft: fallbackPeriod.from,
-      dateToDraft: fallbackPeriod.to,
-      requestSeq: 0,
-      forceRefresh: false,
-      ...current,
-      ...(next ?? {}),
-    }
-    window.dispatchEvent(new CustomEvent('vella:avito-stats-updated'))
-    window.__vellaReactRenderAvitoStats?.()
-  }
+  window.__vellaSetAvitoStatsState = updateAvitoStatsState
   window.applyAvitoStatsFilters = () => {
     const searchInput = document.getElementById('avitoStatsSearch')
     window.__vellaSetAvitoStatsState?.({
@@ -4897,7 +4933,6 @@ function installAvitoStatsReactBridge() {
     })
   }
   window.refreshAvitoStats = () => {
-    if (showAvitoCooldownToast(window.__vellaAvitoStatsLiveState?.data)) return
     const state: Partial<AvitoStatsState> = window.__vellaAvitoStatsState ?? {}
     window.__vellaSetAvitoStatsState?.({
       forceRefresh: true,
@@ -6366,6 +6401,39 @@ export function mapBackendAbcRowToParity(row: AbcBackendRow): AbcReportRow {
   }
 }
 
+export function buildAbcExportTable(rows: AbcBackendRow[]) {
+  const headers = [
+    'Артикул', 'Артикул WB', 'Товар', 'Статус', 'ABC', 'Менеджер', 'Цена до СПП',
+    'Себестоимость за шт', 'Показы', 'Переходы', 'Корзины', 'Заказы, шт', 'Заказы, ₽',
+    'Продажи, шт', 'Продажи, ₽', 'Выкуп, %', 'Реклама', 'Хранение, %', 'Чистая прибыль', 'Маржа, %',
+  ]
+  return {
+    headers,
+    rows: rows.map((row) => [
+      String(row.sku ?? ''),
+      String(row.nmId ?? ''),
+      String(row.productName ?? ''),
+      statusLabelFromBackend(row.productStatus),
+      String(row.abcCode ?? ''),
+      String(row.manager ?? ''),
+      formatAbcKopecks(row.priceBeforeSppKopecks ?? row.priceKopecks),
+      formatAbcKopecks(row.cogsPerUnitKopecks),
+      formatDigestInt(row.impressions),
+      formatDigestInt(row.clicks),
+      formatDigestInt(row.baskets),
+      formatDigestInt(row.ordersComposite?.units),
+      formatAbcKopecks(row.ordersComposite?.kopecks),
+      formatDigestInt(row.salesComposite?.units),
+      formatAbcKopecks(row.salesComposite?.kopecks),
+      formatAbcPct(asAbcNumber(row.buyoutPct) ?? Number.NaN),
+      formatAbcKopecks(row.adSpendKopecks),
+      formatAbcPct(asAbcNumber(row.storageCostPct) ?? Number.NaN),
+      formatAbcKopecks(row.netTotalKopecks),
+      formatAbcPct(asAbcNumber(row.marginPct) ?? Number.NaN),
+    ]),
+  }
+}
+
 function currentAbcLiveState(): AbcLiveState {
   return {
     loading: !!window.__vellaAbcLiveLoading,
@@ -7282,6 +7350,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
     }
     setCustomToIso(iso)
     if (iso < customFromIso) setCustomFromIso(iso)
+    setCalendarBoundary('from')
     setCalendarOpen(false)
   }
 
@@ -7924,18 +7993,26 @@ function DigestActionQueueIsland({ replacementKey }: { replacementKey: string })
   )
 }
 
+type DigestPeriodMetrics = Omit<NonNullable<DigestResponse['periodCards']>[number], 'id' | 'label'>
+
+export function digestPeriodRows(period: DigestPeriodMetrics) {
+  return [
+    ['Открыли карточку', formatDigestInt(period.openCount)],
+    ['Добавили в корзину', formatDigestInt(period.cartCount)],
+    ['Заказы, шт', `${formatDigestInt(period.ordersUnits)} шт`],
+    ['Заказы, ₽', formatDigestKopecks(period.ordersKopecks)],
+    ['Выкупили', `${formatDigestInt(period.salesUnits)} шт`],
+    ['Возвраты', `${formatDigestInt(period.returnsUnits)} шт`],
+    ['Выкуп', formatDigestPct(period.buyoutPct)],
+    ['Выручка', formatDigestKopecks(period.revenueKopecks)],
+  ]
+}
+
 function DigestPeriodContextIsland({ replacementKey, compact = false }: { replacementKey: string; compact?: boolean }) {
   const state = useDigestLiveState()
   const periods = (state.digest?.periodCards ?? []).map((period) => ({
     title: period.label,
-    rows: [
-      ['Заказы, шт', `${formatDigestInt(period.ordersUnits)} шт`],
-      ['Заказы, ₽', formatDigestKopecks(period.ordersKopecks)],
-      ['Выкупили', `${formatDigestInt(period.salesUnits)} шт`],
-      ['Возвраты', `${formatDigestInt(period.returnsUnits)} шт`],
-      ['Выкуп', formatDigestPct(period.buyoutPct)],
-      ['Выручка', formatDigestKopecks(period.revenueKopecks)],
-    ],
+    rows: digestPeriodRows(period),
   }))
   return (
     <div
@@ -8722,7 +8799,18 @@ function AbcSourceStateStripIsland({ replacementKey }: { replacementKey: string 
 
 function AbcToolbarIsland({ replacementKey }: { replacementKey: string }) {
   const state = useAbcLiveState()
+  const { accessToken } = useAuth()
+  const [exporting, setExporting] = useState(false)
   if (state.authExpired || state.loading || !state.report || !abcHasReportRows(state)) return null
+  const exportTable = () => {
+    if (!accessToken || exporting) return
+    const table = buildAbcExportTable(state.report?.rows ?? [])
+    setExporting(true)
+    void downloadSimpleReportTableXlsx(accessToken, 'abc', table.headers, table.rows)
+      .then((filename) => window.showToast?.(`Выгружен ${filename}`, 'success'))
+      .catch((error) => window.showToast?.(error instanceof Error ? error.message : 'Не удалось выгрузить ABC', 'error'))
+      .finally(() => setExporting(false))
+  }
   return (
     <div
       key={replacementKey}
@@ -8758,6 +8846,22 @@ function AbcToolbarIsland({ replacementKey }: { replacementKey: string }) {
         ))}
       </div>
       <div className="toolbar-right">
+        <button
+          className="btn btn-default btn-sm"
+          type="button"
+          disabled={!accessToken || exporting}
+          data-tip="Выгрузить все строки ABC-анализа в XLSX"
+          data-vella-react-handlers="onclick"
+          data-vella-action-owner="react-export"
+          onClickCapture={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            exportTable()
+          }}
+        >
+          <FileSpreadsheet size={14} />
+          {exporting ? 'Выгружаем...' : 'Экспорт XLSX'}
+        </button>
         <button
           className="btn btn-default btn-sm"
           type="button"
@@ -9125,8 +9229,26 @@ function SimpleReportToolbarIsland({
   )
 }
 
-function AdsToolbarIsland({ replacementKey }: { replacementKey: string }) {
-  const chips = ['Все строки', 'Поиск', 'Каталог', 'Медиа', 'Не распределено', 'ДРР выше порога']
+export function adsDimensionValues(rows: AdsBackendRow[], key: 'campaignStatus' | 'campaignType' | 'bidType' | 'paymentType' | 'fundingSource') {
+  return Array.from(new Set(rows.map((row) => String(row[key] ?? '').trim()).filter(Boolean)))
+}
+
+function AdsToolbarIsland({ replacementKey, rows, accessToken }: { replacementKey: string; rows: AdsBackendRow[]; accessToken: string | null }) {
+  const chips = ['Все строки', 'Поиск', 'Рекомендации', 'Ручная ставка', 'Единая ставка', 'Не распределено', 'ДРР выше порога']
+  const [exporting, setExporting] = useState(false)
+  const statuses = adsDimensionValues(rows, 'campaignStatus')
+  const bidTypes = adsDimensionValues(rows, 'bidType')
+  const paymentTypes = adsDimensionValues(rows, 'paymentType')
+  const fundingSources = adsDimensionValues(rows, 'fundingSource')
+  const exportTable = () => {
+    if (!accessToken || exporting) return
+    const table = buildAdsExportTable(rows)
+    setExporting(true)
+    void downloadSimpleReportTableXlsx(accessToken, 'ads', table.headers, table.rows)
+      .then((filename) => window.showToast?.(`Выгружен ${filename}`, 'success'))
+      .catch((error) => window.showToast?.(error instanceof Error ? error.message : 'Не удалось выгрузить рекламу', 'error'))
+      .finally(() => setExporting(false))
+  }
   return (
     <div
       key={replacementKey}
@@ -9164,16 +9286,37 @@ function AdsToolbarIsland({ replacementKey }: { replacementKey: string }) {
         ))}
       </div>
       <div className="toolbar-right">
+        <select className="adv-select" defaultValue="all" data-report-filter="campaignStatus" data-vella-react-handlers="onchange" onChange={updateGenericReportSelect}>
+          <option value="all">Все статусы</option>
+          {statuses.map((status) => <option key={status} value={status}>{adsCampaignStatusLabel(status)}</option>)}
+        </select>
+        <select className="adv-select" defaultValue="all" data-report-filter="bidType" data-vella-react-handlers="onchange" onChange={updateGenericReportSelect}>
+          <option value="all">Все типы ставок</option>
+          {bidTypes.map((bidType) => <option key={bidType} value={bidType}>{adsBidTypeLabel(bidType)}</option>)}
+        </select>
+        <select className="adv-select" defaultValue="all" data-report-filter="paymentType" data-vella-react-handlers="onchange" onChange={updateGenericReportSelect}>
+          <option value="all">Все модели оплаты</option>
+          {paymentTypes.map((paymentType) => <option key={paymentType} value={paymentType}>{adsPaymentTypeLabel(paymentType)}</option>)}
+        </select>
+        <select className="adv-select" defaultValue="all" data-report-filter="fundingSource" data-vella-react-handlers="onchange" onChange={updateGenericReportSelect}>
+          <option value="all">Все источники средств</option>
+          {fundingSources.map((source) => <option key={source} value={source}>{adsFundingSourceLabel(source)}</option>)}
+        </select>
         <span className="report-tag fin">данные backend</span>
         <button
           className="btn btn-default btn-sm"
           type="button"
-          data-tip="Сформировать выгрузку"
+          disabled={!accessToken || exporting}
+          data-tip="Выгрузить все строки рекламы в XLSX"
           data-vella-react-handlers="onclick"
           data-vella-action-owner="react-export"
-          onClickCapture={exportGenericReportXlsx}
+          onClickCapture={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            exportTable()
+          }}
         >
-          Экспорт XLSX
+          {exporting ? 'Выгружаем...' : 'Экспорт XLSX'}
         </button>
       </div>
     </div>
@@ -11997,6 +12140,30 @@ function weekMetricValue(metric: { units?: number | null } | null | undefined) {
   return units == null ? '—' : Math.round(units).toLocaleString('ru-RU')
 }
 
+export function weekMetricPair(metric: { units?: number | null; kopecks?: number | null } | null | undefined) {
+  const units = weekNumber(metric?.units)
+  return {
+    units: units == null ? '—' : `${Math.round(units).toLocaleString('ru-RU')} шт`,
+    money: formatAdsKopecks(metric?.kopecks),
+  }
+}
+
+export function weekRowFilterData(row: WeekBackendRow) {
+  const conclusion = String(row.conclusion ?? '').toLocaleLowerCase('ru-RU')
+  const salesDelta = weekNumber(row.sales?.deltaPct)
+  const ordersDelta = weekNumber(row.orders?.deltaPct)
+  const margin = weekNumber(row.marginPct?.percent)
+  const marginDelta = weekNumber(row.marginPct?.deltaPct)
+  const tags: string[] = []
+  if ((salesDelta ?? 0) > 0 || (ordersDelta ?? 0) > 0 || conclusion.includes('рост')) tags.push('рост')
+  if ((salesDelta ?? 0) < 0 || (ordersDelta ?? 0) < 0 || /ниже|порог|просад/.test(conclusion)) tags.push('ниже порога')
+  if ((margin ?? 0) < 0 || (marginDelta ?? 0) < 0 || /марж.*ниже|низк.*марж/.test(conclusion)) tags.push('маржа ниже')
+  return {
+    search: [row.sku, row.nmId, weekProductTitle(row), weekProductSubtitle(row), row.productStatus, row.conclusion].filter(Boolean).join(' '),
+    tags: tags.join('|'),
+  }
+}
+
 function WeekWorkbenchIsland({ replacementKey, state }: { replacementKey: string; state: WeekLiveState }) {
   const rows = state.status === 'ready' ? getWeekRows(state.report) : []
   const averageDelta = (selector: (row: WeekBackendRow) => unknown) => {
@@ -12004,9 +12171,17 @@ function WeekWorkbenchIsland({ replacementKey, state }: { replacementKey: string
     return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
   }
   const attentionRows = rows.filter((row) => (weekNumber(row.marginPct?.percent) ?? 0) < 0 || (weekNumber(row.sales?.deltaPct) ?? 0) < 0 || row.wasOutOfStock === true)
+  const salesTotal = weekMetricPair({
+    units: rows.reduce((sum, row) => sum + (weekNumber(row.sales?.units) ?? 0), 0),
+    kopecks: rows.reduce((sum, row) => sum + (weekNumber(row.sales?.kopecks) ?? 0), 0),
+  })
+  const ordersTotal = weekMetricPair({
+    units: rows.reduce((sum, row) => sum + (weekNumber(row.orders?.units) ?? 0), 0),
+    kopecks: rows.reduce((sum, row) => sum + (weekNumber(row.orders?.kopecks) ?? 0), 0),
+  })
   const signals = [
-    ['Продажи', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.sales?.deltaPct)), state.status === 'ready' ? formatAdsKopecks(rows.reduce((sum, row) => sum + (weekNumber(row.sales?.kopecks) ?? 0), 0)) : 'данные обновляются', 'week-signal', 'Среднее изменение продаж к прошлой неделе. Сумма ниже показывает выкупили на сумму за текущую неделю.'],
-    ['Заказы', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.orders?.deltaPct)), state.status === 'ready' ? `${rows.reduce((sum, row) => sum + (weekNumber(row.orders?.units) ?? 0), 0)} шт` : 'данные обновляются', 'week-signal', 'Среднее изменение заказов к прошлой неделе. Заказы показывают спрос раньше, чем выкуп.'],
+    ['Продажи', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.sales?.deltaPct)), state.status === 'ready' ? `${salesTotal.units} · ${salesTotal.money}` : 'данные обновляются', 'week-signal', 'Среднее изменение продаж к прошлой неделе. Ниже показаны выкупы в штуках и рублях за текущую неделю.'],
+    ['Заказы', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.orders?.deltaPct)), state.status === 'ready' ? `${ordersTotal.units} · ${ordersTotal.money}` : 'данные обновляются', 'week-signal', 'Среднее изменение заказов к прошлой неделе. Ниже показаны заказы в штуках и рублях за текущую неделю.'],
     ['Маржа', state.status === 'loading' ? 'загрузка' : weekSignedPct(averageDelta((row) => row.marginPct?.deltaPct), ' пп'), state.status === 'ready' ? 'по данным P&L/операционных расходов' : 'данные обновляются', 'week-signal warn', 'Изменение маржи в процентных пунктах. Маржа = прибыль / выручка * 100%.'],
     ['Требуют внимания', state.status === 'ready' ? String(attentionRows.length) : 'загрузка', state.status === 'ready' ? 'снижение продаж, убыток или отсутствие остатка' : 'данные обновляются', 'week-signal danger', 'Товары, которые попали в зону внимания: отрицательная маржа, слабые продажи или проблемный статус.'],
   ]
@@ -12147,6 +12322,11 @@ type AdsBackendRow = {
   campaignType?: string | number | null
   campaignStatus?: string | number | null
   paymentType?: string | null
+  bidType?: string | null
+  fundingSource?: string | null
+  placements?: string[] | null
+  metadataSource?: string | null
+  metadataObservedAt?: string | null
   campaignChangeTime?: string | null
   sku?: string | null
   nmId?: number | null
@@ -12505,16 +12685,101 @@ function adsRecommendationLabel(value: unknown, unallocated?: boolean | null) {
   return ['в пределах порога', 'ok']
 }
 
+export function adsCampaignStatusLabel(value: unknown) {
+  const labels: Record<string, string> = {
+    '-1': 'Удаляется',
+    '4': 'Готова к запуску',
+    '7': 'Завершена',
+    '8': 'Отклонена',
+    '9': 'Активна',
+    '11': 'Приостановлена',
+  }
+  const key = String(value ?? '').trim()
+  return labels[key] ?? (key || 'Не передан')
+}
+
+function adsCampaignStatusClass(value: unknown) {
+  const key = String(value ?? '').trim()
+  if (key === '9') return 'good'
+  if (key === '4' || key === '11') return 'warn'
+  return key ? 'danger' : 'neutral'
+}
+
+export function adsCampaignTypeLabel(value: unknown) {
+  const key = String(value ?? '').trim()
+  if (key === '9') return 'Продвижение WB'
+  if (key === '8') return 'Устаревшая единая кампания'
+  return key || 'Не передан'
+}
+
+function adsBidTypeLabel(value: unknown) {
+  const key = String(value ?? '').trim().toLowerCase()
+  if (key === 'manual') return 'Ручная ставка'
+  if (key === 'unified') return 'Единая ставка'
+  return key || 'Не передан'
+}
+
+export function adsPaymentTypeLabel(value: unknown) {
+  const key = String(value ?? '').trim().toLowerCase()
+  if (key === 'cpm') return 'CPM · за показы'
+  if (key === 'cpc') return 'CPC · за клики'
+  return key || 'Не передан'
+}
+
+function adsFundingSourceLabel(value: unknown) {
+  const key = String(value ?? '').trim()
+  return key || 'Не передан'
+}
+
 function adsTypeTags(row: AdsBackendRow) {
-  const typeText = String(row.campaignType ?? '').toLowerCase()
+  const placements = (row.placements ?? []).map((value) => String(value).toLowerCase())
+  const bidType = String(row.bidType ?? '').toLowerCase()
   const nameText = String(row.campaignName ?? '').toLowerCase()
   const tags = ['реклама']
-  if (typeText.includes('8') || nameText.includes('search') || nameText.includes('поиск')) tags.push('поиск')
-  if (typeText.includes('9') || nameText.includes('catalog') || nameText.includes('каталог')) tags.push('каталог')
-  if (typeText.includes('медиа') || nameText.includes('media') || nameText.includes('медиа')) tags.push('медиа')
+  if (placements.includes('search') || nameText.includes('search') || nameText.includes('поиск')) tags.push('поиск')
+  if (placements.some((value) => value.startsWith('recommend')) || nameText.includes('рекомендац')) tags.push('рекомендации')
+  if (bidType === 'manual') tags.push('ручная ставка')
+  if (bidType === 'unified') tags.push('единая ставка')
   if ((row.drrPct ?? 0) >= 14) tags.push('дрр выше порога')
   if (row.unallocatedSpend || row.attributionLevel === 'campaign_only') tags.push('не распределено', 'на проверку')
   return tags.join('|')
+}
+
+export function buildAdsExportTable(rows: AdsBackendRow[]) {
+  const headers = [
+    'ID кампании', 'Кампания', 'Статус', 'Тип', 'Тип ставки', 'Модель оплаты', 'Источник средств', 'Размещения', 'Артикул', 'Артикул WB', 'Товар',
+    'Показы', 'Клики', 'CTR', 'Корзины', 'Заказы, шт', 'Заказы, ₽', 'Продажи, шт', 'Продажи, ₽',
+    'Расход', 'Бюджет', 'ДРР', 'ROMI', 'Рекомендация',
+  ]
+  return {
+    headers,
+    rows: rows.map((row, index) => [
+      String(row.campaignId ?? ''),
+      String(row.campaignName ?? ''),
+      adsCampaignStatusLabel(row.campaignStatus),
+      adsCampaignTypeLabel(row.campaignType),
+      adsBidTypeLabel(row.bidType),
+      adsPaymentTypeLabel(row.paymentType),
+      adsFundingSourceLabel(row.fundingSource),
+      (row.placements ?? []).join(', '),
+      String(row.sku ?? ''),
+      String(row.nmId ?? ''),
+      adsPrimaryRowLabel(row, index),
+      formatAdsInteger(row.impressions),
+      formatAdsInteger(row.adClicks ?? row.clicks),
+      formatAdsPct(row.ctrPct),
+      formatAdsInteger(row.baskets),
+      formatAdsInteger(row.orders?.units),
+      formatAdsKopecks(row.orders?.kopecks),
+      formatAdsInteger(row.sales?.units),
+      formatAdsKopecks(row.sales?.kopecks),
+      formatAdsKopecks(row.adSpendKopecks),
+      formatAdsKopecks(row.budgetTotalKopecks),
+      formatAdsPct(row.drrPct),
+      formatAdsPct(adsRowRomiPct(row)),
+      String(row.recommendationReason ?? ''),
+    ]),
+  }
 }
 
 function AdsLoadingLine({ className = '' }: { className?: string }) {
@@ -12667,7 +12932,8 @@ function adsRowSearchText(row: AdsBackendRow, index: number, runtimeProduct = ad
     adsProductTitle(row, index, runtimeProduct),
     adsRowString(row, ['brandName', 'brand_name']) || adsRuntimeString(runtimeProduct, ['brandName', 'brand_name', 'brand']),
     adsRowString(row, ['categoryName', 'category_name']) || adsRuntimeString(runtimeProduct, ['size', 'categoryName', 'subjectName', 'category']),
-    row.campaignName, row.campaignId, row.campaignType, row.paymentType, row.sku, row.nmId, row.recommendationReason,
+    row.campaignName, row.campaignId, row.campaignType, row.bidType, adsCampaignStatusLabel(row.campaignStatus),
+    row.paymentType, row.fundingSource, ...(row.placements ?? []), row.sku, row.nmId, row.recommendationReason,
   ].filter(Boolean).join(' ')
 }
 
@@ -12720,6 +12986,7 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
             <ReportHeaderCell label="Товар" tip="Название и фото товара WB, по которому собрана строка рекламы." />
             <ReportHeaderCell label="РК / источник" tip="Название рекламной кампании. Если кампанию нельзя определить, показываем товарную строку." />
             <ReportHeaderCell label="Тип РК" tip="Тип рекламной кампании WB: поиск, каталог, автореклама, медиа или другой формат, если WB его передал." />
+            <ReportHeaderCell label="Статус РК" tip="Статус кампании из кабинета WB: активна, приостановлена, завершена, отклонена или готова к запуску." />
             <ReportHeaderCell label="Привязка" tip="Как расход рекламы связан с товаром: точно к товару, по списку товаров кампании или только на уровне кампании." />
             <ReportHeaderCell className="num" label="Оценка (перспектива)" tip="Оценка показывает, насколько надежно расход рекламы привязан к товару. Низкая оценка значит, что строку лучше проверить вручную перед решением." />
             <ReportHeaderCell label="Менеджер" tip="Ответственный за товар или кампанию. Нужен, чтобы понимать, кому смотреть решение." />
@@ -12754,9 +13021,18 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
                   ? 'РК не передана источником'
                   : `РК ${index + 1}`
             const campaignMeta = hasCampaign
-              ? (row.paymentType ? `оплата: ${row.paymentType}` : 'кампания WB')
+              ? [
+                  row.bidType ? adsBidTypeLabel(row.bidType) : null,
+                  row.paymentType ? adsPaymentTypeLabel(row.paymentType) : null,
+                  row.fundingSource ? adsFundingSourceLabel(row.fundingSource) : null,
+                  row.metadataSource?.includes('snapshot') && row.metadataObservedAt ? `кэш ${new Date(row.metadataObservedAt).toLocaleString('ru-RU')}` : null,
+                ].filter(Boolean).join(' · ') || 'кампания WB'
               : 'кампания не передана'
-            const campaignType = row.campaignType && String(row.campaignType).toLowerCase() !== 'unknown' ? row.campaignType : '—'
+            const campaignType = [
+              row.campaignType && String(row.campaignType).toLowerCase() !== 'unknown' ? adsCampaignTypeLabel(row.campaignType) : null,
+              row.bidType ? adsBidTypeLabel(row.bidType) : null,
+            ].filter(Boolean).join(' · ') || '—'
+            const campaignStatus = adsCampaignStatusLabel(row.campaignStatus)
             const runtimeProduct = adsRuntimeProduct(row)
             const productTitle = adsProductTitle(row, index, runtimeProduct)
             const searchText = adsRowSearchText(row, index, runtimeProduct)
@@ -12767,6 +13043,11 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
                 data-search={searchText}
                 data-report-tags={adsTypeTags(row)}
                 data-manager-id={row.managerId ?? 'unassigned'}
+                data-campaign-status={String(row.campaignStatus ?? '')}
+                data-campaign-type={String(row.campaignType ?? '')}
+                data-bid-type={String(row.bidType ?? '')}
+                data-payment-type={String(row.paymentType ?? '')}
+                data-funding-source={String(row.fundingSource ?? '')}
               >
                 <td className="ads-entity-cell report-sticky">
                   <ReportProductCell
@@ -12783,6 +13064,7 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
                   </div>
                 </td>
                 <td>{campaignType}</td>
+                <td><span className={`report-tag ${adsCampaignStatusClass(row.campaignStatus)}`}>{campaignStatus}</span></td>
                 <td><span className={`report-tag ${attributionClass}`}>{attributionLabel}</span></td>
                 <td className="num">{row.confidence ?? '—'}</td>
                 <td>—</td>
@@ -12806,7 +13088,7 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
           })}
           {rows.length === 0 ? (
             <tr data-report-empty="ads-filter">
-              <td colSpan={21}>
+              <td colSpan={22}>
                 <div className="report-empty-note visible">
                   <b>Нет позиций по выбранным фильтрам</b><br />
                   <span>Измените поиск или фильтр кампаний.</span><br />
@@ -12815,7 +13097,7 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
               </td>
             </tr>
           ) : null}
-          <ReportTableMoreRow colSpan={21} shown={visibleRows.length} total={rows.length} onMore={() => setPagination(current => ({ ...current, limit: current.limit + REPORT_TABLE_RENDER_BATCH }))} />
+          <ReportTableMoreRow colSpan={22} shown={visibleRows.length} total={rows.length} onMore={() => setPagination(current => ({ ...current, limit: current.limit + REPORT_TABLE_RENDER_BATCH }))} />
         </tbody>
       </table>
     </div>
@@ -13115,8 +13397,8 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
         >
           <tr>
             <ReportHeaderCell label="Товар" tip="Название и фото товара, по которому сравниваем текущую неделю с прошлой." />
-            <ReportHeaderCell className="num" label="Продажи" tip="Выкупили на сумму за неделю. Подстрока показывает изменение к прошлой неделе." />
-            <ReportHeaderCell className="num" label="Заказы" tip="Оформленные заказы за неделю. Подстрока показывает изменение к прошлой неделе." />
+            <ReportHeaderCell className="num" label="Продажи" tip="Выкупленные продажи в штуках и рублях за неделю. Подстрока показывает изменение к прошлой неделе." />
+            <ReportHeaderCell className="num" label="Заказы" tip="Оформленные заказы в штуках и рублях за неделю. Подстрока показывает изменение к прошлой неделе." />
             <ReportHeaderCell className="num" label="Корзины" tip="Добавления товара в корзину. Это ранний сигнал спроса до заказа." />
             <ReportHeaderCell className="num" label="Маржа" tip="Маржа = прибыль / выручка * 100%. Подстрока показывает изменение в процентных пунктах." />
             <ReportHeaderCell className="num" label="Прибыль" tip="Подтверждённая прибыль после себестоимости, удержаний WB, рекламы и расходов. Подстрока показывает изменение к прошлой неделе." />
@@ -13129,8 +13411,12 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
           </tr>
         </thead>
         <tbody data-vella-island="week-table-body" data-vella-island-status="explicit-jsx" data-vella-row-count={rows.length}>
-          {visibleRows.map((row, index) => (
-            <tr key={`${row.sku ?? 'sku'}-${index}`} data-report-row="week" data-product-status={row.productStatus ?? undefined}>
+          {visibleRows.map((row, index) => {
+            const sales = weekMetricPair(row.sales)
+            const orders = weekMetricPair(row.orders)
+            const filter = weekRowFilterData(row)
+            return (
+            <tr key={`${row.sku ?? 'sku'}-${index}`} data-report-row="week" data-search={filter.search} data-report-tags={filter.tags} data-product-status={row.productStatus ?? undefined}>
               <td className="report-sticky">
                 <ReportProductCell
                   photoUrl={weekProductPhoto(row)}
@@ -13140,8 +13426,8 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
                 />
                 <small>Средняя цена: {formatAdsKopecks(row.price?.kopecks)} · {weekSignedPct(row.price?.deltaPct)}</small>
               </td>
-              <td className="num"><span className="metric-stack"><strong>{formatAdsKopecks(row.sales?.kopecks)}</strong><span className="subline">{weekSignedPct(row.sales?.deltaPct)}</span></span></td>
-              <td className="num"><span className="metric-stack"><strong>{weekMetricValue(row.orders)}</strong><span className="subline">{weekSignedPct(row.orders?.deltaPct)}</span></span></td>
+              <td className="num"><span className="metric-stack"><strong>{sales.units}</strong><span className="subline">{sales.money} · {weekSignedPct(row.sales?.deltaPct)}</span></span></td>
+              <td className="num"><span className="metric-stack"><strong>{orders.units}</strong><span className="subline">{orders.money} · {weekSignedPct(row.orders?.deltaPct)}</span></span></td>
               <td className="num"><span className="metric-stack"><strong>{weekMetricValue(row.baskets)}</strong><span className="subline">{weekSignedPct(row.baskets?.deltaPct)}</span></span></td>
               <td className="num"><span className="metric-stack"><strong>{weekNumber(row.marginPct?.percent) == null ? '—' : `${row.marginPct?.percent}%`}</strong><span className="subline">{weekSignedPct(row.marginPct?.deltaPct, ' пп')}</span></span></td>
               <td className="num"><span className="metric-stack"><strong>{formatAdsKopecks(row.profit?.kopecks)}</strong><span className="subline">{weekSignedPct(row.profit?.deltaPct)}</span></span></td>
@@ -13152,7 +13438,8 @@ function WeekTableShellIsland({ replacementKey, state }: { replacementKey: strin
               <td>{row.conclusion ?? '—'}</td>
               <td>Добавить</td>
             </tr>
-          ))}
+            )
+          })}
           <ReportTableMoreRow colSpan={12} shown={visibleRows.length} total={rows.length} onMore={renderWindow.loadMore} />
         </tbody>
       </table>
@@ -14093,7 +14380,12 @@ function AdsReportActiveIsland({ replacementKey }: { replacementKey: string }) {
   useEffect(() => {
     const root = document.getElementById('tab-ads')
     removeLegacyReportTableFallbacks('ads')
-    if (root) window.applyGenericReportFilter?.(root)
+    if (root) {
+      window.applyGenericReportFilter?.(root)
+      window.enhanceReportTableSorting?.(root.querySelector('table'))
+      const parityRoot = root.closest<HTMLElement>('.vella-html-parity-root')
+      if (parityRoot) installAdsStickyIdentityColumns(parityRoot)
+    }
     window.initTooltips?.()
   }, [state])
 
@@ -14132,6 +14424,10 @@ function AdsReportActiveIsland({ replacementKey }: { replacementKey: string }) {
           margin: 0 20px 12px;
           width: calc(100% - 40px);
           flex: 0 0 auto;
+        }
+        .vella-html-parity-root #tab-ads > .toolbar,
+        .vella-html-parity-root #tab-ads > .toolbar .toolbar-right {
+          flex-wrap: wrap;
         }
         .vella-html-parity-root #tab-ads .ads-live-bars {
           display: grid;
@@ -14287,7 +14583,7 @@ function AdsReportActiveIsland({ replacementKey }: { replacementKey: string }) {
         <>
           <AdsLiveKpiStripIsland replacementKey={`${replacementKey}-kpis`} state={state} />
           <AdsLiveSourceStripIsland replacementKey={`${replacementKey}-source`} state={state} />
-          <AdsToolbarIsland replacementKey={`${replacementKey}-toolbar`} />
+          <AdsToolbarIsland replacementKey={`${replacementKey}-toolbar`} rows={adsRowsForState} accessToken={accessToken} />
           <AdsLiveChartPanelIsland replacementKey={`${replacementKey}-chart`} state={state} />
           <AdsLiveSummaryGridIsland replacementKey={`${replacementKey}-summary`} state={state} />
           <AdsTableShellIsland replacementKey={`${replacementKey}-table`} state={state} />
@@ -14582,7 +14878,10 @@ function WeekReportActiveIsland({ replacementKey }: { replacementKey: string }) 
   useEffect(() => {
     const root = document.getElementById('tab-week')
     removeLegacyReportTableFallbacks('week')
-    if (root) window.applyGenericReportFilter?.(root)
+    if (root) {
+      window.applyGenericReportFilter?.(root)
+      window.enhanceReportTableSorting?.(root.querySelector('table'))
+    }
     window.initTooltips?.()
   }, [state])
 
@@ -16636,9 +16935,9 @@ type AvitoOverviewBackendResponse = {
     conversionPct: number | null
     orderConversionPct: number | null
     buyoutPct: number | null
-    totalListings: number
-    activeListings: number
-    inactiveListings: number
+    totalListings: number | null
+    activeListings: number | null
+    inactiveListings: number | null
     removedListings: number
     oldListings: number
     blockedListings: number
@@ -16805,15 +17104,6 @@ type AvitoStatsState = {
   forceRefresh: boolean
 }
 
-type AvitoStatsTableRow = {
-  key: AvitoStatsKey
-  kind: 'account' | 'top' | 'low'
-  account: string
-  category: string
-  search: string
-  cells: ReactNode[]
-  action: 'stats' | 'listing'
-}
 
 type AvitoStatsBackendAccount = {
   accountId: string
@@ -17004,6 +17294,11 @@ function isAvitoRepricerCacheHit(data: AvitoRepricerBackendResponse | null | und
 }
 
 type AvitoRepricerBackendRow = AvitoListingsBackendRow & {
+  photoId?: number | null
+  orderConversionPct?: number | null
+  averageContactCostKopecks?: number | null
+  viewsTrend?: RepricerTrend
+  contactsTrend?: RepricerTrend
   strategySignal: AvitoRepricerFilter
   recommendedPriceKopecks: number | null
   priceDeltaPct: number
@@ -17028,6 +17323,8 @@ type AvitoRepricerBackendResponse = {
   strategies: AvitoRepricerStrategy[]
   strategyAssignments?: Record<string, string>
   summary: {
+    blockedListings?: number
+    activePriceKopecks?: number | null
     total: number
     active: number
     raiseCandidates: number
@@ -17250,6 +17547,12 @@ function avitoBackendErrorMessage(payload: { status?: string; source?: Record<st
   return avitoOverviewFriendlyMessage(message || code || null) || 'Источник Авито временно недоступен.'
 }
 
+function avitoStatsErrorMessage(payload: AvitoStatsBackendResponse) {
+  const error = avitoSourceErrorFromPayload(payload)
+  if (error?.code === 'rate_limited') return 'Не удалось обновить статистику: ответ Авито HTTP 429.'
+  return avitoBackendErrorMessage(error ? { ...payload, status: 'blocked' } : payload)
+}
+
 function avitoOverviewFriendlyEvent(event: AvitoOverviewBackendResponse['events'][number]) {
   const title = event.title || ''
   const meta = event.meta || ''
@@ -17306,26 +17609,6 @@ function isAvitoStatsKey(value: unknown): value is AvitoStatsKey {
   return typeof value === 'string' && value.length > 0
 }
 
-const AVITO_STATS_MODE_DATA: Record<AvitoStatsMode, { badge: string; note: string; aria: string; legend: [string, string][] }> = {
-  traffic: {
-    badge: 'метрика: просмотры',
-    note: 'Просмотры объявлений за выбранный период',
-    aria: 'Динамика просмотров объявлений',
-    legend: [['#2563EB', 'Просмотры'], ['#94A3B8', 'Контакты'], ['#CBD5E1', 'Избранное']],
-  },
-  funnel: {
-    badge: 'метрика: контакты',
-    note: 'Контакты покупателей за выбранный период',
-    aria: 'Динамика контактов объявлений',
-    legend: [['#059669', 'Контакты'], ['#94A3B8', 'Просмотры'], ['#CBD5E1', 'Избранное']],
-  },
-  sales: {
-    badge: 'метрика: избранное',
-    note: 'Добавления объявлений в избранное',
-    aria: 'Динамика избранного объявлений',
-    legend: [['#DB2777', 'Избранное'], ['#94A3B8', 'Просмотры'], ['#CBD5E1', 'Контакты']],
-  },
-}
 
 const NOTIFICATION_KPIS = [
   ['Новые', 'Непрочитанные события по всем категориям', 'notifKpiUnread', '—', '', 'новые события', 'neutral'],
@@ -17339,6 +17622,10 @@ const AVITO_NOTIFICATION_KPIS = [
   ['Требуют внимания', 'События, где нужно действие менеджера', 'notifKpiCritical', '—', '', 'важные события', 'down'],
   ['За период', 'Количество событий за выбранный период', 'notifKpiPeriod', '—', 'notifKpiPeriodLabel', 'последние 30 дней', 'neutral'],
   ['Разделы', 'Чаты, отзывы, объявления и статистика', '', 'Авито', '', 'только Авито', 'neutral'],
+] as const
+
+const AVITO_NOTIFICATION_CATEGORY_CHIPS = [
+  ['category', 'Авито', 'Все Авито', true],
 ] as const
 
 const NOTIFICATION_MODE_BUTTONS = [
@@ -17603,6 +17890,7 @@ type AvitoNotificationWorkspaceSnapshot = {
 type NotificationsSnapshot = {
   rows: NotificationEventSnapshot[]
   bodyCount: number
+  kpis: { unread: number; critical: number; period: number; periodLabel: string } | null
   detail: NotificationDetailSnapshot | null
   workspace: AvitoNotificationWorkspaceSnapshot
   workspaceClassName: string
@@ -17718,6 +18006,10 @@ type AvitoOrdersStatus =
   | 'canceled'
   | 'on_return'
   | 'in_dispute'
+  | 'return_inbound'
+  | 'return_pickup'
+  | 'history'
+  | 'review'
 
 type AvitoOrderAction = {
   name: string
@@ -17730,8 +18022,10 @@ type AvitoReturnMatch = {
   accountId?: string | null
   accountName?: string | null
   itemId: string | null
+  lineIndex?: number | null
   title: string
   sellerArticle: string | null
+  brand?: string | null
   size: string | null
   color: string | null
   imageUrl?: string | null
@@ -17742,6 +18036,13 @@ type AvitoReturnMatch = {
   returnStatus?: string | null
   sourceUpdatedAt?: string | null
   lastSeenAt?: string | null
+  returnItemId?: number | null
+  availableQuantity?: number
+  receivedQuantity?: number
+  inspectedQuantity?: number
+  reservedQuantity?: number
+  sentQuantity?: number
+  writtenOffQuantity?: number
 }
 
 type AvitoReturnInventoryItem = Omit<AvitoReturnMatch, 'score' | 'reason'> & {
@@ -17750,14 +18051,18 @@ type AvitoReturnInventoryItem = Omit<AvitoReturnMatch, 'score' | 'reason'> & {
 }
 
 type AvitoOrderItem = {
+  sources?: Record<string, string | null>
   itemId: string | null
+  lineIndex?: number | null
   title: string
   quantity: number
   priceKopecks: number | null
   sellerArticle: string | null
+  brand?: string | null
   size: string | null
   color: string | null
   imageUrl: string | null
+  barcode?: string | null
   returnMatches?: AvitoReturnMatch[]
   reuseSuggestion?: AvitoReturnMatch | null
 }
@@ -17765,6 +18070,7 @@ type AvitoOrderItem = {
 type AvitoOrderRow = {
   orderId: string
   marketplaceId: string | null
+  jobNumber?: string | null
   accountId: string | null
   accountName: string | null
   status: string
@@ -17779,6 +18085,16 @@ type AvitoOrderRow = {
   recipientPhone: string | null
   address: string | null
   trackNumber: string | null
+  stickerNumber?: string | null
+  stickerBarcodeType?: string | null
+  stickerNumberState?: string | null
+  stickerLabelId?: number | null
+  stickerDocumentId?: number | null
+  shipmentNumber?: string | null
+  shipmentNumberState?: string | null
+  returnPickupPlace?: string | null
+  returnPickupDeadline?: string | null
+  returnPickupCode?: string | null
   returnStatus: string | null
   totalKopecks: number | null
   items: AvitoOrderItem[]
@@ -17789,8 +18105,8 @@ type AvitoOrderRow = {
 
 type AvitoOrdersBackendResponse = {
   status: 'synced' | 'blocked'
-  period: { dateFrom: string; days: number }
-  filters: { statuses: string[]; page: number; limit: number }
+  filters: { mode: string; page: number; limit: number; accountId: string | null; search: string; historyFrom: string | null }
+  accounts?: Array<{ id: string; name: string }>
   summary: {
     total: number
     shown: number
@@ -17806,6 +18122,7 @@ type AvitoOrdersBackendResponse = {
     items: number
     totalKopecks: number | null
     statusCounts: Record<string, number>
+    modeCounts?: Record<string, number>
   }
   rows: AvitoOrderRow[]
   source: Record<string, unknown>
@@ -17839,8 +18156,14 @@ type AvitoReturnsSyncSettings = {
   items?: AvitoReturnInventoryItem[]
 }
 
-const AVITO_ORDERS_PAGE_LIMIT = 20
-const AVITO_ORDERS_MAX_PAGES = 100
+type AvitoReturnInventoryPage = { items: AvitoReturnInventoryItem[]; total: number; page: number; limit: number }
+type AvitoReturnInventoryEvents = {
+  events: Array<{ action: string; quantity: number; actorId: string; linkedOrderId: string | null; createdAt: string }>
+  reservations: Array<{ linkedOrderId: string; quantity: number }>
+  total: number
+}
+
+const AVITO_ORDERS_PAGE_LIMIT = 50
 
 type AvitoStickerSettings = {
   qrStyle: 'classic' | 'rounded' | 'dots' | 'diamonds' | 'maze' | 'drops'
@@ -18446,7 +18769,7 @@ function AvitoOverviewKpiStripIsland() {
   const unreadChats = chatsLive.data ? chatsSummary.unread : summary?.unreadChats
   const totalChats = chatsLive.data ? chatsSummary.total : summary?.chats
   const kpis = [
-    ['Активные объявления', 'Активные карточки Авито', summary ? formatAvitoInt(summary.activeListings) : '—', '', summary ? `${formatAvitoInt(summary.inactiveListings)} неактивн.` : 'ждём данные', live.error ? 'down' : 'neutral'],
+    ['Активные объявления', 'Активные карточки Авито', formatAvitoMetric(summary?.activeListings), '', summary ? `${formatAvitoMetric(summary.inactiveListings)} неактивн.` : 'ждём данные', live.error ? 'down' : 'neutral'],
     ['Просмотры', 'Открытия карточек за выбранный период', summary ? formatAvitoMetric(summary.views) : '—', '', summary ? `${formatAvitoPctNullable(summary.conversionPct)} в контакт` : 'ждём данные', 'neutral'],
     ['Контакты', 'Звонки, сообщения и другие контакты Авито', summary ? formatAvitoMetric(summary.contacts) : '—', '', summary ? `${formatAvitoMetric(summary.orders)} заказов` : 'ждём данные', 'neutral'],
     ['Непрочитанные чаты', 'Текущие сообщения Авито', unreadChats == null ? '—' : formatAvitoInt(unreadChats), unreadChats ? 'warn' : '', totalChats == null ? 'ждём данные' : `${formatAvitoInt(totalChats)} всего`, unreadChats ? 'down' : 'neutral'],
@@ -19032,7 +19355,7 @@ function AvitoOverviewReportShellIsland() {
   const live = useAvitoOverviewLiveState()
   const [selectedItemId, setSelectedItemId] = useState('')
   const data = avitoOverviewDataForPeriod(state, live)
-  const summary = data?.summary
+  const statsError = (data?.source.errors as { stats?: { code?: string } } | undefined)?.stats
   const query = state.query.trim().toLocaleLowerCase('ru-RU')
   const topItems = (data?.topItems ?? []).filter((row) => !query || `${row.title} ${row.itemId} ${row.accountName} ${row.category ?? ''}`.toLocaleLowerCase('ru-RU').includes(query))
   const events = (data?.events ?? []).map(avitoOverviewFriendlyEvent).filter((event) => {
@@ -19043,7 +19366,6 @@ function AvitoOverviewReportShellIsland() {
     if (!query) return true
     return `${event.source} ${event.title} ${event.meta}`.toLocaleLowerCase('ru-RU').includes(query)
   })
-  const spendPerView = summary?.spendKopecks != null && summary.views ? `${formatAvitoRub(summary.spendKopecks / summary.views)} за просмотр` : 'ждём расходы'
   const eventClass = (severity: string) => severity === 'danger' ? 'danger' : severity === 'warn' ? 'warn' : 'new'
   const eventColor = (severity: string) => severity === 'danger' ? '#DC2626' : severity === 'warn' ? '#F59E0B' : '#2563EB'
   const selectedItem = (data?.topItems ?? []).find((row) => row.itemId === selectedItemId)
@@ -19070,20 +19392,9 @@ function AvitoOverviewReportShellIsland() {
           <div className="avito-period-group-grid">
             <section className="report-panel report-panel-pad">
               <div className="report-chart-head">
-                <div><div className="report-card-title">Операционный обзор Авито</div><div className="report-card-note">Аккаунты, чаты, объявления, кошельки и заказы.</div></div>
-              </div>
-              <div className="report-mini-grid">
-                <div className="report-mini-card"><div className="report-mini-label">Просмотры</div><div className="report-mini-value">{summary ? formatAvitoMetric(summary.views) : '—'}</div><div className="report-mini-note">{summary ? `${formatAvitoPctNullable(summary.conversionPct)} в контакт` : 'ждём данные'}</div></div>
-                <div className="report-mini-card"><div className="report-mini-label">Контакты</div><div className="report-mini-value">{summary ? formatAvitoMetric(summary.contacts) : '—'}</div><div className="report-mini-note">{summary ? `${formatAvitoMetric(summary.orders)} заказов · ${formatAvitoPctNullable(summary.orderConversionPct)} в заказ` : 'ждём данные'}</div></div>
-                <div className="report-mini-card"><div className="report-mini-label">Избранное</div><div className="report-mini-value">{summary ? formatAvitoMetric(summary.favorites) : '—'}</div><div className="report-mini-note">{summary ? `${formatAvitoMetric(summary.impressions)} показов` : 'ждём данные'}</div></div>
-                <div className="report-mini-card"><div className="report-mini-label">Расходы</div><div className="report-mini-value">{summary ? formatAvitoRubNullable(summary.spendKopecks) : '—'}</div><div className="report-mini-note">{spendPerView}</div></div>
-              </div>
-            </section>
-            <section className="report-panel report-panel-pad">
-              <div className="report-chart-head">
                 <div><div className="report-card-title">Позиции по метрикам</div><div className="report-card-note">Объявления по просмотрам и контактам за выбранный период.</div></div>
               </div>
-              <div className="attention-list">
+              <div className="attention-list avito-overview-items">
                 {topItems.length ? topItems.map((row) => (
                   <div
                     className="attention-item"
@@ -19101,8 +19412,8 @@ function AvitoOverviewReportShellIsland() {
                 )) : (
                   <AvitoDataState
                     kind={live.loading ? 'loading' : 'empty'}
-                    title={live.loading ? 'Загружаем объявления' : 'Нет объявлений за период'}
-                    subtitle={live.loading ? 'Собираем топ по просмотрам и контактам.' : 'Попробуйте другой период или обновите данные из Авито.'}
+                    title={live.loading ? 'Загружаем объявления' : statsError ? 'Топ объявлений обновится позже' : 'Нет объявлений за период'}
+                    subtitle={live.loading ? 'Собираем топ по просмотрам и контактам.' : statsError?.code === 'rate_limited' ? 'Авито временно ограничил запросы. Повторим загрузку автоматически.' : statsError ? 'Статистика Авито временно недоступна. Попробуйте обновить данные.' : 'Попробуйте другой период или обновите данные из Авито.'}
                   />
                 )}
               </div>
@@ -19165,12 +19476,14 @@ function AvitoOverviewReportShellIsland() {
             if (event.target === event.currentTarget) setSelectedItemId('')
           }}
         >
-          <div className="modal xl" style={{ width: 'min(920px, calc(100vw - 48px))', maxHeight: 'calc(100vh - 72px)', overflow: 'auto' }}>
+          <div className="modal xl">
             <div className="modal-head">
               <div className="modal-icon brand">A</div>
-              <h2>{selectedItem.title}</h2>
-              <p>{selectedItem.category ?? 'Категория Авито'} · {selectedItem.accountName}</p>
-              <button className="icon-btn" type="button" data-tip="Закрыть" onClick={() => setSelectedItemId('')}>×</button>
+              <div className="avito-overview-item-heading">
+                <h2>{selectedItem.title}</h2>
+                <p>{selectedItem.category ?? 'Категория Авито'} · {selectedItem.accountName}</p>
+              </div>
+              <button className="icon-btn" type="button" aria-label="Закрыть карточку объявления" onClick={() => setSelectedItemId('')}>×</button>
             </div>
             <div className="modal-body">
               <div className="avito-detail-grid five">
@@ -19188,7 +19501,7 @@ function AvitoOverviewReportShellIsland() {
               </div>
             </div>
             <div className="modal-foot">
-              <button className="btn btn-default" type="button" onClick={() => window.goSubtab?.('avito-listings')}>Открыть объявления</button>
+              <a className="btn btn-default" href="/avito/listings">Открыть объявления</a>
               <button className="btn btn-primary" type="button" onClick={() => setSelectedItemId('')}>Закрыть</button>
             </div>
           </div>
@@ -19202,6 +19515,7 @@ function AvitoOverviewIsland({ replacementKey }: { replacementKey: string }) {
   const location = useLocation()
   const { accessToken } = useAuth()
   const state = useAvitoOverviewState()
+  const live = useAvitoOverviewLiveState()
   const isAvitoOverviewRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'avito-overview'
 
   useEffect(() => {
@@ -19223,7 +19537,7 @@ function AvitoOverviewIsland({ replacementKey }: { replacementKey: string }) {
         if (controller.signal.aborted) return
         if (!data) throw new Error('Пустой ответ обзора Авито')
         setAvitoOverviewLiveState({ loading: false, error: null, data })
-        if (state.forceRefresh) window.__vellaSetAvitoOverviewState?.({ forceRefresh: false })
+        if (state.forceRefresh && window.__vellaAvitoOverviewState) window.__vellaAvitoOverviewState.forceRefresh = false
       })
       .catch((error) => {
         if (controller.signal.aborted) return
@@ -19233,7 +19547,7 @@ function AvitoOverviewIsland({ replacementKey }: { replacementKey: string }) {
       .then((data) => {
         if (controller.signal.aborted) return
         if (!data) throw new Error('Пустой ответ сообщений Авито')
-        setAvitoChatsLiveState({ loading: false, error: null, data })
+        setAvitoChatsLiveState({ loading: false, error: avitoBackendErrorMessage(data), data })
       })
       .catch((error) => {
         if (controller.signal.aborted) return
@@ -19241,6 +19555,19 @@ function AvitoOverviewIsland({ replacementKey }: { replacementKey: string }) {
       })
     return () => controller.abort()
   }, [accessToken, isAvitoOverviewRoute, state.dateFrom, state.dateTo, state.forceRefresh, state.requestSeq])
+
+  useEffect(() => {
+    const data = avitoOverviewDataForPeriod(state, live)
+    const statsError = (data?.source.errors as { stats?: { code?: string } } | undefined)?.stats
+    if (!isAvitoOverviewRoute || live.loading || statsError?.code !== 'rate_limited') return
+    const cooldownUntil = avitoCooldownUntilFromPayload(data)
+    const timer = window.setTimeout(() => {
+      const current = window.__vellaAvitoOverviewState
+      if (!current || current.dateFrom !== state.dateFrom || current.dateTo !== state.dateTo) return
+      window.__vellaSetAvitoOverviewState?.({ forceRefresh: true, requestSeq: current.requestSeq + 1 })
+    }, avitoCooldownRemainingMs(cooldownUntil) + 500)
+    return () => window.clearTimeout(timer)
+  }, [isAvitoOverviewRoute, live, state.dateFrom, state.dateTo])
 
   useEffect(() => {
     window.applyAvitoOverviewPeriod = (values) => {
@@ -19904,10 +20231,10 @@ function AvitoInboxIsland({ replacementKey }: { replacementKey: string }) {
       .then((data) => {
         if (controller.signal.aborted) return
         if (!data) throw new Error('Пустой ответ сообщений Авито')
-        setAvitoChatsLiveState({ loading: false, error: null, data })
+        setAvitoChatsLiveState({ loading: false, error: avitoBackendErrorMessage(data), data })
         const selectedExists = data.chats.some((chat) => chat.chatId === window.__vellaAvitoChatsState?.selectedChatId)
         if (!selectedExists && data.chats[0]?.chatId) window.__vellaSetAvitoChatsState?.({ selectedChatId: data.chats[0].chatId })
-        if (state.forceRefresh) window.__vellaSetAvitoChatsState?.({ forceRefresh: false })
+        if (state.forceRefresh && window.__vellaAvitoChatsState) window.__vellaAvitoChatsState.forceRefresh = false
       })
       .catch((error) => {
         if (controller.signal.aborted) return
@@ -20030,9 +20357,6 @@ function formatAvitoRub(kopecks: number) {
   return `${formatAvitoInt(Math.round(kopecks / 100))} ₽`
 }
 
-function avitoMetricNumber(value: number | null | undefined) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0
-}
 
 function formatAvitoMetric(value: number | null | undefined) {
   return typeof value === 'number' && Number.isFinite(value) ? formatAvitoInt(value) : '—'
@@ -20174,10 +20498,6 @@ function avitoListingRowsForState(data: AvitoListingsBackendResponse | null, sta
   return avitoBackendListingRows(data).filter((row) => avitoListingMatches(row, state)).slice(0, pageSize)
 }
 
-function avitoRowsTotal(rows: AvitoStatsBackendRow[], key: keyof Pick<AvitoStatsBackendRow, 'impressions' | 'views' | 'contacts' | 'favorites' | 'spendKopecks' | 'orders' | 'buyouts'>) {
-  const values = rows.map((row) => row[key]).filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-  return values.length ? values.reduce((sum, value) => sum + value, 0) : null
-}
 
 function getAvitoDetailTotals(detail: AvitoListingDetail): AvitoDetailTotals {
   const views = Math.max(0, Math.round(parseAvitoNumber(detail.views)))
@@ -20656,7 +20976,7 @@ function AvitoListingsIsland({
         if (controller.signal.aborted) return
         if (!data) throw new Error('Пустой ответ объявлений Авито')
         setAvitoListingsLiveState({ loading: false, error: null, data })
-        if (state.forceRefresh) window.__vellaSetAvitoListingsState?.({ forceRefresh: false })
+        if (state.forceRefresh && window.__vellaAvitoListingsState) window.__vellaAvitoListingsState.forceRefresh = false
       })
       .catch((error) => {
         if (controller.signal.aborted) return
@@ -20803,6 +21123,7 @@ async function loadLiveAvitoRepricer(
   const params = new URLSearchParams({
     dateFrom: period.dateFrom,
     dateTo: period.dateTo,
+    includeAnalytics: 'true',
   })
   if (period.forceRefresh) params.set('forceRefresh', 'true')
   return apiRequest<AvitoRepricerBackendResponse>(`/api/v1/avito/repricer?${params.toString()}`, {
@@ -20859,19 +21180,6 @@ async function resolveLiveAvitoRepricerPending(accessToken: string, approvalId: 
     method: 'POST',
     headers: authorizationHeaders(accessToken),
   })
-}
-
-function avitoRepricerSignalLabel(signal: AvitoRepricerFilter) {
-  if (signal === 'raise') return 'Поднять'
-  if (signal === 'lower') return 'Снизить'
-  if (signal === 'keep') return 'Оставить'
-  if (signal === 'no_data') return 'Нет данных'
-  if (signal === 'blocked') return 'Блок'
-  return 'Все'
-}
-
-function avitoRepricerSignalClass(signal: AvitoRepricerFilter) {
-  return `avito-decision-badge ${signal}`
 }
 
 function avitoPriceHistoryActionLabel(action: string) {
@@ -20941,15 +21249,11 @@ function AvitoRepricerKpiStripIsland({ replacementKey }: { replacementKey: strin
   const live = useAvitoRepricerLiveState()
   const summary = live.data?.summary
   const kpis = [
-    ['Написали в чат', 'Сколько пользователей написали по объявлениям', summary ? formatAvitoMetric(summary.contactsMessenger) : '—', 'главный сигнал'],
-    ['Поднять', 'Кандидаты на повышение цены', summary ? formatAvitoInt(summary.raiseCandidates) : '—', 'спрос выше порога'],
-    ['Снизить', 'Кандидаты на снижение цены', summary ? formatAvitoInt(summary.lowerCandidates) : '—', 'трафик без чатов'],
-    ['Без метрики', 'По части объявлений нет метрики чатов', summary ? formatAvitoInt(summary.noData) : '—', 'не применять'],
-    ['Просмотры', 'Просмотры за выбранный период', summary ? formatAvitoMetric(summary.views) : '—', 'за период'],
-    ['Контакты всего', 'Все контакты вместе: чат, телефон и другие действия', summary ? formatAvitoMetric(summary.contacts) : '—', 'общий показатель'],
+    ['Активные объявления', 'Количество объявлений со статусом active в Авито', formatAvitoMetric(summary?.active), 'объявлений'],
+    ['Заблокированные', 'Объявления, заблокированные Авито', formatAvitoMetric(summary?.blockedListings), 'объявлений'],
   ] as const
   return (
-    <div key={replacementKey} className="stats avito-stats-kpis" data-vella-island="avito-repricer-kpi-strip" data-vella-island-status="explicit-jsx">
+    <div key={replacementKey} className="stats avito-stats-kpis" style={{ gridTemplateColumns: 'repeat(2, minmax(180px, 1fr))' }} data-vella-island="avito-repricer-kpi-strip" data-vella-island-status="explicit-jsx">
       {kpis.map(([label, tip, value, note]) => (
         <div className="stat" key={label}>
           <div className="stat-label">{label} <span className="stat-tip" data-tip={tip}>i</span></div>
@@ -21415,13 +21719,14 @@ function AvitoRepricerIsland({ replacementKey }: { replacementKey: string; sourc
                   <th>Стратегия</th>
                   <th className="num">Цена</th>
                   <th className="num">Новая цена</th>
-                  <th>Решение</th>
-                  <th className="num">Написали</th>
-                  <th className="num">Контакты</th>
+                  <th className="num">Чаты</th>
                   <th className="num">Просмотры</th>
                   <th className="num">CR чата</th>
+                  <th className="num" title="Заказы / просмотры × 100%">CR в заказ</th>
+                  <th className="num">Расходы на объявление</th>
+                  <th className="num" title="Расходы / количество контактов">Средняя цена контакта</th>
                   <th>Аккаунт</th>
-                  <th>Основание</th>
+                  <th>Статус</th>
                   <th>История</th>
                 </tr>
               </thead>
@@ -21430,7 +21735,7 @@ function AvitoRepricerIsland({ replacementKey }: { replacementKey: string; sourc
                   <tr key={row.itemId}>
                     <td>
                       <div className="avito-item-cell">
-                        {row.imageUrl ? <img className="avito-row-photo" src={row.imageUrl} alt="" loading="lazy" /> : <div className="avito-row-photo avito-row-photo-empty">AV</div>}
+                        <AvitoRepricerPhoto url={row.imageUrl} title={row.title} photoId={row.photoId} accessToken={accessToken} />
                         <div className="avito-title-cell">
                           <b>{row.title}</b>
                           <span className="sub">ID: {row.itemId} · {row.category ?? 'без категории'}</span>
@@ -21457,20 +21762,21 @@ function AvitoRepricerIsland({ replacementKey }: { replacementKey: string; sourc
                       </div>
                       <span className="sub">{row.strategyDescription ?? 'метрика чатов'}</span>
                     </td>
-                    <td className="num">{formatAvitoRubNullable(row.priceKopecks)}</td>
-                    <td className="num"><div className="avito-price-stack"><b>{formatAvitoRubNullable(row.recommendedPriceKopecks)}</b><span>{row.priceDeltaPct === 0 ? 'без изменения' : `${row.priceDeltaPct > 0 ? '+' : ''}${row.priceDeltaPct}% по стратегии`}</span></div></td>
-                    <td><span className={avitoRepricerSignalClass(row.strategySignal)}>{avitoRepricerSignalLabel(row.strategySignal)}</span></td>
-                    <td className="num"><b>{formatAvitoMetric(row.contactsMessenger)}</b></td>
-                    <td className="num">{formatAvitoMetric(row.contacts)}</td>
-                    <td className="num">{formatAvitoMetric(row.views)}</td>
-                    <td className="num">{formatAvitoPctNullable(row.messengerConversionPct)}</td>
+                    <td className="num" data-sort-value={row.priceKopecks ?? ''}>{formatAvitoRubNullable(row.priceKopecks)}</td>
+                    <td className="num" data-sort-value={row.recommendedPriceKopecks ?? ''}><div className="avito-price-stack"><b>{formatAvitoRubNullable(row.recommendedPriceKopecks)}</b><span>{row.priceDeltaPct === 0 ? 'без изменения' : `${row.priceDeltaPct > 0 ? '+' : ''}${row.priceDeltaPct}% по стратегии`}</span></div></td>
+                    <td className="num" data-sort-value={row.contactsMessenger ?? ''}><AvitoRepricerMetric value={row.contactsMessenger} trend={row.contactsTrend} /></td>
+                    <td className="num" data-sort-value={row.views ?? ''}><AvitoRepricerMetric value={row.views} trend={row.viewsTrend} /></td>
+                    <td className="num" data-sort-value={row.messengerConversionPct ?? ''}>{formatAvitoPctNullable(row.messengerConversionPct)}</td>
+                    <td className="num" data-sort-value={row.orderConversionPct ?? ''}>{formatAvitoPctNullable(row.orderConversionPct)}</td>
+                    <td className="num" data-sort-value={row.spendKopecks ?? ''}>{row.spendKopecks == null ? '—' : `${(row.spendKopecks / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`}</td>
+                    <td className="num" data-sort-value={row.averageContactCostKopecks ?? ''}>{row.averageContactCostKopecks == null ? '—' : `${(row.averageContactCostKopecks / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`}</td>
                     <td><span className="avito-account-badge">{row.accountName}</span></td>
-                    <td>{row.reason}</td>
+                    <td>{avitoListingStatusLabel(row.status)}</td>
                     <td><button className="btn btn-default btn-sm" type="button" onClick={() => void openPriceHistory(row)}>Посмотреть</button></td>
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={12}>
+                    <td colSpan={13}>
                       {live.loading ? (
                         <AvitoDataState kind="loading" title="Считаем рекомендации" subtitle="Загружаем объявления, цены и сообщения за выбранный период." />
                       ) : live.error ? (
@@ -21501,6 +21807,7 @@ async function loadLiveAvitoStats(
   const params = new URLSearchParams({
     dateFrom: period.dateFrom,
     dateTo: period.dateTo,
+    includeDaily: 'true',
   })
   if (period.forceRefresh) params.set('forceRefresh', 'true')
   return apiRequest<AvitoStatsBackendResponse>(`/api/v1/avito/stats?${params.toString()}`, {
@@ -21545,86 +21852,42 @@ async function loadLiveAvitoChats(
 
 async function loadLiveAvitoOrders(
   accessToken: string,
-  options: { dateFrom: string; periodDays?: number; status: AvitoOrdersStatus; limit: number; page: number; forceRefresh?: boolean },
+  options: { dateFrom: string; status: AvitoOrdersStatus; limit: number; page: number; forceRefresh?: boolean; accountId?: string; search?: string },
   signal?: AbortSignal,
 ) {
-  const safePeriodDays = Math.max(1, Math.min(183, Math.round(options.periodDays || 30)))
-  const safeDateFrom = clampDateFromNotFuture(options.dateFrom, toLocalIsoDate(addLocalDays(new Date(), -(safePeriodDays - 1))))
   const params = new URLSearchParams({
-    dateFrom: safeDateFrom,
-    periodDays: String(safePeriodDays),
-    limit: String(Math.max(1, Math.min(20, options.limit || 20))),
+    mode: avitoOrdersMode(options.status),
+    limit: String(Math.max(1, Math.min(100, options.limit || 50))),
     page: String(Math.max(1, options.page || 1)),
   })
-  if (options.status && options.status !== 'all') params.append('status', options.status)
+  if (options.status === 'history') params.set('historyFrom', options.dateFrom)
+  if (options.accountId) params.set('accountId', options.accountId)
+  if (options.search) params.set('search', options.search)
   if (options.forceRefresh) params.set('forceRefresh', 'true')
-  return apiRequest<AvitoOrdersBackendResponse>(`/api/v1/avito/orders?${params.toString()}`, {
+  return apiRequest<AvitoOrdersBackendResponse>(`/api/v1/avito/orders/queue?${params.toString()}`, {
     headers: authorizationHeaders(accessToken),
     signal,
     cache: 'no-store',
   })
 }
 
-function buildAvitoOrdersSummary(rows: AvitoOrderRow[], total: number): AvitoOrdersBackendResponse['summary'] {
-  const statusCounts = rows.reduce<Record<string, number>>((acc, row) => {
-    acc[row.status] = (acc[row.status] ?? 0) + 1
-    return acc
-  }, {})
-  const totalKopecksValues = rows.map((row) => row.totalKopecks).filter((value): value is number => value != null)
-  return {
-    total: total || rows.length,
-    shown: rows.length,
-    confirmation: statusCounts.on_confirmation ?? 0,
-    readyToShip: statusCounts.ready_to_ship ?? 0,
-    inTransit: statusCounts.in_transit ?? 0,
-    delivered: statusCounts.delivered ?? 0,
-    closed: statusCounts.closed ?? 0,
-    canceled: statusCounts.canceled ?? 0,
-    returns: rows.filter((row) => row.status === 'on_return' || Boolean(row.returnStatus)).length,
-    disputes: statusCounts.in_dispute ?? 0,
-    requiredActions: rows.filter((row) => row.availableActions.some((action) => action.required)).length,
-    items: rows.reduce((sum, row) => sum + row.items.reduce((itemSum, item) => itemSum + item.quantity, 0), 0),
-    totalKopecks: totalKopecksValues.length ? totalKopecksValues.reduce((sum, value) => sum + value, 0) : null,
-    statusCounts,
-  }
-}
-
 async function loadAllLiveAvitoOrders(
   accessToken: string,
-  options: { dateFrom: string; periodDays?: number; status: AvitoOrdersStatus; forceRefresh?: boolean },
+  options: { dateFrom: string; status: AvitoOrdersStatus; forceRefresh?: boolean; page: number; accountId?: string; search?: string },
   signal?: AbortSignal,
+  onSnapshot?: (data: AvitoOrdersBackendResponse) => void,
 ): Promise<AvitoOrdersBackendResponse | null> {
-  const first = await loadLiveAvitoOrders(accessToken, { ...options, limit: AVITO_ORDERS_PAGE_LIMIT, page: 1 }, signal)
-  if (!first || first.status === 'blocked') return first
-  const rowsById = new Map<string, AvitoOrderRow>()
-  first.rows.forEach((row) => rowsById.set(row.orderId, row))
-
-  for (let page = 2; page <= AVITO_ORDERS_MAX_PAGES && first.rows.length >= AVITO_ORDERS_PAGE_LIMIT; page += 1) {
-    if (signal?.aborted) throw new Error('Загрузка заказов Авито отменена')
-    const next = await loadLiveAvitoOrders(accessToken, { ...options, limit: AVITO_ORDERS_PAGE_LIMIT, page }, signal)
-    if (!next || next.status === 'blocked' || !next.rows.length) break
-    const previousCount = rowsById.size
-    next.rows.forEach((row) => rowsById.set(row.orderId, row))
-    if (rowsById.size === previousCount) break
-    if (next.rows.length < AVITO_ORDERS_PAGE_LIMIT) break
+  let data: AvitoOrdersBackendResponse | null = null
+  for (let attempt = 0; attempt < 30 && !signal?.aborted; attempt += 1) {
+    data = await loadLiveAvitoOrders(accessToken, { ...options, forceRefresh: attempt === 0 && options.forceRefresh, limit: AVITO_ORDERS_PAGE_LIMIT }, signal)
+    if (signal?.aborted) return null
+    if (data) onSnapshot?.(data)
+    if ((data?.source?.error as { code?: string } | null)?.code !== 'refresh_in_progress') return data
+    await new Promise((resolve) => window.setTimeout(resolve, 2000))
   }
-
-  const rows = Array.from(rowsById.values())
-  const total = Math.max(first.summary?.total ?? 0, rows.length)
-  return {
-    ...first,
-    filters: { ...first.filters, page: 1, limit: AVITO_ORDERS_PAGE_LIMIT },
-    summary: buildAvitoOrdersSummary(rows, total),
-    rows,
-    source: {
-      ...first.source,
-      pagination: {
-        pageLimit: AVITO_ORDERS_PAGE_LIMIT,
-        pagesLoaded: Math.max(1, Math.ceil(rows.length / AVITO_ORDERS_PAGE_LIMIT)),
-        total,
-      },
-    },
-  }
+  return data && !signal?.aborted
+    ? { ...data, source: { ...data.source, error: { code: 'refresh_timeout', message: 'Обновление Авито занимает больше минуты. Попробуйте ещё раз.' } } }
+    : null
 }
 
 async function sendLiveAvitoChatMessage(accessToken: string, chatId: string, accountId: string, text: string) {
@@ -21708,18 +21971,33 @@ async function deleteLiveAvitoReviewAnswer(accessToken: string, answerId: string
 }
 
 const AVITO_ORDER_STATUS_OPTIONS: Array<{ value: AvitoOrdersStatus; label: string }> = [
-  { value: 'all', label: 'Все' },
+  { value: 'all', label: 'Все активные' },
   { value: 'on_confirmation', label: 'На подтверждение' },
-  { value: 'ready_to_ship', label: 'К отгрузке' },
+  { value: 'ready_to_ship', label: 'Ждут отправки' },
   { value: 'in_transit', label: 'В пути' },
   { value: 'delivered', label: 'Доставлены' },
   { value: 'closed', label: 'Закрыты' },
   { value: 'canceled', label: 'Отменены' },
   { value: 'on_return', label: 'Возвраты' },
   { value: 'in_dispute', label: 'Споры' },
+  { value: 'return_inbound', label: 'Едут обратно' },
+  { value: 'return_pickup', label: 'Можно забрать' },
+  { value: 'history', label: 'История' },
+  { value: 'review', label: 'Требует проверки' },
 ]
 
+const AVITO_ORDER_QUEUE_OPTIONS = AVITO_ORDER_STATUS_OPTIONS.filter((option) =>
+  ['all', 'ready_to_ship', 'in_transit', 'on_return', 'return_pickup', 'history'].includes(option.value),
+)
+
+function avitoOrdersMode(status: AvitoOrdersStatus) {
+  if (status === 'all') return 'active'
+  if (status === 'on_return') return 'returns'
+  return status
+}
+
 function avitoOrderStatusLabel(status: string | null | undefined) {
+  if (status === 'unknown') return 'Требует проверки'
   return AVITO_ORDER_STATUS_OPTIONS.find((option) => option.value === status)?.label ?? (status ? 'Другой статус' : '—')
 }
 
@@ -21735,24 +22013,6 @@ function avitoOrderActionLabel(action: string | null | undefined) {
   return 'Действие'
 }
 
-function avitoOrderSearchText(row: AvitoOrderRow) {
-  return [
-    row.orderId,
-    row.marketplaceId,
-    row.accountId,
-    row.accountName,
-    row.status,
-    row.buyerName,
-    row.buyerId,
-    row.recipientName,
-    row.address,
-    row.trackNumber,
-    row.deliveryType,
-    row.deliveryService,
-    ...row.items.map((item) => `${item.itemId ?? ''} ${item.title} ${item.sellerArticle ?? ''}`),
-  ].filter(Boolean).join(' ').toLocaleLowerCase('ru-RU')
-}
-
 function avitoOrderDateLabel(value: string | null | undefined) {
   if (!value) return '—'
   const date = new Date(value)
@@ -21760,10 +22020,13 @@ function avitoOrderDateLabel(value: string | null | undefined) {
   return date.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
-function avitoOrdersDataMatches(data: AvitoOrdersBackendResponse | null, dateFrom: string, status: AvitoOrdersStatus) {
-  if (!data || data.period.dateFrom !== dateFrom) return false
-  const statuses = data.filters.statuses ?? []
-  return status === 'all' ? statuses.length === 0 : statuses.length === 1 && statuses[0] === status
+function avitoOrdersDataMatches(data: AvitoOrdersBackendResponse | null, dateFrom: string, status: AvitoOrdersStatus, accountId: string, page: number, search: string) {
+  if (!data) return false
+  return data.filters.mode === avitoOrdersMode(status)
+    && data.filters.accountId === (accountId || null)
+    && data.filters.page === page
+    && data.filters.search === search
+    && (status !== 'history' || data.filters.historyFrom === dateFrom)
 }
 
 function avitoOrdersBackendError(data: AvitoOrdersBackendResponse | null) {
@@ -21774,7 +22037,7 @@ function avitoOrdersBackendError(data: AvitoOrdersBackendResponse | null) {
 
 function avitoOrderPickingRows(rows: AvitoOrderRow[]) {
   return rows.flatMap((row) => (row.items.length ? row.items : [{ itemId: null, title: 'Товар Авито', quantity: 1, priceKopecks: row.totalKopecks, sellerArticle: null, size: null, color: null, imageUrl: null }]).map((item, index) => ({
-    key: `${row.orderId}:${item.itemId ?? index}`,
+    key: `${row.accountId ?? ''}:${row.orderId}:${item.lineIndex ?? index}:${item.itemId ?? ''}`,
     order: row,
     item,
     index,
@@ -21801,23 +22064,13 @@ function avitoStickerQrValue(settings: AvitoStickerSettings, source: AvitoSticke
 function avitoStickerSku(source: AvitoStickerSource | null) {
   if (!source) return 'SKU / цвет / размер'
   const product = avitoPickingProduct(source.item.title)
-  const size = source.item.size || avitoPickingSize(source.item.title, source.item.sellerArticle)
+  const size = source.item.size || '—'
   const color = source.item.color || '—'
   return [source.item.sellerArticle || source.item.itemId || product, color !== '—' ? color : '', size !== '—' ? size : ''].filter(Boolean).join(' / ')
 }
 
 function avitoStickerTitle(source: AvitoStickerSource | null) {
   return source?.item.title || 'Товар Авито'
-}
-
-function avitoOrdersBrowserSnapshotMeta(data: AvitoOrdersBackendResponse | null) {
-  return data?.source?.browserSnapshot as {
-    capturedAt?: string | null
-    orders?: number
-    items?: number
-    collector?: Record<string, unknown>
-    aiExtraction?: { status?: string; itemsSent?: number; itemsReturned?: number; itemsUpdated?: number; reason?: string; model?: string } | null
-  } | null | undefined
 }
 
 async function loadAvitoOrdersExtensionTokenStatus(accessToken: string, signal?: AbortSignal) {
@@ -21841,6 +22094,28 @@ async function loadAvitoReturnsSyncSettings(accessToken: string, signal?: AbortS
     headers: authorizationHeaders(accessToken),
     signal,
     cache: 'no-store',
+  })
+}
+
+async function loadAvitoReturnInventory(accessToken: string, accountId: string, page: number, signal?: AbortSignal) {
+  const params = new URLSearchParams({ page: String(page), limit: '50' })
+  if (accountId) params.set('accountId', accountId)
+  return apiRequest<AvitoReturnInventoryPage>(`/api/v1/avito/orders/returns-inventory?${params}`, {
+    headers: authorizationHeaders(accessToken), signal, cache: 'no-store',
+  })
+}
+
+async function loadAvitoReturnInventoryEvents(accessToken: string, itemId: number) {
+  return apiRequest<AvitoReturnInventoryEvents>(`/api/v1/avito/orders/returns-inventory/${itemId}/events`, {
+    headers: authorizationHeaders(accessToken), cache: 'no-store',
+  })
+}
+
+async function postAvitoReturnOperation(accessToken: string, itemId: number, payload: { operationId: string; action: string; quantity: number; linkedOrderId?: string }) {
+  return apiRequest<{ ok: boolean; item: AvitoReturnInventoryItem }>(`/api/v1/avito/orders/returns-inventory/${itemId}/operations`, {
+    method: 'POST',
+    headers: { ...authorizationHeaders(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   })
 }
 
@@ -21894,9 +22169,21 @@ function avitoOrderReturnBadge(item: AvitoOrderItem) {
   const match = avitoOrderReturnSuggestion(item)
   if (!match) return <span className="avito-return-badge is-empty">нет</span>
   const evidence = avitoOrderReturnEvidence(match)
+  const exact = match.score === 100
+  const available = match.availableQuantity ?? 0
+  const returning = Math.max(0, match.quantity - (match.receivedQuantity ?? 0))
+  if (available <= 0 && returning <= 0) return <span className="avito-return-badge is-empty">нет доступных</span>
+  const pickup = ['ready_for_pickup', 'ready_to_pickup', 'pickup_ready', 'can_pickup'].includes(match.returnStatus ?? '')
+  const label = exact && available > 0
+    ? `На возвратном складе: ${available} шт.`
+    : exact && pickup && returning > 0
+      ? `Можно забрать: ${returning} шт.`
+      : exact && match.status === 'on_return' && returning > 0
+        ? `Едет обратно: ${returning} шт.`
+        : 'Возможное совпадение — требуется проверка'
   return (
     <span className="avito-return-cell">
-      <span className="avito-return-badge">есть</span>
+      <span className="avito-return-badge">{label}</span>
       <span className="sub">{evidence || 'совпадение по возврату'}</span>
     </span>
   )
@@ -22003,12 +22290,49 @@ function AvitoStickerQrPreview({ settings, value, compact = false }: { settings:
   )
 }
 
+function AvitoTransportBarcode({ order, accessToken }: { order: AvitoOrderRow; accessToken: string | null }) {
+  const [image, setImage] = useState('')
+  const [error, setError] = useState('')
+  useEffect(() => {
+    setImage(''); setError('')
+    if (!accessToken || !order.stickerLabelId || order.stickerNumberState !== 'confirmed') return
+    const controller = new AbortController()
+    let objectUrl = ''
+    void fetch(buildApiUrl(`/api/v1/avito/orders/labels/${order.stickerLabelId}/barcode.png`), {
+      headers: authorizationHeaders(accessToken), credentials: 'include', signal: controller.signal,
+    }).then(async response => {
+      if (!response.ok) throw new Error('Не удалось загрузить штрихкод')
+      const blob = await response.blob()
+      if (controller.signal.aborted) return
+      objectUrl = URL.createObjectURL(blob); setImage(objectUrl)
+    }).catch(() => { if (!controller.signal.aborted) setError('Штрихкод временно недоступен') })
+    return () => { controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [accessToken, order.stickerLabelId, order.stickerNumberState])
+  async function downloadOriginal() {
+    if (!accessToken || !order.stickerDocumentId) return
+    try {
+      const response = await fetch(buildApiUrl(`/api/v1/avito/orders/label-documents/${order.stickerDocumentId}.pdf`), { headers: authorizationHeaders(accessToken), credentials: 'include' })
+      if (!response.ok) throw new Error()
+      const url = URL.createObjectURL(await response.blob())
+      const link = document.createElement('a'); link.href = url; link.download = 'avito-labels.pdf'; link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch { setError('Не удалось скачать оригинал') }
+  }
+  return <div style={{ minWidth: 220 }}>
+    {image && <img src={image} alt={`Штрихкод ${order.stickerNumber || ''}`} style={{ display: 'block', width: 220, minWidth: 220, maxWidth: 'none', height: 'auto', objectFit: 'contain', background: '#fff' }} />}
+    <span className="orders-picking-muted">{order.stickerNumberState === 'confirmed' ? order.stickerNumber : order.stickerNumberState === 'ambiguous' ? 'Несколько отправлений — требуется проверка' : 'Этикетка не получена'}</span>
+    {order.stickerDocumentId && <button type="button" className="btn btn-default btn-sm" onClick={event => { event.stopPropagation(); void downloadOriginal() }}>Оригинал PDF</button>}
+    {error && <span role="status">{error}</span>}
+  </div>
+}
+
 function AvitoStickerPreview({ settings, source, format }: { settings: AvitoStickerSettings; source: AvitoStickerSource | null; format: 'large' | 'small' }) {
   const orderNumber = source?.order.marketplaceId || source?.order.orderId || '№1'
   const qrValue = avitoStickerQrValue(settings, source)
   const sku = avitoStickerSku(source)
   const title = avitoStickerTitle(source)
-  const barcodeValue = source?.order.trackNumber || orderNumber
+  const barcodeValue = source?.order.stickerNumberState === 'confirmed' && source.order.stickerBarcodeType === 'CODE128'
+    ? source.order.stickerNumber || '' : ''
   if (format === 'small') {
     return (
       <div className="avito-sticker-card is-small">
@@ -22023,7 +22347,7 @@ function AvitoStickerPreview({ settings, source, format }: { settings: AvitoStic
           </div>
           <div className="avito-sticker-small-title">{title}</div>
           <div className="avito-sticker-line"><span>{sku}</span><b>{settings.brandName || 'Satorna'}</b></div>
-          <div className="avito-sticker-barcode" dangerouslySetInnerHTML={{ __html: avitoStickerBarcodeHtml(barcodeValue) }} />
+          {barcodeValue ? <div className="avito-sticker-barcode" dangerouslySetInnerHTML={{ __html: avitoStickerBarcodeHtml(barcodeValue) }} /> : <div>Транспортная этикетка не получена</div>}
         </div>
       </div>
     )
@@ -22041,7 +22365,7 @@ function AvitoStickerPreview({ settings, source, format }: { settings: AvitoStic
       <div className="avito-sticker-muted">{sku}</div>
       <div className="avito-sticker-product">{title}</div>
       <div className="avito-sticker-code-row"><span>{source?.order.trackNumber || orderNumber}</span><b>{settings.qrCaption || 'QR'}</b></div>
-      <div className="avito-sticker-barcode" dangerouslySetInnerHTML={{ __html: avitoStickerBarcodeHtml(barcodeValue) }} />
+      {barcodeValue ? <div className="avito-sticker-barcode" dangerouslySetInnerHTML={{ __html: avitoStickerBarcodeHtml(barcodeValue) }} /> : <div>Транспортная этикетка не получена</div>}
       <div className="avito-sticker-footer">{settings.footerText}</div>
     </div>
   )
@@ -22228,12 +22552,6 @@ function avitoPickingProduct(title: string) {
   return 'Товар'
 }
 
-function avitoPickingSize(title: string, article?: string | null) {
-  const source = `${title} ${article ?? ''}`.toUpperCase()
-  const match = /\b(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\b/.exec(source)
-  return match?.[1] ?? '—'
-}
-
 function avitoPickingStatusClass(status: string) {
   if (status === 'ready_to_ship' || status === 'on_confirmation') return 'warn'
   if (status === 'canceled' || status === 'in_dispute') return 'blocked'
@@ -22246,26 +22564,56 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
   const isAvitoOrdersRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'orders-avito'
   const defaultDateFrom = toLocalIsoDate(addLocalDays(new Date(), -29))
   const [query, setQuery] = useState('')
+  const [appliedQuery, setAppliedQuery] = useState('')
   const [status, setStatus] = useState<AvitoOrdersStatus>('all')
+  const [accountId, setAccountId] = useState('')
+  const [page, setPage] = useState(1)
   const [dateFrom, setDateFrom] = useState(defaultDateFrom)
   const [dateDraft, setDateDraft] = useState(defaultDateFrom)
   const [requestSeq, setRequestSeq] = useState(0)
   const [forceRefresh, setForceRefresh] = useState(false)
   const [selectedOrderId, setSelectedOrderId] = useState('')
+  const [imagePreviewUrl, setImagePreviewUrl] = useState('')
   const [stickerOpen, setStickerOpen] = useState(false)
   const [stickerSourceKey, setStickerSourceKey] = useState('')
   const [pickingXlsxLoading, setPickingXlsxLoading] = useState(false)
+  const [pickingDownloadError, setPickingDownloadError] = useState('')
   const [extensionTokenStatus, setExtensionTokenStatus] = useState<AvitoOrdersExtensionTokenStatus | null>(null)
   const [extensionTokenLoading, setExtensionTokenLoading] = useState(false)
+  const [extensionTokenFeedback, setExtensionTokenFeedback] = useState('')
+  const extensionTokenRevision = useRef(0)
+  const extensionTokenInput = useRef<HTMLTextAreaElement | null>(null)
   const [extensionSettingsOpen, setExtensionSettingsOpen] = useState(false)
   const [returnsSyncSettings, setReturnsSyncSettings] = useState<AvitoReturnsSyncSettings | null>(null)
   const [returnsSyncLoading, setReturnsSyncLoading] = useState(false)
   const [returnsWindowOpen, setReturnsWindowOpen] = useState(false)
+  const [inventoryPage, setInventoryPage] = useState(1)
+  const [returnInventory, setReturnInventory] = useState<AvitoReturnInventoryPage | null>(null)
+  const [returnInventoryError, setReturnInventoryError] = useState('')
+  const [returnHistory, setReturnHistory] = useState<{ itemId: number; data: AvitoReturnInventoryEvents | null; error: string | null } | null>(null)
+  const [returnOperationBusy, setReturnOperationBusy] = useState('')
+  const returnOperationIds = useRef<Record<string, string>>({})
   const [returnsTimerNow, setReturnsTimerNow] = useState(() => Date.now())
   const [stickerSettings, setStickerSettings] = useState<AvitoStickerSettings>(() => readAvitoStickerSettings())
   const [live, setLive] = useState<AvitoOrdersLiveState>(EMPTY_AVITO_ORDERS_LIVE_STATE)
-  const validData = avitoOrdersDataMatches(live.data, dateFrom, status) ? live.data : null
-  const browserSnapshot = avitoOrdersBrowserSnapshotMeta(validData)
+  const validData = avitoOrdersDataMatches(live.data, dateFrom, status, accountId, page, appliedQuery) ? live.data : null
+  const labelCollection = validData?.source?.labelCollection as { stage?: string; labels?: number } | undefined
+  useEffect(() => setPickingDownloadError(''), [accountId, appliedQuery, status])
+  useEffect(() => {
+    if (status === 'return_inbound' || status === 'review') {
+      setStatus(status === 'return_inbound' ? 'on_return' : 'all')
+      setPage(1)
+      setSelectedOrderId('')
+    }
+  }, [status])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPage(1)
+      setAppliedQuery(query.trim())
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [query])
 
   useLayoutEffect(() => {
     if (isAvitoOrdersRoute) scrubAvitoOrdersLegacyMocks(document.body)
@@ -22285,7 +22633,9 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
       setDateDraft(safeDateFrom)
       return () => controller.abort()
     }
-    void loadAllLiveAvitoOrders(accessToken, { dateFrom: safeDateFrom, status, forceRefresh }, controller.signal)
+    void loadAllLiveAvitoOrders(accessToken, { dateFrom: safeDateFrom, status, forceRefresh, page, accountId, search: appliedQuery }, controller.signal, (data) => {
+      if (!controller.signal.aborted) setLive({ loading: false, error: avitoOrdersBackendError(data), data })
+    })
       .then((data) => {
         if (controller.signal.aborted) return
         setLive({ loading: false, error: avitoOrdersBackendError(data), data })
@@ -22293,24 +22643,26 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
       })
       .catch((error) => {
         if (controller.signal.aborted) return
-        setLive({ loading: false, error: error instanceof Error ? error.message : 'Не удалось загрузить заказы Авито', data: null })
+        setLive((current) => ({ ...current, loading: false, error: error instanceof Error ? error.message : 'Не удалось загрузить заказы Авито' }))
         setForceRefresh(false)
       })
     return () => controller.abort()
-  }, [accessToken, dateFrom, forceRefresh, isAvitoOrdersRoute, requestSeq, status])
+  }, [accessToken, dateFrom, forceRefresh, isAvitoOrdersRoute, requestSeq, status, page, accountId, appliedQuery])
 
   useEffect(() => {
+    const revision = ++extensionTokenRevision.current
+    setExtensionTokenStatus(null)
+    setExtensionTokenFeedback('')
     if (!isAvitoOrdersRoute || !accessToken) {
-      setExtensionTokenStatus(null)
       return
     }
     const controller = new AbortController()
     void loadAvitoOrdersExtensionTokenStatus(accessToken, controller.signal)
       .then((data) => {
-        if (!controller.signal.aborted) setExtensionTokenStatus(data)
+        if (!controller.signal.aborted && revision === extensionTokenRevision.current) setExtensionTokenStatus(data)
       })
       .catch(() => {
-        if (!controller.signal.aborted) setExtensionTokenStatus(null)
+        if (!controller.signal.aborted && revision === extensionTokenRevision.current) setExtensionTokenStatus(null)
       })
     return () => controller.abort()
   }, [accessToken, isAvitoOrdersRoute])
@@ -22356,22 +22708,25 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
     }
   }, [accessToken, isAvitoOrdersRoute, returnsWindowOpen])
 
-  const rows = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase('ru-RU')
-    return (validData?.rows ?? []).filter((row) => {
-      if (status !== 'all' && row.status !== status) return false
-      if (normalizedQuery && !avitoOrderSearchText(row).includes(normalizedQuery)) return false
-      return true
-    })
-  }, [query, status, validData])
-  const selected = rows.find((row) => row.orderId === selectedOrderId) ?? validData?.rows.find((row) => row.orderId === selectedOrderId) ?? null
+  useEffect(() => {
+    if (!returnsWindowOpen || !isAvitoOrdersRoute || !accessToken) return
+    const controller = new AbortController()
+    setReturnInventory(null)
+    setReturnInventoryError('')
+    void loadAvitoReturnInventory(accessToken, accountId, inventoryPage, controller.signal)
+      .then((data) => { if (!controller.signal.aborted) setReturnInventory(data) })
+      .catch(() => { if (!controller.signal.aborted) setReturnInventoryError('Не удалось загрузить возвратный склад. Повторите попытку позже.') })
+    return () => controller.abort()
+  }, [accessToken, accountId, inventoryPage, isAvitoOrdersRoute, returnsWindowOpen])
+
+  const rows = validData?.rows ?? []
+  const selected = rows.find((row) => `${row.accountId ?? ''}:${row.orderId}` === selectedOrderId) ?? null
   const summary = validData?.summary
   const sourceError = live.error || avitoOrdersBackendError(validData)
   const pickingRows = avitoOrderPickingRows(rows)
   const hasSearchQuery = query.trim().length > 0
-  const hasExtensionRows = Boolean(browserSnapshot && (validData?.rows.length ?? 0) > 0)
   const selectedStickerSource = pickingRows.find((row) => row.key === stickerSourceKey)
-    ?? pickingRows.find((row) => row.order.orderId === selectedOrderId)
+    ?? pickingRows.find((row) => `${row.order.accountId ?? ''}:${row.order.orderId}` === selectedOrderId)
     ?? pickingRows[0]
     ?? null
   const stickerPrintSources = avitoStickerPrintSources(pickingRows)
@@ -22389,6 +22744,10 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
     window.showToast?.('Настройки стикеров Авито сохранены', 'success')
   }
   const printSticker = async (format: '75x120' | '58x40') => {
+    if (stickerPrintSources.some(({ order }) => order.stickerNumberState !== 'confirmed' || order.stickerBarcodeType !== 'CODE128' || !order.stickerNumber)) {
+      window.showToast?.('Транспортная этикетка не подтверждена. Нельзя печатать подстановку из номера заказа.', 'warn')
+      return
+    }
     if (!stickerPrintSources.length) {
       window.showToast?.('Нет позиций для печати стикеров', 'warn')
       return
@@ -22429,21 +22788,35 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
     }
   }
   const downloadPickingList = async () => {
+    if (pickingXlsxLoading) return
     if (!accessToken) {
       window.showToast?.('Нужна активная сессия для выгрузки листа подбора', 'warn')
       return
     }
     setPickingXlsxLoading(true)
+    setPickingDownloadError('')
     try {
       const filename = await downloadAvitoOrdersPickingXlsx(accessToken, {
-        dateFrom,
-        periodDays: 30,
-        status,
+        accountId,
+        search: appliedQuery,
       })
       window.showToast?.(`Лист подбора ${filename} скачан`, 'success')
     } catch (error) {
-      console.error('Failed to download Avito picking list xlsx', error)
-      window.showToast?.('Не удалось скачать лист подбора Авито', 'error')
+      const message = error instanceof Error ? error.message : 'Не удалось скачать лист подбора Авито'
+      setPickingDownloadError(message)
+      window.showToast?.(message, 'error')
+    } finally {
+      setPickingXlsxLoading(false)
+    }
+  }
+  const downloadReturnsList = async () => {
+    if (!accessToken) return
+    setPickingXlsxLoading(true)
+    try {
+      const filename = await downloadAvitoOrdersPickingXlsx(accessToken, { accountId, kind: 'returns' })
+      window.showToast?.(`Лист возвратов ${filename} скачан`, 'success')
+    } catch (error) {
+      window.showToast?.(error instanceof Error ? error.message : 'Не удалось скачать лист возвратов', 'error')
     } finally {
       setPickingXlsxLoading(false)
     }
@@ -22454,26 +22827,49 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
       return
     }
     setExtensionTokenLoading(true)
+    setExtensionTokenFeedback('')
+    const revision = ++extensionTokenRevision.current
     try {
       const next = await regenerateAvitoOrdersExtensionToken(accessToken)
-      if (!next) throw new Error('Backend не вернул токен расширения')
+      if (revision !== extensionTokenRevision.current) return
+      if (!next?.token) throw new Error('Backend не вернул полный токен расширения')
       setExtensionTokenStatus(next)
-      if (next.token) await copyAvitoExtensionValue(next.token, 'Новый токен расширения скопирован')
+      setExtensionTokenFeedback('Новый токен создан. Нажмите «Скопировать токен» и вставьте его в расширение.')
     } catch (error) {
-      window.showToast?.(error instanceof Error ? error.message : 'Не удалось создать токен расширения', 'warn')
+      if (revision === extensionTokenRevision.current) setExtensionTokenFeedback(error instanceof Error ? error.message : 'Не удалось создать токен расширения')
     } finally {
       setExtensionTokenLoading(false)
+    }
+  }
+  const copyExtensionToken = async () => {
+    if (!extensionTokenStatus?.token) return
+    try {
+      await navigator.clipboard.writeText(extensionTokenStatus.token)
+      setExtensionTokenFeedback('Токен скопирован')
+    } catch {
+      extensionTokenInput.current?.focus()
+      extensionTokenInput.current?.select()
+      setExtensionTokenFeedback('Браузер запретил копирование. Токен выделен: нажмите ⌘C на Mac или Ctrl+C.')
     }
   }
   const extensionTokenPanel = (
     <div className="avito-orders-extension-token">
       <div>
-        <code>{extensionTokenStatus?.token || (extensionTokenStatus?.configured ? `${extensionTokenStatus.tokenPrefix || 'sat_avito_...'} · скрыт после создания` : 'токен ещё не создан')}</code>
+        {extensionTokenStatus?.token ? <>
+          <label htmlFor="avito-extension-full-token">Полный токен расширения</label>
+          <textarea id="avito-extension-full-token" ref={extensionTokenInput} readOnly rows={3} spellCheck={false}
+            value={extensionTokenStatus.token} onFocus={(event) => event.currentTarget.select()} />
+          <small>Скопируйте сейчас. После перезагрузки страницы полный токен скрывается; на сервере хранится только его хеш.</small>
+        </> : <>
+          <code>{extensionTokenStatus?.configured ? `${extensionTokenStatus.tokenPrefix || 'sat_avito_...'}…` : 'Токен ещё не создан'}</code>
+          {extensionTokenStatus?.configured ? <small>Это только начало токена, его нельзя использовать для подключения. Создайте новый токен и скопируйте его. Старый токен перестанет работать.</small> : null}
+        </>}
         <small>{avitoExtensionStatusLabel(extensionTokenStatus)}</small>
+        <p role="status" aria-live="polite">{extensionTokenFeedback}</p>
       </div>
       <div className="avito-orders-extension-actions">
-        {extensionTokenStatus?.token ? <button className="btn btn-default btn-sm" type="button" onClick={() => extensionTokenStatus.token && void copyAvitoExtensionValue(extensionTokenStatus.token, 'Токен расширения скопирован')}>Скопировать токен</button> : null}
-        <button className="btn btn-primary btn-sm" type="button" disabled={!accessToken || extensionTokenLoading} onClick={() => void regenerateExtensionToken()}>{extensionTokenStatus?.configured ? 'Перегенерировать токен' : 'Создать токен'}</button>
+        <button className="btn btn-primary btn-sm" type="button" disabled={!extensionTokenStatus?.token || extensionTokenLoading} onClick={() => void copyExtensionToken()}>Скопировать токен</button>
+        <button className="btn btn-default btn-sm" type="button" disabled={!accessToken || extensionTokenLoading} onClick={() => void regenerateExtensionToken()}>{extensionTokenLoading ? 'Создаём токен…' : extensionTokenStatus?.configured ? 'Создать новый токен' : 'Создать токен'}</button>
       </div>
     </div>
   )
@@ -22506,13 +22902,48 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
     try {
       const next = await runAvitoReturnsSync(accessToken)
       setReturnsSyncSettings(next)
-      setForceRefresh(true)
-      setRequestSeq((value) => value + 1)
-      window.showToast?.('Загрузка возвратов запущена, заказы обновятся после завершения', 'success')
+      window.showToast?.('Загрузка возвратов запущена. Результат появится после завершения.', 'success')
     } catch (error) {
       window.showToast?.(error instanceof Error ? error.message : 'Не удалось запустить загрузку возвратов', 'warn')
     } finally {
       setReturnsSyncLoading(false)
+    }
+  }
+  const openReturnHistory = async (itemId: number) => {
+    if (!accessToken) return
+    if (returnHistory?.itemId === itemId) {
+      setReturnHistory(null)
+      return
+    }
+    setReturnHistory({ itemId, data: null, error: null })
+    try {
+      const data = await loadAvitoReturnInventoryEvents(accessToken, itemId)
+      setReturnHistory((current) => current?.itemId === itemId ? { itemId, data, error: null } : current)
+    } catch (error) {
+      setReturnHistory((current) => current?.itemId === itemId ? { itemId, data: null, error: error instanceof Error ? error.message : 'История недоступна' } : current)
+    }
+  }
+  const performReturnOperation = async (itemId: number, action: string, linkedOrderId?: string) => {
+    if (!accessToken) return
+    const key = `${itemId}:${action}:${linkedOrderId ?? ''}`
+    const operationId = returnOperationIds.current[key] ?? crypto.randomUUID()
+    returnOperationIds.current[key] = operationId
+    setReturnOperationBusy(key)
+    try {
+      const result = await postAvitoReturnOperation(accessToken, itemId, { operationId, action, quantity: 1, linkedOrderId })
+      delete returnOperationIds.current[key]
+      if (result?.item) setReturnInventory((current) => current ? { ...current, items: current.items.map((item) => item.returnItemId === itemId ? result.item : item) } : current)
+      if (returnHistory?.itemId === itemId) {
+        void loadAvitoReturnInventoryEvents(accessToken, itemId)
+          .then((data) => setReturnHistory((current) => current?.itemId === itemId ? { itemId, data, error: null } : current))
+          .catch(() => setReturnHistory((current) => current?.itemId === itemId ? { itemId, data: null, error: 'История временно недоступна' } : current))
+      }
+      setRequestSeq((value) => value + 1)
+      window.showToast?.('Операция возвратного склада сохранена', 'success')
+    } catch (error) {
+      window.showToast?.(error instanceof Error ? error.message : 'Не удалось изменить возвратный склад', 'error')
+    } finally {
+      setReturnOperationBusy('')
     }
   }
 
@@ -22525,9 +22956,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
     )
   }
 
-  const statusCount = (key: string) => status === key && rows.length !== (summary?.statusCounts?.[key] ?? 0)
-    ? rows.length
-    : (summary?.statusCounts?.[key] ?? 0)
+  const statusCount = (key: AvitoOrdersStatus) => summary?.modeCounts?.[avitoOrdersMode(key)] ?? 0
 
   return (
     <div
@@ -22539,7 +22968,25 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
     >
       <style>{`
         .vella-html-parity-root #tab-orders-print[data-vella-island="avito-orders"] { padding: 0 20px 20px; }
+        @media screen {
+          .vella-html-parity-root #tab-orders-print[data-vella-island="avito-orders"] > .orders-print-shell {
+            width: 100%; max-width: none; min-width: 0; margin-inline: 0; grid-template-columns: minmax(0, 1fr);
+          }
+          .vella-html-parity-root #tab-orders-print[data-vella-island="avito-orders"] .orders-print-paper { min-width: 0; }
+          .vella-html-parity-root #tab-orders-print[data-vella-island="avito-orders"] .orders-picking-table-wrap { max-width: 100%; overflow-x: auto; }
+        }
         .vella-html-parity-root .avito-orders-table td { vertical-align: top; }
+        .vella-html-parity-root .avito-orders-shipment { white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .vella-html-parity-root .avito-orders-photo-button { padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+        @media screen {
+          .vella-html-parity-root .orders-picking-table .orders-picking-photo { width: 66px; height: 66px; object-fit: contain; }
+        }
+        .vella-html-parity-root .avito-orders-preview { position: fixed; inset: 0; z-index: 43000; display: grid; place-items: center; padding: 24px; background: rgba(15,23,42,.8); }
+        .vella-html-parity-root .avito-orders-preview img { max-width: min(92vw,900px); max-height: 85vh; object-fit: contain; background: #fff; }
+        .vella-html-parity-root .avito-orders-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 12px; }
+        .vella-html-parity-root .avito-orders-toolbar { flex-wrap: wrap; }
+        .vella-html-parity-root .avito-orders-toolbar .chips { flex-wrap: wrap; overflow: visible; }
+        .vella-html-parity-root .avito-orders-toolbar .toolbar-right { flex-wrap: wrap; }
         .vella-html-parity-root .avito-order-items { display: grid; gap: 4px; min-width: 220px; }
         .vella-html-parity-root .avito-orders-actions { display: flex; flex-wrap: wrap; gap: 4px; min-width: 130px; }
         .vella-html-parity-root .avito-orders-extension-settings-btn { gap: 7px; border-color: #BFDBFE; background: #EFF6FF; color: #1D4ED8; font-weight: 850; }
@@ -22554,31 +23001,16 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
         .vella-html-parity-root .avito-orders-picking-title b { font-size: 15px; color: var(--gray-900); }
         .vella-html-parity-root .avito-orders-picking-title span { font-size: 12px; color: var(--gray-500); }
         .vella-html-parity-root .avito-orders-photo-empty { display: grid; place-items: center; color: var(--gray-400); font-size: 10px; font-weight: 800; }
-        .vella-html-parity-root .avito-orders-extension-empty { min-height: calc(100vh - 190px); display: grid; place-items: center; padding: 28px 0; }
-        .vella-html-parity-root .avito-orders-extension-card { width: min(760px, 100%); border: 1px solid #D7E3F7; border-radius: 12px; background: #fff; box-shadow: 0 16px 40px rgba(15, 23, 42, .08); padding: 26px; }
-        .vella-html-parity-root .avito-orders-extension-title { display: grid; gap: 7px; margin-bottom: 18px; }
-        .vella-html-parity-root .avito-orders-extension-title h2 { margin: 0; color: var(--gray-900); font-size: 22px; line-height: 1.1; letter-spacing: 0; }
-        .vella-html-parity-root .avito-orders-extension-title p { margin: 0; max-width: 560px; color: var(--gray-500); font-size: 14px; line-height: 1.45; }
-        .vella-html-parity-root .avito-orders-extension-steps { display: grid; gap: 8px; margin: 0 0 18px; }
-        .vella-html-parity-root .avito-orders-extension-step { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; align-items: start; padding: 11px; border: 1px solid #EEF2F7; border-radius: 10px; background: #F8FAFC; }
-        .vella-html-parity-root .avito-orders-extension-step span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; background: #EFF6FF; color: #1D4ED8; font-size: 12px; font-weight: 900; }
-        .vella-html-parity-root .avito-orders-extension-step b { display: block; margin-bottom: 2px; color: var(--gray-900); font-size: 13px; }
-        .vella-html-parity-root .avito-orders-extension-step small { color: var(--gray-500); font-size: 12px; line-height: 1.35; }
-        .vella-html-parity-root .avito-orders-extension-token { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding-top: 12px; border-top: 1px solid #EEF2F7; }
-        .vella-html-parity-root .avito-orders-extension-token code { min-width: 0; display: block; border: 1px solid #D7E3F7; border-radius: 9px; background: #F8FBFF; color: #1E3A8A; padding: 10px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .vella-html-parity-root .avito-orders-extension-token { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: center; padding-top: 12px; border-top: 1px solid #EEF2F7; }
+        .vella-html-parity-root .avito-orders-extension-token code,
+        .vella-html-parity-root .avito-orders-extension-token textarea { min-width: 0; width: 100%; box-sizing: border-box; display: block; border: 1px solid #D7E3F7; border-radius: 9px; background: #F8FBFF; color: #1E3A8A; padding: 10px; font: 13px/1.5 monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
+        .vella-html-parity-root .avito-orders-extension-token textarea { resize: vertical; min-height: 85px; user-select: text; }
+        .vella-html-parity-root .avito-orders-extension-token .avito-orders-extension-actions { display: flex; flex-wrap: wrap; gap: 8px; }
         .vella-html-parity-root .avito-orders-extension-token small { display: block; margin-top: 6px; color: var(--gray-500); font-size: 12px; }
         .vella-html-parity-root .avito-orders-extension-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
         @media (max-width: 760px) {
           .vella-html-parity-root .avito-orders-extension-token { grid-template-columns: 1fr; }
           .vella-html-parity-root .avito-orders-extension-actions { justify-content: flex-start; }
-        }
-        .vella-html-parity-root .orders-picking-table th.orders-inline-actions,
-        .vella-html-parity-root .orders-picking-table td.orders-inline-actions {
-          width: 112px;
-          min-width: 112px;
-          padding-left: 12px;
-          padding-right: 12px;
-          box-sizing: border-box;
         }
         .vella-html-parity-root .orders-picking-table th.orders-picking-job,
         .vella-html-parity-root .orders-picking-table td.orders-picking-job {
@@ -22671,6 +23103,14 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
         .vella-html-parity-root .avito-order-detail-window .modal-body { min-height: 0; overflow: auto; }
         .vella-html-parity-root .avito-order-detail-window .modal-head,
         .vella-html-parity-root .avito-order-detail-window .modal-foot { flex-shrink: 0; }
+        .vella-html-parity-root .avito-order-detail-window .modal-head,
+        .vella-html-parity-root .avito-returns-window .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 24px 14px; border-bottom: 1px solid var(--gray-100); }
+        .vella-html-parity-root .avito-order-detail-window .modal-head h3,
+        .vella-html-parity-root .avito-returns-window .modal-head h3 { margin: 0; font-size: 18px; line-height: 1.25; }
+        .vella-html-parity-root .avito-order-detail-window .modal-head span,
+        .vella-html-parity-root .avito-returns-window .modal-head span { display: block; margin-top: 4px; color: var(--gray-500); font-size: 12px; }
+        .vella-html-parity-root .avito-order-detail-window .modal-close,
+        .vella-html-parity-root .avito-returns-window .modal-close { width: 32px; height: 32px; flex: none; border: 1px solid var(--gray-200); border-radius: 8px; background: #fff; color: var(--gray-600); font-size: 22px; line-height: 1; cursor: pointer; }
         .vella-html-parity-root .avito-order-detail-window .report-table-wrap { max-width: 100%; overflow: auto; }
         .vella-html-parity-root .avito-order-detail-window .report-mid { min-width: 720px; }
         .vella-html-parity-root .avito-order-detail-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -22701,7 +23141,8 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
         .vella-html-parity-root .avito-returns-field { display: grid; gap: 5px; min-width: 170px; color: var(--gray-700); font-size: 12px; font-weight: 750; }
         .vella-html-parity-root .avito-returns-field select { height: 34px; border: 1px solid var(--gray-200); border-radius: 7px; background: #fff; color: var(--gray-900); font: inherit; font-size: 13px; font-weight: 700; padding: 0 10px; }
         .vella-html-parity-root .avito-returns-list { display: grid; gap: 8px; }
-        .vella-html-parity-root .avito-returns-list-row { display: grid; grid-template-columns: minmax(260px, 1fr) 150px 130px 130px; gap: 10px; align-items: center; border: 1px solid var(--gray-100); border-radius: 8px; background: #fff; padding: 10px; }
+        .vella-html-parity-root .avito-returns-list-row { display: grid; grid-template-columns: minmax(250px, 1fr) 135px 130px 200px; gap: 10px; align-items: center; border: 1px solid var(--gray-100); border-radius: 8px; background: #fff; padding: 10px; }
+        .vella-html-parity-root .avito-returns-list-row > div:nth-child(4) .btn { max-width: 100%; white-space: normal; text-align: left; }
         .vella-html-parity-root .avito-returns-product-cell { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center; }
         .vella-html-parity-root .avito-returns-thumb { width: 44px; height: 44px; border-radius: 8px; border: 1px solid var(--gray-100); background: var(--gray-50); object-fit: cover; color: var(--gray-400); font-size: 10px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
         .vella-html-parity-root .avito-returns-list-row b { display: block; color: var(--gray-900); font-size: 13px; line-height: 1.25; }
@@ -22714,77 +23155,48 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
         @media (max-width: 900px) {
           .vella-html-parity-root .avito-order-detail-list { grid-template-columns: 1fr; }
         }
+        @media (max-width: 1120px) {
+          .vella-html-parity-root .avito-orders-toolbar .toolbar-right { margin-left: 0; }
+          .vella-html-parity-root .orders-print-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
       `}</style>
-      {!hasExtensionRows && (live.loading || sourceError) ? (
-        live.loading ? (
-          <AvitoDataState kind="loading" title="Загружаем лист подбора" subtitle="Собираем заказы и товары Авито." />
-        ) : (
-          <AvitoDataState kind="error" title="Не удалось загрузить заказы" subtitle="Проверьте подключение Авито и обновите данные." />
-        )
-      ) : !hasExtensionRows ? (
-        <section className="avito-orders-extension-empty" aria-label="Подключение расширения Avito Orders">
-          <div className="avito-orders-extension-card">
-            <div className="avito-orders-extension-title">
-              <h2>Подключите расширение Avito Orders</h2>
-              <p>Лист подбора появится после браузерного сбора. Расширение возьмёт фото, размер, цвет и артикул прямо со страницы заказов Avito.</p>
-            </div>
-            <div className="avito-orders-extension-steps">
-              <div className="avito-orders-extension-step"><span>1</span><div><b>Откройте настройки</b><small>Создайте токен и вставьте его в расширение Satorna Avito Orders.</small></div></div>
-              <div className="avito-orders-extension-step"><span>2</span><div><b>Откройте расширение</b><small>В настройках расширения вставьте токен и выберите сбор фото, размера, цвета и артикула.</small></div></div>
-              <div className="avito-orders-extension-step"><span>3</span><div><b>Нажмите “Собрать заказы”</b><small>Расширение само откроет Avito и отправит готовые позиции в Satorna.</small></div></div>
-            </div>
-            <button className="btn btn-primary avito-orders-extension-settings-btn" type="button" onClick={() => setExtensionSettingsOpen(true)}>
-              <Settings aria-hidden="true" />
-              Настройки расширения
-            </button>
-          </div>
-        </section>
-      ) : null}
-      <div className="toolbar" data-vella-event-owner="react" style={!hasExtensionRows ? { display: 'none' } : undefined}>
-        <div className="search">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            type="text"
-            aria-label="Поиск по заказам Авито"
-            autoComplete="off"
-            placeholder="Заказ, покупатель, товар, трек или ID"
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-          />
-        </div>
+      <div className="toolbar avito-orders-toolbar" data-vella-event-owner="react">
         <div className="chips">
-          {AVITO_ORDER_STATUS_OPTIONS.map((option) => (
+          {AVITO_ORDER_QUEUE_OPTIONS.map((option) => (
             <button
               className={status === option.value ? 'chip active' : 'chip'}
               type="button"
               key={option.value}
               onClick={() => {
                 setStatus(option.value)
+                setPage(1)
                 setSelectedOrderId('')
               }}
             >
-              {option.label} <span className="chip-count">{option.value === 'all' ? formatAvitoInt(summary?.total ?? 0) : formatAvitoInt(statusCount(option.value))}</span>
+              {option.label} <span className="chip-count">{formatAvitoInt(statusCount(option.value))}</span>
             </button>
           ))}
         </div>
         <div className="toolbar-right">
+          <select aria-label="Аккаунт Авито" value={accountId} onChange={(event) => { setAccountId(event.currentTarget.value); setPage(1) }}>
+            <option value="">Все аккаунты</option>
+            {(live.data?.accounts ?? []).map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+          </select>
           <button className="btn btn-default btn-sm avito-orders-extension-settings-btn" type="button" onClick={() => setExtensionSettingsOpen(true)}>
             <Settings aria-hidden="true" />
             Настройки расширения
           </button>
-          <AvitoDateRangeActions
+          {status === 'history' ? <AvitoDateRangeActions
             from={dateDraft}
-            fromLabel="с даты"
-            fromAria="Заказы Авито с даты"
+            fromLabel="созданы с даты"
+            fromAria="История Авито по дате создания"
             loading={live.loading}
             onFromChange={(nextDate) => setDateDraft(clampDateFromNotFuture(nextDate, defaultDateFrom))}
             onApply={() => {
               const safeDateFrom = clampDateFromNotFuture(dateDraft, defaultDateFrom)
               setDateDraft(safeDateFrom)
               setDateFrom(safeDateFrom)
+              setPage(1)
               setSelectedOrderId('')
               setRequestSeq((value) => value + 1)
             }}
@@ -22792,17 +23204,26 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
               setForceRefresh(true)
               setRequestSeq((value) => value + 1)
             }}
-          />
+          /> : <button className="btn btn-default btn-sm" type="button" disabled={live.loading} onClick={() => { setForceRefresh(true); setRequestSeq((value) => value + 1) }}>Обновить данные</button>}
         </div>
       </div>
-      {hasExtensionRows ? (
-        <section className="orders-print-shell" aria-label="Лист подбора Авито">
+      <section className="orders-print-shell" aria-label="Лист подбора Авито">
           <section className="orders-print-head">
             <div>
-              <h1 className="orders-print-title">Авито лист подбора</h1>
-              <div className="orders-print-copy" style={{ display: 'block' }}>Заказы подготовлены для сборки, стикеров и печати.</div>
+              <h1 className="orders-print-title">Авито — {AVITO_ORDER_QUEUE_OPTIONS.find((option) => option.value === status)?.label.toLocaleLowerCase('ru-RU') || 'заказы'}</h1>
+              <div className="orders-print-copy" style={{ display: 'block' }}>
+                Последнее успешное обновление: {avitoOrderDateLabel(validData?.source?.lastSuccessfulRefresh as string | null)}
+                {validData?.source?.complete ? '' : (validData?.source?.error as { code?: string } | null)?.code === 'refresh_in_progress'
+                  ? ' · Обновляем в фоне. Можно скачать сохранённые заказы.'
+                  : ' · Сохранённые данные: перед отправкой проверьте актуальность статусов.'}
+              </div>
             </div>
             <div className="orders-print-actions">
+              {labelCollection?.stage && <span role="status" className="orders-picking-muted">{labelCollection.stage === 'complete'
+                ? `Этикеток сохранено: ${labelCollection.labels ?? 0}`
+                : labelCollection.stage === 'error' ? 'Сбор этикеток прервался. Причина — в окне расширения.'
+                  : labelCollection.stage === 'review' ? 'PDF сохранён, этикетки требуют проверки'
+                    : 'Расширение получает этикетки…'}</span>}
               <button className="btn btn-default btn-sm orders-print-action" type="button" onClick={() => openStickerDesigner(selectedStickerSource)}>Стикеры</button>
               <button
                 className="btn btn-primary btn-sm orders-print-action is-primary"
@@ -22810,23 +23231,20 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                 disabled={pickingXlsxLoading}
                 onClick={() => void downloadPickingList()}
               >
-                {pickingXlsxLoading ? 'Готовим XLSX...' : 'Печать'}
+                {pickingXlsxLoading ? 'Готовим XLSX...' : 'Сформировать лист подбора'}
               </button>
+              <button className="btn btn-default btn-sm orders-print-action" type="button" disabled={pickingXlsxLoading} onClick={() => void downloadReturnsList()}>Сформировать лист возвратов</button>
             </div>
           </section>
+          {pickingDownloadError && <p role="alert">{pickingDownloadError}</p>}
           <section className="orders-print-stats" aria-label="Сводка листа подбора Авито">
-            <div className="orders-print-stat"><span>Заказов</span><b>{formatAvitoInt(rows.length)}</b><small>за выбранный период</small></div>
-            <div className="orders-print-stat"><span>Изделий</span><b>{formatAvitoInt(summary?.items ?? pickingRows.length)}</b><small>к подбору</small></div>
+            <div className="orders-print-stat"><span>Заказов</span><b>{formatAvitoInt(summary?.total ?? 0)}</b><small>во всей выбранной очереди</small></div>
+            <div className="orders-print-stat"><span>Изделий</span><b>{formatAvitoInt(summary?.items ?? pickingRows.length)}</b><small>в выбранной очереди</small></div>
             <div className="orders-print-stat"><span>К отгрузке</span><b>{formatAvitoInt(summary?.readyToShip ?? 0)}</b><small>готовы к передаче</small></div>
-            <div className="orders-print-stat"><span>Проверки</span><b>{formatAvitoInt(rows.filter((row) => row.availableActions.length > 0).length)}</b><small>нужны решения</small></div>
+            <div className="orders-print-stat"><span>Проверки</span><b>{formatAvitoInt(summary?.requiredActions ?? 0)}</b><small>нужны решения</small></div>
           </section>
           <section className="orders-queue-toolbar" aria-label="Фильтры листа подбора Авито">
             <div className="orders-queue-main">
-              <div className="orders-queue-tabs" role="group" aria-label="Фильтры очереди Авито">
-                <button className="orders-queue-chip active" type="button">Все <small>{formatAvitoInt(pickingRows.length)}</small></button>
-                <button className="orders-queue-chip" type="button">Готово <small>{formatAvitoInt(rows.filter((row) => row.status === 'ready_to_ship').length)}</small></button>
-                <button className="orders-queue-chip" type="button">Проблемы <small>{formatAvitoInt(rows.filter((row) => row.status === 'canceled' || row.status === 'in_dispute').length)}</small></button>
-              </div>
               <label className="orders-queue-search">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>
                 <input type="search" autoComplete="off" placeholder="Поиск по номеру, заданию, артикулу, названию" value={query} onChange={(event) => setQuery(event.currentTarget.value)} />
@@ -22834,7 +23252,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
               <div className="avito-returns-sync-control" aria-label="Возвраты товаров">
                 <label>
                   <b>Возвраты</b>
-                  <small>{avitoReturnsSyncStateLabel(returnsSyncSettings?.status?.state ?? returnsSyncSettings?.inventory?.status)} · {formatAvitoInt(returnsSyncSettings?.inventory?.candidates ?? 0)} шт</small>
+                  <small>{formatAvitoInt(returnsSyncSettings?.inventory?.candidates ?? 0)} поз. · синхронизация: {avitoReturnsSyncStateLabel(returnsSyncSettings?.status?.state ?? returnsSyncSettings?.inventory?.status)}</small>
                 </label>
                 <button className="btn btn-default btn-sm" type="button" disabled={!accessToken} data-vella-react-handlers="onclick" onClick={() => setReturnsWindowOpen(true)}>
                   Открыть возвраты
@@ -22845,65 +23263,59 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
           <section className="orders-print-paper">
             <div className="orders-paper-head">
               <div>
-                <div className="orders-paper-title">Авито лист подбора - с {dateFrom}</div>
-                <div className="orders-paper-meta">Порядок для производства: заказ, товар, размер и цвет. Поля без данных показаны прочерком.</div>
+                <div className="orders-paper-title">Очередь Авито · {AVITO_ORDER_QUEUE_OPTIONS.find((option) => option.value === status)?.label}</div>
+                <div className="orders-paper-meta">Проверяйте размер, цвет и отправление. Характеристики из объявления не подтверждают выбранный покупателем вариант.</div>
               </div>
               <div className="orders-paper-summary">
-                <span className="orders-paper-pill">Авито: {formatAvitoInt(rows.length)} заказов</span>
-                <span className="orders-paper-pill">{formatAvitoInt(pickingRows.length)} изделий</span>
+                <span className="orders-paper-pill">Заказы: {formatAvitoInt(summary?.total ?? rows.length)}</span>
+                <span className="orders-paper-pill">Изделия на странице: {formatAvitoInt(pickingRows.length)}</span>
               </div>
             </div>
             <div className="orders-picking-table-wrap">
               <table className="orders-picking-table">
                 <thead>
                   <tr>
-                    <th>Номер</th>
-                    <th className="orders-inline-actions" aria-label="Редактирование" />
-                    <th className="orders-picking-job">№ задания</th>
+                    <th>№</th>
+                    <th className="orders-picking-job">Заказ / задание</th>
+                    <th>Номер отправления</th>
                     <th>Фото</th>
-                    <th>Бренд</th>
                     <th>Наименование</th>
                     <th className="num">Кол-во</th>
                     <th>Размер</th>
                     <th>Цвет</th>
-                    <th>Артикул продавца</th>
-                    <th>Возврат</th>
                     <th>Стикер</th>
-                    <th>Баркод</th>
-                    <th>QR/штрихкод Авито</th>
+                    <th>ID товара Авито</th>
                     <th>Статус</th>
                   </tr>
                 </thead>
                 <tbody>
                   {pickingRows.length ? pickingRows.map(({ key, order, item }, index) => (
-                    <tr key={key} onClick={() => setSelectedOrderId(order.orderId)} style={{ cursor: 'pointer' }}>
+                    <tr key={key} onClick={() => setSelectedOrderId(`${order.accountId ?? ''}:${order.orderId}`)} style={{ cursor: 'pointer' }}>
                       <td className="num"><b>{index + 1}</b></td>
-                      <td className="orders-inline-actions"><button className="btn btn-default btn-sm" type="button" onClick={(event) => { event.stopPropagation(); setSelectedOrderId(order.orderId) }}>Открыть</button></td>
-                      <td className="orders-picking-job"><span className="orders-print-order">{order.marketplaceId || order.orderId}</span><span className="orders-picking-muted">{order.deliveryService || 'Авито'}</span></td>
-                      <td>{item.imageUrl ? <img className="orders-picking-photo" src={item.imageUrl} alt="" /> : <div className="orders-picking-photo avito-orders-photo-empty">нет</div>}</td>
-                      <td><span className="orders-platform avito">Авито</span></td>
+                      <td className="orders-picking-job"><span className="orders-print-order">{order.marketplaceId || 'Номер заказа не получен'}</span><span className="orders-picking-muted">Задание: {order.jobNumber || 'Не получено'}</span></td>
+                      <td className="avito-orders-shipment" title={order.shipmentNumber ? 'Номер для сдачи отправления' : order.shipmentNumberState === 'ambiguous' ? 'Несколько номеров: требуется проверка' : 'Не загружен из Авито'}>
+                        {order.shipmentNumber ? <button className="btn btn-default btn-sm" type="button" onClick={(event) => { event.stopPropagation(); void copyAvitoExtensionValue(order.shipmentNumber!, 'Номер отправления скопирован') }}>{order.shipmentNumber}</button> : order.shipmentNumberState === 'ambiguous' ? 'Требует проверки' : 'Не собрано'}
+                      </td>
+                      <td>{item.imageUrl ? <button className="avito-orders-photo-button" type="button" aria-label={`Увеличить фото: ${item.title}`} onClick={(event) => { event.stopPropagation(); setImagePreviewUrl(item.imageUrl!) }}><img className="orders-picking-photo" src={item.imageUrl} alt="" loading="lazy" /></button> : <div className="orders-picking-photo avito-orders-photo-empty">—</div>}</td>
                       <td className="orders-picking-name"><b>{item.title}</b><span className="orders-picking-muted">{avitoPickingProduct(item.title)} · {formatAvitoRubNullable(item.priceKopecks ?? order.totalKopecks)}</span></td>
                       <td className="num"><b>{item.quantity}</b></td>
-                      <td>{avitoPickingCell(item.size || avitoPickingSize(item.title, item.sellerArticle))}</td>
-                      <td>{avitoPickingCell(item.color)}</td>
-                      <td>{avitoPickingCell(item.sellerArticle || item.itemId)}</td>
-                      <td>{avitoOrderReturnBadge(item)}</td>
-                      <td><button className="btn btn-default btn-sm" type="button" onClick={(event) => { event.stopPropagation(); openStickerDesigner({ key, order, item, index }) }}>Стикеры</button><span className="orders-picking-muted">{order.trackNumber || 'трек не указан'}</span></td>
-                      <td>{avitoPickingCell(order.trackNumber)}</td>
-                      <td>{avitoPickingCell(item.itemId || order.trackNumber)}</td>
+                      <td title={['description', 'description_fallback'].includes(item.sources?.size ?? '') ? 'Размер из объявления; вариант заказа не подтверждён' : undefined}>{avitoPickingCell(item.size)}</td>
+                      <td title={['listing', 'browser_unspecified'].includes(item.sources?.color ?? '') ? 'Цвет из браузера/объявления; вариант заказа не подтверждён' : undefined}>{avitoPickingCell(item.color)}</td>
+                      <td><AvitoTransportBarcode order={order} accessToken={accessToken} /></td>
+                      <td>{avitoPickingCell(item.itemId)}</td>
                       <td><span className={`orders-status ${avitoPickingStatusClass(order.status)}`}>{avitoOrderStatusLabel(order.status)}</span></td>
                     </tr>
                   )) : (
                     <tr className="avito-orders-empty-row">
-                      <td colSpan={15}>
-                        {live.loading ? (
-                          <AvitoDataState kind="loading" title="Загружаем лист подбора" subtitle="Собираем заказы и товары Авито." />
+                      <td colSpan={11}>
+                        {live.loading || (validData?.source?.error as { code?: string } | null)?.code === 'refresh_in_progress' ? (
+                          <AvitoDataState kind="loading" title="Обновляем очередь" subtitle="В выбранной группе пока нет сохранённых строк. Проверяем статусы в фоне." />
                         ) : sourceError ? (
                           <AvitoDataState kind="error" title="Не удалось загрузить заказы" subtitle="Проверьте подключение Авито и обновите данные." />
                         ) : hasSearchQuery ? (
                           <AvitoDataState kind="empty" title="Ничего не нашлось" subtitle="Попробуйте изменить запрос или очистить поиск." />
                         ) : (
-                          <AvitoDataState kind="empty" title="Нет позиций для подбора" subtitle="Попробуйте другую дату или статус заказа." />
+                          <AvitoDataState kind="empty" title="Нет заказов в этом режиме" subtitle="Проверьте выбранный аккаунт или обновите данные." />
                         )}
                       </td>
                     </tr>
@@ -22911,9 +23323,14 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                 </tbody>
               </table>
             </div>
+            <div className="avito-orders-pager">
+              <button className="btn btn-default btn-sm" type="button" disabled={page <= 1 || live.loading} onClick={() => setPage((current) => current - 1)}>Назад</button>
+              <span>Страница {page} из {Math.max(1, Math.ceil((summary?.total ?? 0) / AVITO_ORDERS_PAGE_LIMIT))}</span>
+              <button className="btn btn-default btn-sm" type="button" disabled={page * AVITO_ORDERS_PAGE_LIMIT >= (summary?.total ?? 0) || live.loading} onClick={() => setPage((current) => current + 1)}>Далее</button>
+            </div>
           </section>
-        </section>
-      ) : null}
+      </section>
+      {imagePreviewUrl ? <div className="avito-orders-preview" role="dialog" aria-modal="true" aria-label="Фотография товара" onClick={() => setImagePreviewUrl('')}><img src={imagePreviewUrl} alt="Увеличенная фотография товара" /><button className="btn btn-default" type="button" onClick={() => setImagePreviewUrl('')}>Закрыть</button></div> : null}
       {extensionSettingsOpen ? (
         <div className="avito-orders-extension-settings-overlay" data-vella-react-handlers="onclick" onClick={(event) => { if (event.target === event.currentTarget) setExtensionSettingsOpen(false) }}>
           <div className="modal avito-orders-extension-settings-window" role="dialog" aria-modal="true" aria-label="Настройки расширения Avito Orders">
@@ -22927,6 +23344,11 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
             <div className="modal-body">
               <div className="avito-orders-extension-settings-copy">
                 <span>Скопируйте токен и вставьте его в расширение. По нему расширение сможет отправлять в Satorna фото, размер, цвет и артикул заказов и возвратов.</span>
+                {['localhost', '127.0.0.1'].includes(window.location.hostname) ? <p>
+                  Локальная Satorna: в настройках расширения укажите адрес <code>{window.location.origin}</code> и токен, созданный здесь.
+                  Токен опубликованной платформы сюда не подходит. Если поля адреса нет, нужна версия расширения с настройкой сервера.
+                  После успешного сбора обновите список заказов.
+                </p> : null}
               </div>
               {extensionTokenPanel}
             </div>
@@ -22938,20 +23360,20 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
       ) : null}
       {returnsWindowOpen ? (
         <div className="avito-returns-modal-overlay" data-vella-react-handlers="onclick" onClick={(event) => { if (event.target === event.currentTarget) setReturnsWindowOpen(false) }}>
-          <div className="modal-content avito-returns-window">
+          <div className="modal-content avito-returns-window" role="dialog" aria-modal="true" aria-label="Возвраты Авито">
             <div className="modal-head">
               <div>
                 <h3>Возвраты Авито</h3>
-                <span>Товары, которые сейчас можно сверять с заказами</span>
+                <span>Получение, проверка, остатки и резервы</span>
               </div>
-              <button className="modal-close" type="button" data-vella-react-handlers="onclick" onClick={() => setReturnsWindowOpen(false)}>×</button>
+              <button className="modal-close" type="button" aria-label="Закрыть возвраты" data-vella-react-handlers="onclick" onClick={() => setReturnsWindowOpen(false)}>×</button>
             </div>
             <div className="modal-body">
               <div className="avito-returns-summary">
                 <div className="avito-returns-summary-card">
                   <span>В возвратах</span>
-                  <b>{formatAvitoInt(returnsSyncSettings?.inventory?.candidates ?? returnsSyncSettings?.items?.length ?? 0)}</b>
-                  <small>товаров сохранено для сравнения</small>
+                  <b>{formatAvitoInt(returnInventory?.total ?? returnsSyncSettings?.inventory?.candidates ?? 0)}</b>
+                  <small>позиций сохранено для сравнения</small>
                 </div>
                 <div className="avito-returns-summary-card">
                   <span>Состояние</span>
@@ -22984,8 +23406,8 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                 </button>
               </div>
               <div className="avito-returns-list" aria-label="Список товаров в возвратах">
-                {returnsSyncSettings?.items?.length ? returnsSyncSettings.items.map((item, index) => (
-                  <div className="avito-returns-list-row" key={`${item.returnOrderId}-${item.itemId ?? index}`}>
+                {returnInventory?.items?.length ? returnInventory.items.map((item, index) => (
+                  <div className="avito-returns-list-row" key={`${item.accountId ?? ''}-${item.returnOrderId}-${item.lineIndex ?? index}-${item.itemId ?? ''}`}>
                     <div className="avito-returns-product-cell">
                       {item.imageUrl ? <img className="avito-returns-thumb" src={item.imageUrl} alt="" loading="lazy" /> : <div className="avito-returns-thumb">нет</div>}
                       <div>
@@ -22995,7 +23417,8 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                     </div>
                     <div>
                       <b>{formatAvitoInt(item.quantity)} шт.</b>
-                      <span>количество</span>
+                      <span>получено: {item.receivedQuantity ?? 0} · проверено: {item.inspectedQuantity ?? 0}</span>
+                      <span>доступно: {item.availableQuantity ?? 0} · резерв: {item.reservedQuantity ?? 0}</span>
                     </div>
                     <div>
                       <b>{item.marketplaceId || item.returnOrderId}</b>
@@ -23004,13 +23427,38 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                     <div>
                       <b>{item.accountName || 'Авито'}</b>
                       <span>{item.lastSeenAt ? avitoOrderDateLabel(item.lastSeenAt) : 'дата не указана'}</span>
+                      {item.returnItemId && ['ready_for_pickup', 'ready_to_pickup', 'pickup_ready', 'can_pickup'].includes(item.returnStatus ?? '') && (item.receivedQuantity ?? 0) < item.quantity
+                        ? <button className="btn btn-default btn-sm" type="button" disabled={Boolean(returnOperationBusy)} onClick={() => void performReturnOperation(item.returnItemId!, 'receive')}>Подтвердить получение 1 шт.</button> : null}
+                      {item.returnItemId && (item.receivedQuantity ?? 0) > (item.inspectedQuantity ?? 0)
+                        ? <button className="btn btn-default btn-sm" type="button" disabled={Boolean(returnOperationBusy)} onClick={() => void performReturnOperation(item.returnItemId!, 'inspect')}>Проверен и пригоден 1 шт.</button> : null}
+                      {item.returnItemId && (item.availableQuantity ?? 0) > 0
+                        ? <button className="btn btn-default btn-sm" type="button" disabled={Boolean(returnOperationBusy)} onClick={() => void performReturnOperation(item.returnItemId!, 'write_off')}>Списать 1 шт.</button> : null}
+                      {item.returnItemId ? <button className="btn btn-default btn-sm" type="button" onClick={() => void openReturnHistory(item.returnItemId!)}>История и резервы</button> : null}
                     </div>
+                    {item.returnItemId && returnHistory?.itemId === item.returnItemId ? <div style={{ gridColumn: '1 / -1', padding: '8px 12px' }}>
+                      {returnHistory.error ? <span role="alert">{returnHistory.error}</span> : !returnHistory.data ? <span>Загружаем историю…</span> : <>
+                        <b>Активные резервы</b>
+                        {returnHistory.data.reservations.length ? returnHistory.data.reservations.map((reservation) => <div key={reservation.linkedOrderId}>
+                          Заказ {reservation.linkedOrderId}: {reservation.quantity} шт.{' '}
+                          <button className="btn btn-default btn-sm" type="button" disabled={Boolean(returnOperationBusy)} onClick={() => void performReturnOperation(item.returnItemId!, 'ship', reservation.linkedOrderId)}>Отметить повторную отправку 1 шт.</button>{' '}
+                          <button className="btn btn-default btn-sm" type="button" disabled={Boolean(returnOperationBusy)} onClick={() => void performReturnOperation(item.returnItemId!, 'release', reservation.linkedOrderId)}>Снять резерв 1 шт.</button>
+                        </div>) : <div>Активных резервов нет</div>}
+                        <b>Операции ({returnHistory.data.total})</b>
+                        {returnHistory.data.events.map((event, eventIndex) => <div key={`${event.createdAt}-${event.action}-${eventIndex}`}>{avitoOrderDateLabel(event.createdAt)} · {event.action} · {event.quantity} шт. · {event.actorId}{event.linkedOrderId ? ` · заказ ${event.linkedOrderId}` : ''}</div>)}
+                        {returnHistory.data.total > returnHistory.data.events.length ? <small>Показаны последние {returnHistory.data.events.length} операций</small> : null}
+                      </>}
+                    </div> : null}
                   </div>
                 )) : (
-                  <div className="avito-returns-empty">
-                    Возвратов пока нет. Нажмите “Обновить сейчас” или дождитесь следующей автоматической загрузки.
+                  <div className="avito-returns-empty" role={returnInventoryError ? 'alert' : undefined}>
+                    {returnInventoryError || (returnInventory ? 'Возвратов пока нет. Обновите данные или проверьте выбранный аккаунт.' : 'Загружаем возвратный склад…')}
                   </div>
                 )}
+                {returnInventory && returnInventory.total > returnInventory.limit ? <div className="avito-orders-pager">
+                  <button className="btn btn-default btn-sm" type="button" disabled={inventoryPage <= 1} onClick={() => setInventoryPage((value) => value - 1)}>Назад</button>
+                  <span>Страница {inventoryPage}</span>
+                  <button className="btn btn-default btn-sm" type="button" disabled={inventoryPage * returnInventory.limit >= returnInventory.total} onClick={() => setInventoryPage((value) => value + 1)}>Далее</button>
+                </div> : null}
               </div>
             </div>
             <div className="modal-foot">
@@ -23021,7 +23469,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
       ) : null}
       {selected ? (
         <div className="avito-order-detail-modal-overlay" data-vella-react-handlers="onclick" onClick={(event) => { if (event.target === event.currentTarget) setSelectedOrderId('') }}>
-          <div className="modal-content avito-order-detail-window">
+          <div className="modal-content avito-order-detail-window" role="dialog" aria-modal="true" aria-label="Заказ Авито">
             <div className="modal-head">
               <div>
                 <h3>Заказ Авито</h3>
@@ -23040,7 +23488,7 @@ export function AvitoOrdersIsland({ replacementKey, sourceElement }: { replaceme
                 <table className="report-mid">
                   <thead><tr><th>Товар</th><th>ID</th><th>Артикул</th><th>Возврат</th><th>Кол-во</th><th>Цена</th></tr></thead>
                   <tbody>{selected.items.map((item, index) => (
-                    <tr key={`${item.itemId ?? index}`}>
+                    <tr key={`${item.lineIndex ?? index}-${item.itemId ?? ''}`}>
                       <td><b>{item.title}</b></td>
                       <td>{item.itemId || '—'}</td>
                       <td>{item.sellerArticle || '—'}</td>
@@ -23101,190 +23549,19 @@ function setAvitoStatsLiveState(next: AvitoStatsLiveState) {
   window.__vellaReactRenderAvitoStatsLive?.()
 }
 
-function avitoStatsFilterLabel(filter: string, data: AvitoStatsBackendResponse | null) {
-  if (filter === 'all') return 'все аккаунты'
-  if (filter === 'low') return 'контроль'
-  if (filter === 'top') return 'по метрикам'
-  return data?.accounts.find((account) => `account:${account.accountId}` === filter)?.accountName ?? filter
-}
 
-function avitoStatsSourceStatusLabel(status: string | null | undefined) {
-  if (status === 'fresh' || status === 'synced') return 'актуально'
-  if (status === 'partial') return 'частично'
-  if (status === 'stale') return 'сохранённые данные'
-  if (status === 'blocked') return 'нужна проверка'
-  return 'нет данных'
-}
 
-function avitoStatsControlFlagLabel(flag: string) {
-  const labels: Record<string, string> = {
-    no_contacts: 'нет контактов',
-    no_views: 'нет просмотров',
-    partial: 'частичные данные',
-    stale: 'сохранённые данные',
-    missing_metrics: 'нет метрик',
-    low_conversion: 'низкая конверсия',
-    no_spend: 'нет расходов',
-  }
-  return labels[flag] ?? flag.replace(/[_-]+/g, ' ')
-}
 
-function avitoStatsControlFlagsLabel(flags: string[]) {
-  return flags.length ? flags.map(avitoStatsControlFlagLabel).join(', ') : 'без замечаний'
-}
 
-function avitoStatsChips(data: AvitoStatsBackendResponse | null): Array<[string, string, string, string]> {
-  const rows = data?.rows ?? []
-  const accountChips = (data?.accounts ?? []).map((account): [string, string, string, string] => [
-    `account:${account.accountId}`,
-    account.accountName,
-    formatAvitoMetric(avitoRowsTotal(rows.filter((row) => row.accountId === account.accountId), 'views')),
-    '',
-  ])
-  return accountChips.length ? accountChips : [['all', 'Аккаунт', formatAvitoInt(rows.length), '']]
-}
 
-function avitoStatsCategoryFor(row: AvitoStatsBackendRow) {
-  const category = (row.category ?? '').toLocaleLowerCase('ru-RU')
-  if (category.includes('оборуд')) return 'equipment'
-  if (category.includes('одеж') || category.includes('обув') || category.includes('аксессуар')) return 'apparel'
-  return 'all'
-}
 
-function avitoStatsAccountRows(data: AvitoStatsBackendResponse | null): AvitoStatsTableRow[] {
-  if (!data) return []
-  return data.accounts.map((account) => {
-    const rows = data.rows.filter((row) => row.accountId === account.accountId)
-    const totals = {
-      impressions: avitoRowsTotal(rows, 'impressions'),
-      views: avitoRowsTotal(rows, 'views'),
-      favorites: avitoRowsTotal(rows, 'favorites'),
-      contacts: avitoRowsTotal(rows, 'contacts'),
-      spendKopecks: avitoRowsTotal(rows, 'spendKopecks'),
-      orders: avitoRowsTotal(rows, 'orders'),
-      buyouts: avitoRowsTotal(rows, 'buyouts'),
-    }
-    const conversion = totals.views != null && totals.contacts != null ? formatAvitoPctNullable(totals.views ? totals.contacts / totals.views * 100 : 0) : '—'
-    const activeItemCount = account.activeItemCount ?? rows.length
-    const inactiveItemCount = account.inactiveItemCount ?? Math.max(0, account.itemCount - activeItemCount)
-    return {
-      key: `account:${account.accountId}`,
-      kind: 'account',
-      account: account.accountId,
-      category: rows.map(avitoStatsCategoryFor).join(' '),
-      search: `${account.accountName} ${account.accountId} ${rows.map((row) => row.title).join(' ')}`,
-      action: 'stats',
-      cells: [
-        <div className="avito-stats-main-cell"><b>{account.accountName}</b><span className="sub">ID: {account.accountId} · {account.itemCount} объявл.</span></div>,
-        formatAvitoMetric(totals.impressions),
-        formatAvitoMetric(totals.views),
-        formatAvitoMetric(totals.favorites),
-        formatAvitoMetric(totals.contacts),
-        formatAvitoRubNullable(totals.spendKopecks),
-        formatAvitoMetric(totals.orders),
-        formatAvitoMetric(totals.buyouts),
-        <span className="report-tag ok">{conversion}</span>,
-        formatAvitoInt(activeItemCount),
-        formatAvitoInt(inactiveItemCount),
-      ],
-    }
-  })
-}
 
-function avitoStatsTopRows(data: AvitoStatsBackendResponse | null): AvitoStatsTableRow[] {
-  return (data?.rows ?? []).slice(0, 50).map((row) => ({
-    key: `item:${row.itemId}`,
-    kind: 'top',
-    account: row.accountId,
-    category: avitoStatsCategoryFor(row),
-    search: `${row.title} ${row.itemId} ${row.accountName} ${row.category ?? ''}`,
-    action: 'listing',
-    cells: [
-      <div className="avito-stats-main-cell"><b>{row.title}</b><span className="sub">{formatAvitoMetric(row.views)} просмотров · {formatAvitoMetric(row.contacts)} контактов</span></div>,
-      row.accountName,
-      formatAvitoMetric(row.views),
-      formatAvitoRubNullable(row.spendKopecks),
-      formatAvitoMetric(row.contacts),
-      formatAvitoMetric(row.orders),
-      formatAvitoMetric(row.buyouts),
-      formatAvitoPctNullable(row.contactConversionPct),
-    ],
-  }))
-}
 
-function avitoStatsLowRows(data: AvitoStatsBackendResponse | null): AvitoStatsTableRow[] {
-  return (data?.rows ?? []).filter((row) => row.controlFlags.length > 0).map((row) => ({
-    key: `item:${row.itemId}`,
-    kind: 'low',
-    account: row.accountId,
-    category: avitoStatsCategoryFor(row),
-    search: `${row.title} ${row.itemId} ${row.accountName} ${row.controlFlags.join(' ')} ${avitoStatsControlFlagsLabel(row.controlFlags)}`,
-    action: 'listing',
-    cells: [
-      <div className="avito-stats-main-cell"><b>{row.title}</b><span className="sub">ID: {row.itemId}</span></div>,
-      <span className="report-tag warn">{avitoStatsControlFlagsLabel(row.controlFlags)}</span>,
-      data?.period.days && row.views != null ? (row.views / data.period.days).toFixed(1) : '—',
-      formatAvitoMetric(row.contacts),
-      avitoStatsSourceStatusLabel(row.sourceStatus),
-    ],
-  }))
-}
 
-function avitoStatsRowsByTable(data: AvitoStatsBackendResponse | null, table: 'account' | 'top' | 'low') {
-  if (table === 'account') return avitoStatsAccountRows(data)
-  if (table === 'top') return avitoStatsTopRows(data)
-  return avitoStatsLowRows(data)
-}
 
 function AvitoStatsKpiStripIsland({ replacementKey }: { replacementKey: string }) {
-  const live = useAvitoStatsLiveState()
-  const summary = live.data?.summary
-  const kpis = [
-    ['Показы', 'Показы объявлений за выбранный период', 'avitoStatsKpiImpressions', summary ? formatAvitoMetric(summary.impressions) : '—', 'за период'],
-    ['Просмотры', 'Открытия карточек объявлений за выбранный период', 'avitoStatsKpiViews', summary ? formatAvitoMetric(summary.views) : '—', 'за период'],
-    ['Контакты', 'Звонки, сообщения и другие контакты', 'avitoStatsKpiContacts', summary ? formatAvitoMetric(summary.contacts) : '—', 'за период'],
-    ['Избранное', 'Добавления объявлений в избранное', 'avitoStatsKpiFavorites', summary ? formatAvitoMetric(summary.favorites) : '—', 'за период'],
-    ['Заказы', 'Заказы с доставкой Авито, если доступны по аккаунту', 'avitoStatsKpiOrders', summary ? formatAvitoMetric(summary.orders) : '—', 'за период'],
-    ['Выкупы', 'Выкупленные заказы, если доступны', 'avitoStatsKpiBuyouts', summary ? formatAvitoMetric(summary.buyouts) : '—', 'за период'],
-    ['Расходы', 'Расходы на продвижение. Операционный показатель без расчёта прибыли', 'avitoStatsKpiSpend', summary ? formatAvitoRubNullable(summary.spendKopecks) : '—', 'за период'],
-    ['Конверсия', 'Контакты / просмотры по доступным аккаунтам', 'avitoStatsKpiConversion', summary ? formatAvitoPctNullable(summary.conversionPct) : '—', `${summary?.problemRows ?? 0} строк контроля`],
-  ] as const
-  return (
-    <div
-      key={replacementKey}
-      className="stats avito-stats-kpis"
-      data-vella-island="avito-stats-kpi-strip"
-      data-vella-island-status="explicit-jsx"
-    >
-      <style>{`
-        .vella-html-parity-root #tab-avito-stats > .avito-stats-kpis {
-          width: calc(100% - 40px);
-          margin: 0 20px 10px;
-          border: 1px solid var(--gray-100);
-          border-radius: 10px;
-          overflow-x: auto;
-          overflow-y: hidden;
-          box-shadow: var(--shadow-sm);
-        }
-        .vella-html-parity-root #tab-avito-stats > .avito-stats-kpis .stat:first-child {
-          border-top-left-radius: 10px;
-          border-bottom-left-radius: 10px;
-        }
-        .vella-html-parity-root #tab-avito-stats > .avito-stats-kpis .stat:last-child {
-          border-right: 0;
-          border-top-right-radius: 10px;
-          border-bottom-right-radius: 10px;
-        }
-      `}</style>
-      {kpis.map(([label, tip, valueId, value, note]) => (
-        <div className="stat" key={valueId}>
-          <div className="stat-label">{label} <span className="stat-tip" data-tip={tip}>i</span></div>
-          <div className="stat-val" id={valueId}>{live.loading ? '…' : value}</div>
-          <div className={`stat-delta ${live.error ? 'down' : 'neutral'}`}>{live.error ? 'нужна настройка API' : note}</div>
-        </div>
-      ))}
-    </div>
-  )
+  // Metric cards now live beside their chart, below the period toolbar.
+  return <Fragment key={replacementKey} />
 }
 
 function defaultAvitoStatsState(): AvitoStatsState {
@@ -23319,560 +23596,59 @@ function useAvitoStatsState() {
   return state
 }
 
-function avitoStatsRowMatches(row: AvitoStatsTableRow, state: AvitoStatsState) {
-  const query = state.query.trim().toLocaleLowerCase('ru-RU')
-  if (state.filter.startsWith('account:') && row.account !== state.filter.slice('account:'.length)) return false
-  if (!state.filter.startsWith('account:') && row.kind !== 'account') return false
-  if (state.category !== 'all' && !row.category.split(' ').includes(state.category)) return false
-  if (query && !row.search.toLocaleLowerCase('ru-RU').includes(query)) return false
-  return true
-}
 
 function AvitoStatsToolbarIsland({ replacementKey }: { replacementKey: string }) {
   const state = useAvitoStatsState()
   const live = useAvitoStatsLiveState()
-  const chips = avitoStatsChips(live.data)
-  return (
-    <div
-      key={replacementKey}
-      className="toolbar"
-      data-vella-island="avito-stats-toolbar"
-      data-vella-island-status="explicit-jsx"
-      data-vella-event-owner="react"
-    >
-      <div className="search">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-        </svg>
-        <input
-          id="avitoStatsSearch"
-          type="text"
-          aria-label="Поиск по статистике Авито"
-          autoComplete="off"
-          placeholder="Аккаунт, объявление или ID Авито"
-          value={state.query}
-          data-vella-react-handlers="oninput"
-          onInput={(event) => window.__vellaSetAvitoStatsState?.({ query: event.currentTarget.value })}
-        />
-      </div>
-      <div className="chips" id="avitoStatsChips">
-        {chips.map(([filter, label, count, color]) => (
-          <button
-            className={state.filter === filter ? 'chip active' : 'chip'}
-            type="button"
-            data-avito-stats-filter={filter}
-            data-vella-react-handlers="onclick"
-            onClick={(event) => window.setAvitoStatsFilter?.(event.currentTarget)}
-            key={filter}
-          >
-            {label} <span className="chip-count" style={color ? { color } : undefined}>{count}</span>
-          </button>
-        ))}
-      </div>
-      <div className="toolbar-right">
-        <AvitoDateRangeActions
-          from={state.dateFromDraft}
-          to={state.dateToDraft}
-          fromAria="Дата начала статистики Авито"
-          toAria="Дата окончания статистики Авито"
-          loading={live.loading}
-          cooldownUntil={avitoCooldownUntilFromPayload(live.data)}
-          onFromChange={(dateFromDraft) => window.__vellaSetAvitoStatsState?.({ dateFromDraft })}
-          onToChange={(dateToDraft) => window.__vellaSetAvitoStatsState?.({ dateToDraft })}
-          onApply={() => window.applyAvitoStatsPeriod?.()}
-          onRefresh={() => window.refreshAvitoStats?.()}
-        />
-      </div>
-    </div>
-  )
-}
-
-function AvitoStatsChartIsland({ sourceElement }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
-  const state = useAvitoStatsState()
-  const live = useAvitoStatsLiveState()
-  const mode = AVITO_STATS_MODE_DATA[state.mode]
-  const summary = live.data?.summary
-  const metricKey = state.mode === 'funnel' ? 'contacts' : state.mode === 'sales' ? 'favorites' : 'views'
-  const metricLabel = metricKey === 'contacts' ? 'Контакты' : metricKey === 'favorites' ? 'Избранное' : 'Просмотры'
-  const metricTotal = avitoMetricNumber(summary?.[metricKey])
-  const fallbackTotal = (live.data?.rows ?? []).reduce((sum, row) => sum + avitoMetricNumber(row[metricKey]), 0)
-  const currentTotal = metricTotal || fallbackTotal
-  const timeline = (live.data?.timeline ?? [])
-    .filter((point) => typeof point.date === 'string' && point.date)
-    .slice()
-    .sort((a, b) => a.date.localeCompare(b.date))
-  const hasTimeline = timeline.length > 1
-  const hourlyWeights = [0.03, 0.06, 0.10, 0.05, 0.03, 0.01, 0.02, 0.04, 0.06, 0.06, 0.04, 0.07, 0.13, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]
-  const yesterdayWeights = [0.04, 0.07, 0.05, 0.03, 0.00, 0.00, 0.04, 0.02, 0.02, 0.02, 0.03, 0.06, 0.08, 0.04, 0.16, 0.11, 0.02, 0.15, 0.08, 0.08, 0.13, 0.09, 0.05, 0.16]
-  const weekWeights = [0.05, 0.06, 0.04, 0.07, 0.07, 0.02, 0.04, 0.04, 0.03, 0.04, 0.08, 0.09, 0.04, 0.14, 0.06, 0.07, 0.04, 0.10, 0.11, 0.07, 0.09, 0.10, 0.11, 0.14]
-  const normalizeHourly = (total: number, weights: number[]) => {
-    const sum = weights.reduce((acc, value) => acc + value, 0) || 1
-    return weights.map((weight) => Math.round((total * weight) / sum))
-  }
-  const todayValues = normalizeHourly(currentTotal, hourlyWeights)
-  const yesterdayValues = normalizeHourly(Math.round(currentTotal * 0.92), yesterdayWeights)
-  const weekValues = normalizeHourly(Math.round(currentTotal * 1.17), weekWeights)
-  const fallbackSeries = [
-    { key: 'today', label: 'Сегодня', color: '#3B82F6', width: 4, values: todayValues },
-    { key: 'yesterday', label: 'Вчера', color: '#EC4899', width: 3, values: yesterdayValues },
-    { key: 'week', label: 'Неделю назад', color: '#22C55E', width: 3, values: weekValues, dashed: true },
-  ]
-  const timelineValues = timeline.map((point) => avitoMetricNumber(point[metricKey]))
-  const series = hasTimeline
-    ? [{ key: 'period', label: metricLabel, color: '#3B82F6', width: 4, values: timelineValues }]
-    : fallbackSeries
-  const labels = hasTimeline ? timeline.map((point) => point.date.slice(5).replace('-', '.')) : Array.from({ length: 24 }, (_item, index) => `${String(index).padStart(2, '0')}:00`)
-  const comparisonValues = hasTimeline ? timelineValues.slice(0, -1) : yesterdayValues
-  const comparisonTotal = comparisonValues.reduce((sum, value) => sum + value, 0)
-  const delta = currentTotal - comparisonTotal
-  const deltaPct = comparisonTotal > 0 ? Math.round((delta / comparisonTotal) * 1000) / 10 : null
-  const averageValue = hasTimeline ? Math.round(currentTotal / Math.max(1, timelineValues.length)) : Math.round(currentTotal / 24)
-  const summaryValues = hasTimeline ? timelineValues : todayValues
-  const peakIndex = summaryValues.reduce((best, value, index) => value > (summaryValues[best] ?? 0) ? index : best, 0)
-  const peakLabel = hasTimeline ? labels[peakIndex] : labels[Math.min(23, new Date().getHours())]
-  const tickEvery = Math.max(1, Math.ceil(labels.length / 10))
-  const left = 48
-  const right = 742
-  const top = 18
-  const bottom = 186
-  const maxValue = Math.max(1, ...series.flatMap((item) => item.values))
-  const axisMax = maxValue <= 20 ? Math.ceil(maxValue / 2) * 2 : maxValue <= 100 ? Math.ceil(maxValue / 10) * 10 : Math.ceil(maxValue / 50) * 50
-  const height = bottom - top
-  const xCenter = (index: number) => left + ((right - left) / Math.max(1, labels.length - 1)) * index
-  const yValue = (value: number) => bottom - (Math.max(0, value) / axisMax) * height
-  const formatAxis = (value: number) => value.toLocaleString('ru-RU')
-  const pointsFor = (values: number[]) => values.map((value, index) => `${xCenter(index)},${yValue(value)}`).join(' ')
-  const chartRef = useRef<HTMLDivElement | null>(null)
-  const [chartHover, setChartHover] = useState<{
-    x: number
-    y: number
-    title: string
-    rows: Array<{ color: string; label: string; value: string }>
-  } | null>(null)
-  const updateChartHover = (event: MouseEvent<SVGRectElement>, index: number) => {
-    const bounds = chartRef.current?.getBoundingClientRect()
-    const rows = series.map((item) => ({ color: item.color, label: item.label, value: formatAxis(item.values[index]) }))
-    const title = hasTimeline ? timeline[index]?.date.split('-').reverse().join('.') ?? labels[index] : labels[index]
-    if (!bounds) {
-      setChartHover({ x: 16, y: 16, title, rows })
-      return
-    }
-    setChartHover({
-      x: Math.min(Math.max(12, event.clientX - bounds.left + 14), Math.max(12, bounds.width - 190)),
-      y: Math.max(12, event.clientY - bounds.top - 70),
-      title,
-      rows,
+  const applyPreset = (preset: '7' | '30' | '3m') => {
+    const period = quickPeriod(preset)
+    updateAvitoStatsState({
+      ...statsPeriodSelection(period, window.__vellaAvitoStatsState?.requestSeq),
+      query: '', category: 'all', filter: 'all',
     })
   }
-  if (!currentTotal && !(live.data?.rows ?? []).length) {
-    return (
-    <div
-      className={sourceElement instanceof HTMLElement ? sourceElement.className : 'avito-stats-chart'}
-      data-vella-island="avito-stats-chart"
-      data-vella-island-status="explicit-jsx"
-    >
-        {live.loading ? (
-          <AvitoDataState kind="loading" title="Загружаем статистику" subtitle="Собираем метрики за выбранный период." />
-        ) : live.error ? (
-          <AvitoDataState kind="error" title="Не удалось загрузить статистику" subtitle="Проверьте подключение Авито и попробуйте обновить данные." />
-        ) : (
-          <AvitoDataState kind="empty" title="Нет данных за выбранный период" subtitle="Выберите другой период или обновите данные из Авито." />
-        )}
-      </div>
-    )
-  }
-  return (
-    <div
-      ref={chartRef}
-      className={sourceElement instanceof HTMLElement ? sourceElement.className : 'avito-stats-chart'}
-      data-vella-island="avito-stats-chart"
-      data-vella-island-status="explicit-jsx"
-    >
-      <style>{`
-        .vella-html-parity-root .avito-stats-chart {
-          display: grid;
-          gap: 18px;
-          height: auto !important;
-          min-height: 0;
-          overflow: visible;
-          padding: 22px 24px 24px;
-          border: 1px solid var(--gray-100);
-          border-radius: 8px;
-          background: var(--white);
-          box-shadow: var(--shadow-sm);
-          color: var(--gray-900);
-          position: relative;
-        }
-        .vella-html-parity-root .avito-stats-chart-head {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
-          gap: 16px;
-          align-items: start;
-        }
-        .vella-html-parity-root .avito-stats-chart-summary {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(120px, 1fr));
-          gap: 18px;
-          max-width: 720px;
-        }
-        .vella-html-parity-root .avito-stats-chart-metric {
-          display: grid;
-          gap: 6px;
-        }
-        .vella-html-parity-root .avito-stats-chart-metric span {
-          color: var(--gray-500);
-          font-size: 12px;
-          font-weight: 650;
-        }
-        .vella-html-parity-root .avito-stats-chart-metric b {
-          color: var(--gray-900);
-          font-size: 26px;
-          line-height: 1;
-        }
-        .vella-html-parity-root .avito-stats-chart-metric small {
-          color: #34D399;
-          font-size: 11.5px;
-        }
-        .vella-html-parity-root .avito-stats-chart-title {
-          text-align: center;
-          color: var(--gray-900);
-          font-size: 15px;
-          font-weight: 800;
-        }
-        .vella-html-parity-root .avito-stats-mode {
-          align-self: start;
-        }
-        .vella-html-parity-root .avito-stats-chart svg {
-          width: 100%;
-          height: 300px !important;
-          min-height: 0;
-          display: block;
-          overflow: visible;
-        }
-        .vella-html-parity-root .avito-stats-chart .avito-chart-axis {
-          fill: var(--gray-500);
-          font-size: 11px;
-          font-weight: 600;
-        }
-        .vella-html-parity-root .avito-stats-chart .avito-chart-grid {
-          stroke: var(--gray-200);
-          stroke-width: 1;
-        }
-        .vella-html-parity-root .avito-stats-chart .avito-chart-line {
-          fill: none;
-          stroke-linecap: round;
-          stroke-linejoin: round;
-        }
-        .vella-html-parity-root .avito-stats-chart .avito-chart-dot-point {
-          fill: var(--white);
-          stroke-width: 3;
-        }
-        .vella-html-parity-root .avito-stats-chart .chart-hit-zone {
-          fill: transparent;
-          cursor: crosshair;
-        }
-        .vella-html-parity-root .avito-stats-chart .avito-chart-time {
-          fill: var(--gray-500);
-          font-size: 10.5px;
-          font-weight: 600;
-        }
-        .vella-html-parity-root .avito-stats-chart .avito-chart-legend {
-          justify-content: center;
-          color: var(--gray-500);
-        }
-        .vella-html-parity-root .avito-stats-chart .avito-chart-tooltip {
-          position: absolute;
-          z-index: 20;
-          min-width: 168px;
-          padding: 10px 12px;
-          border: 1px solid #CBD5E1;
-          border-radius: 10px;
-          background: rgba(15, 23, 42, .94);
-          color: #FFFFFF;
-          box-shadow: 0 14px 30px rgba(15, 23, 42, .22);
-          pointer-events: none;
-        }
-        .vella-html-parity-root .avito-chart-tooltip-title {
-          font-size: 12px;
-          font-weight: 850;
-          margin-bottom: 7px;
-        }
-        .vella-html-parity-root .avito-chart-tooltip-row {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 14px;
-          font-size: 12px;
-          line-height: 1.45;
-        }
-        .vella-html-parity-root .avito-chart-tooltip-row span {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          color: #CBD5E1;
-        }
-        .vella-html-parity-root .avito-chart-tooltip-row i {
-          width: 8px;
-          height: 8px;
-          border-radius: 999px;
-          flex: 0 0 auto;
-        }
-        .vella-html-parity-root .avito-chart-tooltip-row b {
-          color: #FFFFFF;
-          font-weight: 850;
-        }
-      `}</style>
-      <div className="avito-stats-chart-head">
-        <div className="avito-stats-chart-summary">
-          <div className="avito-stats-chart-metric">
-            <span>Количество</span>
-            <b>{formatAvitoMetric(currentTotal)}</b>
-            <small>{delta >= 0 ? '+' : ''}{formatAvitoMetric(delta)}{deltaPct == null ? '' : ` (${deltaPct >= 0 ? '+' : ''}${deltaPct}%)`}</small>
-          </div>
-          <div className="avito-stats-chart-metric">
-            <span>В среднем за день</span>
-            <b>{formatAvitoMetric(averageValue)}</b>
-            <small>{mode.note}</small>
-          </div>
-          <div className="avito-stats-chart-metric">
-            <span>Пиковый день</span>
-            <b>{formatAvitoMetric(summaryValues[peakIndex] ?? 0)}</b>
-            <small>{peakLabel}</small>
-          </div>
-        </div>
-        <AvitoStatsModeButtonsIsland />
-      </div>
-      <div className="avito-stats-chart-title">Динамика {metricLabel.toLocaleLowerCase('ru-RU')}</div>
-      <svg id="avitoStatsChartSvg" viewBox="0 0 760 238" aria-label={mode.aria} role="img">
-        {[axisMax, Math.round(axisMax * 0.75), Math.round(axisMax / 2), Math.round(axisMax * 0.25), 0].map((value) => {
-          const y = yValue(value)
-          return (
-            <g key={value}>
-              <line className="avito-chart-grid" x1={left} y1={y} x2={right} y2={y} />
-              <text className="avito-chart-axis" x="10" y={y + 4}>{formatAxis(value)}</text>
-            </g>
-          )
-        })}
-        {labels.map((_label, index) => (
-          <line className="avito-chart-grid" x1={xCenter(index)} y1={top} x2={xCenter(index)} y2={bottom} key={`grid-${index}`} />
-        ))}
-        {series.map((item) => (
-          <g key={item.key}>
-            <polyline className="avito-chart-line" points={pointsFor(item.values)} stroke={item.color} strokeWidth={item.width} strokeDasharray={item.dashed ? '5 6' : undefined} />
-            {item.values.map((value, index) => (
-              <circle className="avito-chart-dot-point" cx={xCenter(index)} cy={yValue(value)} r={item.key === 'today' ? 4 : 3} stroke={item.color} key={`${item.key}-${index}`} />
-            ))}
-          </g>
-        ))}
-        {labels.map((label, index) => (
-          <g key={`hour-${index}`}>
-            {index % tickEvery === 0 || index === labels.length - 1 ? <text className="avito-chart-time" x={xCenter(index) - 12} y="220">{label}</text> : null}
-            <rect
-              className="chart-hit-zone"
-              x={index === 0 ? left - 10 : xCenter(index) - 14}
-              y={top}
-              width="28"
-              height={bottom - top}
-              data-chart-tip="1"
-              data-chart-title={label}
-              data-chart-rows={series.map((item) => `${item.color}|${item.label}|${formatAxis(item.values[index])}`).join(';')}
-              onMouseEnter={(event) => updateChartHover(event, index)}
-              onMouseMove={(event) => updateChartHover(event, index)}
-              onMouseLeave={() => setChartHover(null)}
-            />
-          </g>
-        ))}
-      </svg>
-      {chartHover ? (
-        <div className="avito-chart-tooltip" id="avitoStatsChartTooltip" aria-hidden="false" style={{ left: chartHover.x, top: chartHover.y }}>
-          <div className="avito-chart-tooltip-title">{chartHover.title}</div>
-          {chartHover.rows.map((row) => (
-            <div className="avito-chart-tooltip-row" key={row.label}>
-              <span><i style={{ background: row.color }} />{row.label}</span>
-              <b>{row.value}</b>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      <div className="avito-chart-legend" id="avitoStatsChartLegend">{series.map((item) => <span key={item.label}><i className="avito-chart-dot" style={{ background: item.color }} />{item.label}</span>)}</div>
+  return <div key={replacementKey} className="toolbar" data-vella-island="avito-stats-toolbar"
+    data-vella-island-status="explicit-jsx" data-vella-event-owner="react">
+    <div className="avito-period-presets" aria-label="Быстрый выбор периода">
+      {([['7', '7 дней'], ['30', '30 дней'], ['3m', '3 месяца']] as const).map(([preset, label]) => {
+        const period = quickPeriod(preset)
+        return <button key={preset} type="button" data-vella-react-handlers="onclick" aria-pressed={state.dateFrom === period.dateFrom && state.dateTo === period.dateTo}
+          onClick={() => applyPreset(preset)}>{label}</button>
+      })}
     </div>
-  )
+    <span className="sub">{live.data?.accounts.map(account => account.accountName).join(', ')}</span>
+    <div className="toolbar-right">
+      <AvitoDateRangeActions key={`${state.dateFrom}:${state.dateTo}`} from={state.dateFromDraft} to={state.dateToDraft}
+        fromAria="Дата начала статистики Авито" toAria="Дата окончания статистики Авито" loading={live.loading}
+        onFromChange={(dateFromDraft) => updateAvitoStatsState({ dateFromDraft })}
+        onToChange={(dateToDraft) => updateAvitoStatsState({ dateToDraft })}
+        onApply={(values) => updateAvitoStatsState(statsPeriodSelection({
+          dateFrom: values?.from || state.dateFromDraft, dateTo: values?.to || state.dateToDraft,
+        }, window.__vellaAvitoStatsState?.requestSeq))}
+        onRefresh={() => updateAvitoStatsState({ forceRefresh: true, requestSeq: (window.__vellaAvitoStatsState?.requestSeq ?? 0) + 1 })} />
+    </div>
+  </div>
 }
 
-function AvitoStatsModeButtonsIsland() {
-  const state = useAvitoStatsState()
-  return (
-    <div className="avito-stats-mode" aria-label="Режим анализа" data-vella-island="avito-stats-mode-buttons" data-vella-island-status="explicit-jsx">
-      {(['traffic', 'funnel', 'sales'] as AvitoStatsMode[]).map((mode) => (
-        <button
-          className={state.mode === mode ? 'active' : ''}
-          type="button"
-          data-avito-stats-mode={mode}
-          data-vella-react-handlers="onclick"
-          onClick={() => window.setAvitoStatsMode?.(mode)}
-          key={mode}
-        >
-          {mode === 'funnel' ? 'Контакты' : mode === 'traffic' ? 'Просмотры' : 'Избранное'}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function AvitoStatsTableShellIsland({
-  sourceElement,
-  tableKind,
-}: {
-  replacementKey: string
-  sourceElement?: HTMLElement | SVGElement
-  tableKind?: 'account' | 'top' | 'low'
-}) {
+function AvitoStatsChartIsland({ replacementKey }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
   const state = useAvitoStatsState()
   const live = useAvitoStatsLiveState()
-  const headerText = sourceElement instanceof HTMLElement ? sourceElement.querySelector('thead')?.textContent ?? '' : ''
-  const resolvedKind = tableKind ?? (headerText.includes('Аккаунт') && headerText.includes('Показы') ? 'account' : headerText.includes('Название') && headerText.includes('Выкупы') ? 'top' : 'low')
-  const rows = avitoStatsRowsByTable(live.data, resolvedKind).filter((row) => avitoStatsRowMatches(row, state))
-  const headers = resolvedKind === 'account'
-    ? ['Аккаунт', 'Показы', 'Просмотры', 'Избранное', 'Контакты', 'Расходы', 'Заказы', 'Выкупы', 'Конверсия', 'Активн.', 'Неактивн.']
-    : resolvedKind === 'top'
-      ? ['Название', 'Аккаунт', 'Просмотры', 'Расходы', 'Конт.', 'Заказы', 'Выкупы', 'Конв.']
-      : ['Объявление', 'Причина', 'Просм./день', 'Конт.', 'Данные', 'Действие']
-  return (
-    <div
-      className={sourceElement instanceof HTMLElement ? sourceElement.className : 'avito-stats-table table-wrap'}
-      style={sourceElement instanceof HTMLElement ? styleAttributeToObject(sourceElement.getAttribute('style') ?? '') : undefined}
-      data-vella-island={sourceElement instanceof HTMLElement ? sourceElement.dataset.vellaIsland || 'avito-stats-table-shell' : `avito-stats-table-shell-${resolvedKind}`}
-      data-vella-island-status="explicit-jsx"
-    >
-      <style>{`
-        .vella-html-parity-root .avito-stats-main-cell {
-          min-width: 220px;
-          line-height: 1.25;
-        }
-        .vella-html-parity-root .avito-stats-main-cell b {
-          display: block;
-          margin-bottom: 5px;
-        }
-        .vella-html-parity-root .avito-stats-main-cell .sub {
-          display: block;
-          line-height: 1.25;
-        }
-      `}</style>
-      <table className="report-mid">
-        <thead>
-          <tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr>
-        </thead>
-        <tbody data-vella-island="avito-stats-table-body" data-vella-island-status="explicit-jsx">
-          {rows.length ? rows.map((row) => (
-            <tr
-              className={row.action === 'stats' ? 'avito-stats-row' : undefined}
-              data-stats-kind={row.kind}
-              data-account={row.account}
-              data-category={row.category}
-              data-search={row.search}
-              data-vella-island="avito-stats-table-row"
-              data-vella-island-status="explicit-jsx"
-              key={row.key}
-            >
-              {row.cells.map((cell, index) => <td key={`${row.key}-${index}`}>{cell}</td>)}
-              {row.kind === 'low' ? (
-                <td><button className="btn btn-default btn-sm" type="button" data-vella-react-handlers="onclick" onClick={(event) => { event.stopPropagation(); window.selectAvitoStats?.(event.currentTarget.closest('tr') as HTMLElement | null, row.key) }}>Подробнее</button></td>
-              ) : null}
-            </tr>
-          )) : (
-            <tr data-stats-kind="empty" data-account="none" data-category="empty" data-search="нет строк за период">
-              <td colSpan={headers.length}>
-                <div style={{ padding: '18px 12px', textAlign: 'center' }}>
-                  <b>Нет результатов по выбранному фильтру</b>
-                  <span className="sub" style={{ display: 'block', marginTop: 4 }}>Попробуйте другой фильтр или измените поиск.</span>
-                </div>
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  )
+  const data = live.data?.period.dateFrom === state.dateFrom && live.data?.period.dateTo === state.dateTo ? live.data : null
+  return <AvitoStatsAnalytics key={replacementKey} summary={data?.summary} timeline={data?.timeline}
+    period={{ dateFrom: state.dateFrom, dateTo: state.dateTo }} loading={live.loading} />
 }
 
-function AvitoStatsEmptyStateIsland() {
-  const state = useAvitoStatsState()
-  const live = useAvitoStatsLiveState()
-  const title = live.loading
-    ? 'Загружаем статистику Авито'
-    : live.error
-      ? 'Статистика временно недоступна'
-      : 'За выбранный период данных нет'
-  const description = live.loading
-    ? 'Собираем просмотры, контакты, заказы и расходы по объявлениям.'
-    : live.error
-      ? avitoOverviewFriendlyMessage(live.error) || 'Проверьте подключение Авито или обновите данные чуть позже.'
-      : 'Попробуйте выбрать другой период или обновить данные из Авито.'
-  return (
-    <section
-      className="avito-detail-section avito-stats-empty-state"
-      data-vella-island="avito-stats-empty-state"
-      data-vella-island-status="explicit-jsx"
-      style={{ margin: '12px 20px', padding: '28px', textAlign: 'center' }}
-    >
-      <div style={{ margin: '0 auto 12px', width: 44, height: 44, borderRadius: 14, display: 'grid', placeItems: 'center', background: 'var(--brand-light)', color: 'var(--brand)' }}>
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>
-      </div>
-      <h3 style={{ marginBottom: 6 }}>{title}</h3>
-      <div className="profile-helper-text" style={{ maxWidth: 520, margin: '0 auto 14px' }}>{description}</div>
-      <div className="avito-status-summary" style={{ justifyContent: 'center', marginBottom: live.loading ? 0 : 14 }}>
-        <span className="avito-status-item muted">{state.dateFrom} — {state.dateTo}</span>
-        <span className="avito-status-item muted">{avitoStatsFilterLabel(state.filter, live.data)}</span>
-      </div>
-      {!live.loading ? (
-        <AvitoRefreshButton cooldownUntil={avitoCooldownUntilFromPayload(live.data)} onClick={() => window.refreshAvitoStats?.()} />
-      ) : null}
-    </section>
-  )
-}
 
-function AvitoStatsShellIsland({
-  replacementKey,
-}: {
-  replacementKey: string
-  sourceElement?: HTMLElement | SVGElement
-}) {
-  const state = useAvitoStatsState()
+
+
+function AvitoStatsShellIsland({ replacementKey }: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
   const live = useAvitoStatsLiveState()
-  const hasRows = Boolean(live.data?.rows?.length)
-  useEffect(() => {
-    if (!state.selectedKey) return
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') window.closeAvitoPopup?.('stats')
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [state.selectedKey])
-  return (
-    <div
-      className="avito-stats-shell"
-      data-vella-island="avito-stats-shell"
-      data-vella-island-status="explicit-jsx"
-    >
-      {hasRows ? (
-        <section className="avito-stats-main" data-vella-island="avito-stats-main" data-vella-island-status="explicit-jsx">
-          <div className="avito-stats-top" data-vella-island="avito-stats-top-panels" data-vella-island-status="explicit-jsx">
-            <AvitoStatsChartIsland replacementKey={`${replacementKey}-chart`} />
-          </div>
-          <section className="avito-detail-section">
-            <h3>По аккаунтам</h3>
-            <div className="profile-helper-text">Сводка по аккаунтам за выбранный период.</div>
-            <AvitoStatsTableShellIsland replacementKey={`${replacementKey}-accounts`} tableKind="account" />
-          </section>
-        </section>
-      ) : (
-        <section className="avito-stats-main" data-vella-island="avito-stats-main-empty" data-vella-island-status="explicit-jsx">
-          <AvitoStatsEmptyStateIsland />
-        </section>
-      )}
-    </div>
-  )
+  return <div className="avito-stats-shell" data-vella-island="avito-stats-shell" data-vella-island-status="explicit-jsx">
+    {live.error && !live.loading ? <div role="status" className="avito-stats-error" style={{ margin: '12px 20px', color: 'var(--gray-600)', fontSize: 13 }}>
+      {live.error}{live.data?.rows.length ? ' Показаны сохранённые данные.' : ''}
+    </div> : null}
+    <AvitoStatsChartIsland replacementKey={replacementKey + '-analytics'} />
+  </div>
 }
 
 export function AvitoStatsIsland(props: { replacementKey: string; sourceElement?: HTMLElement | SVGElement }) {
@@ -23908,8 +23684,9 @@ function LegacyAvitoStatsIsland({
       .then((data) => {
         if (controller.signal.aborted) return
         if (!data) throw new Error('Пустой ответ статистики Авито')
-        setAvitoStatsLiveState({ loading: false, error: null, data })
-        if (state.forceRefresh) window.__vellaSetAvitoStatsState?.({ forceRefresh: false })
+        setAvitoStatsLiveState({ loading: false, error: avitoStatsErrorMessage(data), data })
+        // Clearing the one-shot flag must not dispatch a second API request.
+        if (state.forceRefresh && window.__vellaAvitoStatsState) window.__vellaAvitoStatsState.forceRefresh = false
       })
       .catch((error) => {
         if (controller.signal.aborted) return
@@ -23940,19 +23717,21 @@ function LegacyAvitoStatsIsland({
 
 function NotificationKpiStripIsland() {
   const location = useLocation()
+  const snapshot = useNotificationsSnapshot()
   const isAvitoNotificationsRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'avito-notifications'
   const kpis = isAvitoNotificationsRoute ? AVITO_NOTIFICATION_KPIS : NOTIFICATION_KPIS
+  const values = snapshot.kpis ? [snapshot.kpis.unread, snapshot.kpis.critical, snapshot.kpis.period] : []
   return (
     <div
       className="stats notif-kpis"
       data-vella-island="notifications-kpi-strip"
       data-vella-island-status="explicit-jsx"
     >
-      {kpis.map(([label, tip, valueId, value, deltaId, delta, deltaClass]) => (
+      {kpis.map(([label, tip, valueId, value, deltaId, delta, deltaClass], index) => (
         <div className="stat" key={label}>
           <div className="stat-label">{label} <span className="stat-tip" data-tip={tip}>i</span></div>
-          <div className="stat-val" {...(valueId ? { id: valueId } : {})}>{value}</div>
-          <div className={`stat-delta ${deltaClass}`} {...(deltaId ? { id: deltaId } : {})}>{delta}</div>
+          <div className="stat-val" {...(valueId ? { id: valueId } : {})}>{values[index] ?? value}</div>
+          <div className={`stat-delta ${deltaClass}`} {...(deltaId ? { id: deltaId } : {})}>{deltaId && snapshot.kpis ? snapshot.kpis.periodLabel : delta}</div>
         </div>
       ))}
     </div>
@@ -24106,7 +23885,9 @@ function NotificationContextBannerIsland() {
 }
 
 function NotificationCategoryChipsIsland() {
-  const renderChip = ([filter, value, label, active]: typeof NOTIFICATION_CATEGORY_CHIPS[number] | typeof NOTIFICATION_SEVERITY_CHIPS[number]) => (
+  const location = useLocation()
+  const isAvitoNotificationsRoute = resolveParityRouteTarget(location.pathname, location.search).tab === 'avito-notifications'
+  const renderChip = ([filter, value, label, active]: readonly [string, string, string, boolean]) => (
     <div
       className={active ? 'chip active' : 'chip'}
       data-filter={filter}
@@ -24123,10 +23904,11 @@ function NotificationCategoryChipsIsland() {
     <div
       className="chips"
       id="notifCategoryChips"
+      data-context={isAvitoNotificationsRoute ? 'avito' : undefined}
       data-vella-island="notifications-category-chips"
       data-vella-island-status="explicit-jsx"
     >
-      {NOTIFICATION_CATEGORY_CHIPS.map(renderChip)}
+      {(isAvitoNotificationsRoute ? AVITO_NOTIFICATION_CATEGORY_CHIPS : NOTIFICATION_CATEGORY_CHIPS).map(renderChip)}
       <div className="subtab-divider"></div>
       {NOTIFICATION_SEVERITY_CHIPS.map(renderChip)}
     </div>
@@ -24136,6 +23918,7 @@ function NotificationCategoryChipsIsland() {
 const EMPTY_NOTIFICATIONS_SNAPSHOT: NotificationsSnapshot = {
   rows: [],
   bodyCount: 0,
+  kpis: null,
   detail: null,
   workspace: {
     active: false,
@@ -24549,7 +24332,7 @@ function LegacyNotificationsIsland({ replacementKey }: { replacementKey: string 
       data-vella-island-status="explicit-jsx"
     >
       <div
-        className="notif-page"
+        className={isAvitoNotificationsRoute ? 'notif-page avito-notifications-page' : 'notif-page'}
         id="notifPage"
         data-vella-island="notifications-page"
         data-vella-island-status="explicit-jsx"
@@ -27655,6 +27438,11 @@ function ProductsKpiStripIsland() {
   const ratioMargin = settlement ? window.__vellaProductsSummary?.settlementProfitKopecks : kpi.marginRub == null ? null : window.__vellaProductsSummary?.marginKopecks ?? kpi.marginRub * 100
   const marginRatioValue = kpi.revenueAvailable && kpi.marginAvailable && ratioMargin != null && ratioRevenue !== 0 && (settlement || window.__vellaProductsSummary?.avgMarginPct !== null)
     ? `${(ratioMargin / ratioRevenue * 100).toFixed(1)}%` : '—'
+  const productRows = productsForKpi()
+  const trends: Record<string, ReturnType<typeof productsMetricTrend>> = {
+    kpiOrdersUnits: productsMetricTrend(productRows, 'ordersPeriod', 'previousOrdersPeriod'),
+    kpiBaskets: productsMetricTrend(productRows, 'bsk', 'previousBaskets'),
+  }
   const items = [
     ['Выручка за период', 'WB retailAmount: продажи минус возвраты за выбранный период, до вычета расходов', 'kpiRevenue', revenueValue, revenueDelta],
     [settlement ? 'Маржа, ₽ / %' : 'Маржа репрайсера, ₽ / %', settlement ? 'Окончательная выплата после удержаний WB − датированная себестоимость проданных товаров − налог от продаж. Расходы WB повторно не вычитаются. Процент от текущей выручки. Внутренние расходы компании сейчас исключены.' : 'Прежний расчёт: выручка WB + корректировка за единицу × продажи нетто − себестоимость − расходы − налог. Процент от текущей выручки. Новый контракт выплаты ещё не получен.', 'kpiMarginRub', marginValue, marginDelta],
@@ -27676,7 +27464,7 @@ function ProductsKpiStripIsland() {
       {id === 'kpiMarginRub' ? <div className="stat-val"><span id="kpiMarginRub">{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</span> / <span id="kpiMargin">{loading || unavailable ? '—' : marginRatioValue}</span></div>
         : clickable ? <button type="button" className="stat-val products-kpi-link" id={id} onClick={() => window.goSubtab?.('history')} aria-label="Открыть историю изменений цен">{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</button>
         : <div className="stat-val" id={id}>{loading ? <ProductsInlineLoader /> : unavailable ? '—' : value}</div>}
-      <div className="stat-delta neutral">{delta}</div>
+      <div className={`stat-delta ${trends[id]?.className ?? 'neutral'}`}>{trends[id]?.label ?? delta}</div>
     </div>
   ))
 
@@ -28157,6 +27945,15 @@ function ProductsFilterChipsIsland() {
       >
         ?
       </button>
+      <a
+        className="btn btn-default btn-sm"
+        href="/settings/imports#settings-imports-costs"
+        data-vella-react-handlers="navigation"
+        title="Загрузить XLSX с себестоимостью товаров"
+      >
+        <Upload size={14} />
+        Загрузить себестоимость
+      </a>
     </div>
   )
 }
@@ -40145,6 +39942,7 @@ declare global {
     openCalendarPopover?: (anchor?: HTMLElement) => void
     toggleDD?: (id: string) => void
     toggleReportColumns?: (button: HTMLElement) => void
+    enhanceReportTableSorting?: (table: HTMLTableElement | null) => void
     applyAdvanced?: () => void
     resetAdvancedFilters?: () => void
     applyGenericReportFilter?: (tab: HTMLElement) => void

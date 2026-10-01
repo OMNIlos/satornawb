@@ -14,6 +14,7 @@ from app.cabinet.store import get_organization_avito_credentials_secret, get_use
 from app.config import get_settings
 from app.control_plane.auth import actor_from_request, has_permission
 from app.repricer_cache.store import get_source_cache, save_source_cache
+from app.routers.avito_stats import _cache_key as _stats_cache_key
 
 
 router = APIRouter(tags=["avito-overview"])
@@ -30,6 +31,29 @@ _ERROR_BLOCKERS = frozenset({
     "AVITO_CHATS", "AVITO_REVIEWS", "AVITO_RATINGS_SCOPE", "AVITO_LISTINGS",
     "AVITO_LISTING_DETAILS",
 })
+_STATS_SUMMARY_FIELDS = (
+    "impressions", "views", "contacts", "favorites", "spendKopecks", "orders", "buyouts",
+    "conversionPct", "orderConversionPct", "buyoutPct",
+)
+
+
+def _has_cached_stats(cached: Any) -> bool:
+    if not isinstance(cached, dict) or not isinstance(cached.get("summary"), dict):
+        return False
+    if cached.get("status") == "synced":
+        return True
+    source = cached.get("source") if isinstance(cached.get("source"), dict) else {}
+    sections = source.get("sections") if isinstance(source.get("sections"), dict) else {}
+    stats = sections.get("stats") if isinstance(sections.get("stats"), dict) else {}
+    return stats.get("status") == "synced"
+
+
+def _use_cached_stats(payload: dict[str, Any], cached_stats: dict[str, Any] | None) -> dict[str, Any]:
+    if not cached_stats:
+        return payload
+    payload["summary"].update({key: cached_stats[key] for key in _STATS_SUMMARY_FIELDS if key in cached_stats})
+    payload["source"]["cache"]["stats"] = "hit"
+    return payload
 
 
 def _safe_retry_instant(value: Any) -> str | None:
@@ -251,9 +275,9 @@ def _empty_rate_limited_payload(start: date, end: date, days: int, error: dict[s
             "conversionPct": None,
             "orderConversionPct": None,
             "buyoutPct": None,
-            "totalListings": 0,
-            "activeListings": 0,
-            "inactiveListings": 0,
+            "totalListings": None,
+            "activeListings": None,
+            "inactiveListings": None,
             "removedListings": 0,
             "oldListings": 0,
             "blockedListings": 0,
@@ -407,12 +431,25 @@ def get_avito_overview(
     cached = get_source_cache(actor.organization_id, source_key, slim=False) or None
     rate_limit_key = scoped_avito_cache_key(_rate_limit_key(account_id), access_token)
     active_rate_limit = _active_rate_limit(get_source_cache(actor.organization_id, rate_limit_key, slim=False) or None)
-    if active_rate_limit is not None:
-        if isinstance(cached, dict) and cached.get("summary"):
-            return _stale_cached_payload(cached, {"stats": active_rate_limit})
-        return _empty_rate_limited_payload(start, end, days, active_rate_limit)
-    if not force_refresh and isinstance(cached, dict) and cached.get("summary"):
+    if active_rate_limit is not None and _has_cached_stats(cached):
+        return _stale_cached_payload(cached, {"stats": active_rate_limit})
+    if not force_refresh and _has_cached_stats(cached):
         return _cache_hit_payload(cached)
+    stats_cache = get_source_cache(
+        actor.organization_id,
+        scoped_avito_cache_key(_stats_cache_key(start, end, account_id), access_token),
+        slim=False,
+    ) or None
+    cached_stats = (
+        stats_cache["summary"]
+        if isinstance(stats_cache, dict)
+        and isinstance(stats_cache.get("summary"), dict)
+        and stats_cache.get("rows")
+        and stats_cache.get("status") != "blocked"
+        else None
+    )
+    if active_rate_limit is not None:
+        return _use_cached_stats(_empty_rate_limited_payload(start, end, days, active_rate_limit), cached_stats)
 
     section_errors: dict[str, Any] = {}
     accounts: list[Any] = []
@@ -432,11 +469,11 @@ def get_avito_overview(
         if stats_result.error is not None:
             section_errors["stats"] = _safe_section_error(stats_result.error)
             if _is_rate_limited_error(section_errors["stats"]):
-                _save_rate_limit(actor.organization_id, account_id, access_token, message=section_errors["stats"].get("message"))
+                section_errors["stats"].update(_save_rate_limit(actor.organization_id, account_id, access_token))
     except Exception as exc:
         section_errors["stats"] = _section_error(exc)
         if _is_rate_limited_error(section_errors["stats"]):
-            _save_rate_limit(actor.organization_id, account_id, access_token, message=section_errors["stats"].get("message"))
+            section_errors["stats"].update(_save_rate_limit(actor.organization_id, account_id, access_token))
 
     listings_summary = {
         "total": sum(int(account.itemCount or 0) for account in accounts) or len(stats_rows),
@@ -509,7 +546,7 @@ def get_avito_overview(
     except Exception as exc:
         section_errors["reviews"] = _section_error(exc)
 
-    if isinstance(cached, dict) and cached.get("summary") and section_errors and (not stats_rows or _has_rate_limited_section(section_errors)):
+    if _has_cached_stats(cached) and section_errors and (not stats_rows or _has_rate_limited_section(section_errors)):
         return _stale_cached_payload(cached, section_errors)
 
     impressions = _sum_optional(stats_rows, "impressions")
@@ -533,9 +570,9 @@ def get_avito_overview(
             "conversionPct": _ratio(contacts, views),
             "orderConversionPct": _ratio(orders, contacts),
             "buyoutPct": _ratio(buyouts, orders),
-            "totalListings": listings_summary["total"],
-            "activeListings": listings_summary["active"],
-            "inactiveListings": listings_summary["inactive"],
+            "totalListings": listings_summary["total"] if accounts or stats_rows else None,
+            "activeListings": listings_summary["active"] if accounts or stats_rows else None,
+            "inactiveListings": listings_summary["inactive"] if accounts or stats_rows else None,
             "removedListings": listings_summary["removed"],
             "oldListings": listings_summary["old"],
             "blockedListings": listings_summary["blocked"],
@@ -577,5 +614,8 @@ def get_avito_overview(
             "errors": section_errors,
         },
     }
-    save_source_cache(actor.organization_id, source_key, payload)
+    if "stats" in section_errors and not stats_rows:
+        _use_cached_stats(payload, cached_stats)
+    if stats_result_status == "synced":
+        save_source_cache(actor.organization_id, source_key, payload)
     return payload

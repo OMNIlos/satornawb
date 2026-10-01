@@ -61,7 +61,7 @@ describe('vella source of truth', () => {
     expect(app).toContain('<Route path="/avito" element={<VellaHtmlParityPage />} />')
     expect(app).toContain('<Route path="/avito/reviews" element={<VellaHtmlParityPage />} />')
     expect(app).toContain('<Route path="/avito/orders" element={<VellaHtmlParityPage />} />')
-    expect(app).toContain('<Route path="/avito/listings" element={<VellaHtmlParityPage />} />')
+    expect(app).toContain('<Route path="/avito/listings/*" element={<Navigate to="/avito/repricer" replace />} />')
     expect(app).toContain('<Route path="/avito/stats" element={<VellaHtmlParityPage />} />')
     expect(app).toContain('<Route path="/avito/notifications" element={<VellaHtmlParityPage />} />')
     expect(app).toContain('<Route path="/settings/profile" element={<VellaHtmlParityPage />} />')

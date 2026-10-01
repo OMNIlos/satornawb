@@ -100,7 +100,7 @@ def test_live_avito_listings_items_preserve_status_and_price_from_core_items():
     assert rows[1]["price"] == 2990
 
 
-def test_live_avito_listings_items_fallback_to_public_og_image():
+def test_live_avito_listings_leaves_missing_photos_for_one_time_extension_import():
     http_client = RecordingAvitoItemsHttpClient(
         [
             {
@@ -137,8 +137,8 @@ def test_live_avito_listings_items_fallback_to_public_og_image():
 
     rows = client._items(http_client, [AvitoStatsAccount(accountId="365024549", accountName="Bless T")])
 
-    assert rows[0]["imageUrl"] == "https://img.avito.st/image.jpg"
-    assert http_client.gets[1]["url"] == "https://www.avito.ru/moskva/odezhda/item_8098482225"
+    assert rows[0]["imageUrl"] is None
+    assert len(http_client.gets) == 1
 
 
 class RecordingListingsClient:

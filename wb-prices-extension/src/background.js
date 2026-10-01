@@ -3,6 +3,9 @@ importScripts('contract.js')
 
 const C = WbPricesContract
 const API = 'https://api.elfprint-system.ru/api/v1/wb/browser-prices'
+const PUBLIC_CARD_API = 'https://card.wb.ru/cards/v4/detail'
+const PUBLIC_DESTINATION = '-1257786'
+const PUBLIC_BATCH_SIZE = 100
 const ALARM = 'wb-price-collector'
 const CYCLE_DELAY = 20 * 60 * 1000
 const emptyState = () => ({ status: 'disconnected', reason: null, catalog: null, tabId: null, pageUrl: null,
@@ -296,6 +299,26 @@ async function submit(observations, receivedAt) {
   }
 }
 
+async function collectPublicPrices() {
+  const nmIds = [...new Set(state.catalog.items.filter((item) => !seenFresh(item)).map((item) => item.nmId))]
+  for (let start = 0; start < nmIds.length && !stopped; start += PUBLIC_BATCH_SIZE) {
+    const batch = nmIds.slice(start, start + PUBLIC_BATCH_SIZE)
+    const query = new URLSearchParams({ appType: '1', curr: 'rub', dest: PUBLIC_DESTINATION, lang: 'ru', nm: batch.join(';') })
+    let response
+    try {
+      response = await fetch(`${PUBLIC_CARD_API}?${query}`, { credentials: 'omit', redirect: 'error',
+        headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20000) })
+    } catch { return false }
+    if (!response.ok) return false
+    let payload
+    try { payload = await response.json() } catch { return false }
+    if (!Array.isArray(payload?.products) || payload.products.length > 1000) return false
+    const items = C.parsePublicDetail(payload, batch)
+    if (items.length) await submit(items, Date.now())
+  }
+  return true
+}
+
 async function observe(message, sender, receivedAt) {
   if (state.status !== 'running' || !C.isTrustedPageSender(sender, chrome.runtime.id, state.tabId, state.pageUrl)) return { ok: false, code: 'sender_not_allowed' }
   const observation = C.sanitizePageMessage(message, state.pageUrl)
@@ -381,7 +404,9 @@ async function command(message, generation = controlGeneration) {
       state.accepted = state.ignored = state.unmatched = state.partialSellers = 0
     }
     state.status = 'running'; state.reason = null; state.retryAfterSeconds = state.nextRunAt = state.pendingRequest = null
-    if (message.type === 'resume' && C.pageIdentity(state.pageUrl)) await navigate(state.pageUrl)
+    await collectPublicPrices()
+    const remaining = state.catalog.items.some((item) => !seenFresh(item))
+    if (remaining && message.type === 'resume' && C.pageIdentity(state.pageUrl)) await navigate(state.pageUrl)
     else await nextPage()
   }
   await save()

@@ -47,6 +47,23 @@ test('normal detail nm lists retain recommendations only when their IDs were act
   assert.throws(() => contract().validateCatalogPage({ ...goods, marketplaceAccountId: '2' }, 1, null, now), /catalog_invalid/)
 })
 
+test('public card batches keep only requested exact sizes and positive integer buyer prices', () => {
+  const payload = { trace: 'never-forward', products: [
+    { id: 101, supplierId: 55, sizes: [
+      { optionId: 201, price: { basic: 20000, product: 15000, wallet: 14000 } },
+      { optionId: 202, price: { product: 14000 } },
+    ] },
+    { id: 999, sizes: [{ optionId: 299, price: { product: 10000 } }] },
+  ] }
+  assert.deepEqual(plain(contract().parsePublicDetail(payload, [101, 102])), [
+    { nmId: 101, sizeId: 201, buyerPriceNoWalletKopecks: 15000, supplierId: 55 },
+    { nmId: 101, sizeId: 202, buyerPriceNoWalletKopecks: 14000, supplierId: 55 },
+  ])
+  assert.deepEqual(plain(contract().parsePublicDetail({ products: [{ id: 101, sizes: [
+    { optionId: 201, price: { product: '15000' } },
+  ] }] }, [101])), [])
+})
+
 test('page messages cannot choose seller prices, timestamps, wallet prices or an API destination', () => {
   const result = contract().sanitizePageMessage({ source: 'satorna-wb-prices-v1', type: 'observations', items: [
     { nmId: 1025784485, sizeId: 123, buyerPriceNoWalletKopecks: 130800, buyerPriceWithWalletKopecks: 1, sellerPriceKopecks: 999999, token: 'secret', url: 'https://evil.test', observedAt: '2099-01-01' },

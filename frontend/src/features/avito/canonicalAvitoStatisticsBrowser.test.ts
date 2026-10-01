@@ -77,7 +77,7 @@ it('synthetic Avito statistics: default-off legacy, explicit reads, exact values
         await page.getByRole('heading', { name: 'Synthetic Avito statistics' }).waitFor()
         expect(await page.title()).toBe('Synthetic Avito statistics'); expect(page.url()).toBe(`${origin}/__synthetic-avito`)
         if (!enabled) {
-          await page.getByText('За выбранный период данных нет', { exact: true }).waitFor()
+          await page.getByText('Дневная статистика не получена. Обновите данные, чтобы построить график.', { exact: true }).waitFor()
           expect(legacy).toBe(1); expect(discovery).toBe(0); expect(stats).toEqual([])
           expect(await page.locator('[data-canonical-avito-statistics]').count()).toBe(0)
         } else {

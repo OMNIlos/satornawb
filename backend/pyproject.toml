@@ -18,10 +18,14 @@ dependencies = [
   "psycopg[binary]>=3.2",
   "httpx>=0.28",
   "uvicorn>=0.38",
+  "pypdfium2>=4.30,<6",
+  "zxing-cpp>=2.3,<3",
+  "Pillow>=11,<13",
 ]
 
 [project.optional-dependencies]
 test = [
+  "reportlab>=4,<5",
   "setuptools>=69",
   "wheel",
   "httpx>=0.28",

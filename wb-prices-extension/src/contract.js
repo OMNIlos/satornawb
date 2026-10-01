@@ -52,9 +52,8 @@
     } catch { return false }
   }
 
-  function parseDetail(payload, pageUrl, requestUrl) {
-    if (!isDetailRequest(requestUrl, pageUrl) || !Array.isArray(payload?.products) || payload.products.length > 1000) return []
-    const requested = catalogPage(requestUrl, pageUrl) ? null : new Set(new URL(requestUrl, pageUrl).searchParams.get('nm').split(';').map(Number))
+  function parseProducts(payload, requested) {
+    if (!Array.isArray(payload?.products) || payload.products.length > 1000) return []
     const seen = new Set()
     const items = []
     for (const product of payload.products) {
@@ -71,6 +70,18 @@
       }
     }
     return items
+  }
+
+  function parseDetail(payload, pageUrl, requestUrl) {
+    if (!isDetailRequest(requestUrl, pageUrl)) return []
+    const requested = catalogPage(requestUrl, pageUrl) ? null : new Set(new URL(requestUrl, pageUrl).searchParams.get('nm').split(';').map(Number))
+    return parseProducts(payload, requested)
+  }
+
+  function parsePublicDetail(payload, nmIds) {
+    if (!Array.isArray(nmIds) || !nmIds.length || nmIds.length > 100
+      || nmIds.some((id) => !integer(id)) || new Set(nmIds).size !== nmIds.length) return []
+    return parseProducts(payload, new Set(nmIds))
   }
 
   function sanitizePageMessage(value, page) {
@@ -139,5 +150,5 @@
   }
 
   globalThis.WbPricesContract = Object.freeze({ SOURCE, WB_ORIGIN, integer, key, cardNmId, sellerId, pageIdentity, catalogPage, isDetailRequest,
-    parseDetail, sanitizePageMessage, validateCatalogPage, snapshotItems, isTrustedPopupSender, isTrustedPageSender })
+    parseDetail, parsePublicDetail, sanitizePageMessage, validateCatalogPage, snapshotItems, isTrustedPopupSender, isTrustedPageSender })
 })()

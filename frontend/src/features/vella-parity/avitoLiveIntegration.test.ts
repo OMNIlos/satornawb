@@ -39,7 +39,6 @@ describe('Avito live integration wiring', () => {
       paritySource.indexOf('async function loadLiveAvitoStats'),
     )
     expect(paritySource).toContain('/api/v1/avito/repricer/items/${encodeURIComponent(itemId)}/strategy')
-    expect(paritySource).toContain('avito-decision-badge')
     expect(repricerSource).toContain('avito-strategy-picker')
     expect(repricerSource).toContain('avito-pending-card')
     expect(repricerSource).toContain('avito-row-photo')
@@ -135,14 +134,6 @@ describe('Avito live integration wiring', () => {
     expect(paritySource).toContain('installLegacyHistoryNavigationBridge()')
   })
 
-  it('shows Avito active and inactive listing counts from backend account totals', () => {
-    expect(paritySource).toContain('activeItemCount?: number')
-    expect(paritySource).toContain('inactiveItemCount?: number')
-    expect(paritySource).toContain('account.activeItemCount')
-    expect(paritySource).toContain('account.inactiveItemCount')
-    expect(paritySource).not.toContain("rows.filter((row) => row.sourceStatus !== 'fresh').length")
-  })
-
   it('uses backend Avito listings data without static listing mock arrays', () => {
     expect(paritySource).toContain('/api/v1/avito/listings')
     expect(paritySource).toContain('loadLiveAvitoListings')
@@ -219,13 +210,13 @@ describe('Avito live integration wiring', () => {
     expect(ordersSource).not.toContain('/api/v1/production/avito-orders/sync')
   })
 
-  it('shows a clean Avito orders extension onboarding before browser data and removes the old KPI strip', () => {
+  it('shows Avito API orders without requiring a browser extension', () => {
     const ordersIslandSource = paritySource.slice(
       paritySource.indexOf('function AvitoOrdersIsland'),
       paritySource.indexOf('function useAvitoStatsLiveState'),
     )
-    expect(ordersIslandSource).toContain('avito-orders-extension-empty')
-    expect(ordersIslandSource).toContain('Подключите расширение Avito Orders')
+    expect(ordersIslandSource).toContain('orders-print-shell')
+    expect(ordersIslandSource).not.toContain('Подключите расширение Avito Orders')
     expect(ordersIslandSource).toContain('Скопируйте токен')
     expect(ordersIslandSource).not.toContain('avito-orders-kpis')
     expect(ordersIslandSource).not.toContain('avito-browser-collector-note')

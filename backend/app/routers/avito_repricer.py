@@ -10,13 +10,16 @@ from pydantic import BaseModel, Field
 from app.avito.auth import resolve_user_avito_access_token, scoped_avito_cache_key
 from app.avito.listings import AvitoListingRow, AvitoListingsFetchRequest, build_avito_listings_client
 from app.avito.price_apply import LiveAvitoPriceClient
+from app.avito.repricer_metrics import row_metrics, enrich_comparisons
 from app.cabinet.store import get_organization_avito_credentials_secret, get_user_avito_credentials_secret
 from app.config import get_settings
 from app.control_plane.auth import actor_from_request, has_permission
 from app.repricer_cache.store import get_source_cache, save_source_cache
+from app.routers.avito_listing_photos import router as photos_router
 
 
 router = APIRouter(tags=["avito-repricer"])
+router.include_router(photos_router)
 logger = logging.getLogger(__name__)
 
 AVITO_REPRICER_SETTINGS_KEY = "avito_repricer_settings"
@@ -457,6 +460,7 @@ def _row_payload(row: AvitoListingRow, assignments: dict[str, str] | None = None
     return {
         **row.model_dump(mode="json"),
         **decision,
+        **row_metrics(row.model_dump()),
         "strategyId": strategy["id"],
         "strategyName": strategy["name"],
         "strategyDescription": strategy["description"],
@@ -469,6 +473,8 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "total": len(rows),
         "active": sum(1 for row in rows if row.get("status") == "active"),
+        "blockedListings": sum(1 for row in rows if row.get("status") == "blocked"),
+        "activePriceKopecks": sum(row["priceKopecks"] for row in rows if row.get("status") == "active" and row.get("priceKopecks") is not None),
         "raiseCandidates": sum(1 for row in rows if row.get("strategySignal") == "raise"),
         "lowerCandidates": sum(1 for row in rows if row.get("strategySignal") == "lower"),
         "keepCandidates": sum(1 for row in rows if row.get("strategySignal") == "keep"),
@@ -543,6 +549,7 @@ def _rows_with_current_strategy_assignments(rows: list[Any], assignments: dict[s
         updated_rows.append(
             {
                 **raw,
+                **row_metrics(raw),
                 **_repricer_decision(listing, strategy),
                 "strategyId": strategy["id"],
                 "strategyName": strategy["name"],
@@ -731,6 +738,7 @@ def get_avito_repricer(
     period_days: int = Query(default=30, alias="periodDays", ge=1, le=270),
     account_id: list[str] = Query(default_factory=list, alias="accountId"),
     force_refresh: bool = Query(default=False, alias="forceRefresh"),
+    include_analytics: bool = Query(default=False, alias="includeAnalytics"),
 ) -> dict[str, Any]:
     actor = actor_from_request(request)
     if not has_permission(actor, "cabinet:read"):
@@ -755,12 +763,19 @@ def get_avito_repricer(
         raise HTTPException(status_code=409, detail="AVITO_OAUTH_FAILED") from None
 
     source_key = scoped_avito_cache_key(_cache_key(start, end, account_id), access_token)
+    def enriched(payload):
+        if include_analytics is not True or not payload.get("rows"):
+            return payload
+        client = build_avito_listings_client(access_token=access_token, base_url=settings.avito_api_base_url,
+                                            timeout_seconds=settings.avito_api_timeout_seconds)
+        scope = credentials.client_id + "\0" + credentials.client_secret
+        return enrich_comparisons(payload, actor.organization_id, scope, client)
     cached = get_source_cache(actor.organization_id, source_key, slim=False) or None
     rate_limit_key = scoped_avito_cache_key(_rate_limit_key(account_id), access_token)
     active_rate_limit = _active_rate_limit(get_source_cache(actor.organization_id, rate_limit_key, slim=False) or None)
     if active_rate_limit is not None:
         if isinstance(cached, dict) and cached.get("rows"):
-            return _stale_cached_payload(cached, active_rate_limit, actor.organization_id)
+            return enriched(_stale_cached_payload(cached, active_rate_limit, actor.organization_id))
         return _response_payload(
             status="blocked",
             start=start,
@@ -773,7 +788,7 @@ def get_avito_repricer(
             organization_id=actor.organization_id,
         )
     if not force_refresh and isinstance(cached, dict) and cached.get("rows"):
-        return _cache_hit_payload(cached, actor.organization_id)
+        return enriched(_cache_hit_payload(cached, actor.organization_id))
 
     client = build_avito_listings_client(
         access_token=access_token,
@@ -788,7 +803,7 @@ def get_avito_repricer(
         saved_limit = _save_rate_limit(actor.organization_id, account_id, access_token)
         error_payload = {**_rate_limit_error(), **saved_limit}
         if isinstance(cached, dict) and cached.get("rows"):
-            return _stale_cached_payload(cached, error_payload, actor.organization_id)
+            return enriched(_stale_cached_payload(cached, error_payload, actor.organization_id))
     payload = _response_payload(
         status=result.status,
         start=start,
@@ -802,7 +817,7 @@ def get_avito_repricer(
     )
     if result.status != "blocked":
         save_source_cache(actor.organization_id, source_key, payload)
-    return payload
+    return enriched(payload)
 
 
 @router.get("/api/v1/avito/repricer/strategies")

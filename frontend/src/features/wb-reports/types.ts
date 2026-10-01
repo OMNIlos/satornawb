@@ -429,6 +429,8 @@ export interface DigestResponse {
   periodCards?: Array<{
     id: string
     label: string
+    openCount: number
+    cartCount: number
     ordersUnits: number
     ordersKopecks: number
     salesUnits: number

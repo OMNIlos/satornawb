@@ -10,8 +10,8 @@ const card = (id) => `https://www.wildberries.ru/catalog/${id}/detail.aspx`
 const seller = 'https://www.wildberries.ru/seller/4405572'
 const offer = (nmId, sizeId = 123) => ({ nmId, sizeId, sellerPriceKopecks: 170000, sellerPriceObservedAt: new Date().toISOString() })
 
-function harness({ offers = [offer(1025784485)], postStatuses = [], catalogStatus = 200, catalogStatuses = [], refreshStatus = 200, local = {}, session = {}, existingTabs = [], postGate = null, catalogGate = null, productionEnvelope = false } = {}) {
-  const calls = []; const access = []; const timers = new Map(); let timerId = 0
+function harness({ offers = [offer(1025784485)], postStatuses = [], catalogStatus = 200, catalogStatuses = [], refreshStatus = 200, publicStatus = 403, local = {}, session = {}, existingTabs = [], postGate = null, publicGate = null, catalogGate = null, productionEnvelope = false } = {}) {
+  const calls = []; const publicCalls = []; const access = []; const timers = new Map(); let timerId = 0
   const tabs = new Map([[7, { id: 7, url: 'https://example.test', active: true }], ...existingTabs.map((tab) => [tab.id, clone(tab)])])
   const alarms = new Map()
   const navigations = []; const scrolls = []; const removed = []
@@ -40,6 +40,20 @@ function harness({ offers = [offer(1025784485)], postStatuses = [], catalogStatu
     },
   }
   const fetch = async (url, options) => {
+    if (url.startsWith('https://card.wb.ru/cards/v4/detail?')) {
+      publicCalls.push({ url, ...clone({ ...options, signal: undefined }) })
+      if (publicGate) { const gate = publicGate; publicGate = null; gate.started(); await gate.wait }
+      assert.equal(options.credentials, 'omit')
+      assert.equal(options.redirect, 'error')
+      assert.equal(options.headers.Authorization, undefined)
+      const requested = new URL(url).searchParams.get('nm').split(';').map(Number)
+      const products = requested.map((nmId) => {
+        const item = offers.find((candidate) => candidate.nmId === nmId)
+        return item ? { id: nmId, supplierId: 4405572,
+          sizes: [{ optionId: item.sizeId, price: { basic: 190000, product: 130800, wallet: 0 } }] } : null
+      }).filter(Boolean)
+      return { ok: publicStatus === 200, status: publicStatus, json: async () => ({ products }) }
+    }
     calls.push({ url, ...clone({ ...options, signal: undefined }) })
     assert.ok(url.startsWith(`${API}/`), 'requests stay on the fixed CRM API')
     assert.equal(options.credentials, 'omit')
@@ -70,7 +84,7 @@ function harness({ offers = [offer(1025784485)], postStatuses = [], catalogStatu
     const body = JSON.parse(options.body)
     return { ok: status === 200, status, json: async () => ({ ok: true, accepted: body.items.length, ignored: 0, observedAt: new Date().toISOString(), forbiddenEcho: 'must-not-render' }) }
   }
-  const context = vm.createContext({ chrome, fetch, URL, Date, Object, Number, Promise, AbortSignal,
+  const context = vm.createContext({ chrome, fetch, URL, URLSearchParams, Date, Object, Number, Promise, AbortSignal,
     setTimeout: (fn, delay) => { timers.set(++timerId, { fn, delay }); return timerId }, clearTimeout: (id) => timers.delete(id) })
   context.importScripts = (path) => vm.runInContext(readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8'), context)
   const path = new URL('../src/background.js', import.meta.url)
@@ -83,7 +97,7 @@ function harness({ offers = [offer(1025784485)], postStatuses = [], catalogStatu
     return send({ source: 'satorna-wb-prices-v1', type: 'observations', ...message }, { id: 'ext', frameId: 0, url: tab?.url, tab: clone(tab ?? {}), ...overrides })
   }
   const fire = (delay) => { const entry = [...timers].find(([, timer]) => timer.delay === delay); assert.ok(entry); timers.delete(entry[0]); return entry[1].fn() }
-  return { popup, page, calls, local, session, access, tabs, navigations, scrolls, removed, timers, alarms,
+  return { popup, page, calls, publicCalls, local, session, access, tabs, navigations, scrolls, removed, timers, alarms,
     closeOwned: () => removedListener(100),
     fire, tick: async (delay) => { await fire(delay); await popup({ type: 'status' }) },
     alarm: async () => { assert.equal(typeof alarmListener, 'function'); await alarmListener({ name: 'wb-price-collector', scheduledTime: Date.now() }); return popup({ type: 'status' }) },
@@ -97,6 +111,51 @@ function gate() {
   const entered = new Promise((resolve) => { started = resolve })
   return { wait, release, started, entered }
 }
+
+test('public card batches submit exact buyer prices without opening product pages', async () => {
+  const offers = Array.from({ length: 101 }, (_, index) => offer(1000 + index, 5000 + index))
+  const h = harness({ offers, publicStatus: 200 })
+  await h.popup({ type: 'connect', token: TOKEN })
+  const result = await h.popup({ type: 'start' })
+  assert.equal(result.state.status, 'waiting')
+  assert.equal(result.state.observedOffers, 101)
+  assert.equal(h.navigations.length, 0)
+  assert.equal(h.publicCalls.length, 2)
+  assert.deepEqual(h.publicCalls.map(({ url }) => {
+    const parsed = new URL(url)
+    return {
+      origin: parsed.origin, path: parsed.pathname, appType: parsed.searchParams.get('appType'),
+      currency: parsed.searchParams.get('curr'), destination: parsed.searchParams.get('dest'),
+      language: parsed.searchParams.get('lang'), count: parsed.searchParams.get('nm').split(';').length,
+    }
+  }), [
+    { origin: 'https://card.wb.ru', path: '/cards/v4/detail', appType: '1', currency: 'rub', destination: '-1257786', language: 'ru', count: 100 },
+    { origin: 'https://card.wb.ru', path: '/cards/v4/detail', appType: '1', currency: 'rub', destination: '-1257786', language: 'ru', count: 1 },
+  ])
+  const posted = h.calls.filter((call) => call.url.endsWith('/snapshots')).flatMap((call) => JSON.parse(call.body).items)
+  assert.equal(posted.length, 101)
+  assert.deepEqual(posted.at(-1), {
+    nmId: 1100, sizeId: 5100, sellerPriceKopecks: 170000,
+    buyerPriceNoWalletKopecks: 130800, buyerPriceWithWalletKopecks: null,
+    observedAt: posted.at(-1).observedAt,
+  })
+})
+
+test('stop during a public card request submits nothing and stays user-stopped', async () => {
+  const publicGate = gate()
+  const h = harness({ publicStatus: 200, publicGate })
+  await h.popup({ type: 'connect', token: TOKEN })
+  const started = h.popup({ type: 'start' })
+  await publicGate.entered
+  const stopped = h.popup({ type: 'stop' })
+  publicGate.release()
+  await started; await stopped
+  const state = (await h.popup({ type: 'status' })).state
+  assert.equal(state.status, 'paused')
+  assert.equal(state.reason, 'user_stopped')
+  assert.equal(h.calls.filter((call) => call.url.endsWith('/snapshots')).length, 0)
+  assert.equal(h.navigations.length, 0)
+})
 
 test('production error envelope invokes one refresh and respects HTTP Retry-After', async () => {
   const h = harness({ catalogStatuses: [409, 200], productionEnvelope: true })

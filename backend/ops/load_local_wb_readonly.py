@@ -35,14 +35,14 @@ def allowed_request(request):
             and (request.method, request.url.host, request.url.path) in ALLOWED)
 
 
-def install_readonly_network_guard(original_connect, original_connect_ex):
+def install_readonly_network_guard(original_connect, original_connect_ex, *, request_allowed=allowed_request):
     """Only allow sockets inside an explicitly allowlisted synchronous HTTP call."""
     import httpx
     original_send = httpx.Client.send
     scope = threading.local()
     def guarded_send(client, request, **kwargs):
-        if not allowed_request(request):
-            raise RuntimeError("LOCAL_WB_READ_ENDPOINT_NOT_ALLOWED")
+        if not request_allowed(request):
+            raise RuntimeError("LOCAL_READ_ENDPOINT_NOT_ALLOWED")
         kwargs["follow_redirects"] = False
         previous = getattr(scope, "allowed", False)
         scope.allowed = True
