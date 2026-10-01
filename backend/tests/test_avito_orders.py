@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import xml.etree.ElementTree as ET
-from datetime import date
+from datetime import date, datetime, timezone
 from io import BytesIO
 from zipfile import ZipFile
 
@@ -667,6 +667,10 @@ def test_avito_orders_extension_token_regeneration_revokes_previous_token(monkey
 
 
 def test_avito_orders_picking_list_xlsx_matches_avito_order_rows(monkeypatch):
+    fixture = RecordingOrdersClient().fetch_orders(AvitoOrdersFetchRequest(date_from=date.today()))
+    cached = {'complete': True, 'lastSuccessfulRefresh': datetime.now(timezone.utc).isoformat(),
+              'rows': [row.model_dump(mode='json') for row in fixture.orders]}
+    monkeypatch.setattr('app.routers.avito_orders.get_source_cache', lambda org, key, **kw: cached if key.startswith('avito_orders_queue_v1') else None)
     monkeypatch.setattr(
         "app.routers.avito_orders._listing_dicts_from_cache",
         lambda *_args: [{
@@ -717,36 +721,20 @@ def test_avito_orders_picking_list_xlsx_matches_avito_order_rows(monkeypatch):
     assert "avito-picking-list-" in response.headers["content-disposition"]
     assert _xlsx_sheet_names(response.content) == ["Лист подбора"]
     cells = _xlsx_cells(response.content)
-    assert cells["A1"].startswith("Снимок: ")
-    assert cells["A2"] == "Лист подбора Авито"
-    assert cells["A4"] == "Количество позиций: 1"
-    assert [cells[f"{column}5"] for column in "ABCDEFGHIJKLM"] == [
-        "Номер заказа",
-        "№ задания",
-        "Номер отправления",
-        "Фото",
-        "Бренд",
-        "Наименование",
-        "Кол-во",
-        "Размер",
-        "Цвет",
-        "Артикул продавца",
-        "Доставка",
-        "Стикер",
-        "Баркод",
+    assert [cells[f"{column}1"] for column in "ABCDEFGHIJ"] == [
+        "№", "Фото", "Наименование", "Размер", "Цвет", "Количество, шт.",
+        "Номер отправления", "Стикер", "Номер заказа", "ID товара Авито",
     ]
-    assert cells["A6"] == "ord_1"
-    assert cells["B6"] == "123456"
-    assert cells["C6"] == "—"
-    assert cells["E6"] == "—"
-    assert cells["F6"] == "Худи черный размер M"
-    assert cells["H6"] == "—"
-    assert cells["I6"] == "—"
-    assert cells["J6"] == "BT-42"
-    assert cells["L6"] == "—"
-    assert cells["M6"] == "—"
-    assert recording_client is not None
-    assert recording_client.requests[0].statuses == []
+    assert cells["A2"] == "1"
+    assert cells["B2"] == "Фото не получено"
+    assert cells["C2"] == "Худи черный размер M"
+    assert cells["D2"] == "Не получено"
+    assert cells["E2"] == "Не получено"
+    assert cells["F2"] == "1"
+    assert cells["G2"] == "Не собрано"
+    assert cells["H2"] == "Этикетка не получена"
+    assert cells["I2"] == "123456"
+    assert recording_client is None  # No provider client or full sync during export.
 
 
 def test_avito_orders_picking_list_xlsx_uses_browser_snapshot(monkeypatch):
@@ -800,7 +788,10 @@ def test_avito_orders_picking_list_xlsx_uses_browser_snapshot(monkeypatch):
     )
     monkeypatch.setattr("app.routers.avito_orders.get_organization_avito_credentials_secret", lambda _organization_id: None)
     monkeypatch.setattr("app.routers.avito_orders.resolve_user_avito_access_token", lambda **_kwargs: "avito-bearer-token")
-    monkeypatch.setattr("app.routers.avito_orders.get_source_cache", lambda organization_id, key, **_kwargs: cache.get((organization_id, key)))
+    fixture = RecordingOrdersClient().fetch_orders(AvitoOrdersFetchRequest(date_from=date.today()))
+    queue = {'complete': True, 'lastSuccessfulRefresh': datetime.now(timezone.utc).isoformat(),
+             'rows': [row.model_dump(mode='json') for row in fixture.orders]}
+    monkeypatch.setattr("app.routers.avito_orders.get_source_cache", lambda organization_id, key, **_kwargs: queue if key.startswith('avito_orders_queue_v1') else cache.get((organization_id, key)))
     api = TestClient(create_app())
 
     response = api.get(
@@ -810,9 +801,9 @@ def test_avito_orders_picking_list_xlsx_uses_browser_snapshot(monkeypatch):
 
     assert response.status_code == 200
     cells = _xlsx_cells(response.content)
-    assert cells["H6"] == "XL"
-    assert cells["I6"] == "молочный"
-    assert cells["J6"] == "BT-42"
+    assert cells["D2"] == "XL"
+    assert cells["E2"] == "молочный"
+    assert cells["J2"] == "8098482225"
 
 
 def test_avito_orders_endpoint_ignores_blocked_cache_and_refetches(monkeypatch):

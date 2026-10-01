@@ -12,8 +12,8 @@ from app.avito.orders import (
 )
 
 
-ACTIVE_STATUSES = {"on_confirmation", "ready_to_ship", "in_transit", "delivered", "on_return", "in_dispute"}
-HISTORY_STATUSES = {"closed", "canceled"}
+ACTIVE_STATUSES = {"on_confirmation", "ready_to_ship", "in_transit", "on_return", "in_dispute"}
+HISTORY_STATUSES = {"delivered", "closed", "canceled"}
 PICKUP_RETURN_STATUSES = {"ready_for_pickup", "ready_to_pickup", "pickup_ready", "can_pickup"}
 INBOUND_RETURN_STATUSES = {"started", "in_transit", "return_in_transit", "on_the_way"}
 

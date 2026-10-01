@@ -7,6 +7,7 @@ import secrets
 from threading import Lock
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
@@ -23,7 +24,11 @@ from app.avito.orders import (
     merge_browser_snapshot_orders,
 )
 from app.avito.orders_ai import enrich_avito_orders_snapshot_with_ai
-from app.avito.orders_picking_xlsx import build_avito_orders_picking_xlsx
+from app.avito.orders_picking_xlsx import build_avito_orders_picking_xlsx, picking_issues, _load_image
+from app.avito.images_store import load_product_image
+from app.avito.labels_store import enrich_labels, read_artifact, save_pdf
+from app.avito.labels_pdf import MAX_PDF_BYTES
+from starlette.concurrency import run_in_threadpool
 from app.avito.orders_queue import fetch_full_queue, select_queue
 from app.avito.returns import AvitoReturnCandidate, extract_return_candidates, match_return_candidates
 from app.avito.returns_store import (
@@ -103,6 +108,74 @@ def _extension_bearer_token(request: Request) -> str | None:
         return None
     raw = token.strip()
     return raw if raw.startswith("sat_avito_") else None
+
+
+def _label_organization(request: Request) -> int:
+    token = _extension_bearer_token(request)
+    if token:
+        organization_id = _resolve_extension_token_organization(token)
+        if organization_id is None:
+            raise HTTPException(401, "AVITO_EXTENSION_TOKEN_INVALID")
+        return organization_id
+    actor = actor_from_request(request)
+    if not has_permission(actor, "cabinet:read"):
+        raise HTTPException(403, "NO_ACCESS:cabinet:read")
+    return actor.organization_id
+
+
+class LabelCollectionStatus(BaseModel):
+    stage: Literal["opening", "selecting", "waiting_pdf", "downloading", "uploading", "error"]
+
+
+@router.get("/api/v1/avito/orders/labels/collection-context")
+def get_label_collection_context(request: Request):
+    organization_id = _label_organization(request)
+    snapshot = _browser_snapshot_from_cache(organization_id)
+    return {"accountIds": sorted({row.accountId or "" for row in snapshot.orders}) if snapshot else [],
+            "status": get_source_cache(organization_id, "avito_label_collection", slim=False)}
+
+
+@router.post("/api/v1/avito/orders/labels/collection-status")
+def save_label_collection_status(request: Request, status: LabelCollectionStatus):
+    organization_id = _label_organization(request)
+    # Never accept URLs, exception dumps, cookies or arbitrary diagnostics.
+    previous = get_source_cache(organization_id, "avito_label_collection", slim=False) or {}
+    save_source_cache(organization_id, "avito_label_collection", {"stage": status.stage, "lastStage": previous.get("stage") if status.stage == "error" else status.stage, "updatedAt": _now_iso()})
+    return {"ok": True}
+
+
+@router.post("/api/v1/avito/orders/labels/import")
+async def import_avito_labels(request: Request, account_id: str = Query(default="", alias="accountId", max_length=128)):
+    organization_id = _label_organization(request)
+    if request.headers.get("content-type", "").split(";")[0] != "application/pdf":
+        raise HTTPException(415, "AVITO_LABEL_PDF_REQUIRED")
+    content = bytearray()
+    async for chunk in request.stream():
+        content.extend(chunk)
+        if len(content) > MAX_PDF_BYTES:
+            raise HTTPException(413, "AVITO_LABEL_PDF_TOO_LARGE")
+    try:
+        result = await run_in_threadpool(save_pdf, organization_id, account_id, bytes(content))
+        save_source_cache(organization_id, "avito_label_collection", {"stage": "complete" if result["labels"] else "review", "labels": result["labels"], "updatedAt": _now_iso()})
+        return result
+    except (ValueError, RuntimeError):
+        raise HTTPException(422, "AVITO_LABEL_PDF_UNREADABLE") from None
+
+
+@router.get("/api/v1/avito/orders/labels/{label_id}/barcode.png")
+def get_avito_label_barcode(request: Request, label_id: int):
+    data = read_artifact(_label_organization(request), label_id)
+    if data is None:
+        raise HTTPException(404, "AVITO_LABEL_NOT_FOUND")
+    return Response(data, media_type="image/png", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/api/v1/avito/orders/label-documents/{document_id}.pdf")
+def get_avito_label_original(request: Request, document_id: int):
+    data = read_artifact(_label_organization(request), document_id, original=True)
+    if data is None:
+        raise HTTPException(404, "AVITO_LABEL_NOT_FOUND")
+    return Response(data, media_type="application/pdf", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Content-Disposition": 'attachment; filename="avito-labels.pdf"'})
 
 
 def _hash_extension_token(token: str) -> str:
@@ -607,13 +680,24 @@ def _browser_snapshot_payload(
     return payload
 
 
-def _orders_client_for_request(request: Request):
+def _orders_credentials_for_request(request: Request):
     actor = actor_from_request(request)
     if not has_permission(actor, "cabinet:read"):
         raise HTTPException(status_code=403, detail="NO_ACCESS:cabinet:read")
     credentials = get_user_avito_credentials_secret(actor.user_id) or get_organization_avito_credentials_secret(actor.organization_id)
     if credentials is None:
         raise HTTPException(status_code=409, detail="AVITO_CREDENTIALS_REQUIRED")
+    return actor, credentials
+
+
+def _saved_queue_for_export(request: Request):
+    actor, credentials = _orders_credentials_for_request(request)
+    key = scoped_avito_cache_key(AVITO_ORDERS_QUEUE_KEY, f"{credentials.client_id}\0{credentials.client_secret}")
+    return actor, get_source_cache(actor.organization_id, key, slim=False) or {}
+
+
+def _orders_client_for_request(request: Request):
+    actor, credentials = _orders_credentials_for_request(request)
 
     settings = get_settings()
     try:
@@ -630,6 +714,11 @@ def _orders_client_for_request(request: Request):
         access_token=access_token,
         base_url=settings.avito_api_base_url,
         timeout_seconds=settings.avito_api_timeout_seconds,
+    )
+    # Same credential-generation boundary as notification read marks. OAuth
+    # refresh must not orphan durable queue data; changing credentials must.
+    client.queue_cache_key = scoped_avito_cache_key(
+        AVITO_ORDERS_QUEUE_KEY, f"{credentials.client_id}\0{credentials.client_secret}",
     )
     return actor, client, access_token
 
@@ -793,6 +882,19 @@ def _queue_cache_key(access_token: str) -> str:
     return scoped_avito_cache_key(AVITO_ORDERS_QUEUE_KEY, access_token)
 
 
+def _read_queue_cache(organization_id: int, access_token: str, client: Any) -> tuple[str, dict[str, Any]]:
+    legacy_key = _queue_cache_key(access_token)
+    key = getattr(client, "queue_cache_key", legacy_key)
+    cached = get_source_cache(organization_id, key, slim=False)
+    if cached is None and key != legacy_key:
+        # Only migrate the exact currently authenticated token's cache. Never
+        # enumerate another credential/account's historical cache entries.
+        cached = get_source_cache(organization_id, legacy_key, slim=False)
+        if cached is not None:
+            save_source_cache(organization_id, key, cached)
+    return key, cached or {}
+
+
 def _queue_cached_rows(payload: dict[str, Any]) -> list[AvitoOrderRow]:
     return [AvitoOrderRow.model_validate(value) for value in payload.get("rows") or [] if isinstance(value, dict)]
 
@@ -826,8 +928,7 @@ def _queue_age_seconds(payload: dict[str, Any], now: datetime) -> float:
 
 
 def _load_orders_queue(organization_id: int, access_token: str, client: Any, *, force: bool = False) -> dict[str, Any]:
-    key = _queue_cache_key(access_token)
-    cached = get_source_cache(organization_id, key, slim=False) or {}
+    key, cached = _read_queue_cache(organization_id, access_token, client)
     now = datetime.now(timezone.utc)
     try:
         retry_after = datetime.fromisoformat(str(cached.get("retryAfter") or "").replace("Z", "+00:00"))
@@ -904,7 +1005,7 @@ def get_avito_orders_queue(
     force_refresh: bool = Query(default=False, alias="forceRefresh"),
 ) -> dict[str, Any]:
     actor, client, access_token = _orders_client_for_request(request)
-    cached = get_source_cache(actor.organization_id, _queue_cache_key(access_token), slim=False) or {}
+    _, cached = _read_queue_cache(actor.organization_id, access_token, client)
     now = datetime.now(timezone.utc)
     if force_refresh or not cached.get("complete") or _queue_age_seconds(cached, now) >= 300:
         try:
@@ -917,6 +1018,9 @@ def get_avito_orders_queue(
             background_tasks.add_task(_load_orders_queue, actor.organization_id, access_token, client, force=force_refresh)
             cached = {**cached, "complete": False, "error": {"code": "refresh_in_progress", "retryable": True}}
     all_rows = _queue_cached_rows(cached)
+    # Uploaded details must be visible without re-fetching the marketplace queue.
+    merge_browser_snapshot_orders(all_rows, _browser_snapshot_from_cache(actor.organization_id))
+    enrich_labels(all_rows, actor.organization_id)
     selected = select_queue(all_rows, mode, account_id)
     if mode == "return_pickup":
         selected = _pickup_unreceived(selected, actor.organization_id, account_id)
@@ -951,6 +1055,7 @@ def get_avito_orders_queue(
             "error": cached.get("error"),
             "retryAfter": cached.get("retryAfter"),
             "browserSnapshot": _browser_snapshot_meta(_browser_snapshot_from_cache(actor.organization_id)),
+            "labelCollection": get_source_cache(actor.organization_id, "avito_label_collection", slim=False),
         },
     }
 
@@ -1162,8 +1267,35 @@ def get_avito_orders(
 def get_avito_orders_picking_list_xlsx(
     request: Request,
     account_id: str | None = Query(default=None, alias="accountId"),
+    search: str = Query(default="", max_length=200),
+    ready_only: bool = Query(default=False, alias="readyOnly"),
 ) -> Response:
-    return _queue_xlsx_response(request, mode="ready_to_ship", account_id=account_id)
+    return _queue_xlsx_response(request, mode="ready_to_ship", account_id=account_id, search=search, ready_only=ready_only)
+
+
+@router.get("/api/v1/avito/orders/picking-list/preview")
+def get_avito_picking_preview(request: Request, account_id: str | None = Query(default=None, alias="accountId"), search: str = Query(default="", max_length=200)):
+    actor, client, access_token = _orders_client_for_request(request)
+    _, cached = _read_queue_cache(actor.organization_id, access_token, client)
+    if not cached.get("complete") or _queue_age_seconds(cached, datetime.now(timezone.utc)) > 600:
+        raise HTTPException(status_code=503, detail="AVITO_ORDERS_QUEUE_NOT_FRESH")
+    rows = _queue_cached_rows(cached)
+    merge_browser_snapshot_orders(rows, _browser_snapshot_from_cache(actor.organization_id))
+    enrich_labels(rows, actor.organization_id)
+    rows = _filter_picking_search(select_queue(rows, "ready_to_ship", account_id), search)
+    excluded = [{"orderId": row.orderId, "number": row.marketplaceId, "issues": picking_issues(row)} for row in rows if picking_issues(row)]
+    return {"orders": len(rows), "units": sum(item.quantity for row in rows for item in row.items),
+            "ready": len(rows) - len(excluded), "excluded": excluded, "asOf": cached["lastSuccessfulRefresh"]}
+
+
+def _filter_picking_search(rows: list[AvitoOrderRow], search: str) -> list[AvitoOrderRow]:
+    needle = search.strip().casefold()
+    if not needle:
+        return rows
+    return [row for row in rows if needle in " ".join(
+        [row.orderId, row.marketplaceId or "", row.jobNumber or "", row.shipmentNumber or "", row.trackNumber or "", row.buyerName or ""]
+        + [item.title + " " + (item.sellerArticle or "") + " " + (item.itemId or "") for item in row.items]
+    ).casefold()]
 
 
 @router.get("/api/v1/avito/orders/returns-list.xlsx")
@@ -1174,18 +1306,30 @@ def get_avito_orders_returns_list_xlsx(
     return _queue_xlsx_response(request, mode="return_pickup", account_id=account_id)
 
 
-def _queue_xlsx_response(request: Request, *, mode: str, account_id: str | None) -> Response:
-    actor, client, access_token = _orders_client_for_request(request)
-    cached = _load_orders_queue(actor.organization_id, access_token, client)
-    if not cached.get("complete") or _queue_age_seconds(cached, datetime.now(timezone.utc)) > 600:
-        raise HTTPException(status_code=503, detail={"code": "AVITO_ORDERS_QUEUE_NOT_FRESH", "sourceError": cached.get("error")})
-    rows = select_queue(_queue_cached_rows(cached), mode, account_id)
+def _queue_xlsx_response(request: Request, *, mode: str, account_id: str | None, search: str = "", ready_only: bool = False) -> Response:
+    # Export is a database read, never an OAuth request/full provider sync.
+    # Export the saved snapshot even during refresh/provider outage. Freshness
+    # is disclosed in the application; the workbook contains only the table.
+    actor, cached = _saved_queue_for_export(request)
+    if "rows" not in cached:
+        raise HTTPException(status_code=404, detail="AVITO_ORDERS_NO_SAVED_SNAPSHOT")
+    all_rows = _queue_cached_rows(cached)
+    merge_browser_snapshot_orders(all_rows, _browser_snapshot_from_cache(actor.organization_id))
+    enrich_labels(all_rows, actor.organization_id)
+    rows = select_queue(all_rows, mode, account_id)
+    rows = _filter_picking_search(rows, search)
+    if ready_only:
+        rows = [row for row in rows if not picking_issues(row)]
+        if not rows:
+            raise HTTPException(status_code=409, detail="AVITO_PICKING_NO_READY_ORDERS")
     if mode == "return_pickup":
         rows = _pickup_unreceived(rows, actor.organization_id, account_id)
-    as_of = str(cached["lastSuccessfulRefresh"])
-    content = build_avito_orders_picking_xlsx(rows, date_from=date.today(), as_of=as_of, returns=mode == "return_pickup")
+    as_of = str(cached.get("lastSuccessfulRefresh") or "Время обновления неизвестно")
+    content = build_avito_orders_picking_xlsx(rows, date_from=date.today(), as_of=as_of, returns=mode == "return_pickup",
+        label_loader=lambda label_id: read_artifact(actor.organization_id, label_id),
+        image_loader=lambda url: load_product_image(actor.organization_id, url, _load_image))
     name = "returns" if mode == "return_pickup" else "picking"
-    filename = f"avito-{name}-list-{as_of[:10]}.xlsx"
+    filename = f"avito-{name}-list-{date.today().isoformat()}.xlsx"
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

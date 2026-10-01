@@ -8,6 +8,10 @@ function visibleIdsFor(role: Parameters<typeof visibleNavigationForRole>[0]) {
 }
 
 describe('navigation role visibility', () => {
+  it('keeps repricer as the only Avito listing workspace', () => {
+    expect(findNavItemByPath('/avito/listings')).toBeUndefined()
+    expect(findNavItemByPath('/avito/repricer')?.id).toBe('avito-repricer')
+  })
   it('keeps production orders and returns available without the removed marking workspace', () => {
     for (const role of ['admin', 'production'] as const) {
       const ids = visibleIdsFor(role)

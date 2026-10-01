@@ -164,7 +164,7 @@ function RoutedApp() {
               <Route path="/avito/messages" element={<VellaHtmlParityPage />} />
               <Route path="/avito/orders" element={<VellaHtmlParityPage />} />
               <Route path="/avito/orders/archive" element={<VellaHtmlParityPage />} />
-              <Route path="/avito/listings" element={<VellaHtmlParityPage />} />
+              <Route path="/avito/listings/*" element={<Navigate to="/avito/repricer" replace />} />
               <Route path="/avito/repricer" element={<VellaHtmlParityPage />} />
               <Route path="/avito/reviews" element={<VellaHtmlParityPage />} />
               <Route path="/avito/stats" element={<VellaHtmlParityPage />} />
@@ -189,8 +189,6 @@ function RoutedApp() {
               <Route element={<AppShell />}>
                 <Route path="/avito/accounts" element={<ComingSoon />} />
                 <Route path="/avito/chat-bot" element={<ComingSoon />} />
-                <Route path="/avito/listings/manage" element={<ComingSoon />} />
-                <Route path="/avito/listings/photo-gen" element={<ComingSoon />} />
                 <Route path="/avito/wallets" element={<ComingSoon />} />
 
                 <Route path="/orders" element={<OrdersPrintListPage />} />

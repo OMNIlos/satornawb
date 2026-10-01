@@ -209,6 +209,31 @@ def test_live_avito_chats_client_keeps_chats_when_messages_endpoint_fails():
     assert "chat-1" not in str(result.diagnostics["messagesFailed"])
 
 
+@pytest.mark.parametrize("failure", [httpx.ReadTimeout("private URL"), RuntimeError("LOCAL_READ_ENDPOINT_NOT_ALLOWED"), ValueError("private payload")])
+def test_message_failure_does_not_erase_other_chats(monkeypatch, failure):
+    http_client = RecordingAvitoChatsHttpClient([
+        {"id": 123, "name": "Test account"},
+        {"chats": [
+            {"id": "u2i~synthetic", "last_message": {"type": "text", "content": {"text": "Last preview"}}},
+            {"id": "second-chat"},
+        ]},
+    ])
+    client = LiveAvitoChatsClient(access_token="synthetic")
+    def messages(_http, _account, chat_id):
+        if chat_id == "u2i~synthetic":
+            raise failure
+        return [AvitoMessageRow(messageId="message", chatId=chat_id, text="Second chat loaded")]
+    monkeypatch.setattr(client, "_messages", messages)
+    result = client.fetch_chats(AvitoChatsFetchRequest(), http_client=http_client)
+    assert result.status == "synced"
+    assert len(result.chats) == 2
+    assert result.messages["u2i~synthetic"][0].text == "Last preview"
+    assert result.messages["second-chat"][0].text == "Second chat loaded"
+    assert len(result.diagnostics["messagesFailed"]) == 1
+    assert "private" not in str(result.diagnostics)
+    assert "u2i~synthetic" not in str(result.diagnostics)
+
+
 def test_live_avito_chats_client_preserves_send_access_errors():
     http_client = RecordingAvitoChatsHttpClient([{"id": 365024549}, ({"error": {"message": "subscription required"}}, 403)])
     client = LiveAvitoChatsClient(access_token="token", base_url="https://api.avito.ru")

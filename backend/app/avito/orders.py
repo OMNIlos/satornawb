@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timezone
 from typing import Any, Literal, Protocol
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 from app.modules.orders import MappingState, map_avito_status
@@ -106,6 +107,10 @@ class AvitoOrderRow(BaseModel):
     address: str | None = None
     trackNumber: str | None = None
     stickerNumber: str | None = None
+    stickerNumberState: str | None = None
+    stickerBarcodeType: str | None = None
+    stickerLabelId: int | None = None
+    stickerDocumentId: int | None = None
     shipmentNumber: str | None = None
     shipmentNumberSource: str | None = None
     shipmentNumberObservedAt: str | None = None
@@ -291,6 +296,23 @@ def _browser_item_matches(item: AvitoOrderItem, browser_item: AvitoOrdersBrowser
 
 
 def _merge_browser_item(item: AvitoOrderItem, browser_item: AvitoOrdersBrowserItem) -> None:
+    fields = ("size", "color", "imageUrl", "sellerArticle", "brand")
+    original = {field: getattr(item, field) for field in fields}
+    listing_matches = _same_identity(item.itemId, browser_item.itemId)
+    sources = dict(browser_item.sources)
+    # v0.2 collectors omitted provenance for details-page photos and color.
+    # Accept only a matched item, retain the weaker evidence explicitly, and
+    # never replace a known ordered variant with these legacy values.
+    if listing_matches and browser_item.color and not sources.get('color'):
+        sources['color'] = 'browser_unspecified'
+    if listing_matches and browser_item.imageUrl and not sources.get('imageUrl'):
+        try:
+            image = urlsplit(browser_item.imageUrl)
+            if image.scheme == 'https' and not image.username and not image.password and image.port in (None, 443) and (image.hostname or '').endswith('.img.avito.st'):
+                sources['imageUrl'] = 'browser_unspecified'
+        except ValueError:
+            pass
+    browser_item = browser_item.model_copy(update={'sources': sources})
     if browser_item.itemId and not item.itemId:
         item.itemId = browser_item.itemId
     if browser_item.title and (not item.title or item.title in {"Товар", "Товар Авито"}):
@@ -303,16 +325,19 @@ def _merge_browser_item(item: AvitoOrderItem, browser_item: AvitoOrdersBrowserIt
         item.sellerArticle = browser_item.sellerArticle
     if browser_item.brand and not item.brand and browser_item.sources.get("brand") in {"order_row", "order_detail"}:
         item.brand = browser_item.brand
-    if browser_item.size and not item.size and browser_item.sources.get("size") in {"order_row", "order_detail"}:
+    if browser_item.size and not item.size and (browser_item.sources.get("size") in {"order_row", "order_detail", "chat_ai"} or (listing_matches and browser_item.sources.get("size") in {"description", "description_fallback"})):
         item.size = browser_item.size
     if browser_item.descriptionSize:
         item.descriptionSize = browser_item.descriptionSize
-    if browser_item.sources:
-        item.sources = {**item.sources, **browser_item.sources}
-    if browser_item.color and not item.color and browser_item.sources.get("color") in {"order_row", "order_detail"}:
+        if not original['size'] and browser_item.sources.get('size') == 'description_fallback':
+            item.sources['size'] = 'description_fallback'
+    if browser_item.color and not item.color and (browser_item.sources.get("color") in {"order_row", "order_detail"} or (listing_matches and browser_item.sources.get("color") in {"listing", "browser_unspecified"})):
         item.color = browser_item.color
-    if browser_item.imageUrl and not item.imageUrl and browser_item.sources.get("imageUrl") in {"order_row", "order_detail"}:
+    if browser_item.imageUrl and not item.imageUrl and (browser_item.sources.get("imageUrl") in {"order_row", "order_detail"} or (listing_matches and browser_item.sources.get("imageUrl") in {"listing", "browser_unspecified"})):
         item.imageUrl = browser_item.imageUrl
+    for field in fields:
+        if not original[field] and getattr(item, field) and browser_item.sources.get(field):
+            item.sources[field] = browser_item.sources[field]
 
 
 def merge_browser_snapshot_orders(rows: list[AvitoOrderRow], snapshot: AvitoOrdersBrowserSnapshot | None) -> None:
