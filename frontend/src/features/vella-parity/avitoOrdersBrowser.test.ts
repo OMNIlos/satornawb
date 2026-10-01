@@ -22,13 +22,14 @@ beforeAll(async () => {
   code = chunk.code
 }, 60_000)
 
-it.each(['populated', 'empty', 'error'])('renders read-only Avito Orders %s with one request owner', async outcome => {
+it.each(['populated', 'populated-no-extension', 'empty', 'error'])('renders read-only Avito Orders %s with one request owner', async outcome => {
   const browser = await chromium.launch({ headless: true })
   try {
     const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
     await page.clock.setFixedTime(new Date('2026-09-09T12:00:00Z'))
     const queries: string[] = [], auxiliary: string[] = [], unexpected: string[] = [], errors: string[] = []
     let phase = 'initial'
+    const populated = outcome.startsWith('populated')
     const queryPhases: string[] = []
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
@@ -47,7 +48,6 @@ it.each(['populated', 'empty', 'error'])('renders read-only Avito Orders %s with
       queries.push(url.search)
       queryPhases.push(phase)
       if (outcome === 'error') return route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":{"code":"SYNTHETIC_ORDERS_UNAVAILABLE","message":"Synthetic Orders unavailable"}}' })
-      const populated = outcome === 'populated'
       // Full required AvitoOrdersBackendResponse/AvitoOrderRow/AvitoOrderItem fields from the consumer.
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
         status: 'synced', period: { dateFrom: url.searchParams.get('dateFrom'), days: 30 },
@@ -62,7 +62,7 @@ it.each(['populated', 'empty', 'error'])('renders read-only Avito Orders %s with
           items: [{ itemId: 'synthetic-item-1', title: 'Synthetic read-only order product', quantity: 1, priceKopecks: 450000,
             sellerArticle: 'SYNTHETIC-ORDER-SKU', size: 'M', color: 'Synthetic blue', imageUrl: null, returnMatches: [], reuseSuggestion: null }],
         }] : [],
-        source: { browserSnapshot: { capturedAt: '2026-09-09T12:00:00Z', orders: populated ? 1 : 0, items: populated ? 1 : 0, collector: {} } },
+        source: { browserSnapshot: outcome === 'populated' ? { capturedAt: '2026-09-09T12:00:00Z', orders: 1, items: 1, collector: {} } : null },
       }) })
     })
     await page.goto('http://satorna.test/avito/orders')
@@ -75,9 +75,13 @@ it.each(['populated', 'empty', 'error'])('renders read-only Avito Orders %s with
     expect([query.get('dateFrom'), query.get('periodDays'), query.get('page'), query.get('limit'), query.get('status'), query.get('forceRefresh')])
       .toEqual(['2026-08-11', '30', '1', '20', null, null])
     const surface = page.locator('#tab-orders-print')
-    if (outcome === 'populated') {
+    if (populated) {
       await surface.getByText('Synthetic read-only order product', { exact: true }).first().waitFor({ timeout: 15_000 })
       expect(await surface.innerText()).toContain('SYNTHETIC-ORDER-SKU')
+      expect(await surface.locator('.avito-orders-extension-empty').isVisible()).toBe(false)
+      await surface.getByRole('button', { name: 'Открыть', exact: true }).click()
+      await surface.locator('.avito-order-detail-window').waitFor({ state: 'visible' })
+      await surface.locator('.avito-order-detail-window').getByRole('button', { name: 'Закрыть' }).click()
       const beforeLogout = [...queries]
       phase = 'logout'
       await page.getByRole('button', { name: 'Clear synthetic report session', exact: true }).click()
@@ -90,9 +94,8 @@ it.each(['populated', 'empty', 'error'])('renders read-only Avito Orders %s with
       })
       expect(auxiliary).toHaveLength(2)
     } else if (outcome === 'empty') {
-      // Characterize the existing zero-row onboarding policy; do not invent a
-      // new empty-snapshot product policy while repairing request/error ownership.
-      await surface.locator('.avito-orders-extension-empty').waitFor({ state: 'visible' })
+      await surface.getByText('Нет позиций для подбора', { exact: true }).waitFor({ state: 'visible' })
+      expect(await surface.getByRole('button', { name: /Обновить данные/ }).isVisible()).toBe(true)
       expect(await surface.getByText('Synthetic read-only order product', { exact: true }).count()).toBe(0)
     } else {
       const expectedTitle = 'Не удалось загрузить заказы'

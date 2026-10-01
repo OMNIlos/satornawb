@@ -219,13 +219,13 @@ describe('Avito live integration wiring', () => {
     expect(ordersSource).not.toContain('/api/v1/production/avito-orders/sync')
   })
 
-  it('shows a clean Avito orders extension onboarding before browser data and removes the old KPI strip', () => {
+  it('shows Avito API orders without requiring a browser extension', () => {
     const ordersIslandSource = paritySource.slice(
       paritySource.indexOf('function AvitoOrdersIsland'),
       paritySource.indexOf('function useAvitoStatsLiveState'),
     )
-    expect(ordersIslandSource).toContain('avito-orders-extension-empty')
-    expect(ordersIslandSource).toContain('Подключите расширение Avito Orders')
+    expect(ordersIslandSource).toContain('orders-print-shell')
+    expect(ordersIslandSource).not.toContain('Подключите расширение Avito Orders')
     expect(ordersIslandSource).toContain('Скопируйте токен')
     expect(ordersIslandSource).not.toContain('avito-orders-kpis')
     expect(ordersIslandSource).not.toContain('avito-browser-collector-note')

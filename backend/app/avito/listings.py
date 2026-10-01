@@ -88,6 +88,9 @@ def _normalize_status(value: Any) -> AvitoListingStatus:
 
 
 class LiveAvitoListingsClient(LiveAvitoStatsClient):
+    # Photos are imported once by the extension and served from the database.
+    # Loading repricer statistics must never scrape each public listing page.
+    _PUBLIC_IMAGE_FETCH_LIMIT = 0
     """Read-only Avito listings registry with period item analytics."""
 
     def fetch_listings(self, request: AvitoListingsFetchRequest) -> AvitoListingsFetchResult:

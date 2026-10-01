@@ -1,7 +1,9 @@
-"""Isolated local UI/API preview. No external network, workers or credentials.
+"""Isolated local UI/API preview. No workers or provider mutations.
 
 Run from backend with the project's Python. Uses the existing development
 schema bootstrap, not production migrations. Register a local account in UI.
+Default denies all outbound traffic. --avito-readonly permits Avito OAuth and
+explicit reads using credentials saved by the user, retaining preview.sqlite.
 """
 from pathlib import Path
 import os
@@ -31,7 +33,12 @@ os.environ.update(
 # button click. Listening and accepting localhost HTTP do not use connect().
 def deny_connect(*args, **kwargs):
     raise OSError("External actions disabled in isolated local preview")
-if "--wb-readonly-data" in sys.argv:
+if "--avito-readonly" in sys.argv:
+    from load_local_wb_readonly import install_readonly_network_guard
+    from local_avito_readonly import allowed_request
+    install_readonly_network_guard(socket.socket.connect, socket.socket.connect_ex,
+                                   request_allowed=allowed_request)
+elif "--wb-readonly-data" in sys.argv:
     from load_local_wb_readonly import install_readonly_network_guard
     install_readonly_network_guard(socket.socket.connect, socket.socket.connect_ex)
 else:

@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timezone
 from typing import Any, Literal, Protocol
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
+from app.modules.orders import MappingState, map_avito_status
 
 try:
     import httpx
@@ -48,11 +50,16 @@ class AvitoReturnMatch(BaseModel):
     status: str = "on_return"
     returnStatus: str | None = None
     lastSeenAt: str | None = None
+    returnItemId: int | None = None
+    availableQuantity: int = 0
+    receivedQuantity: int = 0
+    inspectedQuantity: int = 0
 
 
 class AvitoOrdersFetchRequest(BaseModel):
     dateFrom: date | None = None
     statuses: list[str] = Field(default_factory=list)
+    ids: list[str] = Field(default_factory=list)
     limit: int = Field(default=20, ge=1, le=20)
     page: int = Field(default=1, ge=1)
 
@@ -64,15 +71,18 @@ class AvitoOrderAction(BaseModel):
 
 class AvitoOrderItem(BaseModel):
     itemId: str | None = None
+    lineIndex: int | None = Field(default=None, ge=0)
     title: str = "Товар Авито"
     quantity: int = Field(default=1, ge=0)
     priceKopecks: int | None = Field(default=None, ge=0)
     sellerArticle: str | None = None
+    brand: str | None = None
     size: str | None = None
     descriptionSize: str | None = None
     sources: dict[str, str | None] = Field(default_factory=dict)
     color: str | None = None
     imageUrl: str | None = None
+    barcode: str | None = None
     returnMatches: list[AvitoReturnMatch] = Field(default_factory=list)
     reuseSuggestion: AvitoReturnMatch | None = None
 
@@ -80,9 +90,12 @@ class AvitoOrderItem(BaseModel):
 class AvitoOrderRow(BaseModel):
     orderId: str = Field(min_length=1)
     marketplaceId: str | None = None
+    jobNumber: str | None = None
     accountId: str | None = None
     accountName: str | None = None
     status: str = "unknown"
+    rawStatus: str | None = None
+    canonicalStatus: str | None = None
     deliveryType: str | None = None
     deliveryService: str | None = None
     createdAt: str | None = None
@@ -93,7 +106,26 @@ class AvitoOrderRow(BaseModel):
     recipientName: str | None = None
     address: str | None = None
     trackNumber: str | None = None
+    stickerNumber: str | None = None
+    stickerNumberState: str | None = None
+    stickerBarcodeType: str | None = None
+    stickerLabelId: int | None = None
+    stickerDocumentId: int | None = None
+    shipmentNumber: str | None = None
+    shipmentNumberSource: str | None = None
+    shipmentNumberObservedAt: str | None = None
+    shipmentNumberFetchedAt: str | None = None
+    shipmentNumberState: str | None = None
+    shipmentNumberHistory: list[dict[str, str | None]] = Field(default_factory=list)
+    statusSource: str | None = None
+    statusObservedAt: str | None = None
+    statusFetchedAt: str | None = None
     returnStatus: str | None = None
+    returnStatusSource: str | None = None
+    returnStatusObservedAt: str | None = None
+    returnPickupPlace: str | None = None
+    returnPickupDeadline: str | None = None
+    returnPickupCode: str | None = None
     totalKopecks: int | None = Field(default=None, ge=0)
     items: list[AvitoOrderItem] = Field(default_factory=list)
     availableActions: list[AvitoOrderAction] = Field(default_factory=list)
@@ -103,11 +135,13 @@ class AvitoOrderRow(BaseModel):
 
 class AvitoOrdersBrowserItem(BaseModel):
     itemId: str | None = None
+    lineIndex: int | None = Field(default=None, ge=0)
     title: str | None = None
     itemUrl: str | None = None
     quantity: int | None = Field(default=None, ge=0)
     priceKopecks: int | None = Field(default=None, ge=0)
     sellerArticle: str | None = None
+    brand: str | None = None
     size: str | None = None
     descriptionSize: str | None = None
     sources: dict[str, str | None] = Field(default_factory=dict)
@@ -121,11 +155,18 @@ class AvitoOrdersBrowserItem(BaseModel):
 class AvitoOrdersBrowserOrder(BaseModel):
     orderId: str | None = None
     marketplaceId: str | None = None
+    jobNumber: str | None = None
     accountId: str | None = None
     accountName: str | None = None
     status: str | None = None
     deliveryService: str | None = None
     trackNumber: str | None = None
+    shipmentNumber: str | None = None
+    shipmentNumberState: str | None = None
+    returnPickupPlace: str | None = None
+    returnPickupDeadline: str | None = None
+    returnPickupCode: str | None = None
+    returnStatus: str | None = None
     buyerName: str | None = None
     recipientName: str | None = None
     pageUrl: str | None = None
@@ -240,6 +281,8 @@ def _same_identity(left: str | None, right: str | None) -> bool:
 
 
 def _browser_order_matches(row: AvitoOrderRow, browser_order: AvitoOrdersBrowserOrder) -> bool:
+    if row.accountId and browser_order.accountId and not _same_identity(row.accountId, browser_order.accountId):
+        return False
     return (
         _same_identity(row.orderId, browser_order.orderId)
         or _same_identity(row.marketplaceId, browser_order.marketplaceId)
@@ -247,36 +290,54 @@ def _browser_order_matches(row: AvitoOrderRow, browser_order: AvitoOrdersBrowser
 
 
 def _browser_item_matches(item: AvitoOrderItem, browser_item: AvitoOrdersBrowserItem) -> bool:
-    if _same_identity(item.itemId, browser_item.itemId):
-        return True
-    if item.title and browser_item.title and item.title.strip().lower() == browser_item.title.strip().lower():
-        return True
-    return False
+    return _same_identity(item.itemId, browser_item.itemId) and (
+        item.lineIndex is None or browser_item.lineIndex is None or item.lineIndex == browser_item.lineIndex
+    )
 
 
 def _merge_browser_item(item: AvitoOrderItem, browser_item: AvitoOrdersBrowserItem) -> None:
+    fields = ("size", "color", "imageUrl", "sellerArticle", "brand")
+    original = {field: getattr(item, field) for field in fields}
+    listing_matches = _same_identity(item.itemId, browser_item.itemId)
+    sources = dict(browser_item.sources)
+    # v0.2 collectors omitted provenance for details-page photos and color.
+    # Accept only a matched item, retain the weaker evidence explicitly, and
+    # never replace a known ordered variant with these legacy values.
+    if listing_matches and browser_item.color and not sources.get('color'):
+        sources['color'] = 'browser_unspecified'
+    if listing_matches and browser_item.imageUrl and not sources.get('imageUrl'):
+        try:
+            image = urlsplit(browser_item.imageUrl)
+            if image.scheme == 'https' and not image.username and not image.password and image.port in (None, 443) and (image.hostname or '').endswith('.img.avito.st'):
+                sources['imageUrl'] = 'browser_unspecified'
+        except ValueError:
+            pass
+    browser_item = browser_item.model_copy(update={'sources': sources})
     if browser_item.itemId and not item.itemId:
         item.itemId = browser_item.itemId
     if browser_item.title and (not item.title or item.title in {"Товар", "Товар Авито"}):
         item.title = browser_item.title
-    if browser_item.quantity is not None:
+    if browser_item.quantity is not None and not item.quantity:
         item.quantity = max(0, browser_item.quantity)
-    if browser_item.priceKopecks is not None:
+    if browser_item.priceKopecks is not None and item.priceKopecks is None and browser_item.sources.get("priceKopecks") in {"order_row", "order_detail"}:
         item.priceKopecks = browser_item.priceKopecks
-    if browser_item.sellerArticle:
+    if browser_item.sellerArticle and not item.sellerArticle and browser_item.sources.get("sellerArticle") in {"order_row", "order_detail"}:
         item.sellerArticle = browser_item.sellerArticle
-    if browser_item.size:
+    if browser_item.brand and not item.brand and browser_item.sources.get("brand") in {"order_row", "order_detail"}:
+        item.brand = browser_item.brand
+    if browser_item.size and not item.size and (browser_item.sources.get("size") in {"order_row", "order_detail", "chat_ai"} or (listing_matches and browser_item.sources.get("size") in {"description", "description_fallback"})):
         item.size = browser_item.size
     if browser_item.descriptionSize:
         item.descriptionSize = browser_item.descriptionSize
-    if browser_item.sources:
-        item.sources = {**item.sources, **browser_item.sources}
-    if browser_item.color:
+        if not original['size'] and browser_item.sources.get('size') == 'description_fallback':
+            item.sources['size'] = 'description_fallback'
+    if browser_item.color and not item.color and (browser_item.sources.get("color") in {"order_row", "order_detail"} or (listing_matches and browser_item.sources.get("color") in {"listing", "browser_unspecified"})):
         item.color = browser_item.color
-    else:
-        item.color = None
-    if browser_item.imageUrl:
+    if browser_item.imageUrl and not item.imageUrl and (browser_item.sources.get("imageUrl") in {"order_row", "order_detail"} or (listing_matches and browser_item.sources.get("imageUrl") in {"listing", "browser_unspecified"})):
         item.imageUrl = browser_item.imageUrl
+    for field in fields:
+        if not original[field] and getattr(item, field) and browser_item.sources.get(field):
+            item.sources[field] = browser_item.sources[field]
 
 
 def merge_browser_snapshot_orders(rows: list[AvitoOrderRow], snapshot: AvitoOrdersBrowserSnapshot | None) -> None:
@@ -291,18 +352,60 @@ def merge_browser_snapshot_orders(rows: list[AvitoOrderRow], snapshot: AvitoOrde
             row.accountName = browser_order.accountName
         if browser_order.deliveryService and not row.deliveryService:
             row.deliveryService = browser_order.deliveryService
+        if browser_order.jobNumber and not row.jobNumber:
+            row.jobNumber = browser_order.jobNumber
+        if browser_order.returnStatus and snapshot.capturedAt and row.returnStatusSource != "avito_api":
+            observed = _parsed_time(snapshot.capturedAt)
+            previous = _parsed_time(row.returnStatusObservedAt)
+            if observed and (not previous or observed >= previous):
+                row.returnStatus = browser_order.returnStatus
+                row.returnStatusSource = "browser_return_instruction"
+                row.returnStatusObservedAt = snapshot.capturedAt
+        for field in ("returnPickupPlace", "returnPickupDeadline", "returnPickupCode"):
+            if getattr(browser_order, field) and not getattr(row, field):
+                setattr(row, field, getattr(browser_order, field))
         if browser_order.trackNumber and not row.trackNumber:
             row.trackNumber = browser_order.trackNumber
+        if browser_order.shipmentNumber and snapshot.capturedAt and row.shipmentNumberState != "ambiguous":
+            observed = _parsed_time(snapshot.capturedAt)
+            previous = _parsed_time(row.shipmentNumberObservedAt)
+            if observed and (not previous or observed >= previous):
+                number = " ".join(browser_order.shipmentNumber.split())
+                if row.shipmentNumber and row.shipmentNumber != number:
+                    row.shipmentNumberHistory.append({
+                        "number": row.shipmentNumber, "source": row.shipmentNumberSource,
+                        "observedAt": row.shipmentNumberObservedAt,
+                    })
+                row.shipmentNumber = number
+                row.shipmentNumberSource = "browser_order_instruction"
+                row.shipmentNumberObservedAt = snapshot.capturedAt
+                row.shipmentNumberFetchedAt = datetime.now(timezone.utc).isoformat()
+                row.shipmentNumberState = "confirmed"
+        elif browser_order.shipmentNumberState == "ambiguous" and not row.shipmentNumber:
+            row.shipmentNumberState = "ambiguous"
         if browser_order.buyerName and not row.buyerName:
             row.buyerName = browser_order.buyerName
         if browser_order.recipientName and not row.recipientName:
             row.recipientName = browser_order.recipientName
+        duplicate_ids = {item.itemId for item in row.items if item.itemId and sum(other.itemId == item.itemId for other in row.items) > 1}
         for item in row.items:
             browser_item = next((candidate for candidate in browser_order.items if _browser_item_matches(item, candidate)), None)
-            if browser_item is None and len(row.items) == 1 and len(browser_order.items) == 1:
+            if item.itemId in duplicate_ids and browser_item and browser_item.lineIndex is None:
+                browser_item = None
+            if browser_item is None and len(row.items) == 1 and len(browser_order.items) == 1 and (not item.itemId or not browser_order.items[0].itemId):
                 browser_item = browser_order.items[0]
             if browser_item is not None:
                 _merge_browser_item(item, browser_item)
+
+
+def _parsed_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def _param_value(raw: dict[str, Any], *names: str) -> str | None:
@@ -360,6 +463,8 @@ class LiveAvitoOrdersClient:
             params["dateFrom"] = _date_to_unix_start(request.dateFrom)
         if request.statuses:
             params["statuses"] = ",".join(request.statuses)
+        if request.ids:
+            params["ids"] = ",".join(request.ids)
         url = f"{self.base_url}/order-management/1/orders"
         response = client.get(url, params=params, headers=self._headers())
         status_code = int(getattr(response, "status_code", 200) or 200)
@@ -429,24 +534,32 @@ class LiveAvitoOrdersClient:
     @staticmethod
     def _total(payload: Any, fallback: int) -> int:
         if not isinstance(payload, dict):
-            return fallback
+            return 0
         result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-        return _int_or_none(payload.get("total") or payload.get("totalCount") or result.get("total") or result.get("totalCount")) or fallback
+        return _int_or_none(payload.get("total") or payload.get("totalCount") or result.get("total") or result.get("totalCount")) or 0
 
     def _order_row(self, raw: dict[str, Any]) -> AvitoOrderRow:
         delivery = _first_dict(raw, "delivery", "shipment", "logistics")
+        shipments = raw.get("shipments") or delivery.get("shipments")
         buyer = _first_dict(raw, "buyer", "customer")
         recipient = _first_dict(raw, "recipient", "receiver")
         return_policy = raw.get("returnPolicy") if isinstance(raw.get("returnPolicy"), dict) else {}
         items = self._items(raw)
         order_id = str(raw.get("id") or raw.get("orderId") or raw.get("order_id") or raw.get("uuid") or "")
         seller = _first_dict(raw, "seller", "shop", "store", "merchant")
+        raw_status = str(raw.get("status") or "unknown")
+        mapped_status = map_avito_status(raw_status)
+        fetched_at = datetime.now(timezone.utc).isoformat()
+        observed_at = _iso_from_any(raw.get("updatedAt") or raw.get("updated_at") or raw.get("updated")) or fetched_at
         return AvitoOrderRow(
             orderId=order_id,
             marketplaceId=str(raw.get("marketplaceId") or raw.get("marketplace_id") or raw.get("number") or "") or None,
+            jobNumber=_text_or_none(raw.get("jobNumber"), raw.get("job_number")),
             accountId=str(raw.get("accountId") or raw.get("userId") or raw.get("sellerId") or "") or None,
             accountName=_text_or_none(raw.get("accountName"), raw.get("sellerName"), raw.get("shopName"), raw.get("storeName"), seller.get("name"), seller.get("title")),
-            status=str(raw.get("status") or "unknown"),
+            status=raw_status if mapped_status.mapping_state is MappingState.MAPPED else "unknown",
+            rawStatus=raw_status,
+            canonicalStatus=mapped_status.canonical_status.value if mapped_status.canonical_status else None,
             deliveryType=str(delivery.get("type") or delivery.get("serviceType") or raw.get("deliveryType") or raw.get("delivery_type") or "") or None,
             deliveryService=str(delivery.get("service") or delivery.get("serviceName") or raw.get("deliveryService") or "") or None,
             createdAt=_iso_from_any(raw.get("createdAt") or raw.get("created_at") or raw.get("created")),
@@ -457,7 +570,17 @@ class LiveAvitoOrdersClient:
             recipientName=str(recipient.get("name") or raw.get("recipientName") or "") or None,
             address=self._address(raw, delivery),
             trackNumber=str(delivery.get("trackNumber") or delivery.get("trackingNumber") or raw.get("trackNumber") or raw.get("trackingNumber") or "") or None,
+            stickerNumber=_text_or_none(delivery.get("stickerNumber"), raw.get("stickerNumber")),
+            shipmentNumberState="ambiguous" if isinstance(shipments, list) and len(shipments) > 1 else None,
+            statusSource="avito_api",
+            statusObservedAt=observed_at,
+            statusFetchedAt=fetched_at,
             returnStatus=str(return_policy.get("returnStatus") or return_policy.get("status") or raw.get("returnStatus") or "") or None,
+            returnStatusSource="avito_api" if return_policy.get("returnStatus") or return_policy.get("status") or raw.get("returnStatus") else None,
+            returnStatusObservedAt=observed_at,
+            returnPickupPlace=_text_or_none(return_policy.get("pickupPlace"), return_policy.get("pickupAddress")),
+            returnPickupDeadline=_iso_from_any(return_policy.get("pickupDeadline") or return_policy.get("pickupUntil")),
+            returnPickupCode=_text_or_none(return_policy.get("pickupCode"), return_policy.get("returnCode")),
             totalKopecks=_money_kopecks(raw.get("prices"), raw.get("total"), raw.get("totalPrice"), raw.get("amount"), raw.get("price")),
             items=items,
             availableActions=self._actions(raw),
@@ -481,15 +604,17 @@ class LiveAvitoOrdersClient:
             item = raw.get("item") if isinstance(raw.get("item"), dict) else {}
             rows = [item] if item else []
         result: list[AvitoOrderItem] = []
-        for row in rows:
+        for line_index, row in enumerate(rows):
             if not isinstance(row, dict):
                 continue
             seller = _first_dict(row, "seller", "shop", "store", "merchant")
+            quantity = _int_or_none(row.get("quantity") if "quantity" in row else row.get("count"))
             result.append(
                 AvitoOrderItem(
                     itemId=str(row.get("id") or row.get("itemId") or row.get("avitoId") or "") or None,
+                    lineIndex=line_index,
                     title=str(row.get("title") or row.get("name") or "Товар Авито"),
-                    quantity=_int_or_none(row.get("quantity") or row.get("count")) or 1,
+                    quantity=1 if quantity is None else quantity,
                     priceKopecks=_money_kopecks(row.get("prices"), row.get("price"), row.get("total"), row.get("amount")),
                     sellerArticle=_text_or_none(
                         row.get("sellerArticle"),
@@ -506,9 +631,11 @@ class LiveAvitoOrdersClient:
                         seller.get("sellerArticle"),
                         _param_value(row, "Артикул продавца", "sellerArticle", "seller_sku", "vendorCode"),
                     ),
+                    brand=_text_or_none(row.get("brand"), _param_value(row, "Бренд", "brand")),
                     size=_text_or_none(row.get("size"), _param_value(row, "Размер", "size")),
                     color=_text_or_none(row.get("color"), _param_value(row, "Цвет", "color")),
                     imageUrl=self._image(row),
+                    barcode=_text_or_none(row.get("barcode"), row.get("barCode")),
                 )
             )
         return result

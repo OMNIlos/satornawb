@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import xml.etree.ElementTree as ET
-from datetime import date
+from datetime import date, datetime, timezone
 from io import BytesIO
 from zipfile import ZipFile
 
@@ -76,6 +76,11 @@ def test_live_avito_orders_client_gets_order_management_orders_and_normalizes_ro
     assert result.orders[0].items[0].quantity == 2
     assert result.orders[0].availableActions[0].name == "confirm"
     assert result.orders[0].availableActions[0].required is True
+
+
+def test_zero_quantity_is_not_turning_into_one_item():
+    items = LiveAvitoOrdersClient("token")._items({"items": [{"id": "returned-line", "quantity": 0}]})
+    assert items[0].quantity == 0
 
 
 def test_live_avito_orders_client_returns_safe_diagnostics_on_avito_error():
@@ -224,6 +229,7 @@ class RecordingOrdersClient:
                     marketplaceId="123456",
                     accountName="Bless T",
                     status="ready_to_ship",
+                    statusSource="avito_api",
                     deliveryType="pvz",
                     trackNumber="TRACK-1",
                     totalKopecks=159_000,
@@ -393,8 +399,11 @@ def test_avito_orders_endpoint_adds_return_reuse_suggestion(monkeypatch):
                 size="M",
                 color="white",
                 status="on_return",
-                returnStatus="started",
+                returnStatus="ready_for_pickup",
                 lastSeenAt="2026-08-07T09:00:00+00:00",
+                receivedQuantity=1,
+                inspectedQuantity=1,
+                availableQuantity=1,
             )
         ],
     )
@@ -466,6 +475,7 @@ def test_avito_orders_browser_snapshot_enriches_live_rows(monkeypatch):
                             "sellerArticle": "BT-42-BROWSER",
                             "size": "L",
                             "color": "графит",
+                            "sources": {"imageUrl": "order_row", "sellerArticle": "order_detail", "size": "order_detail", "color": "order_detail"},
                         }
                     ],
                 }
@@ -483,7 +493,7 @@ def test_avito_orders_browser_snapshot_enriches_live_rows(monkeypatch):
     payload = response.json()
     item = payload["rows"][0]["items"][0]
     assert item["imageUrl"] == "https://70.img.avito.st/image.jpg"
-    assert item["sellerArticle"] == "BT-42-BROWSER"
+    assert item["sellerArticle"] == "BT-42"
     assert item["size"] == "L"
     assert item["color"] == "графит"
     assert payload["summary"]["total"] == 1
@@ -657,6 +667,10 @@ def test_avito_orders_extension_token_regeneration_revokes_previous_token(monkey
 
 
 def test_avito_orders_picking_list_xlsx_matches_avito_order_rows(monkeypatch):
+    fixture = RecordingOrdersClient().fetch_orders(AvitoOrdersFetchRequest(date_from=date.today()))
+    cached = {'complete': True, 'lastSuccessfulRefresh': datetime.now(timezone.utc).isoformat(),
+              'rows': [row.model_dump(mode='json') for row in fixture.orders]}
+    monkeypatch.setattr('app.routers.avito_orders.get_source_cache', lambda org, key, **kw: cached if key.startswith('avito_orders_queue_v1') else None)
     monkeypatch.setattr(
         "app.routers.avito_orders._listing_dicts_from_cache",
         lambda *_args: [{
@@ -704,33 +718,23 @@ def test_avito_orders_picking_list_xlsx_matches_avito_order_rows(monkeypatch):
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    assert "avito-picking-list-2026-07-01.xlsx" in response.headers["content-disposition"]
+    assert "avito-picking-list-" in response.headers["content-disposition"]
     assert _xlsx_sheet_names(response.content) == ["Лист подбора"]
     cells = _xlsx_cells(response.content)
-    assert cells["A1"] == "Дата: 01.07.2026"
-    assert cells["A2"] == "Лист подбора Авито"
-    assert cells["A4"] == "Количество товаров: 1"
-    assert [cells[f"{column}5"] for column in "ABCDEFGHI"] == [
-        "№ задания",
-        "Фото",
-        "Бренд",
-        "Наименование",
-        "Размер",
-        "Цвет",
-        "Артикул продавца",
-        "Стикер",
-        "Баркод",
+    assert [cells[f"{column}1"] for column in "ABCDEFGHIJ"] == [
+        "№", "Фото", "Наименование", "Размер", "Цвет", "Количество, шт.",
+        "Номер отправления", "Стикер", "Номер заказа", "ID товара Авито",
     ]
-    assert cells["A6"] == "123456"
-    assert cells["C6"] == "Bless T"
-    assert cells["D6"] == "Худи черный размер M"
-    assert cells["E6"] == "M"
-    assert cells["F6"] == "черный"
-    assert cells["G6"] == "BT-42"
-    assert cells["H6"] == "TRACK-1"
-    assert cells["I6"] == "8098482225"
-    assert recording_client is not None
-    assert recording_client.requests[0].statuses == ["ready_to_ship"]
+    assert cells["A2"] == "1"
+    assert cells["B2"] == "Фото не получено"
+    assert cells["C2"] == "Худи черный размер M"
+    assert cells["D2"] == "Не получено"
+    assert cells["E2"] == "Не получено"
+    assert cells["F2"] == "1"
+    assert cells["G2"] == "Не собрано"
+    assert cells["H2"] == "Этикетка не получена"
+    assert cells["I2"] == "123456"
+    assert recording_client is None  # No provider client or full sync during export.
 
 
 def test_avito_orders_picking_list_xlsx_uses_browser_snapshot(monkeypatch):
@@ -752,6 +756,7 @@ def test_avito_orders_picking_list_xlsx_uses_browser_snapshot(monkeypatch):
                             "sellerArticle": "BT-42-XLSX",
                             "size": "XL",
                             "color": "молочный",
+                            "sources": {"imageUrl": "order_row", "sellerArticle": "order_detail", "size": "order_detail", "color": "order_detail"},
                         }
                     ],
                 }
@@ -783,7 +788,10 @@ def test_avito_orders_picking_list_xlsx_uses_browser_snapshot(monkeypatch):
     )
     monkeypatch.setattr("app.routers.avito_orders.get_organization_avito_credentials_secret", lambda _organization_id: None)
     monkeypatch.setattr("app.routers.avito_orders.resolve_user_avito_access_token", lambda **_kwargs: "avito-bearer-token")
-    monkeypatch.setattr("app.routers.avito_orders.get_source_cache", lambda organization_id, key, **_kwargs: cache.get((organization_id, key)))
+    fixture = RecordingOrdersClient().fetch_orders(AvitoOrdersFetchRequest(date_from=date.today()))
+    queue = {'complete': True, 'lastSuccessfulRefresh': datetime.now(timezone.utc).isoformat(),
+             'rows': [row.model_dump(mode='json') for row in fixture.orders]}
+    monkeypatch.setattr("app.routers.avito_orders.get_source_cache", lambda organization_id, key, **_kwargs: queue if key.startswith('avito_orders_queue_v1') else cache.get((organization_id, key)))
     api = TestClient(create_app())
 
     response = api.get(
@@ -793,9 +801,9 @@ def test_avito_orders_picking_list_xlsx_uses_browser_snapshot(monkeypatch):
 
     assert response.status_code == 200
     cells = _xlsx_cells(response.content)
-    assert cells["E6"] == "XL"
-    assert cells["F6"] == "молочный"
-    assert cells["G6"] == "BT-42-XLSX"
+    assert cells["D2"] == "XL"
+    assert cells["E2"] == "молочный"
+    assert cells["J2"] == "8098482225"
 
 
 def test_avito_orders_endpoint_ignores_blocked_cache_and_refetches(monkeypatch):

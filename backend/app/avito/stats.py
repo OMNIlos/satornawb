@@ -93,7 +93,7 @@ AVITO_STATS_MAX_WINDOW_DAYS = 30
 AVITO_STATS_PAGE_LIMIT = 1000
 AVITO_ITEM_LIST_STATUSES = "active,removed,old"
 
-AvitoStatsGrouping = Literal["item", "totals"]
+AvitoStatsGrouping = Literal["item", "totals", "day"]
 AvitoStatsSourceStatus = Literal["fresh", "partial", "stale", "blocked"]
 AvitoStatsFetchStatus = Literal["synced", "partial", "blocked"]
 
@@ -281,7 +281,7 @@ class LiveAvitoStatsClient:
             with httpx.Client(timeout=self.timeout_seconds) as client:
                 accounts = self._accounts(client, request.accountIds)
                 daily: list[AvitoStatsDailyPoint] = []
-                if request.grouping == "totals":
+                if request.grouping in {"totals", "day"}:
                     stat_items, daily = self._stats_totals(client, request, accounts)
                 else:
                     items = self._items(client, accounts)
@@ -625,9 +625,9 @@ class LiveAvitoStatsClient:
         body = {
             "dateFrom": request.dateFrom.isoformat(),
             "dateTo": request.dateTo.isoformat(),
-            "grouping": "totals",
+            "grouping": request.grouping,
             "metrics": AVITO_ITEM_ANALYTICS_METRICS,
-            "limit": 1,
+            "limit": 1000 if request.grouping == "day" else 1,
             "offset": 0,
         }
         response = client.post(url, json=body, headers=self._headers())

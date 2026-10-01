@@ -12,6 +12,8 @@ from sqlalchemy import engine_from_config, pool
 
 from app.account_health import orm as _account_health_models  # noqa: F401
 from app.avito import returns_orm as _avito_returns_models  # noqa: F401
+from app.avito import labels_orm as _avito_labels_models  # noqa: F401
+from app.avito import images_orm as _avito_images_models  # noqa: F401
 from app.cabinet import orm as _cabinet_models  # noqa: F401
 from app.cash_flow import orm as _cash_flow_models  # noqa: F401
 from app.config import get_settings

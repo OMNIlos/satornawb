@@ -192,6 +192,12 @@ class LiveAvitoChatsClient:
                     failure = self._http_error(exc).model_dump(mode="json")
                     failure["httpStatus"] = _safe_http_status(exc.response.status_code)
                     message_failures.append(failure)
+                except (httpx.RequestError, RuntimeError, ValueError, TypeError):
+                    # One failed conversation must not erase the successfully
+                    # fetched chat list. Never expose raw transport errors/URLs.
+                    messages[chat.chatId] = self._fallback_messages_from_chat(chat)
+                    message_failures.append({"code": "messages_unavailable", "retryable": True,
+                                             "message": "Conversation messages could not be loaded"})
         return AvitoChatsFetchResult(
             status="synced",
             accountId=account_id,
