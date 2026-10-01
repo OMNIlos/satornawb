@@ -9216,16 +9216,17 @@ function SimpleReportToolbarIsland({
   )
 }
 
-export function adsDimensionValues(rows: AdsBackendRow[], key: 'campaignStatus' | 'campaignType' | 'paymentType') {
+export function adsDimensionValues(rows: AdsBackendRow[], key: 'campaignStatus' | 'campaignType' | 'bidType' | 'paymentType' | 'fundingSource') {
   return Array.from(new Set(rows.map((row) => String(row[key] ?? '').trim()).filter(Boolean)))
 }
 
 function AdsToolbarIsland({ replacementKey, rows, accessToken }: { replacementKey: string; rows: AdsBackendRow[]; accessToken: string | null }) {
-  const chips = ['Все строки', 'Поиск', 'Каталог', 'Медиа', 'Не распределено', 'ДРР выше порога']
+  const chips = ['Все строки', 'Поиск', 'Рекомендации', 'Ручная ставка', 'Единая ставка', 'Не распределено', 'ДРР выше порога']
   const [exporting, setExporting] = useState(false)
   const statuses = adsDimensionValues(rows, 'campaignStatus')
-  const types = adsDimensionValues(rows, 'campaignType')
+  const bidTypes = adsDimensionValues(rows, 'bidType')
   const paymentTypes = adsDimensionValues(rows, 'paymentType')
+  const fundingSources = adsDimensionValues(rows, 'fundingSource')
   const exportTable = () => {
     if (!accessToken || exporting) return
     const table = buildAdsExportTable(rows)
@@ -9276,13 +9277,17 @@ function AdsToolbarIsland({ replacementKey, rows, accessToken }: { replacementKe
           <option value="all">Все статусы</option>
           {statuses.map((status) => <option key={status} value={status}>{adsCampaignStatusLabel(status)}</option>)}
         </select>
-        <select className="adv-select" defaultValue="all" data-report-filter="campaignType" data-vella-react-handlers="onchange" onChange={updateGenericReportSelect}>
-          <option value="all">Все типы</option>
-          {types.map((type) => <option key={type} value={type}>{adsCampaignTypeLabel(type)}</option>)}
+        <select className="adv-select" defaultValue="all" data-report-filter="bidType" data-vella-react-handlers="onchange" onChange={updateGenericReportSelect}>
+          <option value="all">Все типы ставок</option>
+          {bidTypes.map((bidType) => <option key={bidType} value={bidType}>{adsBidTypeLabel(bidType)}</option>)}
         </select>
         <select className="adv-select" defaultValue="all" data-report-filter="paymentType" data-vella-react-handlers="onchange" onChange={updateGenericReportSelect}>
-          <option value="all">Все оплаты</option>
+          <option value="all">Все модели оплаты</option>
           {paymentTypes.map((paymentType) => <option key={paymentType} value={paymentType}>{adsPaymentTypeLabel(paymentType)}</option>)}
+        </select>
+        <select className="adv-select" defaultValue="all" data-report-filter="fundingSource" data-vella-react-handlers="onchange" onChange={updateGenericReportSelect}>
+          <option value="all">Все источники средств</option>
+          {fundingSources.map((source) => <option key={source} value={source}>{adsFundingSourceLabel(source)}</option>)}
         </select>
         <span className="report-tag fin">данные backend</span>
         <button
@@ -12304,6 +12309,11 @@ type AdsBackendRow = {
   campaignType?: string | number | null
   campaignStatus?: string | number | null
   paymentType?: string | null
+  bidType?: string | null
+  fundingSource?: string | null
+  placements?: string[] | null
+  metadataSource?: string | null
+  metadataObservedAt?: string | null
   campaignChangeTime?: string | null
   sku?: string | null
   nmId?: number | null
@@ -12684,8 +12694,15 @@ function adsCampaignStatusClass(value: unknown) {
 
 export function adsCampaignTypeLabel(value: unknown) {
   const key = String(value ?? '').trim()
-  if (key === '9') return 'Аукцион'
-  if (key === '8') return 'Единая ставка (архив)'
+  if (key === '9') return 'Продвижение WB'
+  if (key === '8') return 'Устаревшая единая кампания'
+  return key || 'Не передан'
+}
+
+function adsBidTypeLabel(value: unknown) {
+  const key = String(value ?? '').trim().toLowerCase()
+  if (key === 'manual') return 'Ручная ставка'
+  if (key === 'unified') return 'Единая ставка'
   return key || 'Не передан'
 }
 
@@ -12696,13 +12713,20 @@ export function adsPaymentTypeLabel(value: unknown) {
   return key || 'Не передан'
 }
 
+function adsFundingSourceLabel(value: unknown) {
+  const key = String(value ?? '').trim()
+  return key || 'Не передан'
+}
+
 function adsTypeTags(row: AdsBackendRow) {
-  const typeText = String(row.campaignType ?? '').toLowerCase()
+  const placements = (row.placements ?? []).map((value) => String(value).toLowerCase())
+  const bidType = String(row.bidType ?? '').toLowerCase()
   const nameText = String(row.campaignName ?? '').toLowerCase()
   const tags = ['реклама']
-  if (typeText.includes('8') || nameText.includes('search') || nameText.includes('поиск')) tags.push('поиск')
-  if (typeText.includes('9') || nameText.includes('catalog') || nameText.includes('каталог')) tags.push('каталог')
-  if (typeText.includes('медиа') || nameText.includes('media') || nameText.includes('медиа')) tags.push('медиа')
+  if (placements.includes('search') || nameText.includes('search') || nameText.includes('поиск')) tags.push('поиск')
+  if (placements.some((value) => value.startsWith('recommend')) || nameText.includes('рекомендац')) tags.push('рекомендации')
+  if (bidType === 'manual') tags.push('ручная ставка')
+  if (bidType === 'unified') tags.push('единая ставка')
   if ((row.drrPct ?? 0) >= 14) tags.push('дрр выше порога')
   if (row.unallocatedSpend || row.attributionLevel === 'campaign_only') tags.push('не распределено', 'на проверку')
   return tags.join('|')
@@ -12710,7 +12734,7 @@ function adsTypeTags(row: AdsBackendRow) {
 
 export function buildAdsExportTable(rows: AdsBackendRow[]) {
   const headers = [
-    'ID кампании', 'Кампания', 'Статус', 'Тип', 'Оплата', 'Артикул', 'Артикул WB', 'Товар',
+    'ID кампании', 'Кампания', 'Статус', 'Тип', 'Тип ставки', 'Модель оплаты', 'Источник средств', 'Размещения', 'Артикул', 'Артикул WB', 'Товар',
     'Показы', 'Клики', 'CTR', 'Корзины', 'Заказы, шт', 'Заказы, ₽', 'Продажи, шт', 'Продажи, ₽',
     'Расход', 'Бюджет', 'ДРР', 'ROMI', 'Рекомендация',
   ]
@@ -12721,7 +12745,10 @@ export function buildAdsExportTable(rows: AdsBackendRow[]) {
       String(row.campaignName ?? ''),
       adsCampaignStatusLabel(row.campaignStatus),
       adsCampaignTypeLabel(row.campaignType),
+      adsBidTypeLabel(row.bidType),
       adsPaymentTypeLabel(row.paymentType),
+      adsFundingSourceLabel(row.fundingSource),
+      (row.placements ?? []).join(', '),
       String(row.sku ?? ''),
       String(row.nmId ?? ''),
       adsPrimaryRowLabel(row, index),
@@ -12892,7 +12919,8 @@ function adsRowSearchText(row: AdsBackendRow, index: number, runtimeProduct = ad
     adsProductTitle(row, index, runtimeProduct),
     adsRowString(row, ['brandName', 'brand_name']) || adsRuntimeString(runtimeProduct, ['brandName', 'brand_name', 'brand']),
     adsRowString(row, ['categoryName', 'category_name']) || adsRuntimeString(runtimeProduct, ['size', 'categoryName', 'subjectName', 'category']),
-    row.campaignName, row.campaignId, row.campaignType, row.paymentType, row.sku, row.nmId, row.recommendationReason,
+    row.campaignName, row.campaignId, row.campaignType, row.bidType, adsCampaignStatusLabel(row.campaignStatus),
+    row.paymentType, row.fundingSource, ...(row.placements ?? []), row.sku, row.nmId, row.recommendationReason,
   ].filter(Boolean).join(' ')
 }
 
@@ -12980,9 +13008,17 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
                   ? 'РК не передана источником'
                   : `РК ${index + 1}`
             const campaignMeta = hasCampaign
-              ? (row.paymentType ? `оплата: ${adsPaymentTypeLabel(row.paymentType)}` : 'кампания WB')
+              ? [
+                  row.bidType ? adsBidTypeLabel(row.bidType) : null,
+                  row.paymentType ? adsPaymentTypeLabel(row.paymentType) : null,
+                  row.fundingSource ? adsFundingSourceLabel(row.fundingSource) : null,
+                  row.metadataSource?.includes('snapshot') && row.metadataObservedAt ? `кэш ${new Date(row.metadataObservedAt).toLocaleString('ru-RU')}` : null,
+                ].filter(Boolean).join(' · ') || 'кампания WB'
               : 'кампания не передана'
-            const campaignType = row.campaignType && String(row.campaignType).toLowerCase() !== 'unknown' ? adsCampaignTypeLabel(row.campaignType) : '—'
+            const campaignType = [
+              row.campaignType && String(row.campaignType).toLowerCase() !== 'unknown' ? adsCampaignTypeLabel(row.campaignType) : null,
+              row.bidType ? adsBidTypeLabel(row.bidType) : null,
+            ].filter(Boolean).join(' · ') || '—'
             const campaignStatus = adsCampaignStatusLabel(row.campaignStatus)
             const runtimeProduct = adsRuntimeProduct(row)
             const productTitle = adsProductTitle(row, index, runtimeProduct)
@@ -12996,7 +13032,9 @@ function AdsTableShellIsland({ replacementKey, state }: { replacementKey: string
                 data-manager-id={row.managerId ?? 'unassigned'}
                 data-campaign-status={String(row.campaignStatus ?? '')}
                 data-campaign-type={String(row.campaignType ?? '')}
+                data-bid-type={String(row.bidType ?? '')}
                 data-payment-type={String(row.paymentType ?? '')}
+                data-funding-source={String(row.fundingSource ?? '')}
               >
                 <td className="ads-entity-cell report-sticky">
                   <ReportProductCell

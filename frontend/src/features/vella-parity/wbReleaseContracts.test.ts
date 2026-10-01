@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   adsCampaignStatusLabel,
+  adsCampaignTypeLabel,
   adsDimensionValues,
+  adsPaymentTypeLabel,
   buildAbcExportTable,
   buildAdsExportTable,
   digestPeriodRows,
@@ -47,14 +49,20 @@ describe('WB release contracts', () => {
       campaignId: 42,
       campaignName: 'Поиск футболок',
       campaignStatus: 9,
-      campaignType: 8,
-      paymentType: 'cpm',
+      campaignType: 9,
+      bidType: 'manual',
+      paymentType: 'cpc',
+      fundingSource: 'Баланс',
       adSpendKopecks: 12_500,
     }
 
     expect(adsCampaignStatusLabel(row.campaignStatus)).toBe('Активна')
-    expect(adsDimensionValues([row], 'campaignStatus')).toEqual(['9'])
-    expect(buildAdsExportTable([row]).rows[0]).toEqual(expect.arrayContaining(['42', 'Поиск футболок', 'Активна', '125 ₽']))
+    expect(adsCampaignTypeLabel(row.campaignType)).toBe('Продвижение WB')
+    expect(adsPaymentTypeLabel(row.paymentType)).toBe('CPC · за клики')
+    expect(adsDimensionValues([row], 'bidType')).toEqual(['manual'])
+    expect(buildAdsExportTable([row]).rows[0]).toEqual(expect.arrayContaining([
+      '42', 'Поиск футболок', 'Активна', 'Продвижение WB', 'Ручная ставка', 'CPC · за клики', 'Баланс', '125 ₽',
+    ]))
   })
 
   it('shows units and rubles together and makes week filters clickable', () => {
