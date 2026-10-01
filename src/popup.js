@@ -1,10 +1,49 @@
 const accessTokenInput = document.getElementById('accessToken')
+const backendUrlInput = document.getElementById('backendUrl')
+const localServerBtn = document.getElementById('localServerBtn')
+let savedBackendUrl = ''
+let connectionDirty = false
 const photoModeInput = document.getElementById('photoMode')
 const sizeModeInput = document.getElementById('sizeMode')
 const colorFromDescriptionInput = document.getElementById('colorFromDescription')
 const articleFromDescriptionInput = document.getElementById('articleFromDescription')
 const saveBtn = document.getElementById('saveBtn')
 const collectBtn = document.getElementById('collectBtn')
+const labelsBtn = document.getElementById('labelsBtn')
+const listingPhotosBtn = document.getElementById('listingPhotosBtn')
+const stopListingPhotosBtn = document.getElementById('stopListingPhotosBtn')
+const listingPhotosStatus = document.getElementById('listingPhotosStatus')
+
+async function renderListingPhotos() {
+  const [stored, worker] = await Promise.all([
+    chrome.storage.local.get('listingPhotosStatus'),
+    chrome.runtime.sendMessage({ type: 'AVITO_LISTING_PHOTOS_STATE' }),
+  ])
+  const status = stored.listingPhotosStatus
+  const running = Boolean(worker?.running && (!status || status.stage === 'running'))
+  listingPhotosBtn.disabled = running
+  stopListingPhotosBtn.hidden = !running
+  stopListingPhotosBtn.disabled = false
+  if (status) {
+    const label = running ? 'Сбор' : status.stage === 'done' ? 'Готово' : 'Можно продолжить сбор'
+    listingPhotosStatus.textContent = `${label}${running && status.phase ? ': ' + status.phase : ''}. В базе: ${status.saved || 0} из ${status.total || 0}. Найдено в списках: ${status.found || 0}. Проверено за запуск: ${status.processed || 0}. Не получено: ${status.failed || 0}.${status.message && status.stage !== 'done' ? ' ' + status.message : ''}`
+  }
+}
+listingPhotosBtn.addEventListener('click', async () => {
+  if (connectionDirty || !accessTokenInput.value.trim()) {
+    setActiveScreen('settings'); setStatus('Сначала сохраните адрес и токен Satorna'); return
+  }
+  await chrome.runtime.sendMessage({ type: 'AVITO_LISTING_PHOTOS_COLLECT' })
+  await renderListingPhotos()
+})
+stopListingPhotosBtn.addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'AVITO_LISTING_PHOTOS_STOP' })
+  stopListingPhotosBtn.disabled = true
+})
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.listingPhotosStatus) void renderListingPhotos()
+})
+void renderListingPhotos().catch(() => {})
 const statusEl = document.getElementById('status')
 const logsListEl = document.getElementById('logsList')
 const clearLogsBtn = document.getElementById('clearLogsBtn')
@@ -49,7 +88,7 @@ function formatTime(value) {
 
 function updateConnectionState(settings) {
   const hasToken = Boolean(String(settings.accessToken || '').trim())
-  connectionBadge.textContent = hasToken ? 'подключено' : 'не настроено'
+  connectionBadge.textContent = hasToken ? 'настроено' : 'не настроено'
   connectionBadge.classList.toggle('ok', hasToken)
   lastRunText.textContent = settings.lastSnapshotAt ? formatTime(settings.lastSnapshotAt) : 'ещё не запускался'
   syncCollectButtonState(hasToken)
@@ -57,6 +96,7 @@ function updateConnectionState(settings) {
 
 function syncCollectButtonState(hasToken = Boolean(accessTokenInput.value.trim())) {
   collectBtn.disabled = !hasToken
+  labelsBtn.disabled = !hasToken
   collectTokenHint.classList.toggle('visible', !hasToken)
 }
 
@@ -102,6 +142,9 @@ async function loadSettings() {
     lastStatus: '',
     lastSnapshotAt: '',
   })
+  Object.assign(settings, await SatornaConnection.read())
+  savedBackendUrl = SatornaConnection.normalize(settings.backendUrl)
+  backendUrlInput.value = savedBackendUrl
   const options = { ...DEFAULT_COLLECT_OPTIONS, ...(settings.collectOptions || {}) }
   accessTokenInput.value = settings.accessToken || ''
   photoModeInput.value = options.photoMode
@@ -123,13 +166,22 @@ async function saveSettings() {
       articleFromDescription: articleFromDescriptionInput.checked,
     },
   }
-  await chrome.storage.sync.set(settings)
+  const connection = await SatornaConnection.save(backendUrlInput.value, settings.accessToken)
+  const { accessToken: _token, ...options } = settings
+  await chrome.storage.sync.set(options)
+  savedBackendUrl = connection.backendUrl
+  backendUrlInput.value = savedBackendUrl
+  connectionDirty = false
   updateConnectionState(settings)
   setSaveFeedback(true)
   setStatus('Настройки сохранены')
 }
 
 async function collectOrders() {
+  if (connectionDirty) {
+    setActiveScreen('settings')
+    throw new Error('Сначала сохраните адрес и токен Satorna')
+  }
   const accessToken = accessTokenInput.value.trim()
   if (!accessToken) {
     setActiveScreen('settings')
@@ -143,6 +195,7 @@ async function collectOrders() {
   if (!posted?.ok) throw new Error(posted?.error || 'Не удалось отправить данные')
   setStatus(posted.message || 'Заказы собраны')
   const settings = await chrome.storage.sync.get({ accessToken: '', lastSnapshotAt: '' })
+  Object.assign(settings, await SatornaConnection.read())
   updateConnectionState(settings)
   await loadLogs()
 }
@@ -156,8 +209,22 @@ saveBtn.addEventListener('click', () => {
 })
 
 accessTokenInput.addEventListener('input', () => {
+  connectionDirty = true
   setSaveFeedback(false)
   syncCollectButtonState()
+})
+
+backendUrlInput.addEventListener('input', () => {
+  connectionDirty = true
+  // Do not carry an existing credential to a different server.
+  if (backendUrlInput.value.replace(/\/+$/, '') !== savedBackendUrl) accessTokenInput.value = ''
+  setSaveFeedback(false)
+  syncCollectButtonState()
+})
+localServerBtn.addEventListener('click', () => {
+  backendUrlInput.value = SatornaConnection.localUrl
+  backendUrlInput.dispatchEvent(new Event('input'))
+  accessTokenInput.focus()
 })
 
 collectBtn.addEventListener('click', () => {
@@ -173,6 +240,19 @@ collectBtn.addEventListener('click', () => {
     .finally(() => {
       syncCollectButtonState()
     })
+})
+
+labelsBtn.addEventListener('click', async () => {
+  if (connectionDirty || !accessTokenInput.value.trim()) {
+    setActiveScreen('settings'); setStatus('Сначала сохраните адрес и токен Satorna'); return
+  }
+  labelsBtn.disabled = true
+  setStatus('Открываем печать этикеток. Ждём PDF Авито…')
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'AVITO_LABELS_COLLECT' })
+    setStatus(result?.ok ? result.message : result?.error || 'Не удалось получить этикетки')
+  } catch { setStatus('Связь с расширением прервалась. Повторите получение этикеток.') }
+  finally { labelsBtn.disabled = false }
 })
 
 clearLogsBtn.addEventListener('click', () => {

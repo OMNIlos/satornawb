@@ -29,3 +29,11 @@ test('none mode removes size evidence', () => {
   apply(item, 'none', '54 (XL)', 'Беру L')
   assert.deepEqual(item, { size: null, descriptionSize: null, chatText: null, sources: {} })
 })
+
+test('a later page without size does not erase already collected explicit size', () => {
+  const item = { sources: {} }
+  apply(item, 'description', '48 (M)')
+  apply(item, 'description', null)
+  assert.equal(item.size, '48 (M)')
+  assert.equal(item.sources.size, 'description')
+})

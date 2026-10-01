@@ -709,16 +709,24 @@ function requestTabDetails(url, options) {
 }
 
 function mergeItemDetails(item, details, options) {
+  item.sources ||= {}
+  const source = details.itemUrl ? 'listing' : 'order_detail'
   const text = [details.pageText, details.description, item.description].filter(Boolean).join('\n')
   const photos = details.images?.length ? details.images : item.imageUrls || []
   if (details.itemUrl && !item.itemUrl) item.itemUrl = details.itemUrl
   if (details.itemId && !item.itemId) item.itemId = details.itemId
   if (details.title && (!item.title || item.title === 'Товар Авито' || item.title === 'Товар')) item.title = details.title
-  if (photos.length && !item.imageUrl) item.imageUrl = photos[0]
+  if (photos.length && !item.imageUrl) {
+    item.imageUrl = photos[0]
+    item.sources.imageUrl = source
+  }
   if (photos.length) item.imageUrls = photos
   if (details.description) item.description = details.description
   if (options.articleFromDescription && !item.sellerArticle) item.sellerArticle = parseArticle(text)
-  if (options.colorFromDescription && !item.color) item.color = parseColor(text)
+  if (options.colorFromDescription && !item.color) {
+    item.color = parseColor(text)
+    if (item.color) item.sources.color = source
+  }
   const explicitSize = globalThis.SatornaAvitoItemSize.parseExplicitListingSize(text)
   globalThis.SatornaAvitoSizePolicy.applySizeEvidence(
     item,
@@ -747,7 +755,11 @@ async function enrichOrderFromDetails(order, options) {
     if (candidate?.itemUrl) {
       order.items[0].itemUrl = candidate.itemUrl
       order.items[0].itemId = candidate.itemId || itemIdFromUrl(candidate.itemUrl)
-      if (candidate.imageUrl && !order.items[0].imageUrl) order.items[0].imageUrl = candidate.imageUrl
+      if (candidate.imageUrl && !order.items[0].imageUrl) {
+        order.items[0].imageUrl = candidate.imageUrl
+        order.items[0].sources ||= {}
+        order.items[0].sources.imageUrl = 'order_detail'
+      }
       if (candidate.imageUrls?.length && !order.items[0].imageUrls?.length) order.items[0].imageUrls = candidate.imageUrls
       hasRowItemUrl = true
     }
@@ -779,7 +791,11 @@ async function enrichOrderFromDetails(order, options) {
   let orderDetails = null
   const errors = []
   for (const url of detailUrls) {
-    const response = await requestTabDetails(url, { ...options, orderItemTitle: order.items?.[0]?.title || '' })
+    const response = await requestTabDetails(url, {
+      ...options,
+      orderItemTitle: order.items?.[0]?.title || '',
+      requireShipmentNumber: needsOrderInstruction && !order.shipmentNumber,
+    })
     if (response?.ok && response.details) {
       orderDetails = response.details
       break
@@ -1271,7 +1287,7 @@ async function collectSnapshot(optionsPayload) {
     `Собрано ${collectionLabel}: ${orders.length}`,
     `Позиций для производства: ${items.length}`,
     `Не хватает: фото ${missing.imageUrl}, размер ${missing.size}, цвет ${missing.color}, артикул ${missing.sellerArticle}`,
-    detailErrors.length ? 'Есть неполные позиции, подробности сохранены в настройках расширения.' : 'Все доступные данные отправлены в Satorna.',
+    'Данные собраны в браузере. Подтверждение сохранения появится после отправки в Satorna.',
   ], 'ok', {
     phase: `Сбор ${collectionLabel} завершен`,
     candidates: candidates.length,
@@ -1305,6 +1321,11 @@ async function collectSnapshot(optionsPayload) {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'AVITO_UPLOAD_STATUS') {
+    showCollectorOverlay([message.message], message.ok ? 'ok' : 'error', { phase: message.ok ? 'Сохранено в Satorna' : 'Не сохранено в Satorna' })
+    sendResponse({ ok: true })
+    return false
+  }
   if (message?.type === 'AVITO_PAGE_EXTRACT_DETAILS') {
     extractCurrentPageDetails(message.options)
       .then(sendResponse)

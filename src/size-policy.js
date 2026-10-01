@@ -9,7 +9,7 @@ function applySizeEvidence(item, mode, explicitSize, chatText = null) {
     return item
   }
   if (mode === 'description') {
-    item.size = explicitSize || null
+    item.size = explicitSize || item.size || null
     delete item.descriptionSize
     delete item.chatText
     if (item.size) item.sources.size = 'description'

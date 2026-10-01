@@ -1,4 +1,8 @@
 importScripts('runtime-retry.js')
+importScripts('connection.js')
+importScripts('shipment-number.js')
+importScripts('labels.js')
+importScripts('listing-photos.js')
 
 const DEFAULT_BACKEND_URL = 'https://ogni-frontend.vercel.app'
 const SNAPSHOT_PATH = '/api/v1/avito/orders/browser-snapshot'
@@ -25,8 +29,7 @@ async function writeLog(level, message, data = {}) {
 }
 
 function normalizeBackendUrl(value) {
-  const text = String(value || DEFAULT_BACKEND_URL).trim().replace(/\/+$/, '')
-  return text || DEFAULT_BACKEND_URL
+  return SatornaConnection.normalize(value || DEFAULT_BACKEND_URL)
 }
 
 function looksLikeFrontendUrl(value) {
@@ -42,7 +45,7 @@ async function resolveBackendUrl(value) {
   const normalized = normalizeBackendUrl(value)
   if (!looksLikeFrontendUrl(normalized)) return normalized
   try {
-    const response = await fetch(`${normalized}/api/config.js`, { method: 'GET', cache: 'no-store' })
+    const response = await fetch(`${normalized}/api/config.js`, { method: 'GET', cache: 'no-store', redirect: 'error', credentials: 'omit' })
     const text = await response.text()
     const match = text.match(/VITE_API_BASE_URL["']?\s*[:=]\s*["']([^"']+)["']/)
       || text.match(/apiBaseUrl["']?\s*[:=]\s*["']([^"']+)["']/i)
@@ -60,7 +63,7 @@ function authorizationValue(value) {
 }
 
 async function readSettings() {
-  return chrome.storage.sync.get({
+  const settings = await chrome.storage.sync.get({
     backendUrl: DEFAULT_BACKEND_URL,
     accessToken: '',
     collectOptions: {
@@ -72,6 +75,7 @@ async function readSettings() {
     lastStatus: '',
     lastSnapshotAt: '',
   })
+  return { ...settings, ...await SatornaConnection.read() }
 }
 
 async function apiUrlFromSettings(settings) {
@@ -120,6 +124,8 @@ async function postSnapshot(payload) {
   const backendUrl = await apiUrlFromSettings(settings)
   const response = await fetch(`${backendUrl}${SNAPSHOT_PATH}`, {
     method: 'POST',
+    redirect: 'error',
+    credentials: 'omit',
     headers: {
       'Authorization': authorizationValue(token),
       'Content-Type': 'application/json',
@@ -131,6 +137,27 @@ async function postSnapshot(payload) {
   }
   await writeLog('info', 'snapshot posted', { status: response.status })
   return readApiJson(response, { backendUrl, action: 'post_snapshot' })
+}
+
+async function postSnapshotWithFeedback(payload) {
+  const settings = await readSettings()
+  const target = normalizeBackendUrl(settings.backendUrl)
+  try {
+    const result = await postSnapshot(payload)
+    if (result?.ok !== true) throw new Error('Сервер не подтвердил сохранение')
+    await notifyUploadStatus(true, `Сохранено в Satorna: ${target}. Обновите страницу заказов.`)
+    return result
+  } catch (error) {
+    await notifyUploadStatus(false, `Не сохранено в ${target}. ${error instanceof Error ? error.message : 'Ошибка отправки'}. Проверьте адрес и токен в настройках расширения.`)
+    throw error
+  }
+}
+
+async function notifyUploadStatus(ok, message) {
+  try {
+    const tabs = await tabsQuery({ url: 'https://www.avito.ru/*' })
+    await Promise.all(tabs.map(tab => tabsSendMessage(tab.id, { type: 'AVITO_UPLOAD_STATUS', ok, message }).catch(() => {})))
+  } catch { /* Display failures must not turn a successful save into a retry. */ }
 }
 
 function tabsQuery(query) {
@@ -167,9 +194,12 @@ function executeContentScript(tabId, allFrames = false) {
     target: { tabId, allFrames },
     files: [
       'src/item-size.js',
+      'src/item-photo.js',
       'src/order-chat.js',
       'src/size-policy.js',
       'src/page-state.js',
+      'src/shipment-number.js',
+      'src/return-details.js',
       'src/content.js',
     ],
   })
@@ -366,7 +396,10 @@ async function extractDetailsInTab(url, options) {
       const hasListingLink = Array.isArray(response.itemUrls) && response.itemUrls.length > 0
       const hasListingContent = !isOrderDetail && ((response.description?.length || 0) > 20 || (response.images?.length || 0) > 0)
       const hasOrderContent = !isOrderDetail || selectedFrame?.hasExpectedTitle || selectedFrame?.hasOrderWords
-      if ((isOrderDetail && hasOrderContent && (hasListingLink || Date.now() - startedAt > 3500)) || hasListingContent) break
+      const waitingForInstruction = isOrderDetail && SatornaAvitoShipmentNumber.shouldWaitForInstruction(
+        response, options?.requireShipmentNumber === true, Date.now() - startedAt,
+      )
+      if (!waitingForInstruction && ((isOrderDetail && hasOrderContent && (hasListingLink || Date.now() - startedAt > 3500)) || hasListingContent)) break
       await new Promise((resolve) => setTimeout(resolve, 700))
     }
     if (!response?.ok) throw new Error(response?.error || 'Не удалось прочитать деталку Avito')
@@ -542,19 +575,221 @@ async function collectAndPostFromAvito() {
   const payload = combineCollections(collected.payload, collectedReturns.payload)
   const missing = payload?.collector?.missing || {}
   await saveStatus({ ok: false, message: `Нашли заказов: ${payload?.orders?.length || 0}, возвратов: ${payload?.returns?.length || 0}. Не найдено: фото ${missing.imageUrl || 0}, размер ${missing.size || 0}, цвет ${missing.color || 0}. Отправляем в Satorna...` })
-  const result = await postSnapshot(payload)
+  const result = await postSnapshotWithFeedback(payload)
+  let labelStatus = ''
+  try {
+    const labels = await collectLabels(payload)
+    labelStatus = ` Этикеток сохранено: ${labels.labels || 0}.${labels.warnings?.length ? ' Есть этикетки, требующие проверки.' : ''}`
+  } catch (error) {
+    labelStatus = ` Заказы сохранены, этикетки не завершены: ${error instanceof Error ? error.message : 'ошибка получения'}`
+  }
   const meta = result?.browserSnapshot
   const ai = meta?.aiExtraction || {}
   const sizeText = payload?.collector?.options?.sizeMode === 'chat_ai'
     ? ` Размеры: AI ${ai.aiSizeCount || 0}, из характеристик ${ai.descriptionFallbackCount || 0}, не найдено ${ai.missingFinalSizeCount || 0}.`
     : ''
-  const text = `Собрано заказов: ${meta?.orders ?? payload?.orders?.length ?? 0}, возвратов: ${meta?.returns ?? payload?.returns?.length ?? 0}.${sizeText}`
+  const text = `Собрано заказов: ${meta?.orders ?? payload?.orders?.length ?? 0}, возвратов: ${meta?.returns ?? payload?.returns?.length ?? 0}.${sizeText}${labelStatus}`
   await saveStatus({ ok: true, message: text })
   await writeLog('info', 'collection finished', { message: text, aiExtraction: ai })
   return { ok: true, result, message: text }
 }
 
+let labelsRunning = false
+async function collectLabels(payload) {
+  if (labelsRunning) throw new Error('Получение этикеток уже выполняется')
+  const settings = await readSettings()
+  if (!settings.accessToken) throw new Error('Сначала сохраните подключение к Satorna')
+  const backendUrl = await apiUrlFromSettings(settings)
+  const headers = { Authorization: authorizationValue(settings.accessToken) }
+  let accounts = [...new Set((payload?.orders || []).map(order => order.accountId || ''))]
+  if (!payload) {
+    const response = await fetch(`${backendUrl}/api/v1/avito/orders/labels/collection-context`, { headers, redirect: 'error', credentials: 'omit' })
+    if (!response.ok) throw new Error('Проверьте локальный адрес и токен расширения')
+    accounts = (await response.json()).accountIds || []
+  }
+  if (accounts.length !== 1) throw new Error('Сначала соберите заказы одного аккаунта Авито')
+  async function stage(value) {
+    await fetch(`${backendUrl}/api/v1/avito/orders/labels/collection-status`, {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, redirect: 'error', credentials: 'omit',
+      body: JSON.stringify({ stage: value }), signal: AbortSignal.timeout(5000),
+    }).catch(() => {})
+  }
+  labelsRunning = true
+  let tab
+  try {
+    await stage('opening')
+    await saveStatus({ ok: false, message: 'Заказы сохранены. Авито формирует PDF этикеток…' })
+    tab = await chrome.tabs.create({ url: 'https://www.avito.ru/orders/print-labels', active: false })
+    await waitForTabComplete(tab.id)
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', func: SatornaLabels.observeDownloads })
+    await stage('selecting')
+    const generated = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: SatornaLabels.selectAndGenerate })
+    const expected = generated[0]?.result || 0
+    await stage('waiting_pdf')
+    let url = null
+    for (let i = 0; i < 45 && !url; i++) {
+      await new Promise(resolve => setTimeout(resolve, 700))
+      const tabs = await chrome.tabs.query({})
+      url = tabs.filter(candidate => candidate.id === tab.id || candidate.openerTabId === tab.id)
+        .map(candidate => SatornaLabels.downloadUrl(candidate.url || candidate.pendingUrl)).find(Boolean)
+      if (url) break
+      const results = await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', func: () => [
+        ...(window.__satornaLabels?.urls || []),
+        ...performance.getEntriesByType('resource').map(entry => entry.name),
+        ...[...document.querySelectorAll('a[href]')].map(a => a.href),
+      ] }).catch(() => [])
+      url = (results[0]?.result || []).map(SatornaLabels.downloadUrl).find(Boolean)
+    }
+    if (!url) throw new Error('Авито не предоставило ссылку на PDF. Страница этикеток оставлена открытой.')
+    await stage('downloading')
+    const pdf = await SatornaLabels.boundedPdf(await fetch(url, { credentials: 'include', redirect: 'error', signal: AbortSignal.timeout(30000) }))
+    await stage('uploading')
+    const response = await fetch(`${backendUrl}/api/v1/avito/orders/labels/import?accountId=${encodeURIComponent(accounts[0])}`, {
+      method: 'POST', credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(120000),
+      headers: { Authorization: authorizationValue(settings.accessToken), 'Content-Type': 'application/pdf' }, body: pdf,
+    })
+    if (!response.ok) throw new Error(`Satorna не сохранила этикетки (HTTP ${response.status})`)
+    const result = await response.json()
+    if (result.ok !== true) throw new Error('Satorna не подтвердила сохранение PDF')
+    if (result.labels < expected) result.warnings = [...(result.warnings || []), 'Не все выбранные этикетки распознаны']
+    await notifyUploadStatus(result.labels >= expected, result.labels >= expected
+      ? `Этикеток сохранено: ${result.labels}. Обновите заказы в Satorna.`
+      : `PDF сохранён, распознано этикеток: ${result.labels} из ${expected}. Нераспознанные этикетки требуют проверки.`)
+    return result
+  } catch (error) {
+    await stage('error')
+    await notifyUploadStatus(false, error instanceof Error ? error.message : 'Не удалось получить этикетки')
+    throw error
+  } finally {
+    if (tab?.id) await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', func: () => window.__satornaLabels?.restore?.() }).catch(() => {})
+    labelsRunning = false
+  }
+}
+
+let listingPhotosRunning = false
+let listingPhotosStop = false
+async function collectListingPhotos() {
+  const settings = await readSettings()
+  if (!settings.accessToken) throw new Error('Сначала сохраните подключение к Satorna')
+  const backendUrl = await apiUrlFromSettings(settings)
+  let photoTab = null, batchTab = null, blockedTabId = null
+  const replacementTabs = new Map()
+  function onPhotoTabReplaced(addedTabId, removedTabId) {
+    replacementTabs.set(removedTabId, addedTabId)
+    if (photoTab?.id === removedTabId) photoTab.id = addedTabId
+    if (batchTab?.id === removedTabId) batchTab.id = addedTabId
+    if (blockedTabId === removedTabId) blockedTabId = addedTabId
+  }
+  chrome.tabs.onReplaced.addListener(onPhotoTabReplaced)
+  async function pagePhotos(tabId, ids, detailId = null) {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['src/item-photo.js', 'src/listing-photo-page.js'] })
+    const result = await chrome.scripting.executeScript({ target: { tabId },
+      func: (ids, detail) => globalThis.SatornaListingPhotoPage.read(ids, detail), args: [ids, detailId] })
+    return result[0]?.result || { photos: {} }
+  }
+  function assertPhotoPage(result) {
+    if (!result.blocked) return
+    const error = new Error('Авито показывает проверку безопасности. Откройте вкладку Авито, пройдите проверку вручную и продолжите сбор. Фото в базе сохранятся.')
+    error.stop = true
+    throw error
+  }
+  async function readyPhotos(tabId, ids, detailId = null, previous = null, timeout = 8000) {
+    const deadline = Date.now() + timeout
+    let latest = { photos: {} }
+    let stableSignature = '', stableSince = 0
+    while (!listingPhotosStop && Date.now() < deadline) {
+      try {
+        while (replacementTabs.has(tabId)) tabId = replacementTabs.get(tabId)
+        latest = await pagePhotos(tabId, ids, detailId)
+        assertPhotoPage(latest)
+        if (detailId && latest.photos[detailId]) return latest
+        if (!detailId && latest.signature && latest.signature !== previous) {
+          if (stableSignature !== latest.signature) { stableSignature = latest.signature; stableSince = Date.now() }
+          if (latest.listReady && Date.now() - stableSince >= 750) return latest
+        }
+      } catch (error) {
+        if (error.stop) {
+          blockedTabId = tabId
+          await chrome.tabs.update(tabId, { active: true })
+          throw error
+        }
+        // A navigation may briefly replace the frame; read the next DOM, not window.load.
+      }
+      await new Promise(resolve => setTimeout(resolve, 250))
+    }
+    return latest
+  }
+  try { return await SatornaListingPhotos.collect({
+    backendUrl, authorization: authorizationValue(settings.accessToken),
+    shouldStop: () => listingPhotosStop,
+    progress: status => chrome.storage.local.set({ listingPhotosStatus: { ...status, updatedAt: Date.now() } }),
+    preparePhotos: async (rows, reportFound) => {
+      const photos = {}, ids = rows.map(row => row.itemId)
+      for (const tab of await chrome.tabs.query({ url: 'https://www.avito.ru/*' })) {
+        if (listingPhotosStop) break
+        try { Object.assign(photos, (await pagePhotos(tab.id, ids)).photos) } catch { /* Closed/reloading tab. */ }
+      }
+      await reportFound(Object.keys(photos).length)
+      // A tiny remainder is faster to resolve directly than rescanning every list page.
+      if (!listingPhotosStop && ids.length - Object.keys(photos).length > 5) {
+        batchTab = await chrome.tabs.create({ url: 'https://www.avito.ru/profile/pro/items', active: true })
+        let previous = null
+        const seen = new Set()
+        for (let page = 0; page < 50 && !listingPhotosStop; page++) {
+          const result = await readyPhotos(batchTab.id, ids, null, previous, page === 0 ? 25000 : 8000)
+          assertPhotoPage(result)
+          Object.assign(photos, result.photos)
+          await reportFound(Object.keys(photos).length, { pages: page + 1, pageItems: result.count || 0 })
+          if (!result.signature || seen.has(result.signature) || Object.keys(photos).length >= ids.length) break
+          seen.add(result.signature)
+          previous = result.signature
+          const advanced = await chrome.scripting.executeScript({ target: { tabId: batchTab.id }, func: () => globalThis.SatornaListingPhotoPage.advance() })
+          if (!advanced[0]?.result) break
+        }
+      }
+      return photos
+    },
+    loadPhoto: async row => {
+      if (photoTab && !await chrome.tabs.get(photoTab.id).catch(() => null)) photoTab = null
+      if (!photoTab) photoTab = await chrome.tabs.create({ url: row.url, active: false })
+      else await chrome.tabs.update(photoTab.id, { url: row.url })
+      const result = await readyPhotos(photoTab.id, [row.itemId], row.itemId, null, 10000)
+      return result.photos[row.itemId] || null
+    },
+  }) } finally {
+    chrome.tabs.onReplaced.removeListener(onPhotoTabReplaced)
+    if (photoTab && photoTab.id !== blockedTabId) await chrome.tabs.remove(photoTab.id).catch(() => {})
+    if (batchTab && batchTab.id !== blockedTabId) await chrome.tabs.remove(batchTab.id).catch(() => {})
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'AVITO_LISTING_PHOTOS_STATE') {
+    sendResponse({ running: listingPhotosRunning })
+    return false
+  }
+  if (message?.type === 'AVITO_LISTING_PHOTOS_STOP') {
+    listingPhotosStop = true
+    sendResponse({ ok: true })
+    return false
+  }
+  if (message?.type === 'AVITO_LISTING_PHOTOS_COLLECT') {
+    if (!listingPhotosRunning) {
+      listingPhotosRunning = true
+      listingPhotosStop = false
+      void collectListingPhotos().catch(async error => {
+        const stored = await chrome.storage.local.get('listingPhotosStatus')
+        await chrome.storage.local.set({ listingPhotosStatus: { ...stored.listingPhotosStatus, stage: 'error', message: error.message, updatedAt: Date.now() } })
+      }).finally(() => { listingPhotosRunning = false })
+    }
+    sendResponse({ ok: true })
+    return false
+  }
+  if (message?.type === 'AVITO_LABELS_COLLECT') {
+    collectLabels().then(result => sendResponse({ ok: true, message: `Распознано этикеток: ${result.labels}`, result }))
+      .catch(error => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Не удалось получить этикетки' }))
+    return true
+  }
   if (message?.type === 'AVITO_LOG') {
     writeLog(message.level || 'info', message.message || 'event', message.data || {})
       .then(() => sendResponse({ ok: true }))
@@ -585,10 +820,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
   if (message?.type !== 'AVITO_ORDERS_COLLECTED') return false
-  postSnapshot(message.payload)
-    .then((result) => {
+  postSnapshotWithFeedback(message.payload)
+    .then(async (result) => {
       const meta = result?.browserSnapshot
-      const text = `Собрано заказов: ${meta?.orders ?? message.payload?.orders?.length ?? 0}`
+      let labelText = ''
+      try { labelText = ` Этикеток: ${(await collectLabels(message.payload)).labels}` }
+      catch (error) { labelText = ` Этикетки не получены: ${error instanceof Error ? error.message : 'ошибка'}` }
+      const text = `Собрано заказов: ${meta?.orders ?? message.payload?.orders?.length ?? 0}.${labelText}`
       return saveStatus({ ok: true, message: text }).then(() => sendResponse({ ok: true, result, message: text }))
     })
     .catch((error) => {

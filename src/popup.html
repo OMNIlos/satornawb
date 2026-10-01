@@ -39,6 +39,10 @@
         </div>
 
         <button id="collectBtn" class="primary-action" type="button">Собрать заказы и возвраты</button>
+        <button id="labelsBtn" class="primary-action" type="button">Получить этикетки</button>
+        <button id="listingPhotosBtn" class="primary-action" type="button">Сохранить фото объявлений</button>
+        <button id="stopListingPhotosBtn" type="button" hidden>Остановить сбор фото</button>
+        <p id="listingPhotosStatus" role="status">Фото сохраняются один раз. Повторный сбор загружает только недостающие.</p>
         <p id="collectTokenHint" class="token-hint">Сначала вставьте токен Satorna в настройках.</p>
         <p id="status" class="status-line">Нажмите сбор. Расширение само откроет заказы Avito.</p>
 
@@ -59,6 +63,12 @@
               <p>Токен берётся на странице Satorna `/avito/orders`.</p>
             </div>
           </div>
+          <label>
+            Адрес Satorna
+            <input id="backendUrl" type="url" placeholder="http://127.0.0.1:5177">
+          </label>
+          <button id="localServerBtn" type="button">Локальный проект :5177</button>
+          <p>Адрес и токен должны быть из одной Satorna. Для локального проекта создайте токен в его разделе «Авито → Заказы → Настройки расширения».</p>
           <label>
             Токен Satorna
             <input id="accessToken" type="password" placeholder="Вставьте токен расширения">
@@ -113,6 +123,7 @@
         </section>
       </section>
     </main>
+    <script src="connection.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
