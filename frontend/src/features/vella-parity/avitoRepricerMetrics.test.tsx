@@ -43,6 +43,8 @@ describe('Avito repricer presentation without a browser', () => {
     const table = source.slice(source.indexOf('function AvitoRepricerIsland('), source.indexOf('async function loadLiveAvitoStats('))
     expect(table).toContain('<th className="num">Чаты</th>')
     expect(table).toContain('value={row.contactsMessenger}')
+    expect(table).toContain("data-sort-value={row.contactsMessenger ?? ''}")
+    expect(table).toContain("data-sort-value={row.views ?? ''}")
     expect(table).not.toContain('value={row.contacts} trend={row.contactsTrend}')
     expect(table).toContain('CR в заказ')
     expect(table).toContain('Средняя цена контакта')

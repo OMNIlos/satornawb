@@ -21762,14 +21762,14 @@ function AvitoRepricerIsland({ replacementKey }: { replacementKey: string; sourc
                       </div>
                       <span className="sub">{row.strategyDescription ?? 'метрика чатов'}</span>
                     </td>
-                    <td className="num">{formatAvitoRubNullable(row.priceKopecks)}</td>
-                    <td className="num"><div className="avito-price-stack"><b>{formatAvitoRubNullable(row.recommendedPriceKopecks)}</b><span>{row.priceDeltaPct === 0 ? 'без изменения' : `${row.priceDeltaPct > 0 ? '+' : ''}${row.priceDeltaPct}% по стратегии`}</span></div></td>
-                    <td className="num"><AvitoRepricerMetric value={row.contactsMessenger} trend={row.contactsTrend} /></td>
-                    <td className="num"><AvitoRepricerMetric value={row.views} trend={row.viewsTrend} /></td>
-                    <td className="num">{formatAvitoPctNullable(row.messengerConversionPct)}</td>
-                    <td className="num">{formatAvitoPctNullable(row.orderConversionPct)}</td>
-                    <td className="num">{row.spendKopecks == null ? '—' : `${(row.spendKopecks / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`}</td>
-                    <td className="num">{row.averageContactCostKopecks == null ? '—' : `${(row.averageContactCostKopecks / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`}</td>
+                    <td className="num" data-sort-value={row.priceKopecks ?? ''}>{formatAvitoRubNullable(row.priceKopecks)}</td>
+                    <td className="num" data-sort-value={row.recommendedPriceKopecks ?? ''}><div className="avito-price-stack"><b>{formatAvitoRubNullable(row.recommendedPriceKopecks)}</b><span>{row.priceDeltaPct === 0 ? 'без изменения' : `${row.priceDeltaPct > 0 ? '+' : ''}${row.priceDeltaPct}% по стратегии`}</span></div></td>
+                    <td className="num" data-sort-value={row.contactsMessenger ?? ''}><AvitoRepricerMetric value={row.contactsMessenger} trend={row.contactsTrend} /></td>
+                    <td className="num" data-sort-value={row.views ?? ''}><AvitoRepricerMetric value={row.views} trend={row.viewsTrend} /></td>
+                    <td className="num" data-sort-value={row.messengerConversionPct ?? ''}>{formatAvitoPctNullable(row.messengerConversionPct)}</td>
+                    <td className="num" data-sort-value={row.orderConversionPct ?? ''}>{formatAvitoPctNullable(row.orderConversionPct)}</td>
+                    <td className="num" data-sort-value={row.spendKopecks ?? ''}>{row.spendKopecks == null ? '—' : `${(row.spendKopecks / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`}</td>
+                    <td className="num" data-sort-value={row.averageContactCostKopecks ?? ''}>{row.averageContactCostKopecks == null ? '—' : `${(row.averageContactCostKopecks / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`}</td>
                     <td><span className="avito-account-badge">{row.accountName}</span></td>
                     <td>{avitoListingStatusLabel(row.status)}</td>
                     <td><button className="btn btn-default btn-sm" type="button" onClick={() => void openPriceHistory(row)}>Посмотреть</button></td>
