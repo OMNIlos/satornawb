@@ -348,6 +348,30 @@ it.each(['abc', 'pnl'] as const)('allows past canonical %s dates without legacy 
   } finally { await browser.close() }
 }, 45_000)
 
+it('starts a reopened WB data calendar from the beginning of a new range', async () => {
+  const browser = await chromium.launch({ headless: true })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1512, height: 982 } })
+    const evidence = await mount(page, 'abc')
+    await page.getByRole('button', { name: 'Начало периода аналитики WB', exact: true }).click()
+    await page.locator('.products-cache-calendar-day[aria-label^="2026-09-02:"]').click()
+    await page.locator('.products-cache-calendar-day[aria-label^="2026-09-06:"]').click()
+    await page.getByRole('button', { name: 'Применить', exact: true }).click()
+    await expect.poll(() => evidence.queries.some(query => query.includes('dateFrom=2026-09-02') && query.includes('dateTo=2026-09-06'))).toBe(true)
+
+    await page.getByRole('button', { name: 'Календарь данных', exact: true }).click()
+    const fromTab = page.getByRole('button', { name: 'С 2026-09-02', exact: true })
+    expect(await fromTab.getAttribute('class')).toContain('active')
+    await page.locator('.products-cache-calendar-day[aria-label^="2026-09-07:"]').click()
+    await page.locator('.products-cache-calendar-day[aria-label^="2026-09-09:"]').click()
+    await page.getByRole('button', { name: 'Применить', exact: true }).click()
+    await expect.poll(() => evidence.queries.some(query => query.includes('dateFrom=2026-09-07') && query.includes('dateTo=2026-09-09'))).toBe(true)
+    await expect.poll(() => page.locator('#tab-abc [data-report-row]:visible').count()).toBe(50)
+    expect(evidence.errors).toEqual([])
+    expect(evidence.unexpected).toEqual([])
+  } finally { await browser.close() }
+}, 45_000)
+
 it('labels blocked and partial legacy P&L rows without claiming readiness', async () => {
   const browser = await chromium.launch({ headless: true })
   try {

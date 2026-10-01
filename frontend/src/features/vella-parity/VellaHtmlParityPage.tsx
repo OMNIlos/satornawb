@@ -7338,6 +7338,7 @@ function GlobalPeriodIsland({ replacementKey }: { replacementKey: string }) {
     }
     setCustomToIso(iso)
     if (iso < customFromIso) setCustomFromIso(iso)
+    setCalendarBoundary('from')
     setCalendarOpen(false)
   }
 

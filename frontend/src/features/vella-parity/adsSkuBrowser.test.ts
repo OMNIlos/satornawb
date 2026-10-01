@@ -43,6 +43,8 @@ it('searches actual Ads campaign rows by supplied SKU and campaign without addit
             campaignId: 910004 + index, campaignName: `Synthetic campaign-${index + 4}`,
             sku: `SYNTHETIC-SKU-${index + 4}`, productName: `Synthetic product ${index + 4}`, managerId: null,
             campaignType: index === 738 ? 8 : index === 737 ? 9 : index === 736 ? 'медиа' : null,
+            placements: index === 738 ? ['search'] : index === 737 ? ['recommendations'] : null,
+            bidType: index === 737 ? 'unified' : index === 736 ? 'manual' : null,
             unallocatedSpend: index === 738, drrPct: index === 738 ? 18 : 3,
           })),
         ], kpis: [], chart: null,
@@ -77,7 +79,7 @@ it('searches actual Ads campaign rows by supplied SKU and campaign without addit
     await expect.poll(() => visible.count()).toBe(0)
     await surface.getByRole('button', { name: 'Сбросить фильтры', exact: true }).click()
     await expect.poll(() => visible.count()).toBe(50)
-    for (const [chip, campaign] of [['Поиск', '742'], ['Каталог', '741'], ['Медиа', '740'], ['Не распределено', '742'], ['ДРР выше порога', '742']]) {
+    for (const [chip, campaign] of [['Поиск', '742'], ['Рекомендации', '741'], ['Ручная ставка', '740'], ['Единая ставка', '741'], ['Не распределено', '742'], ['ДРР выше порога', '742']]) {
       await surface.locator('.chips .chip').filter({ hasText: chip }).click()
       await expect.poll(() => visible.count()).toBe(1)
       expect(await visible.innerText()).toContain(`Synthetic campaign-${campaign}`)
