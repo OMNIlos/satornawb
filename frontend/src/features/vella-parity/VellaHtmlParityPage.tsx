@@ -30,7 +30,7 @@ import type {
   ReportKpi,
   TableRow,
 } from '@/features/wb-reports/types'
-import { downloadReportTableXlsx } from '@/features/wb-reports/tableXlsx'
+import { downloadReportTableXlsx as downloadSimpleReportTableXlsx } from '@/features/wb-reports/tableXlsx'
 import {
   getManagerPlan,
   getReportRules,
@@ -8793,7 +8793,7 @@ function AbcToolbarIsland({ replacementKey }: { replacementKey: string }) {
     if (!accessToken || exporting) return
     const table = buildAbcExportTable(state.report?.rows ?? [])
     setExporting(true)
-    void downloadReportTableXlsx(accessToken, 'abc', table.headers, table.rows)
+    void downloadSimpleReportTableXlsx(accessToken, 'abc', table.headers, table.rows)
       .then((filename) => window.showToast?.(`Выгружен ${filename}`, 'success'))
       .catch((error) => window.showToast?.(error instanceof Error ? error.message : 'Не удалось выгрузить ABC', 'error'))
       .finally(() => setExporting(false))
@@ -9231,7 +9231,7 @@ function AdsToolbarIsland({ replacementKey, rows, accessToken }: { replacementKe
     if (!accessToken || exporting) return
     const table = buildAdsExportTable(rows)
     setExporting(true)
-    void downloadReportTableXlsx(accessToken, 'ads', table.headers, table.rows)
+    void downloadSimpleReportTableXlsx(accessToken, 'ads', table.headers, table.rows)
       .then((filename) => window.showToast?.(`Выгружен ${filename}`, 'success'))
       .catch((error) => window.showToast?.(error instanceof Error ? error.message : 'Не удалось выгрузить рекламу', 'error'))
       .finally(() => setExporting(false))
@@ -28448,6 +28448,15 @@ function ProductsFilterChipsIsland() {
       >
         ?
       </button>
+      <a
+        className="btn btn-default btn-sm"
+        href="/settings/imports#settings-imports-costs"
+        data-vella-react-handlers="navigation"
+        title="Загрузить XLSX с себестоимостью товаров"
+      >
+        <Upload size={14} />
+        Загрузить себестоимость
+      </a>
     </div>
   )
 }
