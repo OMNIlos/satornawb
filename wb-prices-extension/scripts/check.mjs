@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 const manifest = JSON.parse(await readFile('manifest.json', 'utf8'))
 assert.equal(manifest.manifest_version, 3)
 assert.deepEqual(manifest.permissions, ['storage', 'alarms'])
-assert.deepEqual(manifest.host_permissions, ['https://www.wildberries.ru/*', 'https://api.elfprint-system.ru/*'])
+assert.deepEqual(manifest.host_permissions, ['https://www.wildberries.ru/*', 'https://card.wb.ru/*', 'https://api.elfprint-system.ru/*'])
 assert.equal(manifest.externally_connectable, undefined)
 assert.equal(manifest.web_accessible_resources, undefined)
 for (const script of manifest.content_scripts) {

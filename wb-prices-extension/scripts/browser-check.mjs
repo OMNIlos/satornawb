@@ -44,8 +44,15 @@ try {
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker')
   const extensionId = new URL(worker.url()).host
   await worker.evaluate(() => {
-    self.fixtureCalls = { catalog: 0, snapshots: 0 }
+    self.fixtureCalls = { publicCards: 0, catalog: 0, snapshots: 0 }
     self.fetch = async (url, options) => {
+      if (url.startsWith('https://card.wb.ru/cards/v4/detail?')) {
+        if (options.credentials !== 'omit' || options.redirect !== 'error') throw new Error('Public WB fixture destination rejected')
+        self.fixtureCalls.publicCards += 1
+        return new Response(JSON.stringify({ products: [{ id: 3003, supplierId: 303,
+          sizes: [{ optionId: 33, price: { product: 110000, wallet: 0 } }] }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
       const prefix = 'https://api.elfprint-system.ru/api/v1/wb/browser-prices'
       if (!url.startsWith(prefix) || options.credentials !== 'omit' || options.redirect !== 'error') throw new Error('Fixture destination rejected')
       const json = (value) => new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -80,7 +87,7 @@ try {
   await popup.getByText('Каталог проверен', { exact: true }).waitFor()
   assert.equal(await popup.locator('#token').inputValue(), '')
   await popup.getByRole('button', { name: 'Начать сбор', exact: true }).click()
-  await popup.waitForFunction(() => document.getElementById('coverage').textContent === '2 / 3', null, { timeout: 12000 }).catch(async (error) => {
+  await popup.waitForFunction(() => document.getElementById('coverage').textContent === '3 / 3', null, { timeout: 12000 }).catch(async (error) => {
     console.error(JSON.stringify(await worker.evaluate(() => ({ state: publicState(), calls: self.fixtureCalls }))))
     console.error(JSON.stringify({ errors, blocked }))
     for (const page of context.pages().filter((item) => item.url().startsWith('https://www.wildberries.ru/'))) {
@@ -91,7 +98,7 @@ try {
     await popup.screenshot({ path: join(output, 'popup-failed.png'), fullPage: true })
     throw error
   })
-  assert.equal(await popup.locator('#accepted').textContent(), '2')
+  assert.equal(await popup.locator('#accepted').textContent(), '3')
   await popup.screenshot({ path: join(output, 'popup-running.png'), fullPage: true })
   await popup.getByRole('button', { name: 'Остановить', exact: true }).click()
   await popup.getByText('Сбор приостановлен', { exact: true }).waitFor()
@@ -101,13 +108,13 @@ try {
   await popup.getByText('Не подключено', { exact: true }).waitFor()
   const local = await worker.evaluate(() => chrome.storage.local.get('token'))
   assert.equal(local.token, undefined)
-  assert.deepEqual(await worker.evaluate(() => self.fixtureCalls), { catalog: 1, snapshots: 2 })
+  assert.deepEqual(await worker.evaluate(() => self.fixtureCalls), { publicCards: 1, catalog: 1, snapshots: 3 })
   assert.deepEqual(errors, [])
   assert.deepEqual(blocked, [])
   const manifest = JSON.parse(await readFile('dist/manifest.json', 'utf8'))
   const result = { ok: true, browser: await context.browser().version(), permissions: manifest.permissions,
     externalNetwork: 'offline; all HTTP page requests fulfilled by exact fixtures or aborted',
-    checks: ['MV3 loaded', 'MAIN observer to isolated bridge to trusted background', 'exact offers 2/3', 'server acknowledgements 2', 'manual pause', 'local token deletion', 'wallet null'],
+    checks: ['MV3 loaded', 'public batch plus MAIN observer fallback', 'exact offers 3/3', 'server acknowledgements 3', 'manual pause', 'local token deletion', 'wallet null'],
     popupTransport: 'local fixture bridge to worker command; native popup sender checked separately by VM tests',
     transportBoundary: 'deny-only loopback proxy; no upstream forwarding', deniedConnections,
     screenshots: ['popup-running.png', 'popup-paused.png'] }
