@@ -102,7 +102,7 @@ it('applies dates explicitly and keeps statistics refresh available after a prov
     await surface.getByText('Дневная статистика не получена. Обновите данные, чтобы построить график.', { exact: true }).waitFor({ state: 'visible' })
     expect(queries).toHaveLength(5)
     expect(new URLSearchParams(queries[4]).get('forceRefresh')).toBe('true')
-    expect(await surface.locator('.avito-stats-error').count()).toBe(0)
+    await expect.poll(() => surface.locator('.avito-stats-error').count()).toBe(0)
     await page.getByRole('button', { name: 'Clear synthetic report session', exact: true }).click()
     await surface.getByRole('status').filter({ hasText: 'Нужна активная сессия' }).waitFor({ state: 'visible' })
     expect(await surface.locator('#avitoStatsKpiViews').innerText()).toBe('—')

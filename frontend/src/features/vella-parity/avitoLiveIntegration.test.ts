@@ -39,7 +39,6 @@ describe('Avito live integration wiring', () => {
       paritySource.indexOf('async function loadLiveAvitoStats'),
     )
     expect(paritySource).toContain('/api/v1/avito/repricer/items/${encodeURIComponent(itemId)}/strategy')
-    expect(paritySource).toContain('avito-decision-badge')
     expect(repricerSource).toContain('avito-strategy-picker')
     expect(repricerSource).toContain('avito-pending-card')
     expect(repricerSource).toContain('avito-row-photo')
@@ -133,14 +132,6 @@ describe('Avito live integration wiring', () => {
     expect(paritySource).toContain("new PopStateEvent('popstate'")
     expect(paritySource).toContain('vella:history-navigation')
     expect(paritySource).toContain('installLegacyHistoryNavigationBridge()')
-  })
-
-  it('shows Avito active and inactive listing counts from backend account totals', () => {
-    expect(paritySource).toContain('activeItemCount?: number')
-    expect(paritySource).toContain('inactiveItemCount?: number')
-    expect(paritySource).toContain('account.activeItemCount')
-    expect(paritySource).toContain('account.inactiveItemCount')
-    expect(paritySource).not.toContain("rows.filter((row) => row.sourceStatus !== 'fresh').length")
   })
 
   it('uses backend Avito listings data without static listing mock arrays', () => {

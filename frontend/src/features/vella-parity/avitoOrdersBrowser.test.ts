@@ -42,7 +42,7 @@ it.each(['populated', 'populated-no-extension', 'empty', 'error'])('renders read
         return route.fulfill({ contentType: 'application/json', body: JSON.stringify(url.pathname.endsWith('extension-token')
           ? { configured: false } : { enabled: false, intervalMinutes: 60, periodDays: 30 }) })
       }
-      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/v1/avito/orders') {
+      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/v1/avito/orders/queue') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       queries.push(url.search)
@@ -50,8 +50,8 @@ it.each(['populated', 'populated-no-extension', 'empty', 'error'])('renders read
       if (outcome === 'error') return route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":{"code":"SYNTHETIC_ORDERS_UNAVAILABLE","message":"Synthetic Orders unavailable"}}' })
       // Full required AvitoOrdersBackendResponse/AvitoOrderRow/AvitoOrderItem fields from the consumer.
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
-        status: 'synced', period: { dateFrom: url.searchParams.get('dateFrom'), days: 30 },
-        filters: { statuses: [], page: 1, limit: 20 },
+        status: 'synced',
+        filters: { mode: 'active', page: 1, limit: 50, accountId: null, search: '', historyFrom: null },
         summary: { total: populated ? 1 : 0, shown: populated ? 1 : 0, confirmation: 0, readyToShip: populated ? 1 : 0,
           inTransit: 0, delivered: 0, closed: 0, canceled: 0, returns: 0, disputes: 0, requiredActions: 0,
           items: populated ? 1 : 0, totalKopecks: populated ? 450000 : 0, statusCounts: populated ? { ready_to_ship: 1 } : {} },
@@ -66,22 +66,21 @@ it.each(['populated', 'populated-no-extension', 'empty', 'error'])('renders read
       }) })
     })
     await page.goto('http://satorna.test/avito/orders')
-    const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/avito/orders')
+    const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/avito/orders/queue')
     await page.addScriptTag({ content: code })
     await response
     await expect.poll(() => auxiliary.length, { timeout: 15_000 }).toBe(2)
     expect(queries).toHaveLength(1)
     const query = new URLSearchParams(queries[0])
-    expect([query.get('dateFrom'), query.get('periodDays'), query.get('page'), query.get('limit'), query.get('status'), query.get('forceRefresh')])
-      .toEqual(['2026-08-11', '30', '1', '20', null, null])
+    expect([...query.entries()]).toEqual([['mode', 'active'], ['limit', '50'], ['page', '1']])
     const surface = page.locator('#tab-orders-print')
     if (populated) {
       await surface.getByText('Synthetic read-only order product', { exact: true }).first().waitFor({ timeout: 15_000 })
-      expect(await surface.innerText()).toContain('SYNTHETIC-ORDER-SKU')
       expect(await surface.locator('.avito-orders-extension-empty').isVisible()).toBe(false)
-      await surface.getByRole('button', { name: 'Открыть', exact: true }).click()
+      await surface.getByText('Synthetic read-only order product', { exact: true }).first().click()
       await surface.locator('.avito-order-detail-window').waitFor({ state: 'visible' })
-      await surface.locator('.avito-order-detail-window').getByRole('button', { name: 'Закрыть' }).click()
+      expect(await surface.locator('.avito-order-detail-window').innerText()).toContain('SYNTHETIC-ORDER-SKU')
+      await surface.locator('.avito-order-detail-window .modal-close').click()
       const beforeLogout = [...queries]
       phase = 'logout'
       await page.getByRole('button', { name: 'Clear synthetic report session', exact: true }).click()
@@ -94,7 +93,7 @@ it.each(['populated', 'populated-no-extension', 'empty', 'error'])('renders read
       })
       expect(auxiliary).toHaveLength(2)
     } else if (outcome === 'empty') {
-      await surface.getByText('Нет позиций для подбора', { exact: true }).waitFor({ state: 'visible' })
+      await surface.getByText('Нет заказов в этом режиме', { exact: true }).waitFor({ state: 'visible' })
       expect(await surface.getByRole('button', { name: /Обновить данные/ }).isVisible()).toBe(true)
       expect(await surface.getByText('Synthetic read-only order product', { exact: true }).count()).toBe(0)
     } else {
