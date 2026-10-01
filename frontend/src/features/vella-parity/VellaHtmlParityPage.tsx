@@ -21719,7 +21719,7 @@ function AvitoRepricerIsland({ replacementKey }: { replacementKey: string; sourc
                   <th>Стратегия</th>
                   <th className="num">Цена</th>
                   <th className="num">Новая цена</th>
-                  <th className="num">Контакты</th>
+                  <th className="num">Чаты</th>
                   <th className="num">Просмотры</th>
                   <th className="num">CR чата</th>
                   <th className="num" title="Заказы / просмотры × 100%">CR в заказ</th>
@@ -21764,7 +21764,7 @@ function AvitoRepricerIsland({ replacementKey }: { replacementKey: string; sourc
                     </td>
                     <td className="num">{formatAvitoRubNullable(row.priceKopecks)}</td>
                     <td className="num"><div className="avito-price-stack"><b>{formatAvitoRubNullable(row.recommendedPriceKopecks)}</b><span>{row.priceDeltaPct === 0 ? 'без изменения' : `${row.priceDeltaPct > 0 ? '+' : ''}${row.priceDeltaPct}% по стратегии`}</span></div></td>
-                    <td className="num"><AvitoRepricerMetric value={row.contacts} trend={row.contactsTrend} /></td>
+                    <td className="num"><AvitoRepricerMetric value={row.contactsMessenger} trend={row.contactsTrend} /></td>
                     <td className="num"><AvitoRepricerMetric value={row.views} trend={row.viewsTrend} /></td>
                     <td className="num">{formatAvitoPctNullable(row.messengerConversionPct)}</td>
                     <td className="num">{formatAvitoPctNullable(row.orderConversionPct)}</td>

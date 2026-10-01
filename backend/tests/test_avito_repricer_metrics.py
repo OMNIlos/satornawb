@@ -38,7 +38,14 @@ def test_comparison_windows_are_batched_cached_and_item_specific(monkeypatch):
     monkeypatch.setattr(metrics, "blocked_count", lambda *_: 0)
     def fetch(http, request, account):
         calls.append((request, account))
-        return {"a": {"views": 20 if len(calls) % 2 else 10, "contacts": 2}, "b": {"views": 7, "contacts": 0}}
+        return {
+            "a": {
+                "views": 20 if len(calls) % 2 else 10,
+                "contacts": 99,
+                "contactsMessenger": 4 if len(calls) % 2 else 2,
+            },
+            "b": {"views": 7, "contacts": 8, "contactsMessenger": 0},
+        }
     client = SimpleNamespace(_http_client=lambda: nullcontext(None), _v2_item_analytics_for_account=fetch)
     payload = {"period": {"dateFrom": "2026-07-01", "dateTo": "2026-07-28"}, "summary": {},
                "source": {"error": {"code": "rate_limited", "retryAfterUntil": "2020-01-01T00:00:00Z"}},
@@ -49,7 +56,9 @@ def test_comparison_windows_are_batched_cached_and_item_specific(monkeypatch):
     assert str(calls[1][0].dateFrom) == "2026-07-23"
     assert str(calls[1][0].dateTo) == "2026-07-25"
     assert enriched["rows"][0]["viewsTrend"]["percent"] == 100
+    assert enriched["rows"][0]["contactsTrend"]["percent"] == 100
     assert enriched["rows"][1]["viewsTrend"]["direction"] == "flat"
+    assert enriched["rows"][1]["contactsTrend"]["direction"] == "flat"
     assert "viewsTrend" not in payload["rows"][0]
     metrics.enrich_comparisons(payload, 1, "scope", client)
     assert len(calls) == 2

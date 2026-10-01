@@ -106,7 +106,7 @@ def enrich_comparisons(payload, organization_id, scope, client):
         for row in account_rows:
             current, previous = [snapshot.get(row["itemId"], {}) for snapshot in snapshots]
             row["viewsTrend"] = trend(current.get("views"), previous.get("views"))
-            row["contactsTrend"] = trend(current.get("contacts"), previous.get("contacts"))
+            row["contactsTrend"] = trend(current.get("contactsMessenger"), previous.get("contactsMessenger"))
             row["comparisonPeriod"] = {"currentFrom": str(windows[0][0]), "currentTo": str(windows[0][1]),
                                        "previousFrom": str(windows[1][0]), "previousTo": str(windows[1][1])}
     summary = {**payload.get("summary", {}), "blockedListings": blocked_count(organization_id, scope, client)}

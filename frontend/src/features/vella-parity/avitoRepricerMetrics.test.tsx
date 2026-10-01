@@ -41,6 +41,9 @@ describe('Avito repricer presentation without a browser', () => {
   it('keeps requested columns and removes superseded columns', () => {
     const source = readFileSync(new URL('./VellaHtmlParityPage.tsx', import.meta.url), 'utf8')
     const table = source.slice(source.indexOf('function AvitoRepricerIsland('), source.indexOf('async function loadLiveAvitoStats('))
+    expect(table).toContain('<th className="num">Чаты</th>')
+    expect(table).toContain('value={row.contactsMessenger}')
+    expect(table).not.toContain('value={row.contacts} trend={row.contactsTrend}')
     expect(table).toContain('CR в заказ')
     expect(table).toContain('Средняя цена контакта')
     expect(table).toContain('Расходы на объявление')
