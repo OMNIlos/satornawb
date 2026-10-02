@@ -17,7 +17,7 @@ Chrome Manifest V3 extension for collecting Avito seller order details that are 
 11. Choose what to collect: product photos, color/article from description, and size from description or chat AI.
 12. Click `Собрать заказы`; the extension opens `https://www.avito.ru/orders` and sends the collected data to Satorna.
 
-Default Satorna URL: `https://ogni-frontend.vercel.app`. The popup now supports an explicit server address.
+Default Satorna URL: `https://satorna-wb.vercel.app`. Existing settings for the retired `ogni-frontend.vercel.app` deployment are migrated automatically. The popup also supports an explicit server address.
 
 ## Local Satorna
 

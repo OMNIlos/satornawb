@@ -4,7 +4,7 @@ importScripts('shipment-number.js')
 importScripts('labels.js')
 importScripts('listing-photos.js')
 
-const DEFAULT_BACKEND_URL = 'https://ogni-frontend.vercel.app'
+const DEFAULT_BACKEND_URL = SatornaConnection.defaultUrl
 const SNAPSHOT_PATH = '/api/v1/avito/orders/browser-snapshot'
 const AVITO_ORDERS_URL = 'https://www.avito.ru/orders'
 const AVITO_RETURNS_URL = 'https://www.avito.ru/orders?status%5B%5D=on_return'

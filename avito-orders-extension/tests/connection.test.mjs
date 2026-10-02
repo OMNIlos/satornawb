@@ -29,9 +29,15 @@ function harness() {
 
 test('accepts loopback HTTP and explicit HTTPS origins', () => {
   const { connection } = harness()
-  for (const url of ['http://127.0.0.1:5177', 'http://localhost:58017', 'http://[::1]:5177', 'https://ogni-frontend.vercel.app']) {
+  for (const url of ['http://127.0.0.1:5177', 'http://localhost:58017', 'http://[::1]:5177', 'https://satorna-wb.vercel.app']) {
     assert.equal(connection.normalize(` ${url}/ `), url)
   }
+})
+
+test('uses current production and migrates the retired frontend origin', () => {
+  const { connection } = harness()
+  assert.equal(connection.defaultUrl, 'https://satorna-wb.vercel.app')
+  assert.equal(connection.normalize('https://ogni-frontend.vercel.app'), connection.defaultUrl)
 })
 
 test('rejects unsafe or ambiguous server addresses', () => {

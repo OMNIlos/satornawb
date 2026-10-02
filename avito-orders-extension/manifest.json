@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Satorna Avito Orders Collector",
-  "version": "0.2.5",
-  "version_name": "0.2.5 local — пакетный сбор фотографий",
+  "version": "0.2.6",
+  "version_name": "0.2.6 — актуальный production Satorna",
   "description": "Collects Avito order details from the seller browser page for Satorna picking lists.",
   "permissions": ["activeTab", "storage", "scripting", "tabs"],
   "host_permissions": ["https://www.avito.ru/*", "http://localhost:*/*", "http://127.0.0.1:*/*", "https://*/*"],
