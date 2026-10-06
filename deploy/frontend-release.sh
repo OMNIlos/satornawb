@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish the frontend to the Beget server (https://app.elfprint-system.ru).
+# Publish the frontend to the Beget server (https://comcookie.store).
 #
 #   deploy/frontend-release.sh                 build this commit and make it live
 #   deploy/frontend-release.sh --no-switch     build and upload only

@@ -29,14 +29,14 @@ function harness() {
 
 test('accepts loopback HTTP and explicit HTTPS origins', () => {
   const { connection } = harness()
-  for (const url of ['http://127.0.0.1:5177', 'http://localhost:58017', 'http://[::1]:5177', 'https://app.elfprint-system.ru', 'https://satorna.example']) {
+  for (const url of ['http://127.0.0.1:5177', 'http://localhost:58017', 'http://[::1]:5177', 'https://comcookie.store', 'https://satorna.example']) {
     assert.equal(connection.normalize(` ${url}/ `), url)
   }
 })
 
 test('uses current production and migrates the retired hosted origins', () => {
   const { connection } = harness()
-  assert.equal(connection.defaultUrl, 'https://app.elfprint-system.ru')
+  assert.equal(connection.defaultUrl, 'https://comcookie.store')
   for (const retired of ['https://ogni-frontend.vercel.app', 'https://satorna-wb.vercel.app', 'https://satorna-wb.vercel.app/']) {
     assert.equal(connection.normalize(retired), connection.defaultUrl)
   }

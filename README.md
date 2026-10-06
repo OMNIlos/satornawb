@@ -42,7 +42,7 @@ npm run build
 
 ## Frontend deployment
 
-Production runs on the Beget server at `https://app.elfprint-system.ru`: nginx
+Production runs on the Beget server at `https://comcookie.store`: nginx
 serves the built `frontend/dist` and proxies `/api/*` on the same host to the
 backend container, so the browser talks to a single origin.
 
@@ -53,7 +53,7 @@ deploy/frontend-release.sh --switch <release>  # make an uploaded release live (
 ```
 
 - Build flags: `deploy/frontend-production.env`.
-- nginx site: `deploy/nginx/app.elfprint-system.ru.conf`.
+- nginx site: `deploy/nginx/comcookie.store.conf`.
 - The script needs Node 22.12+, rsync and the `satorna-api` SSH alias.
 
 The former Vercel deployment (`satorna-wb.vercel.app`) is frozen and receives no

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Satorna Avito Orders Collector",
   "version": "0.2.7",
-  "version_name": "0.2.7 — Satorna на app.elfprint-system.ru",
+  "version_name": "0.2.7 — Satorna на comcookie.store",
   "description": "Collects Avito order details from the seller browser page for Satorna picking lists.",
   "permissions": ["activeTab", "storage", "scripting", "tabs"],
   "host_permissions": ["https://www.avito.ru/*", "http://localhost:*/*", "http://127.0.0.1:*/*", "https://*/*"],

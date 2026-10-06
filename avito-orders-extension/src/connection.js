@@ -1,6 +1,6 @@
 // Shared by the popup and service worker; never infer a server from an Avito page.
 globalThis.SatornaConnection = {
-  defaultUrl: 'https://app.elfprint-system.ru',
+  defaultUrl: 'https://comcookie.store',
   // Earlier hosted addresses of the same platform: saved settings move to defaultUrl.
   retiredUrls: ['https://ogni-frontend.vercel.app', 'https://satorna-wb.vercel.app'],
   localUrl: 'http://127.0.0.1:5177',

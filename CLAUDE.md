@@ -213,7 +213,7 @@ Use `/browse` from gstack for all web browsing. Never use `mcp__claude-in-chrome
 
 - `/retro global` — нет других YC-проектов
 - `/office-hours` для пересмотра уже одобренного ТЗ — TZ-WB.md и TZ-Avito.md финализированы
-- `/setup-deploy` — деплой фронтенда уже настроен: `deploy/frontend-release.sh` (Beget, `app.elfprint-system.ru`)
+- `/setup-deploy` — деплой фронтенда уже настроен: `deploy/frontend-release.sh` (Beget, `comcookie.store`)
 - `/connect-chrome` / `mcp__claude-in-chrome__*` — только `/browse` (Playwright)
 
 ### Конфликты со superpowers
