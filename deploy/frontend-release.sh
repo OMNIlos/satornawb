@@ -76,6 +76,10 @@ cd "$repo_root/frontend"
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --no-audit --no-fund
 npm run build
 node "$repo_root/deploy/package-extensions.mjs" --origin=https://comcookie.store --to-dist
+node "$repo_root/deploy/package-extensions.mjs" --origin=https://api.elfprint-system.ru
+mkdir -p dist/api-downloads
+cp public/downloads/satorna-{avito-orders,wb-prices}-extension.zip dist/api-downloads/
+cp dist/downloads/satorna-{avito-orders,wb-prices}-extension.zip public/downloads/
 if [ ! -s dist/index.html ] || ! ls dist/assets/*.js >/dev/null 2>&1; then
   echo "The build produced no site in frontend/dist." >&2
   exit 1
