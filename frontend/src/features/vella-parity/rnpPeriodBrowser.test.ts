@@ -38,7 +38,7 @@ it('hides the old RNP period while the next scoped cache response is pending', a
     await page.route('**/*', async route => {
       const request = route.request()
       const url = new URL(request.url())
-      if (url.origin !== 'http://satorna.test' || request.method() !== 'GET') {
+      if (url.origin !== 'https://satorna.test' || request.method() !== 'GET') {
         unexpected.push(`${request.method()} ${url.pathname}`)
         return route.abort()
       }
@@ -67,7 +67,7 @@ it('hides the old RNP period while the next scoped cache response is pending', a
         kpis: [], formulaNotes: [], sourceEvidence: [], reportJob: null,
       }) })
     })
-    await page.goto('http://satorna.test/wb/reports/rnp')
+    await page.goto('https://satorna.test/wb/reports/rnp')
     await page.addScriptTag({ content: bundle.code })
     const first = page.getByText('Артикул: FIRST-PERIOD-SKU', { exact: true }).first()
     await first.waitFor({ state: 'visible', timeout: 10_000 })

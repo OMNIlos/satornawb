@@ -37,6 +37,7 @@ it.each([
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
+      if (route.request().method() === 'POST' && url.pathname === '/api/wb/reports/stats/jobs') return route.fulfill({ status: 503, json: { detail: 'Synthetic optional statistics unavailable' } })
       if (request.resourceType() === 'document') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.resourceType() === 'image') {
         if (/\/10[1-4]\/images\//.test(url.pathname)) {
@@ -46,11 +47,11 @@ it.each([
         return route.fulfill({ contentType: 'image/gif', body: image })
       }
       if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
-      if (url.origin === 'http://satorna.test' && request.method() === 'GET') {
+      if (url.origin === 'https://satorna.test' && request.method() === 'GET') {
         if (url.pathname === '/api/v1/wb-repricer/sku') {
           const pageNumber = Number(url.searchParams.get('page') || 1)
           const pageProducts = pageNumber === 1
-            ? products.concat(Array.from({ length: 146 }, (_, index) => ({ sku: `ZZZ-FILLER-${index}`, nmId: 2000 + index, photoUrl: `http://satorna.test/filler-${index}.gif` })))
+            ? products.concat(Array.from({ length: 146 }, (_, index) => ({ sku: `ZZZ-FILLER-${index}`, nmId: 2000 + index, photoUrl: `https://satorna.test/filler-${index}.gif` })))
             : [{ ...products[0], sku: 'PHOTO-PAGE-TWO' }]
           return route.fulfill({ json: {
           items: pageProducts.map(product => ({
@@ -73,7 +74,7 @@ it.each([
       unexpected.push(`${request.method()} ${url.pathname}`)
       return route.abort()
     })
-    await page.goto(`http://satorna.test${routePath}`)
+    await page.goto(`https://satorna.test${routePath}`)
     await page.addStyleTag({ content: styles })
     await page.addScriptTag({ content: bundle.code })
     const tab = page.locator(tabSelector)
@@ -89,7 +90,7 @@ it.each([
     expect.soft(await photo('PHOTO-UNAVAILABLE').getAttribute('alt')).toBe('Фото недоступно')
     expect.soft(photos.filter(url => url.includes('/101/'))).toEqual([sourceUrl(101)])
     expect.soft(photos.filter(url => url.includes('/104/')).length).toBeLessThanOrEqual(2)
-    await photo('PHOTO-UNAVAILABLE').evaluate(img => { img.setAttribute('src', 'http://satorna.test/recovered-photo.gif') })
+    await photo('PHOTO-UNAVAILABLE').evaluate(img => { img.setAttribute('src', 'https://satorna.test/recovered-photo.gif') })
     await expect.poll(() => photo('PHOTO-UNAVAILABLE').evaluate(img => (img as HTMLImageElement).naturalWidth)).toBe(1)
     expect.soft(await photo('PHOTO-UNAVAILABLE').getAttribute('alt')).toBe('')
     if (routePath.endsWith('/stats')) {

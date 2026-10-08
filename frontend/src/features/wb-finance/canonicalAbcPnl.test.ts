@@ -24,6 +24,7 @@ afterEach(() => {
 })
 
 function installBridgeWindow() {
+  vi.stubGlobal('document', { getElementById: () => null })
   vi.stubGlobal('window', Object.assign(new EventTarget(), {
     location: { pathname: '/wb/reports/abc', search: '', origin: 'http://localhost' },
     localStorage: { getItem: () => null, setItem: () => undefined },
@@ -77,7 +78,8 @@ describe('canonical ABC bridge lifecycle', () => {
     installBridgeWindow()
     let now = 1_000_000
     vi.spyOn(Date, 'now').mockImplementation(() => now)
-    const request = vi.fn(async () => jsonResponse(page()))
+    const request = vi.fn(async (input: RequestInfo | URL) => jsonResponse(String(input).includes('/latest-cache?')
+      ? { rows: [], cache: { fresh: true } } : page()))
     vi.stubGlobal('fetch', request)
     installAbcLiveDataBridge('ttl-test-token', { organizationId: 7, marketplaceAccountId: 31 })
     await window.__vellaLoadLiveAbcReport?.()

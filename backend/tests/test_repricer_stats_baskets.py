@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app import repricer_bff as repricer_bff_module
 from app import repricer_sync
 from app.main import create_app
-from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
+from app.repricer_cache.store import FINANCE_REVENUE_BASIS, FINANCE_SCHEMA_VERSION
 from app.routers import wb_repricer_bff as wb_repricer_bff_router
 from tests.auth_helpers import auth_headers
 
@@ -121,7 +121,7 @@ def stats_runtime(monkeypatch):
         storage[1, f"period_stats_{SUFFIX}"] = _source_payload(period)
         storage[1, f"finance_{SUFFIX}"] = _source_payload(
             finance,
-            revenueBasis="retailAmount",
+            revenueBasis=FINANCE_REVENUE_BASIS,
             financeSchemaVersion=FINANCE_SCHEMA_VERSION,
         )
         storage[1, f"ads_{SUFFIX}"] = _source_payload(ads)

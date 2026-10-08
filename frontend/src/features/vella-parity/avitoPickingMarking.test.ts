@@ -18,7 +18,7 @@ function ordersResponse(search = '', refreshing = false) {
       buyerName: null, buyerId: null, buyerPhone: null, recipientName: null, recipientPhone: null, address: null,
       trackNumber: 'TEST-TRACK-1', returnStatus: null, totalKopecks: 10000, availableActions: [], schedules: [], sourceStatus: 'ready_to_ship',
       items: [{ itemId: 'TEST-ITEM-1', title: 'Test shirt', quantity: 2, priceKopecks: 5000, barcode: 'TEST-BARCODE-1',
-        sellerArticle: 'TEST-SKU-1', size: 'M', color: 'white', imageUrl: 'http://satorna.test/test-product.png', returnMatches: [], reuseSuggestion: null }],
+        sellerArticle: 'TEST-SKU-1', size: 'M', color: 'white', imageUrl: 'https://satorna.test/test-product.png', returnMatches: [], reuseSuggestion: null }],
     }],
     source: { complete: !refreshing, error: refreshing ? { code: 'refresh_in_progress' } : null },
   }
@@ -51,16 +51,17 @@ describe('Avito picking without the empty marking slot', () => {
       await page.route('**/*', async (route) => {
         const request = route.request()
         const url = new URL(request.url())
-        if (request.method() === 'POST' && url.origin === 'http://satorna.test' && url.pathname === '/api/v1/avito/orders/extension-token/regenerate') {
+        if (request.method() === 'POST' && url.origin === 'https://satorna.test' && url.pathname === '/api/v1/avito/orders/extension-token/regenerate') {
           tokenCreates++
           return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ configured: true, token: syntheticToken, tokenPrefix: 'sat_avito_SYNTHETIC' }) })
         }
-        if (request.method() !== 'GET' || url.origin !== 'http://satorna.test') {
+        if (request.method() !== 'GET' || url.origin !== 'https://satorna.test') {
           unexpected.push(`${request.method()} ${url.pathname}`)
           return route.abort()
         }
         if (url.pathname === '/avito/orders') return route.fulfill({ contentType: 'text/html', body: '<body class="vella-html-parity-root"><div id="root"></div></body>' })
         if (url.pathname === '/favicon.ico') return route.fulfill({ status: 204 })
+        if (url.pathname === '/api/v1/avito/orders/picking-list/freshness') return route.fulfill({ json: { fresh: true } })
         if (url.pathname === '/api/v1/avito/orders/picking-list.xlsx') {
           exports++
           return exports === 1
@@ -79,7 +80,7 @@ describe('Avito picking without the empty marking slot', () => {
         else { unexpected.push(`${request.method()} ${url.pathname}`); return route.abort() }
         return route.fulfill({ contentType: 'application/json', body: JSON.stringify(data) })
       })
-      await page.goto('http://satorna.test/avito/orders')
+      await page.goto('https://satorna.test/avito/orders')
       await page.addScriptTag({ content: bundle.code })
       const table = page.locator('table.orders-picking-table')
       await table.waitFor({ state: 'visible', timeout: 10_000 })
@@ -97,7 +98,7 @@ describe('Avito picking without the empty marking slot', () => {
       expect(await table.innerText()).not.toContain('TEST-SKU-1')
       expect(await table.innerText()).not.toContain('TEST-BARCODE-1')
       expect(await table.innerText()).not.toContain('КИЗ')
-      expect(await table.locator('thead th').count()).toBe(11)
+      expect(await table.locator('thead th').count()).toBe(12)
       expect(await table.getByRole('button', { name: 'Открыть', exact: true }).count()).toBe(0)
       expect(await table.locator('.orders-inline-actions').count()).toBe(0)
       const productPhoto = table.locator('img.orders-picking-photo').first()
@@ -109,7 +110,7 @@ describe('Avito picking without the empty marking slot', () => {
         expect(await table.getByRole('columnheader', { name, exact: true }).count()).toBe(0)
       }
       const cells = table.locator('tbody tr').first().locator('td')
-      expect(await cells.count()).toBe(11)
+      expect(await cells.count()).toBe(12)
       expect(await cells.nth(1).innerText()).toContain('TEST-JOB-1')
       expect(await cells.nth(2).innerText()).toContain('001 286 40390')
       expect(await cells.nth(5).innerText()).toBe('2')
@@ -125,7 +126,7 @@ describe('Avito picking without the empty marking slot', () => {
       expect(barcodeLayout.width / barcodeLayout.height).toBeCloseTo(barcodeLayout.ratio, 2)
       expect(barcodeLayout.fit).toBe('contain')
       expect(await cells.nth(8).getByRole('button', { name: 'Оригинал PDF' }).isVisible()).toBe(true)
-      expect(await cells.nth(9).innerText()).toBe('TEST-ITEM-1')
+      expect(await cells.nth(10).innerText()).toBe('TEST-ITEM-1')
       expect(await page.getByText('54 поз. · синхронизация: готово').isVisible()).toBe(true)
       await page.getByRole('button', { name: 'Настройки расширения', exact: true }).click()
       const dialog = page.getByRole('dialog', { name: 'Настройки расширения Avito Orders' })
@@ -170,7 +171,7 @@ describe('Avito picking without the empty marking slot', () => {
       await page.getByPlaceholder('Поиск по номеру, заданию, артикулу, названию', { exact: true }).fill('not-present-in-fixture')
       const empty = table.locator('tbody tr.avito-orders-empty-row td')
       await empty.waitFor({ state: 'visible' })
-      expect(await empty.getAttribute('colspan')).toBe('11')
+      expect(await empty.getAttribute('colspan')).toBe('12')
       expect(await empty.innerText()).toContain('Ничего не нашлось')
       // Include the actual legacy width constraint: the JSX screen-only override
       // must win even when this rule is loaded later, without changing printing.

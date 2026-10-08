@@ -28,6 +28,7 @@ it('retains saved data when refresh fails and never retries automatically', asyn
 })
 
 it('does not start a collection for a fresh cache', async () => {
+  vi.stubGlobal('document', { getElementById: () => null })
   const saved = { cache: { fresh: true } }
   vi.mocked(apiRequest).mockResolvedValueOnce(saved)
   expect(await loadLatestReportCache('rnp', 'rnp', 'synthetic', 'sku', period)).toEqual(saved)

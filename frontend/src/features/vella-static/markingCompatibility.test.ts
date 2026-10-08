@@ -18,12 +18,12 @@ describe('shared Orders marking retirement compatibility', () => {
       await page.route('**/*', async route => {
         const request = route.request()
         if (request.method() !== 'GET') writes.push(request.method())
-        if (request.url() === 'http://satorna.test/orders' && request.method() === 'GET') {
+        if (request.url() === 'https://satorna.test/orders' && request.method() === 'GET') {
           return route.fulfill({ contentType: 'text/html', body: html })
         }
         return route.abort()
       })
-      await page.goto('http://satorna.test/orders', { waitUntil: 'domcontentloaded' })
+      await page.goto('https://satorna.test/orders', { waitUntil: 'domcontentloaded' })
       const result = await page.evaluate<CompatibilityResult>(`(() => {
         const original = { id: 'synthetic-legacy', jobNumber: 'JOB-1', source: 'wb',
           name: 'Synthetic shirt', size: 'M', color: 'white', sellerArticle: 'SKU-1',

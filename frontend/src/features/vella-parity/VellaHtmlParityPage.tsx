@@ -1612,13 +1612,8 @@ function computeProductsKpiFallbackSnapshot() {
     const backendRevenue = productNumber(product, 'revenue7d') || productNumber(product, 'revenue')
     return sum + backendRevenue
   }, 0)
-  const factMarginMissing = products.some(product => product.factTaxState && (product.factTaxState === 'missing' || product.netSku == null))
-  const marginRub = factMarginMissing ? null : products.reduce((sum, product) => {
-    const periodNet = productNumber(product, 'netSku')
-    if (product.factTaxState === 'configured' || periodNet !== 0) return sum + periodNet
-    const unitMargin = productNumber(product, 'mgRub') || productNumber(product, 'netPerUnit')
-    return sum + unitMargin * productNumber(product, 'ordersPeriod')
-  }, 0)
+  const factMarginMissing = products.some(product => product.factTaxState === 'missing' || product.netSku == null)
+  const marginRub = factMarginMissing ? null : products.reduce((sum, product) => sum + productNumber(product, 'netSku'), 0)
   const cogsRub = products.reduce((sum, product) => {
     const cogsTotal = productNumber(product, 'cogsTotal')
     if (cogsTotal !== 0) return sum + cogsTotal
@@ -5119,6 +5114,7 @@ type AbcBackendRow = AbcOperationalRow & {
   canonicalSourceState?: CanonicalCompatibilityMeta['state'] | null
 }
 type AbcBackendReport = {
+  cache?: { fresh?: boolean }
   rows?: AbcBackendRow[] | null
   filteredSummary?: Record<string, unknown> | null
   sourceEvidence?: Array<{ fieldsUsed?: string[] | null } | null> | null
@@ -6706,7 +6702,7 @@ export function installAbcLiveDataBridge(accessToken: string | null, canonicalRo
             if (controller.signal.aborted || isAbcAuthExpiredError(error)) throw error
             warning = 'Данные предыдущего периода не загрузились. Динамика расходов недоступна.'
           }
-          latest = { ...adaptCanonicalAbcReport(page, operational?.rows ?? [], previousPage), warning }
+          latest = { ...adaptCanonicalAbcReport(page, operational?.rows ?? [], previousPage), cache: operational?.cache, warning }
         } else {
           latest = await loadLatestReportCache<AbcBackendReport>('abc', 'abc', authToken, 'sku', period, 'operational', {
             signal: controller.signal,

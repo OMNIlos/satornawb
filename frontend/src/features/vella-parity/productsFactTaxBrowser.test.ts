@@ -22,7 +22,7 @@ it('keeps missing factual tax unknown and confirmed zero distinct from the curre
     { state: 'missing', summary: { factTaxState: 'missing', factTaxReason: 'tax_policy_unconfirmed', taxKopecks: null, marginKopecks: null, avgMarginPct: null }, expected: '—', ratio: '—', net: null },
     { state: 'missing', summary: undefined, expected: '—', ratio: '—', net: null },
     { state: 'configured', summary: undefined, expected: '0₽', ratio: '0.0%', net: 0 },
-    { state: undefined, summary: undefined, expected: '1200₽', ratio: '12.0%', net: 1200 },
+    { state: undefined, summary: undefined, expected: '—', ratio: '—', net: null },
   ]
   const browser = await chromium.launch({ headless: true })
   try {
@@ -43,10 +43,11 @@ it('keeps missing factual tax unknown and confirmed zero distinct from the curre
       page.on('pageerror', error => errors.push(error.message))
       await page.route('**/*', route => {
         const request = route.request(), url = new URL(request.url())
+        if (request.method() === 'POST' && url.pathname === '/api/wb/reports/stats/jobs') return route.fulfill({ status: 503, json: { detail: 'Synthetic optional statistics unavailable' } })
         if (request.resourceType() === 'document') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
         if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
         if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
-        if (url.origin === 'http://satorna.test' && request.method() === 'GET') {
+        if (url.origin === 'https://satorna.test' && request.method() === 'GET') {
           if (url.pathname === '/api/v1/wb-repricer/sku') return route.fulfill({ json: {
             items: [item], total: 1, itemsReturned: 1, page: 1, pageSize: 150, summary: scenario.summary,
             cache: { totalCached: 1, pagesCached: 1, financeFetchedAt: '2026-09-15T10:00:00Z' },
@@ -57,7 +58,7 @@ it('keeps missing factual tax unknown and confirmed zero distinct from the curre
         unexpected.push(`${request.method()} ${url.pathname}`)
         return route.abort()
       })
-      await page.goto('http://satorna.test/wb/repricer')
+      await page.goto('https://satorna.test/wb/repricer')
       await page.addStyleTag({ content: styles })
       await page.addScriptTag({ content: bundle.code })
       const row = page.locator('#tbody tr[data-sku="FACT-TAX"]')
@@ -65,8 +66,8 @@ it('keeps missing factual tax unknown and confirmed zero distinct from the curre
       const compact = (value: string) => value.replace(/\s+/g, '')
       expect.soft(compact(await page.locator('#kpiMarginRub').innerText()), JSON.stringify(scenario)).toBe(scenario.expected)
       expect.soft(compact(await page.locator('#kpiMargin').innerText()), JSON.stringify(scenario)).toBe(scenario.ratio)
-      expect(await row.locator('[data-column-id="mg"]').count()).toBe(0)
-      expect(await page.evaluate(() => (window.PRODUCTS as Array<{ mg?: number; mgRub?: number }>)?.[0]?.mgRub)).toBe(100)
+      expect(await row.locator('[data-column-id="mg"]').count()).toBe(1)
+      expect(await page.evaluate(() => (window.PRODUCTS as Array<{ mg?: number; mgRub?: number }>)?.[0]?.mgRub)).toBeNull()
       expect.soft(await page.evaluate(() => (window.PRODUCTS as Array<{ netSku?: number | null }>)?.[0]?.netSku)).toBe(scenario.net)
       if (scenario.state === 'missing') {
         expect.soft(await page.locator('#kpiMarginRub').locator('xpath=ancestor::div[contains(@class,"stat")][2]').innerText()).toContain('налог за период не подтверждён')

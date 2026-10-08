@@ -28,7 +28,7 @@ it('opens the real Avito schedule modal and discards edits on cancel without wri
     await page.route('**/*', async route => {
       const request = route.request()
       const url = new URL(request.url())
-      if (url.origin !== 'http://satorna.test' || request.method() !== 'GET') {
+      if (url.origin !== 'https://satorna.test' || request.method() !== 'GET') {
         unexpected.push(`${request.method()} ${url.pathname}`)
         return route.abort()
       }
@@ -52,7 +52,7 @@ it('opens the real Avito schedule modal and discards edits on cancel without wri
       apiReads.push(url.pathname)
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify(payload) })
     })
-    await page.goto('http://satorna.test/settings-test')
+    await page.goto('https://satorna.test/settings-test')
     await page.addScriptTag({ content: bundle.code })
     const open = page.getByRole('button', { name: 'Настроить время', exact: true })
     await open.waitFor({ state: 'visible', timeout: 10_000 })

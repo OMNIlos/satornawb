@@ -36,18 +36,18 @@ async function mount(page: Page) {
   })
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url())
-    if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/wb/reports/expenses') {
+    if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/wb/reports/expenses') {
       return route.fulfill({ contentType: 'text/html', body: '<title>Synthetic disabled 1C</title><div id="root"></div>' })
     }
     if (request.method() === 'GET' && request.resourceType() === 'image') {
       return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
     }
     if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
-    if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/pnl') {
+    if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/api/wb/reports/pnl') {
       requests.push(`${request.method()} ${url.pathname}${url.search}`)
       return route.fulfill({ json: { rows: [], kpis: [], cashFlow: { status: 'disabled' }, reportJob: { state: 'completed' } } })
     }
-    if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname.endsWith('/latest-cache')) {
+    if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname.endsWith('/latest-cache')) {
       requests.push(`${request.method()} ${url.pathname}${url.search}`)
       return route.fulfill({ json: {
         meta: { state: 'partial' }, warning: unavailableMessage,
@@ -59,7 +59,7 @@ async function mount(page: Page) {
     requests.push(`${request.method()} ${url.pathname}${url.search}`)
     return route.abort()
   })
-  await page.goto('http://satorna.test/wb/reports/expenses')
+  await page.goto('https://satorna.test/wb/reports/expenses')
   await page.addScriptTag({ content: bundleCode })
   return { requests, errors, consoleProblems }
 }
@@ -77,7 +77,7 @@ it('renders disabled 1C as unavailable on expenses without waiting or zero amoun
     expect(evidence.requests.some(request => request.includes('/jobs'))).toBe(false)
     expect(evidence.errors).toEqual([])
     expect(evidence.consoleProblems).toEqual([])
-    expect(page.url()).toBe('http://satorna.test/wb/reports/expenses')
+    expect(page.url()).toBe('https://satorna.test/wb/reports/expenses')
     expect(await page.title()).toBe('Satorna — Отчёты WB')
     expect(await page.locator('vite-error-overlay, nextjs-portal').count()).toBe(0)
     if (process.env.SATORNA_REPORT_UI_SCREENSHOTS) {

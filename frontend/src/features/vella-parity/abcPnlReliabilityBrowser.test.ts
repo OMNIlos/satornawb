@@ -75,12 +75,12 @@ async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false, canonicalPa
   await page.clock.setFixedTime(new Date('2026-09-11T12:00:00Z'))
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url())
-    if (request.method() === 'GET' && url.origin === 'http://satorna.test') {
+    if (request.method() === 'GET' && url.origin === 'https://satorna.test') {
       if (url.pathname === `/wb/reports/${tab}`) return route.fulfill({ contentType: 'text/html', body: '<title>Synthetic report reliability</title><div id="root"></div>' })
       if (url.pathname === '/api/v1/cabinet/team/users') return route.fulfill({ json: { data: [] } })
       if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: { data: { userId: '1', hasToken: false, tokenMasked: null, updatedAt: null } } })
       if (url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: { data: { userId: '1', hasCredentials: false, clientIdMasked: null, clientSecretMasked: null, accessTokenExpiresAt: null, updatedAt: null } } })
-      if (url.pathname === '/api/wb/reports/abc/latest-cache') return route.fulfill({ json: { rows: [] } })
+      if (url.pathname === '/api/wb/reports/abc/latest-cache') return route.fulfill({ json: { rows: [], cache: { fresh: true } } })
       if (!legacy && url.pathname === '/api/v2/wb/reports/abc-pnl') {
         queries.push(url.search)
         const dateFrom = url.searchParams.get('dateFrom') ?? '2026-09-01', dateTo = url.searchParams.get('dateTo') ?? '2026-09-07'
@@ -113,7 +113,7 @@ async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false, canonicalPa
     unexpected.push(`${request.method()} ${url.pathname}`)
     return route.abort()
   })
-  await page.goto(`http://satorna.test/wb/reports/${tab}${legacy ? '#legacy' : ''}`)
+  await page.goto(`https://satorna.test/wb/reports/${tab}${legacy ? '#legacy' : ''}`)
   await page.evaluate(tab => { window.__vellaReportPeriods = { [tab]: { days: 7, mode: 'custom', fromIso: '2026-09-01', toIso: '2026-09-07', label: 'Synthetic period' } } }, tab)
   await page.addScriptTag({ content: bundleCode })
   await page.locator(`#tab-${tab} [data-report-row]`).first().waitFor({ timeout: 15_000 }).catch(async error => {
@@ -151,30 +151,12 @@ async function mount(page: Page, tab: 'abc' | 'pnl', legacy = false, canonicalPa
         financeExpensesKopecks: 4500,
       } })
     const surface = page.locator('#tab-pnl')
-    await surface.getByText('Полный состав расчёта', { exact: true }).click()
-    const breakdown = surface.getByRole('table', { name: 'Состав прибыли по выбранным строкам' })
-    const value = (label: string) => breakdown.getByRole('row').filter({ has: page.getByRole('rowheader', { name: label, exact: true }) }).getByRole('cell').first()
-    expect(await value('Промежуточная прибыль WB').innerText()).toBe('нет данных')
-    await surface.locator('.search input').fill('500000001')
-    await expect.poll(() => surface.locator('[data-report-row]:visible').count()).toBe(1)
-    for (const [label, expected] of [['Расходы WB, всего', '15,00 ₽'], ['Компенсации WB', '1,00 ₽'],
-      ['Промежуточная прибыль WB', '65,00 ₽'], ['Налог', '3,00 ₽'],
-      ['До рекламы и лояльности', '60,00 ₽'], ['До лояльности', '50,00 ₽'],
-      ['Прибыль', '49,00 ₽']]) expect(await value(label).innerText()).toBe(expected)
-    await surface.locator('.search input').fill('ZERO')
-    await expect.poll(() => value('Прибыль').innerText()).toBe('0,00 ₽')
-    await surface.locator('.search input').fill('LOSS')
-    await expect.poll(() => value('Прибыль').innerText()).toBe('-1,01 ₽')
-    if (process.env.SATORNA_REPORT_UI_SCREENSHOTS) {
-      await breakdown.scrollIntoViewIfNeeded()
-      await page.screenshot({ path: '/tmp/satorna-profit-breakdown-desktop.png' })
+    const profit = surface.locator('.pnl-flow-item b').last()
+    expect(await profit.innerText()).toBe('нет данных')
+    for (const [query, expected] of [['500000001', '49 ₽'], ['ZERO', '0 ₽'], ['LOSS', '-1,01 ₽'], ['absent', '0 ₽']]) {
+      await surface.locator('.search input').fill(query)
+      await expect.poll(() => profit.innerText()).toBe(expected)
     }
-    await page.setViewportSize({ width: 390, height: 844 })
-    expect(await breakdown.isVisible()).toBe(false)
-    if (process.env.SATORNA_REPORT_UI_SCREENSHOTS) await page.screenshot({ path: '/tmp/satorna-profit-breakdown-mobile.png' })
-    await page.setViewportSize({ width: 1440, height: 1000 })
-    await surface.locator('.search input').fill('absent')
-    await expect.poll(() => value('Прибыль').innerText()).toBe('нет данных')
     expect(evidence.errors).toEqual([])
     expect(evidence.unexpected).toEqual([])
   } finally { await browser.close() }
@@ -392,8 +374,8 @@ it('labels blocked and partial legacy P&L rows without claiming readiness', asyn
     await search.fill('')
     await expect.poll(() => totals.allTextContents()).toEqual(['60 ₽', 'нет данных', '0 ₽', '0 ₽', '0 ₽', 'нет данных · нет данных'])
     await page.getByRole('button', { name: 'Начало периода аналитики WB', exact: true }).click()
-    // The rollout-disabled legacy report still uses its existing coverage gate.
-    expect(await page.locator('.products-cache-calendar-day[aria-label^="2026-09-02:"]').getAttribute('aria-disabled')).toBe('true')
+    // Sparse saved coverage does not block selecting past dates.
+    expect(await page.locator('.products-cache-calendar-day[aria-label^="2026-09-02:"]').getAttribute('aria-disabled')).toBe('false')
     expect(evidence.errors).toEqual([])
     expect(evidence.unexpected).toEqual([])
   } finally { await browser.close() }

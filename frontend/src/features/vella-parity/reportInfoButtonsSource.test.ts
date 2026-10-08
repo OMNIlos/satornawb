@@ -41,13 +41,13 @@ describe('report info buttons source coverage', () => {
     expect(functionSource('StockTableShellIsland')).toContain('Дней до OOS = доступный остаток / средние заказы в день')
     expect(functionSource('AdsTableShellIsland')).toContain('ДРР = расход рекламы / сумму заказов или продаж')
     expect(functionSource('PnlLiveTableShellIsland')).toContain('Прибыль = выручка - себестоимость - комиссия')
-    expect(functionSource('WeekTableShellIsland')).toContain('Наличие 7 дней')
+    expect(functionSource('WeekTableShellIsland')).toContain('Наличие: последние 7 дней')
   })
 
   it('adds info tips to report summary cards', () => {
     expect(functionSource('AdsLiveKpiStripIsland')).toContain('Сколько денег списано на рекламу WB')
     expect(functionSource('AdsLiveSummaryGridIsland')).toContain('<ReportHelpTip tip={tip} />')
     expect(functionSource('PnlLiveWorkbenchIsland')).toContain('Маржа = прибыль / выручка * 100%.')
-    expect(functionSource('WeekWorkbenchIsland')).toContain('Среднее изменение продаж к прошлой неделе')
+    expect(functionSource('WeekWorkbenchIsland')).toContain('Среднее изменение по товарам к предыдущему периоду равной длины')
   })
 })

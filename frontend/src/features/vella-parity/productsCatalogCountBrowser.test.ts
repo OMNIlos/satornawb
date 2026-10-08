@@ -47,7 +47,8 @@ it('keeps catalog totals in the table without duplicating unscoped navigation co
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
-      if (url.origin === 'http://satorna.test' && url.pathname === '/wb/repricer') {
+      if (request.method() === 'POST' && url.pathname === '/api/wb/reports/stats/jobs') return route.fulfill({ status: 503, json: { detail: 'Synthetic optional statistics unavailable' } })
+      if (url.origin === 'https://satorna.test' && url.pathname === '/wb/repricer') {
         return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       }
       if (request.resourceType() === 'image') {
@@ -81,7 +82,7 @@ it('keeps catalog totals in the table without duplicating unscoped navigation co
       return route.abort()
     })
 
-    await page.goto('http://satorna.test/wb/repricer')
+    await page.goto('https://satorna.test/wb/repricer')
     await page.addScriptTag({ content: bundle.code })
     const sidebarCount = page.locator('#sidebar [data-tab="products"] > .nav-badge')
     const subtabCount = page.locator('.subtabs [data-tab="products"] > .subtab-count')
@@ -111,11 +112,12 @@ it('keeps catalog totals in the table without duplicating unscoped navigation co
     expect.soft(await revenueTip.count()).toBe(1)
     if (await revenueTip.count()) {
       await revenueTip.focus()
-      await expect.poll(() => page.locator('#g-tip').innerText()).toContain('retailAmount')
+      await expect.poll(() => page.locator('#g-tip').innerText()).toContain('цене продавца')
       await page.keyboard.press('Escape')
       expect.soft(await page.locator('#g-tip').isVisible()).toBe(false)
     }
 
+    await page.locator('#tbody tr[data-sku]').first().locator('td').first().locator('.cb').click()
     // Both controls must remain reachable; changing their z-index alone cannot fix the overlap.
     for (const width of [1366, 1440, 1920]) {
       await page.setViewportSize({ width, height: 1000 })
@@ -147,8 +149,8 @@ it('keeps catalog totals in the table without duplicating unscoped navigation co
       Object.assign(window.__vellaProductsSummary!, { revenueKopecks: 0, marginKopecks: 0, cogsKopecks: -200, expensesKopecks: -300, avgMarginPct: 0 })
       window.dispatchEvent(new CustomEvent('vella:products-kpi-updated'))
     })
-    await expect.poll(() => page.locator('#kpiRevenue').innerText()).toBe('0 ₽')
-    expect.soft(await page.locator('#kpiMarginRub').innerText()).toBe('0 ₽')
+    await expect.poll(() => page.locator('#kpiRevenue').innerText()).toBe('0,00 ₽')
+    await expect.poll(() => page.locator('#kpiMarginRub').innerText()).toBe('0 ₽')
     await expect.poll(() => page.locator('#kpiCogs').innerText()).toBe('-2 ₽')
     expect.soft(await page.locator('#kpiExpenses').innerText()).toBe('-3 ₽')
     expect.soft(await page.locator('#kpiMargin').innerText()).toBe('—')
@@ -172,7 +174,7 @@ it('keeps catalog totals in the table without duplicating unscoped navigation co
     await page.locator('#searchTable').fill('SKU-3410-scoped')
     await expect.poll(() => productQueries.some(query => new URLSearchParams(query).get('q') === 'SKU-3410-scoped')).toBe(true)
     await expect.poll(() => page.locator('.products-kpi-summary-actions').innerText()).toContain('Все товары по фильтру')
-    await expect.poll(() => page.locator('#kpiRevenue').innerText()).toBe('1 234 ₽')
+    await expect.poll(() => page.locator('#kpiRevenue').innerText()).toBe('1 234,00 ₽')
     expect(await page.locator('#kpiMarginRub').innerText()).toBe('567 ₽')
     expect(await page.locator('#kpiMargin').innerText()).toBe('45.9%')
     expect(await page.evaluate(() => window.__vellaProductsSummary?.skuCount)).toBe(1)
@@ -182,7 +184,7 @@ it('keeps catalog totals in the table without duplicating unscoped navigation co
       window.__vellaProductsListState = { ...window.__vellaProductsListState, page: 2 }
       await window.__vellaLoadLiveRepricerProducts?.()
     })
-    await expect.poll(() => page.locator('#kpiRevenue').innerText()).toBe('2 468 ₽')
+    await expect.poll(() => page.locator('#kpiRevenue').innerText()).toBe('2 468,00 ₽')
     expect(await page.locator('#kpiMarginRub').innerText()).toBe('1 134 ₽')
     expect(productQueries.filter(query => new URLSearchParams(query).get('q') === 'SKU-3410-fallback').map(query => new URLSearchParams(query).get('page'))).toEqual(['2', '1'])
     expect(await sidebarCount.count()).toBe(0)

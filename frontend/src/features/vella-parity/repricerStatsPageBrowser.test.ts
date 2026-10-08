@@ -40,14 +40,14 @@ it('loads live statistics through the actual React route and clears them on sess
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url())
-      if (url.origin === 'http://satorna.test' && request.method() === 'GET' && url.pathname === '/wb/repricer/stats') {
+      if (url.origin === 'https://satorna.test' && request.method() === 'GET' && url.pathname === '/wb/repricer/stats') {
         return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       }
       if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') {
         return route.fulfill({ contentType: 'text/css', body: '/* Offline font fixture: use system fallback. */' })
       }
-      if (url.origin !== 'http://satorna.test' || request.method() !== 'GET' || url.pathname !== '/api/v1/wb-repricer/stats') {
+      if (url.origin !== 'https://satorna.test' || request.method() !== 'GET' || url.pathname !== '/api/v1/wb-repricer/stats') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       requests.push(url.search)
@@ -66,7 +66,7 @@ it('loads live statistics through the actual React route and clears them on sess
         }, cache: { basketsFetchedAt: '2026-08-07T12:00:00Z' },
       }) })
     })
-    await page.goto('http://satorna.test/wb/repricer/stats')
+    await page.goto('https://satorna.test/wb/repricer/stats')
     await page.addScriptTag({ content: bundle.code })
     await expect.poll(() => requests.length).toBe(1)
     await page.getByText('Загружаю статистику товаров...', { exact: true }).waitFor()

@@ -50,7 +50,8 @@ it('keeps review counts scoped, rules editable and product sync active after rem
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.resourceType() === 'document' && url.origin === 'http://satorna.test') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (route.request().method() === 'POST' && url.pathname === '/api/wb/reports/stats/jobs') return route.fulfill({ status: 503, json: { detail: 'Synthetic optional statistics unavailable' } })
+      if (request.resourceType() === 'document' && url.origin === 'https://satorna.test') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.resourceType() === 'image') return route.fulfill({ status: 204 })
       if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
       if (request.method() === 'GET') {
@@ -81,7 +82,7 @@ it('keeps review counts scoped, rules editable and product sync active after rem
       unexpected.push(`${request.method()} ${url.pathname}`)
       return route.abort()
     })
-    await page.goto('http://satorna.test/wb/reviews')
+    await page.goto('https://satorna.test/wb/reviews')
     await page.clock.install()
     await page.addScriptTag({ content: bundle.code })
     const reviews = page.locator('#tab-reviews')

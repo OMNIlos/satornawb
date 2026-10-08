@@ -27,10 +27,10 @@ it('shows live Avito notification counts and opens details on demand', async () 
     let notificationRequests = 0
     await page.route('**/*', route => {
       const url = new URL(route.request().url())
-      if (url.origin === 'http://satorna.test' && url.pathname === '/avito/notifications') {
+      if (url.origin === 'https://satorna.test' && url.pathname === '/avito/notifications') {
         return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       }
-      if (url.origin === 'http://satorna.test' && url.pathname === '/api/v1/avito/notifications') {
+      if (url.origin === 'https://satorna.test' && url.pathname === '/api/v1/avito/notifications') {
         notificationRequests++
         return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
           status: 'synced', summary: { total: 2, unread: 1, critical: 1, warning: 0, info: 1, sectionsBlocked: 0 },
@@ -46,7 +46,7 @@ it('shows live Avito notification counts and opens details on demand', async () 
       }
       return route.abort()
     })
-    await page.goto('http://satorna.test/avito/notifications')
+    await page.goto('https://satorna.test/avito/notifications')
     await page.addScriptTag({ content: bundle.code })
     const surface = page.locator('#tab-notifications')
     await surface.locator('#notifTableWrap').getByText('Avito alert', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 })

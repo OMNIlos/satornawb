@@ -107,7 +107,7 @@ describe('vella source of truth', () => {
     expect(html).toContain("'/wb/reviews': 'reviews'")
     expect(html).toContain("'/avito/reviews': 'avito-reviews'")
     expect(html).toContain('id="tab-avito-reviews"')
-    expect(html).toContain('id="avitoReviewsNavCount"')
+    expect(html).not.toContain('id="avitoReviewsNavCount"')
     expect(html).toContain('<button class="chip active" type="button" data-avito-review-filter="status" data-value="all" aria-pressed="true"')
     expect(html).toContain("const totals = { open: 14, queue: 7, auto: 31, blocked: 4 }")
     expect(html).toContain("set('avitoReviewsNavCount', totals.open)")
@@ -155,6 +155,7 @@ describe('vella source of truth', () => {
       },
     })
     vi.stubGlobal('window', runtime)
+    vi.stubGlobal('document', { getElementById: () => null })
     const requests: Array<{ url: string; method: string }> = []
     let outcome: 'rows' | 'empty' | 'error' = 'rows'
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {

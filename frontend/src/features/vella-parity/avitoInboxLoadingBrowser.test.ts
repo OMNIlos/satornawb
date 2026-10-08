@@ -28,10 +28,10 @@ it('shows a chat API failure instead of a false empty inbox and recovers on refr
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/avito/inbox') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/avito/inbox') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
-      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/v1/avito/chats') {
+      if (request.method() !== 'GET' || url.origin !== 'https://satorna.test' || url.pathname !== '/api/v1/avito/chats') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       requests++
@@ -45,7 +45,7 @@ it('shows a chat API failure instead of a false empty inbox and recovers on refr
         source: { diagnostics: {}, error: success ? null : { code: 'transport_error', message: 'Avito transport error' } },
       }) })
     })
-    await page.goto('http://satorna.test/avito/inbox')
+    await page.goto('https://satorna.test/avito/inbox')
     await page.addScriptTag({ content: bundle.code })
     const stream = page.locator('#avitoMessageStream')
     await stream.getByText('Сообщения временно недоступны', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 })

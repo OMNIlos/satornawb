@@ -48,7 +48,7 @@ it('searches Week by SKU, product name and the supplied product segment without 
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/wb/reports/week-over-week') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/wb/reports/week-over-week') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
       if (request.method() === 'GET' && url.pathname === '/api/v1/wb-repricer/cache/coverage') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: { days: [] } }) })
@@ -60,7 +60,7 @@ it('searches Week by SKU, product name and the supplied product segment without 
         exports.push(request.postDataJSON())
         return route.fulfill({ contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', body: Buffer.from('synthetic-xlsx') })
       }
-      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/wb/reports/week-over-week/latest-cache') {
+      if (request.method() !== 'GET' || url.origin !== 'https://satorna.test' || url.pathname !== '/api/wb/reports/week-over-week/latest-cache') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       queries.push(url.search)
@@ -74,7 +74,7 @@ it('searches Week by SKU, product name and the supplied product segment without 
         rows: rows.map((row, index) => ({ ...row, sales: partial ? null : { units: index + 1, kopecks: (index + 1) * 100, deltaPct: null }, orders: { units: index + 1, kopecks: (index + 1) * 100, deltaPct: 10 }, price: { kopecks: 100 }, baskets: { units: index + 1, deltaPct: -10 } })), reportJob: null,
       }) })
     })
-    await page.goto('http://satorna.test/wb/reports/week-over-week')
+    await page.goto('https://satorna.test/wb/reports/week-over-week')
     await page.evaluate(() => {
       window.__vellaReportPeriods = { week: { days: 7, mode: 'custom', fromIso: '2026-08-01', toIso: '2026-08-07', label: 'Synthetic Week period' } }
     })

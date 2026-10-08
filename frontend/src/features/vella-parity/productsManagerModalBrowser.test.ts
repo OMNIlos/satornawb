@@ -24,6 +24,7 @@ it('keeps manager assignment above the page, traps focus and saves selected SKU 
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url())
+      if (route.request().method() === 'POST' && url.pathname === '/api/wb/reports/stats/jobs') return route.fulfill({ status: 503, json: { detail: 'Synthetic optional statistics unavailable' } })
       if (request.resourceType() === 'document') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.resourceType() === 'image') return route.fulfill({ status: 204 })
       if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
@@ -42,7 +43,7 @@ it('keeps manager assignment above the page, traps focus and saves selected SKU 
       unexpected.push(`${request.method()} ${url.pathname}`)
       return route.abort()
     })
-    await page.goto('http://satorna.test/wb/repricer')
+    await page.goto('https://satorna.test/wb/repricer')
     await page.addScriptTag({ content: bundle.code })
     await page.locator('#tbody tr[data-sku]').first().waitFor()
     for (const index of [0, 1]) {

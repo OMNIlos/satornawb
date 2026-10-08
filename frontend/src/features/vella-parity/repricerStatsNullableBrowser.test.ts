@@ -36,8 +36,8 @@ function response(rows: typeof metricRows, summary: Record<string, unknown>) {
 
 async function expectRow(page: Page, articleId: string, basketIndex: number, crIndex: number, basket: string, cr: string) {
   const row = page.getByRole('row').filter({ hasText: articleId })
-  expect(await row.locator('td').nth(basketIndex).innerText()).toBe(basket)
-  expect(await row.locator('td').nth(crIndex).innerText()).toBe(cr)
+  expect((await row.locator('td').nth(basketIndex).innerText()).split('\n')[0]).toBe(basket)
+  expect((await row.locator('td').nth(crIndex).innerText()).split('\n')[0]).toBe(cr)
 }
 
 it('renders unknown and zero baskets honestly in both actual statistics pages', async () => {
@@ -70,14 +70,15 @@ it('renders unknown and zero baskets honestly in both actual statistics pages', 
     })
     await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url())
-      if (url.origin === 'http://satorna.test' && request.method() === 'GET' && url.pathname === '/wb/repricer/stats') {
+      if (request.method() === 'POST' && url.pathname === '/api/wb/reports/stats/jobs') return route.fulfill({ json: { state: 'failed', error: 'Synthetic optional statistics unavailable' } })
+      if (url.origin === 'https://satorna.test' && request.method() === 'GET' && url.pathname === '/wb/repricer/stats') {
         return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       }
       if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') {
         return route.fulfill({ contentType: 'text/css', body: '/* Offline font fixture. */' })
       }
-      if (url.origin !== 'http://satorna.test' || request.method() !== 'GET' || url.pathname !== '/api/v1/wb-repricer/stats') {
+      if (url.origin !== 'https://satorna.test' || request.method() !== 'GET' || url.pathname !== '/api/v1/wb-repricer/stats') {
         unexpected.push(`${request.method()} ${url.pathname}`)
         return route.abort()
       }
@@ -92,14 +93,14 @@ it('renders unknown and zero baskets honestly in both actual statistics pages', 
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
     })
 
-    await page.goto('http://satorna.test/wb/repricer/stats')
+    await page.goto('https://satorna.test/wb/repricer/stats')
     await page.addStyleTag({ content: styles })
     await page.addScriptTag({ content: bundle.code })
     await page.getByText('UNKNOWN-STATS-SKU', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 })
-    expect(page.url()).toBe('http://satorna.test/wb/repricer/stats')
+    expect(page.url()).toBe('https://satorna.test/wb/repricer/stats')
     expect(await page.title()).toBe('Satorna — Репрайсер WB')
-    expect(await page.locator('#repricerStatsBody tr').first().locator('td').nth(8).innerText()).toBe('—')
-    expect(await page.locator('#repricerStatsBody tr').first().locator('td').nth(10).innerText()).toBe('—')
+    expect((await page.locator('#repricerStatsBody tr').first().locator('td').nth(8).innerText()).split('\n')[0]).toBe('—')
+    expect((await page.locator('#repricerStatsBody tr').first().locator('td').nth(10).innerText()).split('\n')[0]).toBe('—')
     expect(await page.locator('#tab-repricer-stats .stat-val').first().innerText()).toBe('—')
     expect(await page.locator('#tab-repricer-stats .stat-delta').first().innerText()).toContain('нет данных WB')
     await expectRow(page, 'ZERO-STATS-SKU', 8, 10, '0', '0%')

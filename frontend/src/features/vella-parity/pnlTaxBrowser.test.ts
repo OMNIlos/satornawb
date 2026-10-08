@@ -39,13 +39,13 @@ it('renders backend P&L tax as unknown, zero or supplied amount under the Tax co
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/wb/reports/pnl') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/wb/reports/pnl') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
       if (url.pathname === '/api/v1/cabinet/team/users') return route.fulfill({ json: { data: [] } })
       if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: { data: { hasToken: false } } })
       if (url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: { data: { hasCredentials: false } } })
-      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/wb/reports/pnl/latest-cache') {
+      if (request.method() !== 'GET' || url.origin !== 'https://satorna.test' || url.pathname !== '/api/wb/reports/pnl/latest-cache') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       queries.push(url.search)
@@ -60,7 +60,7 @@ it('renders backend P&L tax as unknown, zero or supplied amount under the Tax co
       }
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify(payload) })
     })
-    await page.goto('http://satorna.test/wb/reports/pnl')
+    await page.goto('https://satorna.test/wb/reports/pnl')
     await page.evaluate(() => {
       window.__vellaReportPeriods = { pnl: { days: 7, mode: 'custom', fromIso: '2026-08-01', toIso: '2026-08-07', label: 'Synthetic P&L period' } }
     })

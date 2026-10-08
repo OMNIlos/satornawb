@@ -26,13 +26,13 @@ test('WB live products mount without installing legacy table writers or crashing
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const url = new URL(route.request().url())
-      if (url.origin === 'http://satorna.test' && url.pathname === '/wb/repricer') {
+      if (url.origin === 'https://satorna.test' && url.pathname === '/wb/repricer') {
         return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       }
       if (url.pathname.startsWith('/api/')) requests.push(url.pathname)
       return route.abort()
     })
-    await page.goto('http://satorna.test/wb/repricer')
+    await page.goto('https://satorna.test/wb/repricer')
     await page.addScriptTag({ content: bundle.code })
     for (const output of (Array.isArray(result) ? result : [result])) {
       if ('output' in output) for (const asset of output.output) {

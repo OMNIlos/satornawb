@@ -4081,6 +4081,7 @@ def test_wb_sync_runs_four_independent_sources_in_parallel_and_waits_for_goods(m
     monkeypatch.setattr("app.repricer_sync.fetch_commission_tariffs", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(repricer_bff_module, "fetch_commission_tariffs", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(wb_repricer_bff_router, "_build_repricer_sku_snapshot", lambda *_args, **_kwargs: {"total": 0})
+    monkeypatch.setattr("app.platform.catalog.photos.save_missing_catalog_photos", lambda *_args: {"saved": 0, "missing": 0})
     import threading
     import time
 
@@ -4138,7 +4139,7 @@ def test_wb_sync_runs_four_independent_sources_in_parallel_and_waits_for_goods(m
     monkeypatch.setattr("app.repricer_sync.fetch_finance_report_aggregates", finance)
     monkeypatch.setattr("app.repricer_sync.fetch_baskets_aggregates", baskets)
     monkeypatch.setattr("app.repricer_sync.save_goods_page", lambda **_kwargs: {"totalCached": 0})
-    monkeypatch.setattr("app.repricer_sync.save_source_cache", lambda _organization_id, _key, payload: payload)
+    monkeypatch.setattr("app.repricer_sync.save_source_cache", lambda _organization_id, _key, payload, **_kwargs: payload)
 
     result = refresh_wb_data_sources(
         organization_id=1,

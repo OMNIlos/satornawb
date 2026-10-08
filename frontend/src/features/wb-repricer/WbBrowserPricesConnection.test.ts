@@ -77,6 +77,7 @@ it('shows a one-time WB extension key only in its issuing scope and recovers unc
       if (method === 'GET' && ['/api/v1/cabinet/team/users', '/api/v1/cabinet/integrations'].includes(url.pathname)) return route.fulfill({ json: { data: [] } })
       if (method === 'GET' && url.pathname === '/api/v1/cabinet/audit/events') return route.fulfill({ json: { data: [], total: 0 } })
       if (method === 'GET' && url.pathname === '/api/v1/cabinet/preferences') return route.fulfill({ json: { data: { timezone: 'Europe/Moscow', notificationSettings: {}, exportSettings: {} } } })
+      if (method === 'GET' && url.pathname === '/api/v1/cabinet/openai-key') return route.fulfill({ json: { data: { configured: false, storageAvailable: false, serverConfigured: false } } })
       if (method === 'GET' && url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: { data: { hasToken: false, tokenMasked: null, updatedAt: null } } })
       if (method === 'GET' && url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: { data: { hasCredentials: false, clientIdMasked: null, clientSecretMasked: null, updatedAt: null } } })
       unexpected.push(`${method} ${url.pathname}`)

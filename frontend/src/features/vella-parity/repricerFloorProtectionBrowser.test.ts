@@ -53,10 +53,11 @@ it.each(['/wb/repricer', '/wb/repricer/stats'])('uses the backend floor and deci
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
+      if (route.request().method() === 'POST' && url.pathname === '/api/wb/reports/stats/jobs') return route.fulfill({ status: 503, json: { detail: 'Synthetic optional statistics unavailable' } })
       if (request.resourceType() === 'document') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
-      if (url.origin === 'http://satorna.test' && request.method() === 'GET') {
+      if (url.origin === 'https://satorna.test' && request.method() === 'GET') {
         if (url.pathname === '/api/v1/wb-repricer/sku') return route.fulfill({ json: { items, total: 4, itemsReturned: 4, page: 1, pageSize: 150, summary: { skuCount: 4 }, cache: { totalCached: 4, pagesCached: 1 } } })
         if (url.pathname === '/api/v1/wb-repricer/stats') return route.fulfill({ json: {
           items: statsItems, total: 7, itemsReturned: 7, page: 1, pageSize: 500,
@@ -74,7 +75,7 @@ it.each(['/wb/repricer', '/wb/repricer/stats'])('uses the backend floor and deci
       unexpected.push(`${request.method()} ${url.pathname}`)
       return route.abort()
     })
-    await page.goto(`http://satorna.test${routePath}`)
+    await page.goto(`https://satorna.test${routePath}`)
     await page.addStyleTag({ content: styles })
     await page.addScriptTag({ content: bundle.code })
     if (routePath === '/wb/repricer') {

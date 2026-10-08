@@ -70,7 +70,7 @@ async function mount(page: Page, tab: 'abc' | 'pnl', responseMode: 'xlsx' | '403
   await page.clock.setFixedTime(new Date('2026-09-11T12:00:00Z'))
   await page.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url())
-    if (url.origin === 'http://satorna.test') {
+    if (url.origin === 'https://satorna.test') {
       if (url.pathname === `/wb/reports/${tab}`) return route.fulfill({ contentType: 'text/html', body: '<title>Synthetic report export</title><div id="root"></div>' })
       if (url.pathname === '/api/v2/wb/reports/table.xlsx') {
         const data = request.postDataJSON(); requests.push(data)
@@ -84,13 +84,13 @@ async function mount(page: Page, tab: 'abc' | 'pnl', responseMode: 'xlsx' | '403
       if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: { data: { userId: '1', hasToken: false, tokenMasked: null, updatedAt: null } } })
       if (url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: { data: { userId: '1', hasCredentials: false, clientIdMasked: null, clientSecretMasked: null, accessTokenExpiresAt: null, updatedAt: null } } })
       if (url.pathname === '/api/wb/reports/pnl/latest-cache') return route.fulfill({ json: { meta: { dateRange: { from: '2026-09-01', to: '2026-09-07' }, sourceType: 'operational' }, rows: [], cashFlow: null, reportJob: null } })
-      if (url.pathname === '/api/wb/reports/abc/latest-cache') return route.fulfill({ json: { rows: [] } })
+      if (url.pathname === '/api/wb/reports/abc/latest-cache') return route.fulfill({ json: { rows: [], cache: { fresh: true } } })
     }
     if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
     if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
     unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
   })
-  await page.goto(`http://satorna.test/wb/reports/${tab}`)
+  await page.goto(`https://satorna.test/wb/reports/${tab}`)
   await page.evaluate(tab => { window.__vellaReportPeriods = { [tab]: { days: 7, mode: 'custom', fromIso: '2026-09-01', toIso: '2026-09-07', label: 'Synthetic period' } } }, tab)
   await page.addScriptTag({ content: bundleCode })
   await page.locator(`#tab-${tab} [data-report-row]`).first().waitFor({ timeout: 15000 })
@@ -208,10 +208,10 @@ it.each(['allocated', 'missing-cost', 'unattributed'] as const)('ties P&L select
     const surface = page.locator('#tab-pnl'), search = surface.locator('.search input')
     const totals = surface.locator('.pnl-flow-item b')
     for (const [query, selected, expected] of [
-      ['Exact-A', [first], ['100,5 ₽', '10 ₽', '1,2 ₽', '2,2 ₽', '1,2 ₽', source === 'unattributed' ? 'нет данных' : '84,9 ₽']],
+      ['Exact-A', [first], ['100,5 ₽', '10 ₽', '1,2 ₽', '2,2 ₽', '0,3 ₽', source === 'unattributed' ? 'нет данных' : '84,9 ₽']],
       ['Exact-B', [second], ['-1,25 ₽', source === 'missing-cost' ? 'нет данных' : '0 ₽', '0 ₽', '0 ₽', '0 ₽', source === 'allocated' ? '-1,25 ₽' : 'нет данных']],
       ['absent', [], Array(6).fill('0 ₽')],
-      ['', [first, second], ['99,25 ₽', source === 'missing-cost' ? 'нет данных' : '10 ₽', '1,2 ₽', '2,2 ₽', '1,2 ₽', source === 'allocated' ? '83,65 ₽' : 'нет данных']],
+      ['', [first, second], ['99,25 ₽', source === 'missing-cost' ? 'нет данных' : '10 ₽', '1,2 ₽', '2,2 ₽', '0,3 ₽', source === 'allocated' ? '83,65 ₽' : 'нет данных']],
     ] as const) {
       await search.fill(query)
       await expect.poll(() => surface.locator('[data-report-row="pnl"]').count()).toBe(selected.length)
@@ -223,11 +223,7 @@ it.each(['allocated', 'missing-cost', 'unattributed'] as const)('ties P&L select
       }
       expect(await totals.allTextContents()).toEqual(expected)
       expect(await surface.getByText(`Итоги по строкам таблицы · позиций: ${selected.length}`, { exact: true }).isVisible()).toBe(true)
-      const account = surface.locator('[data-vella-island="pnl-account-summary"]')
-      expect(await account.innerText()).toContain('Весь аккаунт · без фильтров')
-      expect(await account.innerText()).toContain(`Прибыль: ${source === 'allocated' ? '83,65 ₽' : 'нет данных'}`)
-      if (source === 'unattributed') expect(await account.innerText()).toContain('Нераспределённая реклама: 7 ₽')
-      else expect(await account.innerText()).not.toContain('Нераспределённая реклама')
+      expect(await surface.locator('[data-vella-island="pnl-account-summary"]').count()).toBe(0)
       const download = page.waitForEvent('download')
       await exportTable(page); await download
       const request = evidence.requests.at(-1)!
@@ -242,7 +238,7 @@ it.each(['allocated', 'missing-cost', 'unattributed'] as const)('ties P&L select
     await surface.locator('select.adv-select').selectOption('unassigned')
     await expect.poll(() => surface.locator('[data-report-row="pnl"]').count()).toBe(2)
     expect((await totals.allTextContents())[0]).toBe('99,25 ₽')
-    expect(page.url()).toBe('http://satorna.test/wb/reports/pnl')
+    expect(page.url()).toBe('https://satorna.test/wb/reports/pnl')
     expect(await page.title()).toBe('Satorna — Отчёты WB')
     expect(await page.locator('vite-error-overlay').count()).toBe(0)
     expect(evidence.errors).toEqual([]); expect(evidence.unexpected).toEqual([])

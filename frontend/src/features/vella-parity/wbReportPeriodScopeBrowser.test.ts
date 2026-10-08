@@ -51,12 +51,12 @@ it.each([
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === `/wb/reports/${tab}`) {
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === `/wb/reports/${tab}`) {
         return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       }
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
-      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== `/api/wb/reports/${tab}/latest-cache`) {
+      if (request.method() !== 'GET' || url.origin !== 'https://satorna.test' || url.pathname !== `/api/wb/reports/${tab}/latest-cache`) {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       requests.push(url.search)
@@ -65,7 +65,7 @@ it.each([
         rows: [], kpis: [], formulaNotes: [], sourceEvidence: [], reportJob: null,
       }) })
     })
-    await page.goto(`http://satorna.test/wb/reports/${tab}`)
+    await page.goto(`https://satorna.test/wb/reports/${tab}`)
     await page.addScriptTag({ content: bundleCode })
     const surface = page.locator(`#tab-${tab}`)
     await surface.getByText(empty, { exact: true }).waitFor({ timeout: 15_000 })
@@ -131,7 +131,7 @@ it('shows historical ads before optional budgets and rejects the old-period budg
       }
       unexpected.push(url.pathname); return route.abort()
     })
-    await page.goto('http://satorna.test/wb/reports/ads')
+    await page.goto('https://satorna.test/wb/reports/ads')
     await page.addScriptTag({ content: bundleCode })
     const surface = page.locator('#tab-ads')
     await surface.locator('[data-report-row="ads"]').first().waitFor({ timeout: 15000 })

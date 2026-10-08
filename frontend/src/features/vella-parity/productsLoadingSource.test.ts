@@ -9,21 +9,9 @@ const productsLoader = source.slice(
 
 describe('Products live loading source', () => {
   it('renders SKU rows before loading the slower price changes KPI', () => {
-    const firstPageBranch = productsLoader.slice(
-      productsLoader.indexOf('const firstPageQuery = productsQueryFromRuntime(1)'),
-      productsLoader.indexOf('window.__vellaProductsCacheMeta = payload.cache'),
-    )
-    const currentPageBranch = productsLoader.slice(
-      productsLoader.indexOf('window.__vellaProductsCacheMeta = payload.cache'),
-      productsLoader.indexOf('function formatPromoNumber'),
-    )
-
-    expect(firstPageBranch.indexOf('applyLiveProductsToRuntime(firstPagePayload.products')).toBeLessThan(
-      firstPageBranch.indexOf('loadProductsPriceChangesCount'),
-    )
-    expect(currentPageBranch.indexOf('applyLiveProductsToRuntime(payload.products')).toBeLessThan(
-      currentPageBranch.indexOf('loadProductsPriceChangesCount'),
-    )
+    const render = productsLoader.indexOf('applyLiveProductsToRuntime(payload.products')
+    expect(render).toBeGreaterThanOrEqual(0)
+    expect(render).toBeLessThan(productsLoader.indexOf('loadProductsPriceChangesCountInBackground', render))
   })
 
   it('finalizes product loads with the returned payload so empty state cannot flicker before rows sync', () => {

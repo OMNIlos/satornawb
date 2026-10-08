@@ -41,12 +41,12 @@ it.each(reports.flatMap(report => ['empty', 'failure'].map(outcome => ({ ...repo
       page.on('pageerror', event => errors.push(event.message))
       await page.route('**/*', async route => {
         const request = route.request(), url = new URL(request.url())
-        if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === `/wb/reports/${report}`) {
+        if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === `/wb/reports/${report}`) {
           return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
         }
         if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
         if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
-        if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== `/api/wb/reports/${report}/latest-cache`) {
+        if (request.method() !== 'GET' || url.origin !== 'https://satorna.test' || url.pathname !== `/api/wb/reports/${report}/latest-cache`) {
           unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
         }
         queries.push(url.search)
@@ -57,7 +57,7 @@ it.each(reports.flatMap(report => ['empty', 'failure'].map(outcome => ({ ...repo
           rows: [], kpis: [], formulaNotes: [], sourceEvidence: [], reportJob: null,
         }) })
       })
-      await page.goto(`http://satorna.test/wb/reports/${report}`)
+      await page.goto(`https://satorna.test/wb/reports/${report}`)
       await page.addScriptTag({ content: bundle.code })
       // Wait for the real React effect, not a one-second machine-speed assumption.
       await expect.poll(() => queries.length, { timeout: 15_000 }).toBe(1)
@@ -121,20 +121,20 @@ it('does not report an empty P&L when polling expires without a ready cache', as
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/wb/reports/pnl') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
-      if (request.method() === 'POST' && url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/work-demand/release') return route.fulfill({ json: {} })
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/wb/reports/pnl') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.method() === 'POST' && url.origin === 'https://satorna.test' && url.pathname === '/api/wb/reports/work-demand/release') return route.fulfill({ json: {} })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
       if (url.pathname === '/api/v1/cabinet/team/users') return route.fulfill({ json: { data: [] } })
       if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: { data: { hasToken: false } } })
       if (url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: { data: { hasCredentials: false } } })
-      if (url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/pnl/latest-cache' && request.method() === 'GET') {
+      if (url.origin === 'https://satorna.test' && url.pathname === '/api/wb/reports/pnl/latest-cache' && request.method() === 'GET') {
         cacheReads += 1
         return readyEmpty
           ? route.fulfill({ contentType: 'application/json', body: JSON.stringify({ rows: [], kpis: [], cashFlow: null, reportJob: { state: 'completed' } }) })
           : route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":{"code":"HTTP_404","message":"REPORT_LATEST_CACHE_MISSING"}}' })
       }
-      if (url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/pnl/jobs' && ['GET', 'POST'].includes(request.method())) {
+      if (url.origin === 'https://satorna.test' && url.pathname === '/api/wb/reports/pnl/jobs' && ['GET', 'POST'].includes(request.method())) {
         if (request.method() === 'POST') starts += 1
         else polls += 1
         return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
@@ -146,7 +146,7 @@ it('does not report an empty P&L when polling expires without a ready cache', as
       unexpected.push(`${request.method()} ${url.pathname}`)
       return route.abort()
     })
-    await page.goto('http://satorna.test/wb/reports/pnl')
+    await page.goto('https://satorna.test/wb/reports/pnl')
     await page.addScriptTag({ content: bundle.code })
     const surface = page.locator('#tab-pnl')
     await expect.poll(() => polls, { timeout: 20_000 }).toBe(600)
@@ -201,21 +201,21 @@ it.each(['abc', 'pnl', 'ads'])('stops a cold %s report poll after navigating to 
       if (url.pathname === '/api/v1/cabinet/team/users') return route.fulfill({ json: { data: [] } })
       if (url.pathname === '/api/v1/cabinet/wb-token') return route.fulfill({ json: { data: { hasToken: false } } })
       if (url.pathname === '/api/v1/cabinet/avito-credentials') return route.fulfill({ json: { data: { hasCredentials: false } } })
-      if (url.origin === 'http://satorna.test' && url.pathname === `/api/wb/reports/${report}/latest-cache` && request.method() === 'GET') {
+      if (url.origin === 'https://satorna.test' && url.pathname === `/api/wb/reports/${report}/latest-cache` && request.method() === 'GET') {
         return route.fulfill({ status: 404, json: { error: { code: 'HTTP_404', message: 'REPORT_LATEST_CACHE_MISSING' } } })
       }
-      if (url.origin === 'http://satorna.test' && url.pathname === `/api/wb/reports/${report}/jobs`) {
+      if (url.origin === 'https://satorna.test' && url.pathname === `/api/wb/reports/${report}/jobs`) {
         if (request.method() === 'POST') starts++
         else polls++
         return route.fulfill({ json: { state: 'queued', percent: 0, label: 'Получаем данные WB', dateFrom: url.searchParams.get('from'), dateTo: url.searchParams.get('to') } })
       }
-      if (url.origin === 'http://satorna.test' && url.pathname === '/api/v1/wb-repricer/stats' && request.method() === 'GET') return route.fulfill({ json: {
+      if (url.origin === 'https://satorna.test' && url.pathname === '/api/v1/wb-repricer/stats' && request.method() === 'GET') return route.fulfill({ json: {
         items: [{ articleId: 'VISIBLE-STATS-SKU', name: 'Synthetic statistics', metrics: {}, sources: {}, decision: {}, priceProtection: {}, flags: [] }], total: 1, itemsReturned: 1, page: 1, pageSize: 500,
       } })
       unexpected.push(`${request.method()} ${url.href}`)
       return route.abort()
     })
-    await page.goto(`http://satorna.test/wb/reports/${report}`)
+    await page.goto(`https://satorna.test/wb/reports/${report}`)
     await page.addScriptTag({ content: bundle.code })
     await expect.poll(() => starts, { timeout: 15000 }).toBe(1)
     // Exercise the existing route handler; its parent navigation group is collapsed on reports.
@@ -259,7 +259,7 @@ it('reloads the requested Digest period after leaving during a cold refresh', as
       if (request.resourceType() === 'document') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
-      if (url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/digest/latest-cache') {
+      if (url.origin === 'https://satorna.test' && url.pathname === '/api/wb/reports/digest/latest-cache') {
         const from = url.searchParams.get('from'), to = url.searchParams.get('to')
         if (from === '2026-08-01') {
           cacheReadsB++
@@ -271,16 +271,16 @@ it('reloads the requested Digest period after leaving during a cold refresh', as
           weeklyBalance: { title: 'Synthetic', valueLabel: 'Заказы', compareLabel: 'Выкупили', points: [] },
         } })
       }
-      if (url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/digest/plan') return route.fulfill({ json: { company: { revenuePlanKopecks: 0, marginPlanKopecks: 0 }, managers: [] } })
-      if (url.origin === 'http://satorna.test' && ['/api/wb/reports/digest/refresh', '/api/wb/reports/digest/status'].includes(url.pathname)) {
+      if (url.origin === 'https://satorna.test' && url.pathname === '/api/wb/reports/digest/plan') return route.fulfill({ json: { company: { revenuePlanKopecks: 0, marginPlanKopecks: 0 }, managers: [] } })
+      if (url.origin === 'https://satorna.test' && ['/api/wb/reports/digest/refresh', '/api/wb/reports/digest/status'].includes(url.pathname)) {
         if (request.method() === 'POST') starts++
         return route.fulfill({ json: { state: 'queued', percent: 0, label: 'Получаем данные WB' } })
       }
-      if (url.origin === 'http://satorna.test' && url.pathname === '/api/v1/wb-repricer/stats') return route.fulfill({ json: { items: [{ articleId: 'DIGEST-NAV-STATS', name: 'Synthetic', metrics: {}, decision: {}, sources: {}, flags: [] }], total: 1 } })
+      if (url.origin === 'https://satorna.test' && url.pathname === '/api/v1/wb-repricer/stats') return route.fulfill({ json: { items: [{ articleId: 'DIGEST-NAV-STATS', name: 'Synthetic', metrics: {}, decision: {}, sources: {}, flags: [] }], total: 1 } })
       unexpected.push(`${request.method()} ${url.href}`)
       return route.abort()
     })
-    await page.goto('http://satorna.test/wb/reports')
+    await page.goto('https://satorna.test/wb/reports')
     await page.evaluate(() => {
       window.__vellaReportPeriods = { digest: { days: 7, mode: 'custom', fromIso: '2026-09-02', toIso: '2026-09-08', label: 'Synthetic A' } }
       window.__vellaReportPeriodManual = { digest: true }

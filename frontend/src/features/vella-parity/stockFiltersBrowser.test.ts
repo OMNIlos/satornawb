@@ -75,17 +75,17 @@ it('filters the full stock response and restores its first display window on res
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/wb/reports/stock') {
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/wb/reports/stock') {
         return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       }
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' &&
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' &&
         ['/wb/reports/brand/satorna-logo-white.svg', '/wb/reports/brand/satorna-icon.svg'].includes(url.pathname)) {
         return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" />' })
       }
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') {
         return route.fulfill({ contentType: 'text/css', body: '' })
       }
-      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/wb/reports/stock/latest-cache') {
+      if (request.method() !== 'GET' || url.origin !== 'https://satorna.test' || url.pathname !== '/api/wb/reports/stock/latest-cache') {
         unexpected.push(`${request.method()} ${url.origin}${url.pathname}`)
         return route.abort()
       }
@@ -97,7 +97,7 @@ it('filters the full stock response and restores its first display window on res
         rows, kpis: [], sourceCoverage: [], managementCards: [], reportJob: null,
       }) })
     })
-    await page.goto('http://satorna.test/wb/reports/stock')
+    await page.goto('https://satorna.test/wb/reports/stock')
     await page.addScriptTag({ content: bundleCode })
     const surface = page.locator('#tab-stock')
     const visibleSkus = () => surface.locator('tbody tr[data-report-row="stock"]:visible').evaluateAll(elements =>

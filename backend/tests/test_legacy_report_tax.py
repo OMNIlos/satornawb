@@ -20,6 +20,7 @@ def report_cache(monkeypatch, tax_db):
         value_state='configured', effective_from=datetime(2020, 1, 1, tzinfo=timezone.utc),
         source='fixture', source_reference='explicit-zero-cost', evidence_status='dated')
     sources, stored = {}, {}
+    monkeypatch.setattr("app.platform.economics.legacy_catalog.catalog_facts", lambda org: {})
     monkeypatch.setattr(reports, "_period_cache", lambda org, prefix, *_args, **_kwargs: deepcopy(sources.get(prefix, {})))
     monkeypatch.setattr(reports, "get_source_cache", lambda org, key, **_kwargs: deepcopy(stored.get((org, key))))
     monkeypatch.setattr(reports, "save_source_cache", lambda org, key, value: stored.update({(org, key): {**deepcopy(value), "fetchedAt": datetime.now(timezone.utc).isoformat()}}))

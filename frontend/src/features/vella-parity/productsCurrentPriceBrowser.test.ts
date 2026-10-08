@@ -44,9 +44,10 @@ it('keeps current buyer columns separate and shows factual margin without shifti
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
-      if (url.origin === 'http://satorna.test' && url.pathname === '/api/v2/wb/products/100/current-cost') return route.fulfill({ json: { data: { catalogSkuId: 1, linkedProductCount: 1, canWrite: true, currentCost: { amountKopecks: savedCost, costVersionId: 1, effectiveFrom: '2026-09-17T00:00:00Z' } } } })
-      if (url.origin === 'http://satorna.test' && url.pathname === '/api/v2/catalog/skus/1/cost-history') return route.fulfill({ json: { data: [] } })
-      if (url.origin === 'http://satorna.test' && url.pathname === '/api/v2/catalog/skus/1/current-cost' && request.method() === 'POST') {
+      if (route.request().method() === 'POST' && url.pathname === '/api/wb/reports/stats/jobs') return route.fulfill({ status: 503, json: { detail: 'Synthetic optional statistics unavailable' } })
+      if (url.origin === 'https://satorna.test' && url.pathname === '/api/v2/wb/products/100/current-cost') return route.fulfill({ json: { data: { catalogSkuId: 1, linkedProductCount: 1, canWrite: true, currentCost: { amountKopecks: savedCost, costVersionId: 1, effectiveFrom: '2026-09-17T00:00:00Z' } } } })
+      if (url.origin === 'https://satorna.test' && url.pathname === '/api/v2/catalog/skus/1/cost-history') return route.fulfill({ json: { data: [] } })
+      if (url.origin === 'https://satorna.test' && url.pathname === '/api/v2/catalog/skus/1/current-cost' && request.method() === 'POST') {
         const payload = request.postDataJSON()
         expect(payload.expectedCostVersionId).toBe(1)
         expect(payload.sourceReference).toBeTruthy()
@@ -56,7 +57,7 @@ it('keeps current buyer columns separate and shows factual margin without shifti
       if (request.resourceType() === 'document') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
-      if (url.origin === 'http://satorna.test' && request.method() === 'GET') {
+      if (url.origin === 'https://satorna.test' && request.method() === 'GET') {
         if (url.pathname === '/api/v1/wb-repricer/sku') return route.fulfill({ json: {
           items, total: items.length, itemsReturned: items.length, page: 1, pageSize: 150,
           summary: { skuCount: items.length, buyoutUnits: 6, buyoutAmountKopecks: 160001 }, cache: { totalCached: items.length, pagesCached: 1 },
@@ -67,7 +68,7 @@ it('keeps current buyer columns separate and shows factual margin without shifti
       unexpected.push(`${request.method()} ${url.pathname}`)
       return route.abort()
     })
-    await page.goto('http://satorna.test/wb/repricer')
+    await page.goto('https://satorna.test/wb/repricer')
     await page.addStyleTag({ content: styles })
     await page.addScriptTag({ content: bundle.code })
     await page.locator('#tbody tr[data-sku="AVERAGE-ONLY"]').waitFor({ timeout: 15000 })
@@ -97,6 +98,7 @@ it('keeps current buyer columns separate and shows factual margin without shifti
     ))
     await cell('AVERAGE-ONLY', 'currentCost').getByRole('textbox').click()
     const costInput = page.getByRole('textbox', { name: 'Себестоимость 100, рублей за штуку' })
+    await expect.poll(() => page.getByRole('button', { name: 'Сохранить себестоимость 100', exact: true }).isEnabled()).toBe(true)
     await costInput.fill('350,50')
     expect(costWrites).toBe(0)
     await costInput.press('Enter')

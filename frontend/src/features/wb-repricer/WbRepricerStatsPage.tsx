@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/authContext'
 import '../../components/vella/VellaFoundation.css'
-import { loadLiveRepricerStats, type LiveRepricerStatsItem, type LiveRepricerStatsResponse } from './liveParityData'
+import { loadLiveRepricerStats, resetLiveRepricerParityCache, type LiveRepricerStatsItem, type LiveRepricerStatsResponse } from './liveParityData'
 
 function numberValue(value: number | null | undefined) {
   return Number.isFinite(Number(value)) ? Number(value) : 0
@@ -157,7 +157,7 @@ export function WbRepricerStatsPage() {
             <div className="vella-breadcrumb">WB <span>/</span> Репрайсер <span>/</span> <b>Статистика</b></div>
             <div className="vella-top-actions">
               <button className="vella-button" type="button" onClick={() => pushToast('Период: 7 дней')}><CalendarDays size={16} /> 7 дней</button>
-              <button className="vella-button" type="button" onClick={() => setReloadKey((value) => value + 1)}><RefreshCw size={16} /> Обновить</button>
+              <button className="vella-button" type="button" onClick={() => { resetLiveRepricerParityCache(accessToken); setReloadKey((value) => value + 1) }}><RefreshCw size={16} /> Обновить</button>
             </div>
           </header>
 

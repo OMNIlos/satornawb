@@ -76,8 +76,8 @@ describe('ABC live row', () => {
       margin: '650 ₽ / 50%',
       views: '1 000',
       clicks: '200',
-      clicksSub: 'CTR 20% · +10%',
-      basketDelta: '+30%',
+      clicksSub: 'CTR 20% · ↑ +10%',
+      basketDelta: '↑ +30%',
       cr: '44,4%',
       warehouse: '—',
       localization: '46%',
@@ -235,6 +235,7 @@ describe('ABC live row', () => {
   })
 
   it('restores a previously visited period without another request', async () => {
+    vi.stubGlobal('document', { getElementById: () => null })
     const periods = {
       first: { days: 7, fromIso: '2026-08-18', toIso: '2026-08-24', label: '7 дней', mode: 'custom' as const },
       second: { days: 14, fromIso: '2026-08-11', toIso: '2026-08-24', label: '14 дней', mode: 'custom' as const },
@@ -258,7 +259,7 @@ describe('ABC live row', () => {
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = String(input)
       const sku = url.includes('2026-08-11') ? 'SECOND' : 'FIRST'
-      const response = new Response(JSON.stringify({ rows: [{ sku }], filteredSummary: {} }), {
+      const response = new Response(JSON.stringify({ rows: [{ sku }], filteredSummary: {}, cache: { fresh: true } }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       })

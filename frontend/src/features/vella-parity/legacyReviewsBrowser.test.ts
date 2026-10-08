@@ -32,7 +32,7 @@ it('renders empty legacy Reviews, then preserves drawer guards and settings with
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/vella-production.html') {
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/vella-production.html') {
         return route.fulfill({ contentType: 'text/html', body: html })
       }
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
@@ -40,7 +40,7 @@ it('renders empty legacy Reviews, then preserves drawer guards and settings with
       unexpected.push(`${request.method()} ${url.pathname}`)
       return route.abort()
     })
-    await page.goto('http://satorna.test/vella-production.html?tab=reviews', { waitUntil: 'domcontentloaded' })
+    await page.goto('https://satorna.test/vella-production.html?tab=reviews', { waitUntil: 'domcontentloaded' })
     await page.locator('#tab-reviews.active').waitFor()
     await page.locator('#reviewsEmpty.show').waitFor()
     expect(await page.locator('#reviewsTableBody tr').count()).toBe(0)

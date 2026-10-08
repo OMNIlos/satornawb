@@ -51,10 +51,10 @@ it.each(['empty', 'error'])('hides previous Avito listing rows, open detail and 
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/avito/listings') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/avito/listings') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
-      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/v1/avito/listings') {
+      if (request.method() !== 'GET' || url.origin !== 'https://satorna.test' || url.pathname !== '/api/v1/avito/listings') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       requests.push(url.search)
@@ -63,7 +63,7 @@ it.each(['empty', 'error'])('hides previous Avito listing rows, open detail and 
       if (!first && outcome === 'error') return route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":{"code":"SYNTHETIC_LISTINGS_UNAVAILABLE","message":"Synthetic listings unavailable"}}' })
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify(listingResponse(url.searchParams.get('dateFrom')!, url.searchParams.get('dateTo')!, first)) })
     })
-    await page.goto('http://satorna.test/avito/listings')
+    await page.goto('https://satorna.test/avito/listings')
     await page.addScriptTag({ content: bundle.code })
     const surface = page.locator('#tab-avito-listings')
     const row = surface.locator('[data-vella-island="avito-listings-table-row"]')

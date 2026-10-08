@@ -5,7 +5,7 @@ import { build } from 'vite'
 import react from '@vitejs/plugin-react'
 import { expect, it } from 'vitest'
 
-it('filters statistics and compares each visible SKU with the adjacent equal-length period', async () => {
+it('filters statistics and compares each visible SKU with the previous completed three-day window', async () => {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const result = await build({
     configFile: false, envFile: false, root, logLevel: 'silent', plugins: [react()],
@@ -36,31 +36,32 @@ it('filters statistics and compares each visible SKU with the adjacent equal-len
       if (url.pathname === '/favicon.ico') return route.fulfill({ status: 204 })
       if (url.pathname !== '/api/v1/wb-repricer/stats') return route.abort()
       requests.push(url.search)
-      const prior = url.searchParams.get('dateFrom') === '2026-07-25'
+      const prior = url.searchParams.get('dateFrom') === '2026-08-02'
       const items = [
-        { articleId: 'A', brand: 'Alpha', managerId: 'm1', managerName: 'One', metrics: { impressions: prior ? 50 : 100 }, sources: {}, priceProtection: {}, decision: {} },
-        { articleId: 'B', brand: 'Beta', managerId: 'm2', managerName: 'Two', metrics: { impressions: prior ? 20 : 10 }, sources: {}, priceProtection: {}, decision: {} },
+        { articleId: 'A', brand: 'Alpha', managerId: 'm1', managerName: 'One', metrics: { impressions: prior ? 50 : 100 }, sources: { states: { ads: 'ok' } }, priceProtection: {}, decision: {} },
+        { articleId: 'B', brand: 'Beta', managerId: 'm2', managerName: 'Two', metrics: { impressions: prior ? 20 : 10 }, sources: { states: { ads: 'ok' } }, priceProtection: {}, decision: {} },
         { articleId: 'C', brand: 'Gamma', metrics: { impressions: prior ? 100 : null }, sources: {}, priceProtection: {}, decision: {} },
       ]
       return route.fulfill({ json: { items, total: 3, summary: { baskets: 0, orders: 0 },
-        dateFrom: prior ? '2026-07-25' : '2026-08-01', dateTo: prior ? '2026-07-31' : '2026-08-07' } })
+        dateFrom: url.searchParams.get('dateFrom'), dateTo: url.searchParams.get('dateTo') } })
     })
-    await page.goto('http://satorna.test/wb/repricer/stats')
+    await page.goto('https://satorna.test/wb/repricer/stats?dateFrom=2026-08-01&dateTo=2026-08-07')
     await page.evaluate(() => { window.__vellaReportPeriods = { 'repricer-stats': { days: 7, mode: 'custom', fromIso: '2026-08-01', toIso: '2026-08-07', label: '7 дней' } } })
     await page.addScriptTag({ content: bundle.code })
     await page.waitForFunction(() => document.body.dataset.firstSettled === 'true')
-    expect(new URLSearchParams(requests[1]).get('dateFrom')).toBe('2026-07-25')
-    expect(new URLSearchParams(requests[1]).get('dateTo')).toBe('2026-07-31')
-    expect(await page.locator('.stats-trend').innerText()).toBe('↑')
+    expect(new URLSearchParams(requests[1]).get('dateFrom')).toBe('2026-08-05')
+    expect(new URLSearchParams(requests[1]).get('dateTo')).toBe('2026-08-07')
+    expect(await page.locator('tr[data-article-id="A"] td[data-stats-column="impressions"] .stats-trend').innerText()).toBe('↑ 50 (+100%)')
+    expect(await page.locator('tr[data-article-id="C"] td[data-stats-column="impressions"] .stats-trend').innerText()).toBe('—')
     await page.locator('#repricerStatsFiltersTrigger').click()
     await page.locator('[data-stats-key="brand"][data-stats-value="Beta"]').first().click()
-    expect(await page.locator('.stats-trend').innerText()).toBe('↓')
+    expect(await page.locator('tr[data-article-id="B"] td[data-stats-column="impressions"] .stats-trend').innerText()).toBe('↓ 10 (−50%)')
     expect(await page.locator('#repricerStatsBody [data-report-row]:visible').count()).toBe(1)
     await page.locator('[data-stats-column-toggle="impressions"]').uncheck()
     expect(await page.locator('th[data-stats-column="impressions"]').isVisible()).toBe(false)
     await page.locator('#repricerStatsReset').click()
     expect(await page.locator('#repricerStatsBody [data-report-row]:visible').count()).toBe(3)
-    expect(await page.locator('.stats-trend').innerText()).toBe('↑')
+    expect(await page.locator('tr[data-article-id="A"] td[data-stats-column="impressions"] .stats-trend').innerText()).toBe('↑ 50 (+100%)')
     expect(errors).toEqual([])
   } finally { await browser.close() }
 }, 30_000)

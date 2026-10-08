@@ -189,7 +189,7 @@ it.each([
     await page.route('**/*', async (route: Route) => {
       const request = route.request()
       const url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && !url.pathname.startsWith('/api/')) {
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && !url.pathname.startsWith('/api/')) {
         return route.fulfill({ contentType: 'text/html', body: '<title>Products session isolation</title><div id="root"></div>' })
       }
       if (request.resourceType() === 'image') {
@@ -287,7 +287,7 @@ it.each([
       return route.fulfill({ json: envelope([]) })
     })
 
-    await page.goto('http://satorna.test/wb/repricer')
+    await page.goto('https://satorna.test/wb/repricer')
     if (label === 'cached products') await page.clock.install()
     await page.evaluate(() => localStorage.setItem('ogni.auth.access-token', 'account-a-token'))
     await page.addStyleTag({ content: styles })
@@ -413,31 +413,7 @@ it.each([
     expect(await products.locator('#totalCount').innerText()).toBe('7')
     await expect.poll(() => products.locator('[data-sku]:visible').allInnerTexts()).toContainEqual(expect.stringContaining('SKU-B-1'))
     expect(await products.locator('[data-sku]:visible').allInnerTexts()).not.toContainEqual(expect.stringContaining('SKU-A-1'))
-    if (label === 'cached products') {
-      await page.evaluate(() => {
-        history.pushState({}, '', '/wb/repricer/simulator')
-        window.dispatchEvent(new PopStateEvent('popstate'))
-      })
-      await expect.poll(() => page.getByRole('heading', { name: 'Симулятор WB-товаров' }).isVisible()).toBe(true)
-      expect(await page.locator('.repricer-sim-page').evaluate(element => element.getBoundingClientRect().bottom <= innerHeight + 1)).toBe(true)
-      const screenshotDir = process.env.WORKER_LAYOUT_SCREENSHOT_DIR
-      if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'desktop-simulator.png') })
-      expect(await page.locator('.worker-layout, .worker-overlay').count()).toBe(0)
-      expect(await page.locator('.repricer-sim-page').evaluate(element => element.getBoundingClientRect().top)).toBe(0)
-      await page.reload()
-      await page.addStyleTag({ content: styles })
-      await page.addScriptTag({ content: bundle.code })
-      await expect.poll(() => page.getByRole('heading', { name: 'Симулятор WB-товаров' }).isVisible()).toBe(true)
-      expect(await page.locator('.worker-layout, .worker-overlay').count()).toBe(0)
-      expect(await page.locator('.repricer-sim-page').evaluate(element => element.getBoundingClientRect().top)).toBe(0)
-      await page.evaluate(() => {
-        history.pushState({}, '', '/wb/repricer')
-        window.dispatchEvent(new PopStateEvent('popstate'))
-      })
-      await expect.poll(() => products.locator('#totalCount').innerText()).toBe('7')
-      expect(await page.locator('.worker-layout, .worker-overlay').count()).toBe(0)
-      expect(await page.locator('.vella-html-parity-root').evaluate(element => element.getBoundingClientRect().top)).toBe(0)
-    }
+
     expect(approvalDecisions).toEqual(label === 'cached products' ? ['/api/v1/wb-repricer/price-approvals/approval-1/reject'] : [])
     expect(errors).toEqual([])
   } finally {

@@ -31,7 +31,7 @@ it.each(['success', 'error', 'logout', 'pagination', 'pagination-error', 'latest
       if (request.method() === 'GET' && request.resourceType() === 'image' && url.href === 'https://basket-01.wbbasket.ru/vol0/part0/101/images/c516x688/1.webp') {
         return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       }
-      if (url.origin !== 'http://satorna.test' || request.method() !== 'GET') {
+      if (url.origin !== 'https://satorna.test' || request.method() !== 'GET') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       if (url.pathname === '/wb/repricer/stats') return route.fulfill({ contentType: 'text/html', body:
@@ -51,7 +51,7 @@ it.each(['success', 'error', 'logout', 'pagination', 'pagination-error', 'latest
         summary: { baskets: query ? 902 : 401, orders: 10 },
       }) })
     })
-    await page.goto('http://satorna.test/wb/repricer/stats')
+    await page.goto('https://satorna.test/wb/repricer/stats')
     await page.addScriptTag({ content: bundle.code })
     await expect.poll(() => requests.length).toBe(paginated ? 2 : 1)
     if (!paginated) {
@@ -110,7 +110,7 @@ it.each([false, true])('keeps every received statistics page and retries a faile
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', async route => {
       const url = new URL(route.request().url())
-      if (url.origin !== 'http://satorna.test' || route.request().method() !== 'GET') { unexpected.push(url.href); return route.abort() }
+      if (url.origin !== 'https://satorna.test' || route.request().method() !== 'GET') { unexpected.push(url.href); return route.abort() }
       if (url.pathname === '/wb/repricer/stats') return route.fulfill({ contentType: 'text/html', body:
         '<title>Synthetic statistics batching</title><button id="reload">Reload</button><button id="logout">Logout</button><section id="tab-repricer-stats"><div class="search"><input></div><div class="stats"><div class="stat"><span class="stat-val"></span><span class="stat-delta"></span></div></div><table><tbody id="repricerStatsBody"></tbody></table><nav id="repricerStatsPager"></nav><div data-filter-summary><span></span></div></section>' })
       if (url.pathname === '/favicon.ico') return route.fulfill({ status: 204 })
@@ -126,7 +126,7 @@ it.each([false, true])('keeps every received statistics page and retries a faile
         metrics: {}, decision: {}, sources: {}, priceProtection: {}, flags: [],
       })), total: 1001, itemsReturned: pageNumber === 3 ? 1 : 500, page: pageNumber, pageSize: 500, summary: { baskets: 1001, orders: 1001 } } })
     })
-    await page.goto('http://satorna.test/wb/repricer/stats')
+    await page.goto('https://satorna.test/wb/repricer/stats')
     await page.addScriptTag({ content: bundle.code })
     await expect.poll(() => queries).toEqual([1, 2, 3])
     const rows = page.locator('#repricerStatsBody [data-sku]')

@@ -33,12 +33,12 @@ it.each(['empty', 'failure', 'populated'])('renders RNP cache loading → %s and
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/wb/reports/rnp') {
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/wb/reports/rnp') {
         return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       }
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
-      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/wb/reports/rnp/latest-cache') {
+      if (request.method() !== 'GET' || url.origin !== 'https://satorna.test' || url.pathname !== '/api/wb/reports/rnp/latest-cache') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       requests.push(url.search)
@@ -53,7 +53,7 @@ it.each(['empty', 'failure', 'populated'])('renders RNP cache loading → %s and
         kpis: [], formulaNotes: [], sourceEvidence: [], reportJob: null,
       }) })
     })
-    await page.goto('http://satorna.test/wb/reports/rnp')
+    await page.goto('https://satorna.test/wb/reports/rnp')
     await page.evaluate(() => {
       window.__vellaReportPeriods = { rnp: { days: 7, mode: 'custom', fromIso: '2026-08-01', toIso: '2026-08-07', label: 'Synthetic RNP period' } }
     })

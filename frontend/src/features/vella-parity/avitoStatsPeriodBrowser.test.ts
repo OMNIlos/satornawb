@@ -38,10 +38,10 @@ it('applies dates explicitly and keeps statistics refresh available after a prov
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/avito/stats') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/avito/stats') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
-      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/v1/avito/stats') {
+      if (request.method() !== 'GET' || url.origin !== 'https://satorna.test' || url.pathname !== '/api/v1/avito/stats') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       queries.push(url.search)
@@ -61,7 +61,7 @@ it('applies dates explicitly and keeps statistics refresh available after a prov
         timeline: [], accounts: [], rows: [], source: {},
       }) })
     })
-    await page.goto('http://satorna.test/avito/stats')
+    await page.goto('https://satorna.test/avito/stats')
     await page.addScriptTag({ content: bundle.code })
     const surface = page.locator('#tab-avito-stats')
     await surface.getByText('Дневная статистика не получена. Обновите данные, чтобы построить график.', { exact: true }).waitFor({ state: 'visible', timeout: 15_000 })

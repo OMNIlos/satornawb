@@ -30,17 +30,17 @@ it.each(['empty', 'failure', 'rate-limit'])('keeps actual Avito overview period,
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/avito/overview') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/avito/overview') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/api/v1/avito/chats') {
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/api/v1/avito/chats') {
         chatQueries.push(url.search)
         return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
           status: 'synced', summary: { total: 0, unread: 0, withItems: 0, messages: 0 },
           account: { accountId: null, accountName: null }, chats: [], messages: {}, source: {},
         }) })
       }
-      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/v1/avito/overview') {
+      if (request.method() !== 'GET' || url.origin !== 'https://satorna.test' || url.pathname !== '/api/v1/avito/overview') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       queries.push(url.search)
@@ -66,7 +66,7 @@ it.each(['empty', 'failure', 'rate-limit'])('keeps actual Avito overview period,
         }] : [],
       }) })
     })
-    await page.goto('http://satorna.test/avito/overview')
+    await page.goto('https://satorna.test/avito/overview')
     await page.addScriptTag({ content: bundle.code })
     const surface = page.locator('#tab-avito-overview')
     if (outcome === 'rate-limit') {

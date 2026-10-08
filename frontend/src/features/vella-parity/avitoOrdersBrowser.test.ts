@@ -34,15 +34,15 @@ it.each(['populated', 'populated-no-extension', 'populated-chat-confirmed', 'pop
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/avito/orders') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && url.pathname === '/avito/orders') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
-      if (request.method() === 'GET' && url.origin === 'http://satorna.test' && ['/api/v1/avito/orders/extension-token', '/api/v1/avito/orders/returns-sync'].includes(url.pathname)) {
+      if (request.method() === 'GET' && url.origin === 'https://satorna.test' && ['/api/v1/avito/orders/extension-token', '/api/v1/avito/orders/returns-sync'].includes(url.pathname)) {
         auxiliary.push(url.pathname)
         return route.fulfill({ contentType: 'application/json', body: JSON.stringify(url.pathname.endsWith('extension-token')
           ? { configured: false } : { enabled: false, intervalMinutes: 60, periodDays: 30 }) })
       }
-      if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/v1/avito/orders/queue') {
+      if (request.method() !== 'GET' || url.origin !== 'https://satorna.test' || url.pathname !== '/api/v1/avito/orders/queue') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       queries.push(url.search)
@@ -68,7 +68,7 @@ it.each(['populated', 'populated-no-extension', 'populated-chat-confirmed', 'pop
         source: { browserSnapshot: outcome === 'populated' ? { capturedAt: '2026-09-09T12:00:00Z', orders: 1, items: 1, collector: {} } : null },
       }) })
     })
-    await page.goto('http://satorna.test/avito/orders')
+    await page.goto('https://satorna.test/avito/orders')
     const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/avito/orders/queue')
     await page.addScriptTag({ content: code })
     await response
@@ -91,9 +91,7 @@ it.each(['populated', 'populated-no-extension', 'populated-chat-confirmed', 'pop
       }
       expect(await surface.locator('.avito-orders-extension-empty').isVisible()).toBe(false)
       await surface.getByText('Synthetic read-only order product', { exact: true }).first().click()
-      await surface.locator('.avito-order-detail-window').waitFor({ state: 'visible' })
-      expect(await surface.locator('.avito-order-detail-window').innerText()).toContain('SYNTHETIC-ORDER-SKU')
-      await surface.locator('.avito-order-detail-window .modal-close').click()
+      expect(await page.getByRole('dialog', { name: 'Заказ Авито', exact: true }).count()).toBe(0)
       const beforeLogout = [...queries]
       phase = 'logout'
       await page.getByRole('button', { name: 'Clear synthetic report session', exact: true }).click()
@@ -158,7 +156,7 @@ it('exports picking and returns from saved data without invoking the extension o
       if (route.request().resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       unexpected.push(url.pathname); return route.abort()
     })
-    await page.goto('http://satorna.test/avito/orders')
+    await page.goto('https://satorna.test/avito/orders')
     await page.addScriptTag({ content: code })
     const surface = page.locator('#tab-orders-print')
     await surface.getByText('Synthetic export item', { exact: true }).first().waitFor({ timeout: 5000 }).catch(async error => {
