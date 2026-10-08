@@ -26,6 +26,14 @@ def test_auth_and_stats():
     assert module.allowed_request(httpx.Request("POST", "https://api.avito.ru/stats/v2/accounts/123/items", json={}))
     assert not module.allowed_request(httpx.Request("POST", "https://api.avito.ru/token", content="grant_type=unknown"))
 
+def test_only_scoped_nonstored_avito_ai_requests_allowed():
+    body = {'store': False, 'text': {'format': {'name': 'avito_order_item_extraction', 'type': 'json_schema', 'strict': True}}}
+    assert module.allowed_request(httpx.Request('POST', 'https://api.openai.com/v1/responses', json=body))
+    for url in ['http://api.openai.com/v1/responses', 'https://api.openai.com/v1/files', 'https://api.openai.com/v1/responses?x=1', 'https://api.openai.com.evil.test/v1/responses']:
+        assert not module.allowed_request(httpx.Request('POST', url, json=body))
+    assert not module.allowed_request(httpx.Request('POST', 'https://api.openai.com/v1/responses', json={**body, 'store': True}))
+    assert not module.allowed_request(httpx.Request('GET', 'https://api.openai.com/v1/responses', json=body))
+
 
 def test_photo_reads_have_no_credentials_and_no_arbitrary_hosts():
     assert module.allowed_request(httpx.Request('GET', 'https://70.img.avito.st/synthetic.jpg'))

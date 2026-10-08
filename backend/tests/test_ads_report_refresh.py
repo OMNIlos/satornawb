@@ -37,7 +37,7 @@ def runtime(monkeypatch):
 
 def set_source(state, spend):
     row = {"nmId": 101, "campaignId": 42, "adSpendKopecks": spend}
-    state.source = {"aggregates": {"101": row}, "dailyAggregates": {"2026-07-01": {"101": row}}}
+    state.source = {"sourceComplete": True, "aggregates": {"101": row}, "dailyAggregates": {"2026-07-01": {"101": row}}}
 
 
 def invoke_refresh(kind):

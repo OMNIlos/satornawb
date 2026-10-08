@@ -17,7 +17,8 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="health")
 
 def _database() -> None:
     with get_engine().begin() as connection:
-        connection.execute(text("SET LOCAL statement_timeout = 1000"))
+        if connection.dialect.name == "postgresql":
+            connection.execute(text("SET LOCAL statement_timeout = 1000"))
         if connection.execute(text("SELECT 1")).scalar_one() != 1:
             raise RuntimeError("Database check failed")
 

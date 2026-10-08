@@ -1,6 +1,7 @@
 import { ApiError, apiRequest, buildApiUrl } from '@/lib/api'
 import { authorizationHeaders } from '@/features/auth/authApi'
 import { sharedStatusRequest } from './sharedStatusRequest'
+import { createReadCache } from './readCache'
 import { resolvePresetPeriodRange } from './presetPeriodAnchor'
 
 function wbBasketNumber(volume: number) {
@@ -121,6 +122,8 @@ export type LiveRepricerSkuRow = {
     abcReason?: string | null
     settlementFormulaVersion?: string
     settlementProfitKopecks?: number | null
+    settlementBlockers?: string[]
+    settlementCogsState?: 'configured' | 'assumed' | 'missing'
     promotionStatus?: 'yes' | 'no'
     promotionStatusText?: string | null
     promotionName?: string | null
@@ -219,6 +222,7 @@ export type LiveRepricerSkuListResponse = {
   periodDays?: number
   summary?: LiveRepricerSkuListSummary
   cache?: {
+    periodCoverage?: Record<string, { state: string; coveredDays: number; requestedDays: number; missingDates: string[] }>
     summaryScope?: 'filtered_skus' | 'catalog'
     pagesCached: number
     totalCached: number
@@ -797,7 +801,7 @@ function parityPMinRub(row: LiveRepricerSkuRow) {
   return Math.round(numerator / denominator / 100)
 }
 
-export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index: number) {
+export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, _index: number) {
   const basketsState = row.analytics?.basketsState ?? 'no_data'
   const periodStatsState = row.analytics?.periodStatsState ?? 'no_data'
   const stockState = row.analytics?.stockState ?? 'no_data'
@@ -836,7 +840,6 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     ? row.analytics.commissionDisplayPct
     : null
   const commissionPct = commissionDisplayPct != null ? Number(commissionDisplayPct.toFixed(1)) : null
-  const marginRub = commissionPct != null && row.analytics?.marginKopecks != null ? kopecksToRub(row.analytics.marginKopecks) : null
   const sppPct = normalizeSppPct(row.analytics?.sppPct)
     ?? deriveSppPct(row.meta.currentPriceKopecks, buyerPriceNoWalletKopecks)
   const commissionRub = hasFinance && row.analytics?.commissionKopecks != null
@@ -870,22 +873,38 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
   const financeNetProfitRub = hasFinance && financeNetProfitKopecks != null
     ? kopecksToRub(financeNetProfitKopecks)
     : null
-  const plannedPeriodMarginRub = row.analytics?.plannedPeriodMarginKopecks != null
-    ? kopecksToRub(row.analytics.plannedPeriodMarginKopecks)
-    : null
   const financeRevenueRub = kopecksToRub(row.analytics?.revenueKopecks ?? 0)
   const revenue7d = hasFinance ? financeRevenueRub : 0
   const storagePerSku = storageRub
+  // The products column is realised profit, never the current-price plan.
+  // A tariff/buyout forecast must not gate (or replace) actual settlement data.
+  const actualProfit = hasSettlementProfit ? financeNetProfitRub : null
+  const netSoldUnits = row.analytics?.salesUnits != null && row.analytics?.returnsUnits != null
+    ? row.analytics.salesUnits - row.analytics.returnsUnits : null
+  const marginRub = actualProfit != null && netSoldUnits != null && netSoldUnits > 0
+    ? actualProfit / netSoldUnits : null
+  const actualMarginPct = actualProfit != null && row.analytics?.revenueKopecks != null && financeRevenueRub > 0
+    ? actualProfit / financeRevenueRub * 100 : null
+  const marginBlockerLabels: Record<string, string> = {
+    settlement_payable_unconfirmed: 'Нет подтверждённой выплаты WB',
+    settlement_components_missing: 'Не все расходы WB загружены',
+    settlement_account_expenses_unreconciled: 'Расходы аккаунта ещё не распределены по товарам',
+    settlement_dated_cogs_missing: 'Нет себестоимости на дату продажи',
+    settlement_tax_missing: 'Нет налога по продажам выбранного периода',
+  }
+  const marginReason = actualProfit == null
+    ? (row.analytics?.settlementBlockers?.map(reason => marginBlockerLabels[reason] ?? 'Финансовые данные требуют проверки').join('; ') || 'Нет подтверждённого финансового расчёта за выбранный период')
+    : actualMarginPct == null || marginRub == null
+      ? 'Нет положительной выручки или количества продаж за вычетом возвратов для расчёта относительной маржи'
+      : row.analytics?.settlementCogsState === 'assumed'
+        ? 'Расчёт по операциям WB с примерной себестоимостью. Загрузите фактическую себестоимость для окончательного результата.'
+        : 'Фактическая прибыль / выручка; ₽ на проданную единицу за вычетом возвратов'
   const netPerUnit = marginRub
   const netSku = hasSettlementProfit ? financeNetProfitRub : factTaxState
     ? factTaxState === 'configured' ? financeNetProfitRub : null
     : financeNetProfitRub != null
     ? financeNetProfitRub
-    : plannedPeriodMarginRub != null
-      ? plannedPeriodMarginRub
-    : marginRub != null && ordersPeriod > 0
-      ? marginRub * ordersPeriod
-      : null
+    : null
   const rawAbc = row.analytics?.abcCode ?? ''
   const versionedAbc = row.analytics?.abcPolicyVersion === 'wb-units-profit-cumulative-80-95-v1'
   const abcCode = versionedAbc && /^[ABC—]{2}$/.test(rawAbc)
@@ -910,7 +929,7 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
   const photoUrl = row.meta.imageUrl || row.meta.photoUrl || wbProductPhotoUrl(row.meta.nmId)
 
   return {
-    sel: index < 2,
+    sel: false,
     sku: row.meta.articleId,
     photoUrl,
     imageUrl: photoUrl,
@@ -936,8 +955,11 @@ export function mapLiveRepricerRowToParityProduct(row: LiveRepricerSkuRow, index
     stockWarehouse: row.analytics?.wbStockUnits ?? null,
     stockToBuyer: row.analytics?.stockInWayToClient ?? null,
     stockFromBuyer: row.analytics?.stockInWayFromClient ?? null,
-    mg: commissionPct != null && row.analytics?.marginPct != null ? Math.round(row.analytics.marginPct) : null,
+    mg: actualMarginPct == null ? null : Math.round(actualMarginPct * 100) / 100,
     mgRub: marginRub,
+    marginMode: 'actual_settlement',
+    marginReason,
+    marginAssumed: row.analytics?.settlementCogsState === 'assumed',
     bsk: baskets,
     previousBaskets,
     previousOrdersPeriod: previousOrders,
@@ -1200,6 +1222,8 @@ export async function loadLiveRepricerParityProducts(
   return request
 }
 
+const statsReadCache = createReadCache<LiveRepricerStatsResponse>()
+
 export async function loadLiveRepricerStats(
   accessToken: string,
   signal?: AbortSignal,
@@ -1218,16 +1242,17 @@ export async function loadLiveRepricerStats(
   if (query.status && query.status !== 'all') params.set('status', query.status)
   if (query.brand && query.brand !== 'all') params.set('brand', query.brand)
   if (query.manager && query.manager !== 'all') params.set('manager', query.manager)
-  const payload = await apiRequest<LiveRepricerStatsResponse>(`/api/v1/wb-repricer/stats?${params.toString()}`, {
-    headers: authorizationHeaders(accessToken),
-    cache: 'no-store',
-    signal,
-  })
-  if (!payload) return { items: [], total: 0, page, pageSize, periodDays: period.periodDays } satisfies LiveRepricerStatsResponse
-  return payload
+  return statsReadCache.get(JSON.stringify([accessToken, params.toString()]), async requestSignal => {
+    const payload = await apiRequest<LiveRepricerStatsResponse>(`/api/v1/wb-repricer/stats?${params.toString()}`, {
+      headers: authorizationHeaders(accessToken), cache: 'no-store', signal: requestSignal,
+    })
+    if (!payload || !Array.isArray(payload.items)) throw new Error('Сервер вернул неполный ответ статистики. Повторите загрузку.')
+    return payload
+  }, signal)
 }
 
 export function resetLiveRepricerParityCache(accessToken?: string | null) {
+  statsReadCache.clear()
   for (const key of liveProductsRequests.keys()) {
     if (accessToken === undefined || JSON.parse(key)[0] === accessToken) liveProductsRequests.delete(key)
   }

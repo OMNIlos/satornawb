@@ -42,6 +42,9 @@ def _request_statistics_report(
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> WbApiResponseEnvelope:
+    from app.wb_api.report_reads import active_report_read
+    if active_report_read.get() is not None:
+        return client.request(request)
     global _statistics_report_last_request_at
     is_real = get_settings().wb_api_mode == "real"
     for attempt in range(3):

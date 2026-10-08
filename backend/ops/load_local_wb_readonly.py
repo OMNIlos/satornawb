@@ -27,6 +27,13 @@ ALLOWED = {
     ("GET", "statistics-api.wildberries.ru", "/api/v1/supplier/orders"),
     ("GET", "statistics-api.wildberries.ru", "/api/v1/supplier/sales"),
     ("POST", "finance-api.wildberries.ru", "/api/finance/v1/sales-reports/detailed"),
+    ("POST", "seller-analytics-api.wildberries.ru", "/api/analytics/v3/sales-funnel/products/history"),
+    ("GET", "advert-api.wildberries.ru", "/adv/v1/promotion/count"),
+    ("GET", "advert-api.wildberries.ru", "/api/advert/v2/adverts"),
+    ("GET", "advert-api.wildberries.ru", "/adv/v3/fullstats"),
+    ("GET", "advert-api.wildberries.ru", "/adv/v1/budget"),
+    ("GET", "advert-api.wildberries.ru", "/adv/v1/balance"),
+    ("GET", "advert-api.wildberries.ru", "/adv/v1/upd"),
 }
 
 
@@ -35,7 +42,7 @@ def allowed_request(request):
             and (request.method, request.url.host, request.url.path) in ALLOWED)
 
 
-def install_readonly_network_guard(original_connect, original_connect_ex, *, request_allowed=allowed_request):
+def install_readonly_network_guard(original_connect, original_connect_ex, *, request_allowed=allowed_request, local_broker_port=None):
     """Only allow sockets inside an explicitly allowlisted synchronous HTTP call."""
     import httpx
     original_send = httpx.Client.send
@@ -51,11 +58,13 @@ def install_readonly_network_guard(original_connect, original_connect_ex, *, req
         finally:
             scope.allowed = previous
     def connect(sock, address):
-        if not getattr(scope, "allowed", False):
+        local_broker = isinstance(address, tuple) and address[0] in {"127.0.0.1", "::1"} and address[1] == local_broker_port
+        if not getattr(scope, "allowed", False) and not local_broker:
             raise OSError("LOCAL_EXTERNAL_SOCKET_NOT_ALLOWED")
         return original_connect(sock, address)
     def connect_ex(sock, address):
-        if not getattr(scope, "allowed", False):
+        local_broker = isinstance(address, tuple) and address[0] in {"127.0.0.1", "::1"} and address[1] == local_broker_port
+        if not getattr(scope, "allowed", False) and not local_broker:
             raise OSError("LOCAL_EXTERNAL_SOCKET_NOT_ALLOWED")
         return original_connect_ex(sock, address)
     httpx.Client.send = guarded_send

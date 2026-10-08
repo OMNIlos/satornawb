@@ -6,14 +6,47 @@
   let checkTimer = null
   let challengeSince = null
   let scrollTimer = null
+  let catalogPage = 0
   const send = (message) => { void chrome.runtime.sendMessage({ source: C.SOURCE, ...message }).catch(() => {}) }
 
   window.addEventListener('message', (event) => {
     if (event.source !== window || event.origin !== C.WB_ORIGIN) return
     const clean = C.sanitizePageMessage(event.data, location.href)
     if (clean) {
-      if (clean.catalogPage) clearTimeout(scrollTimer)
-      send(clean)
+      // A repeated response for the same page must not stop the native scroll
+      // pump: the worker deliberately ignores duplicate pagination responses.
+      if (clean.catalogPage > catalogPage) {
+        catalogPage = clean.catalogPage
+        clearTimeout(scrollTimer)
+      }
+      if (clean.walletSingleSizeNmIds?.length) {
+        const expected = C.pageIdentity(location.href)
+        let attempts = 0
+        const captured = new Map()
+        const observeWallet = () => {
+          if (blocked || challengeSince || C.pageIdentity(location.href) !== expected || ++attempts > 8) return
+          for (const nmId of clean.walletSingleSizeNmIds) {
+            const tile = document.querySelector(`article[data-nm-id="${nmId}"]`)
+            const price = tile?.querySelector('[class*="price"]')
+            const buyer = clean.items.find(item => item.nmId === nmId)?.buyerPriceNoWalletKopecks
+            if (!tile?.getClientRects().length || !price?.getClientRects().length) continue
+            const style = getComputedStyle(price)
+            if (style.visibility !== 'visible' || style.display === 'none' || style.opacity === '0') continue
+            let visibleText = price.innerText
+            for (const node of price.querySelectorAll('*')) {
+              const nodeStyle = getComputedStyle(node)
+              if (node.matches('del, s, [class*="old"], [class*="Old"]') || !node.getClientRects().length
+                || nodeStyle.visibility !== 'visible' || nodeStyle.opacity === '0') visibleText = visibleText.replace(node.textContent, '')
+            }
+            const wallet = C.visibleWalletKopecks(visibleText, buyer)
+            if (wallet != null && !captured.has(nmId)) captured.set(nmId, wallet)
+          }
+          if (captured.size === clean.walletSingleSizeNmIds.length || attempts === 8) send({ ...clean,
+            items: clean.items.map(item => captured.has(item.nmId) ? { ...item, buyerPriceWithWalletKopecks: captured.get(item.nmId) } : item) })
+          else setTimeout(observeWallet, 250)
+        }
+        setTimeout(observeWallet, 250)
+      } else send(clean)
     }
   })
 
@@ -40,7 +73,18 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchChallenge, { once: true })
   else watchChallenge()
 
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && C.sellerId(location.href) && !blocked && !challengeSince) send({ type: 'collector_visible' })
+  })
+
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
+    if (['scroll', 'catalog_progress'].includes(message?.type)
+      && C.pageIdentity(message.expectedPageUrl) !== C.pageIdentity(location.href)) return
+    if (sender.id === chrome.runtime.id && message?.type === 'catalog_progress' && C.sellerId(location.href)) {
+      respond({ visible: document.visibilityState === 'visible',
+        cards: document.querySelectorAll('.catalog-page__main article[data-nm-id]').length })
+      return
+    }
     if (sender.id === chrome.runtime.id && message?.type === 'stop_scroll') {
       clearTimeout(scrollTimer); respond({ ok: true }); return
     }
@@ -56,7 +100,8 @@
       clearTimeout(scrollTimer)
       const deadline = Date.now() + 18000
       const advance = () => {
-        if (blocked || challengeSince || Date.now() >= deadline) return
+        if (blocked || challengeSince || Date.now() >= deadline
+          || C.pageIdentity(message.expectedPageUrl) !== C.pageIdentity(location.href)) return
         // The catalog lazily renders cards before requesting the next page.
         // Scrolling straight past its sentinel into the footer skips that load.
         const cards = [...document.querySelectorAll('.catalog-page__main article[data-nm-id]')].filter((item) => item.getClientRects().length)

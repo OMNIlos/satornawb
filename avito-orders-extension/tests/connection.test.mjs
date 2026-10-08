@@ -15,7 +15,7 @@ function harness() {
     remove: async (keys) => keys.forEach(key => delete data[key]),
   })
   const calls = []
-  const context = vm.createContext({ URL, console: { info() {}, error() {}, warn() {} },
+  const context = vm.createContext({ URL, AbortSignal, console: { info() {}, error() {}, warn() {} },
     chrome: { storage: { sync: store(sync), local: store(local) }, runtime: { onMessage: { addListener() {} } } },
     importScripts() {}, fetch: async (url, options) => {
       calls.push({ url, options })

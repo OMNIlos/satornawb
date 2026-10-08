@@ -14,6 +14,9 @@ def row(identity=1, **changes):
         "docTypeName": "Продажа",
         "quantity": 1,
         "retailAmount": "1",
+        "retailPriceWithDisc": changes.get("retailAmount", "1"),
+        "saleDt": "2026-08-17",
+        "rrDate": "2026-08-17",
         **changes,
     }
 
@@ -248,6 +251,7 @@ def test_valid_trade_revenue_preserves_period_and_daily_amounts(
     trade = row(docTypeName=document, saleDt="2026-08-17")
     trade.pop("retailAmount")
     trade[field] = amount
+    trade["retailPriceWithDisc"] = amount
     result, cursors = fetch(monkeypatch, [(200, [trade]), (204, None)])
     for aggregate in (
         result["aggregates"]["101"],

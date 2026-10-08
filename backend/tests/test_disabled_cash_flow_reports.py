@@ -35,8 +35,9 @@ def disabled_source(monkeypatch, tmp_path):
     monkeypatch.setattr(reports, "legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
     monkeypatch.setattr("app.wb_reports_sprint_d.legacy_finance_tax_revision", lambda org: "synthetic-confirmation")
     # Isolate 1C readiness from the independently tested dated-tax SQL bridge.
-    monkeypatch.setattr("app.wb_reports_sprint_d.get_legacy_finance_taxes", lambda org, finance, period: {
-        str(nm): {"taxKopecks": 0, "factTaxState": "configured", "factTaxReason": None}
+    monkeypatch.setattr("app.wb_reports_sprint_d.get_legacy_finance_taxes", lambda org, finance, period, **kwargs: {
+        str(nm): {"taxKopecks": 0, "factTaxState": "configured", "factTaxReason": None,
+                  "settlementCogsKopecks": 0, "settlementCogsState": "configured"}
         for nm in finance.get("aggregates", {})
     })
     monkeypatch.setattr(repricer_tasks, "_report_snapshot_sources_ready", lambda *a, **kw: (True, []))
@@ -106,8 +107,32 @@ def test_old_expenses_cache_cannot_restore_waiting_for_disabled_source(disabled_
     api = TestClient(create_app())
     response = api.get("/api/wb/reports/expenses/latest-cache", params=params,
                        headers=auth_headers(api, "finance_viewer"))
-    assert response.status_code == 404
+    if params:
+        assert response.status_code == 200
+        assert response.json()["cashFlow"]["status"] == "disabled"
+    else:
+        assert response.status_code == 404
     assert cache[1, key] == old
+
+
+@pytest.mark.parametrize("status", ["pending", "processing", "failed", "not_loaded"])
+def test_financial_pnl_builds_when_optional_enabled_cash_flow_is_unavailable(disabled_source, monkeypatch, status):
+    _, cache = disabled_source
+    monkeypatch.setenv("VELLA_1C_ENABLED", "true")
+    monkeypatch.setattr(reports, "get_cash_flow_for_period", lambda **kw: {"status": status})
+    _signed_pnl_source(monkeypatch, 0)
+    result = repricer_tasks.build_report_for_org.run(
+        1, "synthetic-user", "pnl", str(START), str(END), "sku", "financial", True, None,
+        source_refresh={"state": "completed", "steps": []},
+    )
+    assert result["state"] == "completed"
+    key = reports._report_cache_key("pnl", START, END, "sku", "financial", organization_id=1, finance_allowed=True)
+    report = cache[1, key]["report"]
+    assert report["cashFlow"]["status"] == "unavailable"
+    assert "ONE_C_DISABLED" not in report["blockerIds"]
+    assert report["financialConfirmationStatus"] == "pending"
+    assert report["rows"][0]["netProfitKopecks"] is None
+    assert report["sourceEvidence"]
 
 
 @pytest.mark.parametrize("report_id", ["pnl", "expenses"])
@@ -130,7 +155,12 @@ def test_current_version_cache_is_rejected_when_1c_mode_changes(disabled_source,
         assert api.get(f"/api/wb/reports/{report_id}/latest-cache", params=params, headers=headers).status_code == 200
     monkeypatch.setenv("VELLA_1C_ENABLED", str(not was_enabled).lower())
     for params in (PARAMS, {}):
-        assert api.get(f"/api/wb/reports/{report_id}/latest-cache", params=params, headers=headers).status_code == 404
+        response = api.get(f"/api/wb/reports/{report_id}/latest-cache", params=params, headers=headers)
+        if report_id == "expenses" and params:
+            assert response.status_code == 200
+            assert response.json()["cashFlow"]["status"] == ("not_loaded" if not was_enabled else "disabled")
+        else:
+            assert response.status_code == 404
     enqueued = []
     monkeypatch.setattr(reports, "_report_daily_sources_ready", lambda *a, **kw: (True, []))
     monkeypatch.setattr(repricer_tasks.build_report_for_org, "delay", lambda *a: enqueued.append(a) or SimpleNamespace(id="synthetic-rebuild"))
@@ -139,6 +169,44 @@ def test_current_version_cache_is_rejected_when_1c_mode_changes(disabled_source,
     assert response.json()["state"] == "queued"
     assert len(enqueued) == 1
     assert cache[1, key] == cached
+
+
+@pytest.mark.parametrize("status", ["unavailable", "disabled"])
+def test_optional_unavailable_cash_flow_does_not_look_like_configured_disable(disabled_source, monkeypatch, status):
+    monkeypatch.setenv("VELLA_1C_ENABLED", "true")
+    monkeypatch.setattr(reports, "list_source_cache_ranges_by_prefix", lambda *a, **kw: [])
+    monkeypatch.setattr(reports, "get_source_cache_fetched_at", lambda *a, **kw: None)
+    cached = {
+        "report": {
+            "cacheVersion": reports.PNL_REPORT_PAYLOAD_VERSION,
+            "rows": [],
+            "blockerIds": ["ONE_C_DISABLED"] if status == "disabled" else [],
+            "cashFlow": {"status": status, "reason": "optional_operating_costs_unavailable", "data": None},
+        },
+        "dateFrom": str(START), "dateTo": str(END),
+        "completedAt": reports._utc_now_iso(), "taxRevision": "synthetic-confirmation",
+    }
+    assert reports._report_payload_cache_is_usable("pnl", cached, organization_id=1)
+    monkeypatch.setenv("VELLA_1C_ENABLED", "false")
+    assert not reports._report_payload_cache_is_usable("pnl", cached, organization_id=1)
+
+
+def test_finance_progress_and_other_period_do_not_invalidate_finished_pnl(disabled_source, monkeypatch):
+    observed = reports._utc_now_iso()
+    rows = [{"sourceKey": "repricer_finance_progress_connection_2026-05-01_2026-05-28",
+             "dateFrom": str(START), "dateTo": str(END), "fetchedAt": observed},
+            {"sourceKey": "repricer_finance_connection_2026-06-01_2026-06-07",
+             "dateFrom": "2026-06-01", "dateTo": "2026-06-07", "fetchedAt": observed}]
+    monkeypatch.setattr(reports, "list_source_cache_ranges_by_prefix", lambda org, prefix, **kw: rows if prefix == "repricer_finance_" else [])
+    monkeypatch.setattr(reports, "get_source_cache_fetched_at", lambda *a, **kw: None)
+    cached = {"report": {"cacheVersion": reports.PNL_REPORT_PAYLOAD_VERSION,
+                         "rows": [], "blockerIds": ["ONE_C_DISABLED"], "cashFlow": {"status": "disabled"}},
+              "dateFrom": str(START), "dateTo": str(END), "completedAt": "2026-10-06T20:00:00+00:00",
+              "taxRevision": "synthetic-confirmation"}
+    assert reports._report_payload_cache_is_usable("pnl", cached, organization_id=1, allow_stale=True)
+    rows.append({"sourceKey": "repricer_finance_connection_2026-05-01_2026-05-28",
+                 "dateFrom": str(START), "dateTo": str(END), "fetchedAt": observed})
+    assert not reports._report_payload_cache_is_usable("pnl", cached, organization_id=1, allow_stale=True)
 
 
 def test_disabled_expenses_are_unavailable_not_ready_zeroes(disabled_source):

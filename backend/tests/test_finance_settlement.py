@@ -14,7 +14,7 @@ def test_legacy_producer_marks_signed_withdrawal_schema(monkeypatch, fee, credit
     from tests.test_finance_fetch_completeness import fetch, row
 
     result, cursors = fetch(monkeypatch, [(200, [row(retailAmount="100", paymentSchedule=fee, saleDt="2026-08-17")]), (204, None)])
-    assert FINANCE_SCHEMA_VERSION == "v4"
+    assert FINANCE_SCHEMA_VERSION == "v5"
     assert result["financeSchemaVersion"] == FINANCE_SCHEMA_VERSION
     assert finance_cache_uses_current_revenue_basis(result)
     assert result["aggregates"]["101"]["additionalPaymentKopecks"] == credit

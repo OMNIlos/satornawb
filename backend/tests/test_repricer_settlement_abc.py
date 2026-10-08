@@ -108,6 +108,51 @@ def test_unreconciled_account_costs_block_profit_class():
     assert rows[0]["analytics"]["settlementProfitKopecks"] is None
 
 
+def test_expense_only_observation_has_zero_payout_not_missing_payout():
+    row = finance(rowsCount=2, salesUnits=0, returnsUnits=0, buyerRevenueKopecks=0,
+        payableKopecks=0, commissionKopecks=0, acquiringKopecks=0, commissionSource="ppvzSalesCommission")
+    assert bff.settlement_payable_confirmed(row)
+    assert not bff.settlement_payable_confirmed(row | {"salesUnits": 1})
+    assert not bff.settlement_payable_confirmed(row | {"returnsUnits": 1})
+    assert not bff.settlement_payable_confirmed(row | {"rowsCount": 0})
+    assert not bff.settlement_payable_confirmed(row | {"payableKopecks": None})
+
+
+def test_daily_rollup_confirms_every_sale_day_not_first_commission_label():
+    from datetime import datetime
+    from app.routers.wb_repricer_bff import _rollup_daily_aggregates
+    expense = finance(rowsCount=1, salesUnits=0, returnsUnits=0, buyerRevenueKopecks=0,
+        payableKopecks=0, commissionKopecks=0, acquiringKopecks=0, commissionSource="ppvzSalesCommission")
+    days = {"2026-10-01": {"1": expense}, "2026-10-02": {"1": finance(rowsCount=1)}}
+    def roll():
+        return _rollup_daily_aggregates(days, datetime(2026, 10, 1), datetime(2026, 10, 2))["1"]
+    assert bff.settlement_payable_confirmed(roll())
+    days["2026-10-02"]["1"]["commissionSource"] = "commissionPercent"
+    assert not bff.settlement_payable_confirmed(roll())
+    days["2026-10-02"]["1"] = finance(rowsCount=1)
+    del days["2026-10-02"]["1"]["payableKopecks"]
+    assert not bff.settlement_payable_confirmed(roll())
+    days["2026-10-02"]["1"] = finance(rowsCount=1)
+    del days["2026-10-02"]["1"]["storageKopecks"]
+    assert bff.settlement_profit_metrics(roll(), context())["settlementProfitKopecks"] is None
+
+
+def test_advertising_reconciliation_survives_daily_aggregate_diagnostics():
+    from app.routers.wb_repricer_bff import _finance_raw_cost_total
+    diagnostic = bff.build_finance_diagnostics_from_aggregates({"1": finance(adSpendKopecks=12345)})
+    assert _finance_raw_cost_total(diagnostic, "adSpend") == 12345
+    diagnostic = bff.build_finance_diagnostics_from_aggregates({"1": finance(adSpendKopecks=None)})
+    assert _finance_raw_cost_total(diagnostic, "adSpend") is None
+
+
+def test_catalog_products_without_finance_do_not_erase_observed_summary():
+    from app.routers.wb_repricer_bff import _repricer_list_summary
+    observed = {"meta": {"nmId": 1}, "analytics": {"financeState": "ok", **bff.settlement_profit_metrics(finance(), context())}}
+    unsold = {"meta": {"nmId": 2}, "analytics": {"financeState": "no_data", **bff.settlement_profit_metrics({}, {})}}
+    assert _repricer_list_summary([observed, unsold])["settlementProfitKopecks"] == 24_800_000
+    assert _repricer_list_summary([unsold])["settlementProfitKopecks"] is None
+
+
 def test_filtered_summary_uses_persisted_sku_shares_not_redistribution():
     from app.routers.wb_repricer_bff import _repricer_list_summary
     rows = [{"meta": {"nmId": i}, "analytics": {

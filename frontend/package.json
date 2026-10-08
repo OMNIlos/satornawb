@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "npm run snapshot:vella && vite",
     "snapshot:vella": "node scripts/generate-vella-production-snapshot.mjs",
-    "build": "npm run snapshot:vella && tsc -b && vite build",
+    "build": "node ../avito-orders-extension/scripts/build.mjs && npm run snapshot:vella && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "baseline:vella": "npm run build && node scripts/capture-vella-baseline.mjs",

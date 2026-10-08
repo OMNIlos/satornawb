@@ -37,11 +37,12 @@ export function AvitoRepricerPhoto({ url, title, photoId, accessToken }: { url?:
     : <span style={{ ...style, display: 'grid', placeItems: 'center', background: 'var(--gray-50)', fontSize: 10, textAlign: 'center' }}>{photoId ? 'Фото' : 'Фото не получено'}</span>}</span>
 }
 
-export type RepricerTrend = { direction: 'up' | 'down' | 'flat' | 'missing'; percent: number | null }
+export type RepricerTrend = { direction: 'up' | 'down' | 'flat' | 'missing'; percent: number | null; delta?: number | null }
 export function AvitoRepricerMetric({ value, trend }: { value?: number | null; trend?: RepricerTrend }) {
-  const direction = trend?.direction ?? 'missing'
+  const direction = trend?.delta == null && trend?.direction !== 'flat' ? 'missing' : (trend?.direction ?? 'missing')
+  const absolute = trend?.delta == null ? '' : `${trend.delta > 0 ? '+' : ''}${trend.delta.toLocaleString('ru-RU')} `
   const label = direction === 'missing' ? 'Нет сравнения' : direction === 'flat' ? 'Без изменений'
-    : trend?.percent == null ? 'Рост с 0' : `${trend.percent > 0 ? '+' : ''}${trend.percent.toLocaleString('ru-RU')}%`
+    : trend?.percent == null ? `${absolute}(с 0)` : `${absolute}(${trend.percent > 0 ? '+' : ''}${trend.percent.toLocaleString('ru-RU')}%)`
   return <div style={{ display: 'grid', gap: 5, justifyItems: 'end' }}>
     <b>{value == null ? '—' : value.toLocaleString('ru-RU')}</b>
     <span title="Последние 3 завершённых дня против предыдущих 3" style={{ fontSize: 11, whiteSpace: 'nowrap', color: direction === 'up' ? '#15803d' : direction === 'down' ? '#dc2626' : 'var(--gray-500)' }}>

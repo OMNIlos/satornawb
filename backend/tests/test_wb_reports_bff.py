@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
+from app.repricer_bff import FINANCE_REVENUE_BASIS
 from app.routers.wb_reports_bff import (
     DIGEST_REPORT_PAYLOAD_VERSION,
     RNP_REPORT_PAYLOAD_VERSION,
@@ -31,6 +32,13 @@ from app.wb_api import reports_sources_runtime as reports_runtime
 from app.wb_api.client import FakeWbApiClient, WbApiRequest
 from app.wb_api.reports_sources_runtime import WbStockRow
 from tests.auth_helpers import auth_headers
+
+
+@pytest.fixture(autouse=True)
+def isolated_catalog_facts(monkeypatch):
+    # These report unit tests supply their own cached catalog; canonical DB
+    # integration is covered separately in test_wb_cost_import.
+    monkeypatch.setattr('app.platform.economics.legacy_catalog.catalog_facts', lambda _organization_id: {})
 
 
 def test_rnp_buyout_composite_keeps_zero_instead_of_copying_orders():
@@ -238,6 +246,7 @@ def test_bff_digest_endpoint_returns_frontend_shape():
 
 def test_digest_read_uses_cached_result_without_calling_wb(monkeypatch):
     cached = {
+        'dateFrom': '2026-07-10', 'dateTo': '2026-07-16', 'sourceComplete': True, 'sourceRevision': 'test-revision',
         "completedAt": datetime.now(timezone.utc).isoformat(),
         "digest": {"cacheVersion": DIGEST_REPORT_PAYLOAD_VERSION, "meta": {"id": "digest", "freshnessState": "fresh"}, "kpis": [{"id": "orders_qty", "value": "7"}], "planFactRows": [], "freshness": [], "alerts": [], "charts": [], "quickLinks": []},
     }
@@ -248,6 +257,7 @@ def test_digest_read_uses_cached_result_without_calling_wb(monkeypatch):
         return cached if key == cache_key else {}
 
     monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", read_cache)
+    monkeypatch.setattr("app.routers.wb_reports_bff._digest_source_revision", lambda *a: 'test-revision')
     monkeypatch.setattr("app.routers.wb_reports_bff.save_source_cache", lambda *_args, **_kwargs: {})
     monkeypatch.setattr("app.routers.wb_reports_bff.record_audit_event", lambda **_kwargs: None)
     monkeypatch.setattr(reports_runtime, "build_wb_reports_sources_snapshot", lambda **_kwargs: pytest.fail("digest GET must not call WB"))
@@ -277,8 +287,11 @@ def test_digest_payload_uses_wb_funnel_totals_and_daily_points():
     plan_fact = SimpleNamespace(blockerIds=[], rows=[])
     funnel_snapshot = {
         "status": "fresh",
+        "rows": [{"nmId": 101}],
         "totals": {
             "orderCount": 60_846,
+            "openCount": 95_823,
+            "cartCount": 5_511,
             "orderSumKopecks": 11_009_938_600,
             "buyoutCount": 24_359,
             "buyoutSumKopecks": 4_288_069_900,
@@ -313,15 +326,17 @@ def test_digest_payload_uses_wb_funnel_totals_and_daily_points():
     assert kpis["orders_qty"] == "60846"
     assert kpis["sales_revenue"] == "4288069900"
     assert kpi_labels["sales_revenue"] == "Выкупили на сумму"
-    assert "сумма выкупленных товаров" in kpi_hints["sales_revenue"].lower()
+    assert "по дате заказа" in kpi_hints["sales_revenue"].lower()
     assert "seller payout - комиссии" in kpi_hints["margin_profit"]
     assert payload["cacheVersion"] == DIGEST_REPORT_PAYLOAD_VERSION
     assert payload["funnelSummary"]["buyoutCount"] == 24_359
+    assert payload["periodCards"][0]["openCount"] == funnel_snapshot["totals"]["openCount"]
+    assert payload["periodCards"][0]["cartCount"] == funnel_snapshot["totals"]["cartCount"]
     point = payload["charts"][0]["points"][0]
     assert point["value"] == 1_242
     assert point["compareValue"] == 3
-    assert point["returnsUnits"] == 4
-    assert point["buyoutPct"] == 0.2
+    assert point["returnsUnits"] is None  # cancelCount is not returns.
+    assert point["buyoutPct"] == 42.9
 
 
 def test_digest_funnel_snapshot_uses_baskets_cache_without_live_wb(monkeypatch):
@@ -383,6 +398,7 @@ def test_digest_refresh_reuses_existing_running_job(monkeypatch):
 
 
 def test_digest_refresh_does_not_pass_user_wb_token_to_report_task(monkeypatch):
+    monkeypatch.setattr("app.routers.wb_reports_bff.save_source_cache", lambda _org, _key, payload: payload)
     from app import repricer_tasks
 
     captured_args = {}
@@ -397,6 +413,8 @@ def test_digest_refresh_does_not_pass_user_wb_token_to_report_task(monkeypatch):
 
     monkeypatch.setattr("app.routers.wb_reports_bff.get_source_cache", fake_get_source_cache)
     monkeypatch.setattr(repricer_tasks.build_digest_for_org, "delay", fake_delay)
+    monkeypatch.setattr(repricer_tasks.refresh_report_sources_for_org, "delay", fake_delay)
+    monkeypatch.setattr("app.routers.wb_reports_bff.list_source_cache_ranges_by_prefix", lambda *a, **kw: [])
     api = client()
     response = api.post("/api/wb/reports/digest/refresh", headers=auth_headers(api, "viewer"))
 
@@ -625,6 +643,7 @@ def test_week_over_week_enriches_rows_from_cached_catalog(monkeypatch):
 
 
 def test_week_over_week_job_endpoint_starts_and_reuses_task(monkeypatch):
+    monkeypatch.setattr('app.routers.wb_reports_bff._report_daily_sources_ready', lambda *a, **kw: (True, []))
     from app import repricer_tasks
     from app.routers import wb_reports_bff
 
@@ -785,6 +804,7 @@ def test_report_job_status_does_not_overwrite_active_source_refresh(monkeypatch)
 
 
 def test_week_over_week_job_endpoint_reuses_completed_cached_report(monkeypatch):
+    monkeypatch.setattr('app.routers.wb_reports_bff._report_daily_sources_ready', lambda *a, **kw: (True, []))
     from app import repricer_tasks
     from app.routers import wb_reports_bff
 
@@ -834,7 +854,7 @@ def test_week_over_week_job_endpoint_reuses_completed_cached_report(monkeypatch)
     assert result["reused"] is True
     assert result["taskId"] == "done-task"
     assert delay_calls == []
-    assert saved == {"reports_job_week-over-week_2026-07-07_2026-07-13_sku": result}
+    assert saved == {"reports_job_week-over-week_2026-07-07_2026-07-13_sku_nofinance": result}
 
 
 def test_week_over_week_latest_cache_builds_from_source_cache_for_inner_period(monkeypatch):
@@ -871,10 +891,11 @@ def test_week_over_week_latest_cache_builds_from_source_cache_for_inner_period(m
 
     assert result["rows"][0]["sku"] == "INNER"
     assert result["cache"]["status"] == "derived"
-    assert "reports_payload_week-over-week_2026-07-24_2026-07-25_sku_operational" in saved
+    assert "reports_payload_week-over-week_2026-07-24_2026-07-25_sku_operational_nofinance" in saved
 
 
 def test_week_over_week_job_endpoint_restarts_stale_running_job(monkeypatch):
+    monkeypatch.setattr('app.routers.wb_reports_bff._report_daily_sources_ready', lambda *a, **kw: (True, []))
     from app import repricer_tasks
     from app.routers import wb_reports_bff
 
@@ -1021,7 +1042,7 @@ def test_week_over_week_get_returns_completed_cached_job_payload(monkeypatch):
     assert {key: payload["reportJob"][key] for key in completed_job} == completed_job
     assert payload["reportJob"]["stage"] == "cache"
     assert payload["reportJob"]["reused"] is True
-    assert saved == {"reports_job_week-over-week_2026-07-01_2026-07-14_sku": payload["reportJob"]}
+    assert saved == {"reports_job_week-over-week_2026-07-01_2026-07-14_sku_nofinance": payload["reportJob"]}
 
 
 def test_week_over_week_get_returns_missing_background_report_without_cache(monkeypatch):
@@ -1310,6 +1331,7 @@ def test_digest_payload_builds_weekly_balance_periods_and_real_problem_rows():
         "salesKopecks": 100_000,
         "returnsUnits": 1,
         "buyoutPct": 50.0,
+        "coverageComplete": True,
     }
     assert payload["periodCards"][0]["id"] == "selected"
     assert payload["periodCards"][0]["ordersUnits"] == 3
@@ -1477,7 +1499,7 @@ def test_bff_stock_and_week_over_week_endpoints_return_rows(monkeypatch):
     date_from = date(2026, 7, 14)
     date_to = date(2026, 7, 20)
     params = {"preset": "custom", "from": str(date_from), "to": str(date_to)}
-    wow_cache_key = "reports_payload_week-over-week_2026-07-14_2026-07-20_sku_operational"
+    wow_cache_key = "reports_payload_week-over-week_2026-07-14_2026-07-20_sku_operational_nofinance"
     wow_cache = {
         "taxRevision": "synthetic-confirmation",
         "completedAt": datetime.now(timezone.utc).isoformat(),
@@ -1535,7 +1557,7 @@ def test_bff_stock_and_week_over_week_endpoints_return_rows(monkeypatch):
     def daily_sources_ready(organization_id, sources, *, date_from: date, date_to: date):
         assert (organization_id, sources, date_from, date_to) == (
             1,
-            ("period-stats", "finance"),
+            ("stocks", "period-stats", "finance"),
             date(2026, 7, 14),
             date(2026, 7, 20),
         )
@@ -1590,7 +1612,7 @@ def test_stock_get_does_not_build_cached_snapshot_without_daily_sources(monkeypa
     def readiness(organization_id, sources, *, date_from, date_to):
         assert (organization_id, sources, date_from, date_to) == (
             1,
-            ("period-stats", "finance"),
+            ("stocks", "period-stats", "finance"),
             date(2026, 7, 14),
             date(2026, 7, 20),
         )
@@ -1786,9 +1808,11 @@ def test_bff_rnp_endpoint_returns_full_backend_funnel_shape(monkeypatch):
 
 
 def test_latest_report_payload_cache_respects_requested_range(monkeypatch):
+    monkeypatch.setattr("app.routers.wb_reports_bff.legacy_finance_tax_revision", lambda org: "synthetic-current")
     caches = [
         {
             "sourceKey": "reports_payload_rnp_2026-06-08_2026-06-14_sku_operational",
+            "catalogRevision": "synthetic-current",
             "report": {"cacheVersion": RNP_REPORT_PAYLOAD_VERSION, "rows": [{"sku": "WRONG", "orderCount": 1}]},
             "fetchedAt": datetime.now(timezone.utc).isoformat(),
             "dateFrom": "2026-06-08",
@@ -1796,6 +1820,7 @@ def test_latest_report_payload_cache_respects_requested_range(monkeypatch):
         },
         {
             "sourceKey": "reports_payload_rnp_2026-06-01_2026-06-07_sku_operational",
+            "catalogRevision": "synthetic-current",
             "report": {"cacheVersion": RNP_REPORT_PAYLOAD_VERSION, "rows": [{"sku": "RIGHT", "orderCount": 1}]},
             "fetchedAt": datetime.now(timezone.utc).isoformat(),
             "dateFrom": "2026-06-01",
@@ -1943,7 +1968,7 @@ def test_report_daily_sources_ready_accepts_covering_daily_detail(monkeypatch):
         lambda _organization_id, prefix, **_kwargs: [
             {
                 "sourceKey": "finance_2026-06-25_2026-07-24",
-                "revenueBasis": "retailAmount",
+                "revenueBasis": FINANCE_REVENUE_BASIS,
                 "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
                 "dateFrom": "2026-06-25",
                 "dateTo": "2026-07-24",
@@ -1961,6 +1986,39 @@ def test_report_daily_sources_ready_accepts_covering_daily_detail(monkeypatch):
         date_from=date(2026, 7, 8),
         date_to=date(2026, 7, 21),
     ) == (True, [])
+
+
+def test_daily_source_union_reuses_overlap_and_only_reports_real_holes(monkeypatch):
+    from app.routers.wb_reports_bff import _report_missing_source_ranges
+    caches = [
+        {'dateFrom': '2026-09-01', 'dateTo': '2026-09-03', 'dailyAggregateDates': ['2026-09-01', '2026-09-02', '2026-09-03']},
+        {'dateFrom': '2026-09-03', 'dateTo': '2026-09-07', 'dailyAggregateDates': ['2026-09-03', '2026-09-06', '2026-09-07']},
+    ]
+    monkeypatch.setattr('app.routers.wb_reports_bff.list_source_cache_ranges_by_prefix', lambda *args, **kwargs: caches)
+    assert _report_missing_source_ranges(2, 'ads', date_from=date(2026, 9, 1), date_to=date(2026, 9, 7)) == [(date(2026, 9, 4), date(2026, 9, 5))]
+    caches[1]['dailyAggregateDates'].extend(['2026-09-04', '2026-09-05'])
+    assert _report_daily_sources_ready(2, ('ads',), date_from=date(2026, 9, 1), date_to=date(2026, 9, 7)) == (True, [])
+
+
+def test_partial_product_batches_do_not_make_a_complete_funnel_day(monkeypatch):
+    from app.routers.wb_reports_bff import _report_missing_source_ranges
+    monkeypatch.setattr('app.routers.wb_reports_bff.list_source_cache_ranges_by_prefix', lambda *a, **k: [{
+        'sourceKey': 'baskets_2026-09-01_2026-09-02', 'dateFrom': '2026-09-01', 'dateTo': '2026-09-02',
+        'dailyDetailStatus': 'partial', 'dailyAggregateDates': ['2026-09-01', '2026-09-02'],
+    }])
+    monkeypatch.setattr('app.routers.wb_reports_bff.get_source_cache', lambda *a, **k: {'dailyBatchCount': 2,
+        'dailyDetailStatus': 'partial', 'dailyAggregateDates': ['2026-09-01', '2026-09-02'], 'chunks': [
+        {'type': 'daily', 'date': '2026-09-01', 'chunkIndex': 0, 'status': 'done'},
+        {'type': 'daily', 'date': '2026-09-01', 'chunkIndex': 1, 'status': 'done'},
+        {'type': 'daily', 'date': '2026-09-02', 'chunkIndex': 0, 'status': 'done'},
+        # The second batch has not started yet; its absence must not mean done.
+    ]})
+    assert _report_missing_source_ranges(2, 'baskets', date_from=date(2026, 9, 1), date_to=date(2026, 9, 2)) == [(date(2026, 9, 2), date(2026, 9, 2))]
+
+
+def test_short_digest_includes_six_days_for_comparison_without_changing_selected_period():
+    from app.routers.wb_reports_bff import _digest_source_bounds
+    assert _digest_source_bounds(date(2026, 9, 7), date(2026, 9, 7)) == (date(2026, 9, 2), date(2026, 9, 7))
 
 
 @pytest.mark.parametrize("metadata", [
@@ -2137,6 +2195,7 @@ def test_bff_export_supports_async_job_flow_and_compat_get():
 
 
 def test_starting_pnl_job_immediately_exposes_cash_flow_job_to_1c(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.routers.wb_reports_bff.save_source_cache", lambda _org, _key, payload: payload)
     from app import repricer_tasks
     from app.routers import one_c_cash_flow
 
@@ -2182,6 +2241,7 @@ def test_starting_pnl_job_immediately_exposes_cash_flow_job_to_1c(tmp_path, monk
 
 
 def test_starting_expenses_job_immediately_exposes_cash_flow_job_to_1c(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.routers.wb_reports_bff.save_source_cache", lambda _org, _key, payload: payload)
     from app import repricer_tasks
 
     captured_args = {}

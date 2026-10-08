@@ -107,17 +107,19 @@
       state.processed += 1
       await progress({ ...state })
     }
-    // Four bounded CDN/upload workers, but only one browser-detail fallback at a time.
+    // Bound both CDN uploads and remaining detail-page reads. Stop scheduling
+    // additional work as soon as Avito reports a throttle or challenge.
     const ready = missing.filter(row => row.imageUrl)
     let cursor = 0
-    await Promise.all(Array.from({ length: Math.min(4, ready.length) }, async () => {
+    await Promise.all(Array.from({ length: Math.min(5, ready.length) }, async () => {
       while (cursor < ready.length && state.stage !== 'paused') await processRow(ready[cursor++])
     }))
     state.phase = 'Проверка оставшихся объявлений'
-    for (const row of missing.filter(row => !row.imageUrl)) {
-      if (state.stage === 'paused') break
-      await processRow(row)
-    }
+    const remainder = missing.filter(row => !row.imageUrl)
+    cursor = 0
+    await Promise.all(Array.from({ length: Math.min(5, remainder.length) }, async () => {
+      while (cursor < remainder.length && state.stage !== 'paused') await processRow(remainder[cursor++])
+    }))
     if (state.stage === 'running') state.stage = state.failed ? 'partial' : 'done'
     await progress({ ...state })
     return state

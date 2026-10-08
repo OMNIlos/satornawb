@@ -1,4 +1,5 @@
 import { clearStoredAccessToken, readStoredAccessToken, storeAccessToken } from './authTokenStore'
+import { wbDemandHeaders } from './wbDemand'
 
 export class ApiError extends Error {
   status: number
@@ -193,6 +194,7 @@ export function refreshStoredAccessTokenOnce() {
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers)
+  Object.entries(wbDemandHeaders(path, init.method)).forEach(([key, value]) => headers.set(key, value))
   if (!headers.has('Accept')) headers.set('Accept', 'application/json')
   if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')

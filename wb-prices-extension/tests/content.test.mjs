@@ -13,14 +13,16 @@ function load({ url = 'https://www.wildberries.ru/seller/4405572', title = 'Wild
   const context = vm.createContext({ URL, Date: Clock, Object, Number, location: new URL(url), document,
     chrome: { runtime: { id: 'ext', sendMessage: async (value) => { sent.push(JSON.parse(JSON.stringify(value))); return { ok: true } }, onMessage: { addListener: (fn) => { runtimeListener = fn } } } },
     MutationObserver: class { observe() {} }, setTimeout: (fn) => { timer = fn; return 1 }, clearTimeout: () => { timer = null },
-    addEventListener: (name, fn) => { listeners[name] = fn }, innerHeight: 800, scrollBy: (data) => scrolled.push(data) })
+    getComputedStyle: () => ({ visibility: 'visible', display: 'block', opacity: '1' }),
+    addEventListener: (name, fn) => { listeners[name] = fn }, postMessage: (data) => sent.push(JSON.parse(JSON.stringify(data))), innerHeight: 800, scrollBy: (data) => scrolled.push(data) })
   context.window = context; context.top = context
   for (const name of ['contract.js', 'content.js']) {
     const path = new URL(`../src/${name}`, import.meta.url)
     assert.ok(existsSync(path), `${name} is implemented`)
     vm.runInContext(readFileSync(path, 'utf8'), context)
   }
-  return { context, sent, scrolled, listeners, tick: (ms) => { now += ms; timer?.() }, document, runtime: (...args) => runtimeListener(...args) }
+  return { context, sent, scrolled, listeners, hasTimer: () => Boolean(timer), tick: (ms) => { now += ms; timer?.() }, document,
+    runtime: (message, ...args) => runtimeListener({ expectedPageUrl: url, ...message }, ...args) }
 }
 
 test('isolated bridge ignores foreign windows/origins and strips untrusted fields', () => {
@@ -32,6 +34,30 @@ test('isolated bridge ignores foreign windows/origins and strips untrusted field
   vm.runInContext(`window.dispatchForTest = (fn, data) => fn({ source: window, origin: 'https://www.wildberries.ru', data })`, h.context)
   h.context.dispatchForTest(h.listeners.message, data)
   assert.deepEqual(h.sent, [{ source: 'satorna-wb-prices-v1', type: 'observations', items: [{ nmId: 100, sizeId: 200, buyerPriceNoWalletKopecks: 10000 }] }])
+})
+
+test('wallet enrichment comes from matching visible product, not MAIN-injected wallet or guessed discount', () => {
+  const h = load()
+  const tile = { getClientRects: () => [1], querySelector: () => ({ innerText: '1 397 ₽ с WB Кошельком', getClientRects: () => [1], querySelectorAll: () => [] }) }
+  h.document.querySelector = selector => selector === 'article[data-nm-id="101"]' ? tile : null
+  vm.runInContext('window.dispatchForTest = (fn, data) => fn({ source: window, origin: location.origin, data })', h.context)
+  h.context.dispatchForTest(h.listeners.message, { source: 'satorna-wb-prices-v1', type: 'observations',
+    walletSingleSizeNmIds: [101], items: [{ nmId: 101, sizeId: 201, buyerPriceNoWalletKopecks: 142600, buyerPriceWithWalletKopecks: 1 }] })
+  assert.equal(h.sent.length, 0, 'wallet capture precedes ACK/navigation')
+  h.tick(250)
+  assert.equal(h.sent[0].items[0].buyerPriceWithWalletKopecks, 139700)
+  assert.equal(h.sent[0].items[0].sizeId, 201)
+})
+
+test('hidden wallet DOM stays unknown and regular observation is published after bounded wait', () => {
+  const h = load()
+  h.document.querySelector = () => ({ getClientRects: () => [1], querySelector: () => ({ innerText: '1 397 ₽ с WB Кошельком', getClientRects: () => [] }) })
+  vm.runInContext('window.dispatchForTest = (fn, data) => fn({ source: window, origin: location.origin, data })', h.context)
+  h.context.dispatchForTest(h.listeners.message, { source: 'satorna-wb-prices-v1', type: 'observations',
+    walletSingleSizeNmIds: [101], items: [{ nmId: 101, sizeId: 201, buyerPriceNoWalletKopecks: 142600 }] })
+  for (let i = 0; i < 8; i++) h.tick(250)
+  assert.equal(h.sent.length, 1)
+  assert.equal(h.sent[0].items[0].buyerPriceWithWalletKopecks, undefined)
 })
 
 test('collector scroll is a bounded native action and foreign commands do nothing', () => {
@@ -59,6 +85,36 @@ test('an actually present next-page control is used without constructing a selle
   h.runtime({ type: 'scroll' }, { id: 'ext' }, () => {})
   assert.equal(clicked, 1)
   assert.equal(h.scrolled.length, 0)
+})
+
+test('visibility only sends a fixed notification; no automatic marketplace HTTP requests', () => {
+  const h = load()
+  h.document.visibilityState = 'hidden'; h.listeners.visibilitychange()
+  assert.equal(h.sent.length, 0)
+  h.document.visibilityState = 'visible'; h.listeners.visibilitychange()
+  assert.deepEqual(h.sent, [{ source: 'satorna-wb-prices-v1', type: 'collector_visible' }])
+})
+
+test('duplicate catalog responses do not cancel native pagination; progress is read-only and sender-bound', () => {
+  const h = load()
+  h.runtime({ type: 'scroll' }, { id: 'ext' }, () => {})
+  const data = { source: 'satorna-wb-prices-v1', type: 'observations', items: [], catalogPage: 1, productCount: 200 }
+  vm.runInContext('window.dispatchForTest = (fn, data) => fn({ source: window, origin: location.origin, data })', h.context)
+  h.context.dispatchForTest(h.listeners.message, data)
+  assert.equal(h.hasTimer(), false)
+  h.runtime({ type: 'scroll' }, { id: 'ext' }, () => {})
+  h.context.dispatchForTest(h.listeners.message, data)
+  assert.equal(h.hasTimer(), true)
+  let response
+  h.document.visibilityState = 'hidden'
+  h.runtime({ type: 'catalog_progress' }, { id: 'other' }, value => { response = value })
+  assert.equal(response, undefined)
+  h.runtime({ type: 'catalog_progress' }, { id: 'ext' }, value => { response = value })
+  assert.equal(response.visible, false)
+  assert.equal(response.cards, 0)
+  const count = h.scrolled.length
+  h.runtime({ type: 'scroll', expectedPageUrl: 'https://www.wildberries.ru/seller/999' }, { id: 'ext' }, () => {})
+  assert.equal(h.scrolled.length, count, 'a different user-selected seller cannot be scrolled')
 })
 
 test('a challenge only emits a fixed stop code, without page text or cookies', () => {

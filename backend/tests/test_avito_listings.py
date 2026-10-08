@@ -9,6 +9,28 @@ from app.avito.stats import AvitoStatsAccount
 from app.main import create_app
 from tests.auth_helpers import auth_headers
 from tests.test_avito_stats import RecordingAvitoItemsHttpClient, RecordingAvitoStatsHttpClient
+import pytest
+
+
+def test_inventory_remains_available_when_optional_analytics_fail(monkeypatch):
+    client = LiveAvitoListingsClient(access_token="synthetic", base_url="https://api.avito.ru")
+    def unavailable(*_):
+        raise ValueError("Synthetic analytics unavailable")
+    monkeypatch.setattr(client, "_v2_item_analytics_for_account", unavailable)
+    rows = client._listing_rows(None, AvitoListingsFetchRequest(dateFrom=date(2026, 9, 1), dateTo=date(2026, 9, 7)),
+        [AvitoStatsAccount(accountId="a", accountName="Synthetic")],
+        [{"itemId": "000123", "title": "Saved inventory", "accountId": "a", "status": "active", "price": 100}])
+    assert len(rows) == 1
+    assert rows[0].itemId == "000123"
+    assert rows[0].views is None and rows[0].impressions is None
+    assert client.analytics_error.code == "avito_analytics_failed"
+
+
+def test_repeated_catalog_page_is_not_published_as_complete():
+    page = {"resources": [{"id": index + 1000, "title": f"Item {index}"} for index in range(99)]}
+    client = LiveAvitoListingsClient(access_token="synthetic", base_url="https://api.avito.ru")
+    with pytest.raises(ValueError, match="repeated"):
+        client._items(RecordingAvitoItemsHttpClient([page, page]), [AvitoStatsAccount(accountId="a", accountName="Synthetic")])
 
 
 def test_live_avito_listings_client_fetches_registry_statuses_and_period_metrics():

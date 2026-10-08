@@ -9,6 +9,26 @@
     } catch { return null }
   }
 
+  function downloadForObservedTask(tabUrls, observedUrls) {
+    const observed = new Set(), candidates = new Set()
+    for (const value of observedUrls || []) {
+      const direct = downloadUrl(value)
+      if (direct) candidates.add(direct)
+      try {
+        const url = new URL(value)
+        if (url.origin === 'https://www.avito.ru' && !url.username && !url.password &&
+            /^\/web\/1\/orders\/labels\/[a-zA-Z0-9-]+\/status\/?$/.test(url.pathname)) {
+          observed.add(url.pathname.replace(/\/status\/?$/, ''))
+        }
+      } catch { /* Only a task actually observed in this print page is trusted. */ }
+    }
+    for (const value of tabUrls || []) {
+      const direct = downloadUrl(value)
+      if (direct && observed.has(new URL(direct).pathname.replace(/\/download\/?$/, ''))) candidates.add(direct)
+    }
+    return candidates.size === 1 ? [...candidates][0] : null
+  }
+
   // Runs in MAIN world; observes only label response URLs, never auth headers.
   function observeDownloads() {
     window.__satornaLabels?.restore?.()
@@ -56,7 +76,7 @@
   }
 
   // Runs in ISOLATED world. Only the print-labels route and exact label action.
-  async function selectAndGenerate() {
+  async function selectAndGenerate(missing = []) {
     if (location.origin !== 'https://www.avito.ru' || location.pathname !== '/orders/print-labels') throw new Error('Откройте страницу печати этикеток Авито')
     const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
     let stable = 0, lastHeight = 0
@@ -67,9 +87,25 @@
       stable = height === lastHeight ? stable + 1 : 0
       lastHeight = height
     }
-    for (const checkbox of document.querySelectorAll('input[type="checkbox"], [role="checkbox"]')) {
+    const targets = new Set(missing.flatMap(row => [row.orderId, row.shipmentNumber]).filter(Boolean).map(value => String(value).replace(/\D/g, '')))
+    let selected = 0
+    const checkboxes = [...document.querySelectorAll('input[type="checkbox"], [role="checkbox"]')]
+      .filter(node => !node.querySelector('input[type="checkbox"]'))
+    for (const checkbox of checkboxes) {
+      let matches = targets.size === 0
+      if (targets.size) {
+        for (let parent = checkbox.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+          // Stop before the list/header: never match numbers from another row.
+          if (parent.querySelectorAll('input[type="checkbox"], [role="checkbox"]').length > 2) break
+          const text = (parent.innerText || parent.textContent || '') + ' ' + [...parent.querySelectorAll('a[href]')].map(a => a.getAttribute('href')).join(' ')
+          const numbers = text.match(/\d[\d\s]{5,}\d/g) || []
+          if (numbers.some(value => targets.has(value.replace(/\D/g, '')))) { matches = true; break }
+        }
+      }
+      const wanted = matches && selected < 100
       const checked = checkbox.checked === true || checkbox.getAttribute('aria-checked') === 'true'
-      if (!checked && !checkbox.disabled && checkbox.getAttribute('aria-disabled') !== 'true') { checkbox.click(); await pause(60) }
+      if (wanted !== checked && !checkbox.disabled && checkbox.getAttribute('aria-disabled') !== 'true') { checkbox.click(); await pause(60) }
+      if (wanted) selected++
     }
     await pause(500)
     const buttons = [...document.querySelectorAll('button, [role="button"]')].filter(el =>
@@ -100,5 +136,5 @@
     if (new TextDecoder().decode(data.slice(0, 5)) !== '%PDF-') throw new Error('Вместо PDF Авито вернуло другую страницу')
     return data
   }
-  root.SatornaLabels = { downloadUrl, observeDownloads, selectAndGenerate, boundedPdf }
+  root.SatornaLabels = { downloadUrl, downloadForObservedTask, observeDownloads, selectAndGenerate, boundedPdf }
 })(typeof globalThis === 'object' ? globalThis : this)

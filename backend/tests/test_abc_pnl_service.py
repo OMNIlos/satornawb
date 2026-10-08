@@ -29,7 +29,6 @@ PERIOD = Period(date(2026, 8, 20), date(2026, 8, 21))
 GLOBAL_BLOCKERS = {
     "WB_PNL_ADS_NOT_CANONICAL",
     "WB_PNL_LOYALTY_NOT_CANONICAL",
-    "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
 }
 
 
@@ -367,14 +366,12 @@ def test_v3_loyalty_evidence_builds_profit_after_loyalty(session: Session) -> No
     assert page.summary.cashback_commission_change_kopecks == -100
     assert page.summary.loyalty_net_cost_kopecks == 700
     assert page.summary.profit_after_loyalty_kopecks == 10_500
-    assert page.summary.net_profit_kopecks is None
+    assert page.summary.net_profit_kopecks == 10_500
     assert "WB_PNL_LOYALTY_NOT_CANONICAL" not in page.blocker_ids
-    assert page.blocker_ids == (
-        "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
-            )
+    assert page.blocker_ids == ("WB_PNL_CLASSIFICATION_NOT_CANONICAL",)
     assert page.advertising_snapshot.source_kind == "ads_fullstats"
     assert page.advertising_snapshot.evidence_status == "raw"
-    assert row.net_profit_kopecks is None
+    assert row.net_profit_kopecks == 10_500
     assert row.profit_class is None
     assert row.abc_code is None
 
@@ -660,7 +657,6 @@ def test_unattributed_raw_spend_keeps_summary_but_not_row_profit(
     assert "WB_PNL_ADVERTISING_UNATTRIBUTED" in row.blocker_ids
     assert page.blocker_ids == (
         "WB_PNL_ADVERTISING_UNATTRIBUTED",
-        "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
             )
 
 
@@ -702,7 +698,6 @@ def test_advertising_source_failure_propagates_without_guessing(
     assert row.profit_before_loyalty_kopecks is None
     assert page.blocker_ids == (
         "WB_ADS_SOURCE_METRIC_INCOMPLETE",
-        "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
             )
     assert "WB_PNL_ADVERTISING_UNATTRIBUTED" not in page.blocker_ids
 
@@ -1096,7 +1091,8 @@ def test_basis_point_rounding_is_signed_half_even() -> None:
         (750, "configured", "dated", 0, 333, False, 24_766_700),
         (750, "configured", "dated", 1_000, 0, False, None),
         (750, "configured", "dated", None, 0, False, None),
-        (600, "configured", "dated", 0, 0, False, None),
+        (600, "configured", "dated", 0, 0, False, 26_300_000),
+        (2200, "configured", "dated", 0, 0, False, 10_300_000),
         (750, "assumed", "dated", 0, 0, False, None),
         (750, "configured", "undated", 0, 0, False, None),
         (None, "missing", "dated", 0, 0, False, None),
@@ -1198,9 +1194,7 @@ def test_approved_profit_uses_confirmed_policy_and_account_advertising_once(
     assert page.summary.net_profit_kopecks == expected
     assert "WB_PNL_INTERNAL_EXPENSES_MISSING" not in page.blocker_ids
     tax_confirmed = confirmed_tax or (
-        tax_basis_points,
-        value_state,
-        evidence_status,
-    ) == (750, "configured", "dated")
+        tax_basis_points is not None and value_state == "configured" and evidence_status == "dated"
+    )
     assert ("WB_PNL_TAX_POLICY_NOT_CONFIRMED_750" in row.blocker_ids) != tax_confirmed
     assert service.get_page(31, PERIOD, limit=1, offset=1).summary == page.summary

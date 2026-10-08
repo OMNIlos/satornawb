@@ -54,20 +54,36 @@ test('reader follows a Chrome prerender replacement without losing the photo', a
   assert.ok((await r.read(7, ['123'], '123')).photos['123'])
 })
 
-test('closed detail tab is recreated instead of failing every remaining listing', async () => {
+test('each detail photo uses its own tab and closes it after reading', async () => {
   const from = background.indexOf('    loadPhoto: async row => {')
   const to = background.indexOf('\n  }) } finally', from)
   let created = 0
+  const removed = []
   const context = vm.createContext({
-    photoTab: { id: 7 },
+    detailTabs: new Set(), replacementTabs: new Map(), blockedTabId: null,
     chrome: { tabs: {
-      get: async () => { throw new Error('No tab with id: 7') },
       create: async options => { assert.equal(options.url, 'https://www.avito.ru/item_123'); created++; return { id: 8 } },
-      update: async () => assert.fail('Must not navigate a closed tab'),
+      remove: async id => removed.push(id),
     } },
     readyPhotos: async id => { assert.equal(id, 8); return { photos: { 123: 'https://b00.img.avito.st/photo' } } },
   })
   const loader = vm.runInContext('({' + background.slice(from, to) + '})', context)
   assert.equal(await loader.loadPhoto({ itemId: '123', url: 'https://www.avito.ru/item_123' }), 'https://b00.img.avito.st/photo')
   assert.equal(created, 1)
+  assert.deepEqual(removed, [8])
+})
+
+test('order detail proceeds when DOM is interactive, without waiting for image load', async () => {
+  const from = background.indexOf('async function waitForTabInteractive(')
+  const to = background.indexOf('\nfunction assertAvitoUrl(', from)
+  assert.ok(from >= 0 && to > from)
+  let attempts = 0
+  const context = vm.createContext({
+    Date: { now: () => attempts * 400 },
+    setTimeout: callback => callback(),
+    chrome: { scripting: { executeScript: async () => [{ result: { ready: ++attempts >= 2, host: 'www.avito.ru' } }] } },
+  })
+  vm.runInContext(background.slice(from, to), context)
+  await context.waitForTabInteractive(7)
+  assert.equal(attempts, 2)
 })

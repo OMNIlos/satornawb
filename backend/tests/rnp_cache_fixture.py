@@ -17,6 +17,7 @@ def install_rnp_cache(monkeypatch, date_from, date_to, *, bff=False):
         key = f"{source}_{date_from.isoformat()}_{date_to.isoformat()}"
         caches[key] = {
             "sourceKey": key, "dateFrom": date_from.isoformat(),
+            "aggregateComplete": True,
             "dateTo": date_to.isoformat(), "dailyAggregatesDays": days,
             "dailyAggregates": {
                 (date_from + timedelta(days=i)).isoformat(): {"101": dict(row)}

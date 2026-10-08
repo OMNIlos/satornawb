@@ -481,6 +481,7 @@ export function adaptCanonicalAbcReport(page: CanonicalAbcPnlPage, operationalRo
 
 export function financeBlockerReasons(blockers: string[]) {
   return [...new Set(blockers.map((blocker) => {
+    if (blocker === 'WB_USER_EXAMPLE_COSTS') return 'Примерная себестоимость — замените своей таблицей'
     if (blocker.includes('COST')) return 'Уточните себестоимость и её даты'
     if (blocker.includes('TAX')) return 'Не подтверждён налог за период'
     if (blocker.includes('ECONOMICS')) return 'Не подтверждён налог за период'

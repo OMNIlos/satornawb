@@ -17,8 +17,8 @@ from app.wb_browser_prices import CONNECTION_KEY, PRICES_KEY, apply_browser_pric
 
 _REDIS_CACHE_TTL_SECONDS = 45
 _REDIS_DISABLED_UNTIL = 0.0
-FINANCE_REVENUE_BASIS = "retailAmount"
-FINANCE_SCHEMA_VERSION = "v4"
+FINANCE_REVENUE_BASIS = "retailPriceWithDisc*quantity"
+FINANCE_SCHEMA_VERSION = "v5"
 
 
 def _db_timestamp(value: Any) -> str | None:
@@ -306,8 +306,12 @@ def _slim_promotion(promotion: dict[str, Any]) -> dict[str, Any]:
 
 def slim_source_cache_payload(source_key: str, payload: dict[str, Any]) -> dict[str, Any]:
     slim = dict(payload)
+    if source_key.startswith("repricer_finance_"):
+        slim.pop("operations", None)
+        return slim
     if source_key.startswith("finance_"):
         slim.pop("rows", None)
+        slim.pop("revenueOperations", None)
         return slim
     if source_key == "content_cards":
         cards = payload.get("cards")
@@ -621,7 +625,17 @@ def list_source_cache_ranges_by_prefix(
             key_date_from, key_date_to = _source_cache_range_from_key(row["source_key"])
             range_date_from = row["range_date_from"] or key_date_from
             range_date_to = row["range_date_to"] or key_date_to
-            daily_dates = sorted(str(value)[:10] for value in (row["daily_aggregate_dates"] or []) if value)
+            raw_dates = row["daily_aggregate_dates"]
+            # Raw SQL returns decoded JSON on PostgreSQL, but JSON text on
+            # SQLite. Iterating that text would turn dates into characters and
+            # make every saved period look missing to the refresh planner.
+            if isinstance(raw_dates, str):
+                try:
+                    raw_dates = json.loads(raw_dates)
+                except (ValueError, TypeError):
+                    raw_dates = None
+            daily_dates = sorted({parsed.isoformat() for value in raw_dates
+                if (parsed := _optional_date(value)) is not None}) if isinstance(raw_dates, list) else []
             result.append(
                 {
                     "sourceKey": row["source_key"],
@@ -638,7 +652,7 @@ def list_source_cache_ranges_by_prefix(
                     "dailyDetailPreservedBy": row["daily_detail_preserved_by"],
                     "dailyDetailRequestsCompleted": row["daily_detail_requests_completed"],
                     "dailyDetailRequestsTotal": row["daily_detail_requests_total"],
-                    "dailyAggregatesDays": len(daily_dates) if row["daily_aggregate_dates"] is not None else None,
+                    "dailyAggregatesDays": len(daily_dates) if isinstance(raw_dates, list) else None,
                     "dailyAggregateDates": daily_dates,
                     "revenueBasis": row["revenue_basis"],
                     "financeSchemaVersion": row["finance_schema_version"],
@@ -665,6 +679,7 @@ def get_covering_source_cache(
             .where(
                 WbRepricerSourceCacheRow.organization_id == organization_id,
                 WbRepricerSourceCacheRow.source_key.like(f"{source_key_prefix}%"),
+                ~WbRepricerSourceCacheRow.source_key.like("finance_revenue_%") if source_key_prefix == "finance_" else text("true"),
             )
             .order_by(WbRepricerSourceCacheRow.fetched_at.desc())
             # Keep JSON checks above the sorted scan so LIMIT can stop early.
@@ -819,13 +834,23 @@ def get_source_cache_meta_fields(organization_id: int, source_key: str) -> dict[
     return _run_db(_db) or {}
 
 
-def save_source_cache(organization_id: int, source_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+def save_source_cache(organization_id: int, source_key: str, payload: dict[str, Any], *, strict: bool = False) -> dict[str, Any]:
     if source_key == "stocks":
         from zoneinfo import ZoneInfo
         observed_day = datetime.now(ZoneInfo("Europe/Moscow")).date()
-        save_source_cache(organization_id, f"stock_history_{observed_day.isoformat()}", payload)
+        save_source_cache(organization_id, f"stock_history_{observed_day.isoformat()}", payload, strict=strict)
     stored_payload = dict(payload)
     if source_key.startswith("finance_"):
+        if isinstance(stored_payload.get("rows"), list):
+            # Retain the small trade ledger needed for arbitrary date selections.
+            # Full fee/diagnostic rows remain in the HTTP checkpoints.
+            fields = ("rrdId", "nmId", "saleDt", "rrDate", "docTypeName", "quantity",
+                      "retailPriceWithDisc", "retailAmount")
+            stored_payload["revenueOperations"] = [
+                {key: row.get(key) for key in fields}
+                for row in stored_payload["rows"]
+                if str(row.get("docTypeName") or "").strip().lower() in {"продажа", "возврат"}
+            ]
         stored_payload.pop("rows", None)
     now = datetime.now(timezone.utc)
     metadata = _source_cache_metadata(source_key, stored_payload)
@@ -875,6 +900,8 @@ def save_source_cache(organization_id: int, source_key: str, payload: dict[str, 
     result = _run_db(_db)
     if result is not None:
         return result
+    if strict:
+        raise RuntimeError("Не удалось сохранить данные в БД. Повторите после восстановления соединения.")
     fallback = dict(stored_payload)
     fallback["fetchedAt"] = now.isoformat()
     return fallback

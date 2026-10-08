@@ -33,10 +33,12 @@ def test_missing_ads_cache_returns_blocked_report_and_cached_replay(monkeypatch)
 @pytest.mark.parametrize("ads_status", ["blocked", "unknown"])
 def test_legacy_cached_missing_ads_response_keeps_required_blocker(monkeypatch, ads_status):
     cached = {
+        "sourceRevision": {"baskets_": None, "ads_": None},
         "rows": [], "sourceStatus": "blocked", "confidence": "blocked",
         "adsSourceStatus": ads_status, "blockerIds": ["WB_ADS_CACHE_EMPTY"],
     }
     monkeypatch.setattr("app.wb_api.rnp_runtime.get_source_cache", lambda *_args, **_kwargs: cached)
+    monkeypatch.setattr("app.wb_api.rnp_runtime.list_source_cache_ranges_by_prefix", lambda *args, **kwargs: [])
     report = build_rnp_report(date(2026, 6, 1), date(2026, 6, 7), "sku", True, organization_id=7)
     assert {"WB-02", "WB_ADS_CACHE_EMPTY", "WB-11"} <= set(report.blockerIds)
     assert report.adsSourceStatus == ads_status

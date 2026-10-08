@@ -14,7 +14,11 @@ from vella_wb_19_05.models import ManualCost
 
 
 @pytest.fixture
-def report_cache(monkeypatch):
+def report_cache(monkeypatch, tax_db):
+    from app.platform.economics.costs import CostsService
+    CostsService(tax_db, 1).set_cost(catalog_sku_id=11, amount_kopecks=0,
+        value_state='configured', effective_from=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        source='fixture', source_reference='explicit-zero-cost', evidence_status='dated')
     sources, stored = {}, {}
     monkeypatch.setattr(reports, "_period_cache", lambda org, prefix, *_args, **_kwargs: deepcopy(sources.get(prefix, {})))
     monkeypatch.setattr(reports, "get_source_cache", lambda org, key, **_kwargs: deepcopy(stored.get((org, key))))
@@ -91,6 +95,147 @@ def test_pnl_cache_rebuilds_after_dated_policy_change(tax_db, report_cache):
     assert reports.build_pnl_report(*args).rows[0].taxKopecks == 9000
 
 
+@pytest.mark.parametrize('source,expected', [('user-example', 80000), ('unverified-import', None)])
+def test_only_explicit_user_examples_produce_provisional_math(tax_db, report_cache, source, expected):
+    from app.platform.economics.costs import CostsService
+    sources, _ = report_cache
+    _policy(tax_db, '1970-01-01T00:00:00', 2200, reference='all-history')
+    CostsService(tax_db, 1).set_cost(catalog_sku_id=11, amount_kopecks=80000, value_state='assumed',
+        effective_from=datetime(2021, 1, 1, tzinfo=timezone.utc), source=source,
+        source_reference='example', evidence_status='dated')
+    sources.update(finance=_cache(_fact(200000), {'2026-09-01': _fact(200000)}),
+                   ads={'aggregates': {'123': {'adSpendKopecks': 0}}})
+    args = (date(2026, 9, 1), date(2026, 9, 1))
+    pnl = reports.build_pnl_report(*args, 'sku', 'final', True, 1)
+    abc = reports.build_abc_report(*args, 'sku', '', True, 1)
+    assert pnl.rows[0].cogsKopecks == expected
+    assert pnl.rows[0].taxKopecks == 44000
+    assert pnl.rows[0].netProfitKopecks == (76000 if expected else None)
+    assert abc.rows[0]['netTotalKopecks'] == pnl.rows[0].netProfitKopecks
+    assert pnl.reportState != 'final'
+    if expected:
+        assert 'WB_USER_EXAMPLE_COSTS' in pnl.blockerIds
+        assert 'WB_USER_EXAMPLE_COSTS' in abc.blockerIds
+        mapped = bff._map_pnl_to_report_response(pnl, {'from': '2026-09-01', 'to': '2026-09-01'},
+            {'status': 'disabled'}, finance_allowed=True)
+        assert mapped['rows'][0]['netProfitKopecks'] == 76000
+        assert mapped['financialConfirmationStatus'] == 'pending'
+        assert 'ONE_C_DISABLED' in mapped['blockerIds']
+        assert 'не фактическая' in mapped['warning']
+        restricted = bff._map_pnl_to_report_response(pnl, {'from': '2026-09-01', 'to': '2026-09-01'},
+            {'status': 'disabled'}, finance_allowed=False)
+        assert restricted['rows'][0]['netProfitKopecks'] is None
+        assert restricted['rows'][0]['overheadKopecks'] is None
+        assert restricted['rows'][0]['marginPct'] is None
+        assert restricted['chart']['points'] == []
+        assert restricted['kpis'][1]['value'] == restricted['kpis'][2]['value'] == '—'
+
+
+@pytest.mark.parametrize('cash_status', ['not_loaded', 'pending', 'processing', 'failed'])
+@pytest.mark.parametrize('finance_allowed', [True, False])
+def test_unloaded_operational_costs_never_confirm_final_profit(tax_db, report_cache, cash_status, finance_allowed):
+    sources, _ = report_cache
+    _policy(tax_db, '1970-01-01T00:00:00', 2200, reference='all-history')
+    sources.update(finance=_cache(_fact(200000)), ads={'aggregates': {'123': {'adSpendKopecks': 0}}})
+    pnl = reports.build_pnl_report(date(2026, 9, 1), date(2026, 9, 1), 'sku', 'final', True, 1)
+    mapped = bff._map_pnl_to_report_response(pnl, {'from': '2026-09-01', 'to': '2026-09-01'},
+        {'status': cash_status}, finance_allowed=finance_allowed)
+    assert mapped['financialConfirmationStatus'] == 'pending'
+    assert mapped['rows'][0]['netProfitKopecks'] is None
+    assert mapped['rows'][0]['marginPct'] is None
+    assert mapped['chart']['points'] == []
+    assert mapped['kpis'][1]['value'] == mapped['kpis'][2]['value'] == '—'
+    assert mapped['warning']
+
+
+@pytest.mark.parametrize('authoritative,ads_present', [(True, True), (False, True), (True, False)])
+def test_abc_pnl_share_signed_fees_and_authoritative_advertising(tax_db, report_cache, authoritative, ads_present):
+    sources, _ = report_cache
+    _policy(tax_db, '1970-01-01T00:00:00', 2200, reference='all-history')
+    fact = {**_fact(200000), 'reportedCommissionRows': 1, 'commissionKopecks': -1180,
+            'logisticsKopecks': 10000, 'storageKopecks': -500, 'acquiringKopecks': 1500,
+            'deductionKopecks': 200, 'additionalPaymentKopecks': 100,
+            'adSpendKopecks': 6000, 'financeAdSpendAuthoritative': authoritative}
+    sources.update(finance=_cache(fact, {'2026-09-01': fact}),
+                   ads={'aggregates': {'123': {'adSpendKopecks': 2000}}} if ads_present else {})
+    args = (date(2026, 9, 1), date(2026, 9, 1))
+    p = reports.build_pnl_report(*args, 'sku', 'preliminary', True, 1)
+    a = reports.build_abc_report(*args, 'sku', '', True, 1)
+    row = p.rows[0]
+    assert row.adSpendKopecks == (6000 if authoritative else 2000)
+    assert row.commissionKopecks == -1180
+    assert row.storageKopecks == -500
+    assert row.overheadKopecks == 1600
+    assert row.netProfitKopecks == a.rows[0]['netTotalKopecks']
+    assert a.filteredSummary.profitKopecks == p.totals.netProfitKopecks
+    assert a.rows[0]['adSpendSource'] == ('wb_finance_report' if authoritative else 'wb_ads_api')
+    assert row.netProfitKopecks == row.revenueKopecks - sum(getattr(row, key) for key in (
+        'cogsKopecks', 'commissionKopecks', 'logisticsKopecks', 'storageKopecks',
+        'adSpendKopecks', 'taxKopecks', 'overheadKopecks'))
+    from app.contracts.vella_wb_19_05_generated import PnlReportResponse
+    TypeAdapter(PnlReportResponse).validate_python(p.model_dump(mode='json'))
+
+
+@pytest.mark.parametrize('evidence,expected', [('complete', 0), ('partial', None), ('undated', None)])
+def test_abc_no_settlement_requires_complete_exact_ledger(tax_db, report_cache, monkeypatch, evidence, expected):
+    sources, _ = report_cache
+    _policy(tax_db, '1970-01-01T00:00:00', 2200, reference='all-history')
+    monkeypatch.setattr(reports, 'list_cached_goods', lambda org: [
+        {'nmID': 123, 'vendorCode': 'TEST'}, {'nmID': 456, 'vendorCode': 'NO-SALES'}])
+    finance = _cache(_fact(200000), {'2026-09-01': _fact(200000)})
+    finance.update(pagesLoaded=1, rowsCount=1, sourceComplete=evidence != 'partial')
+    if evidence != 'undated':
+        finance.update(dateFrom='2026-09-01', dateTo='2026-09-01')
+    sources.update(finance=finance, ads={'aggregates': {}})
+    report = reports.build_abc_report(date(2026, 9, 1), date(2026, 9, 1), 'sku', '', True, 1)
+    row = next(r for r in report.rows if r['nmId'] == 456)
+    assert row['netTotalKopecks'] == expected
+    assert (report.filteredSummary.profitKopecks is not None) == (evidence == 'complete')
+
+
+def test_partial_finance_with_fully_known_rows_cannot_be_final(tax_db, report_cache):
+    sources, _ = report_cache
+    _policy(tax_db, '1970-01-01T00:00:00', 2200, reference='all-history')
+    finance = _cache(_fact(200000), {'2026-09-01': _fact(200000)})
+    finance['sourceComplete'] = False
+    sources.update(finance=finance, ads={'aggregates': {'123': {'adSpendKopecks': 0}}})
+    args = (date(2026, 9, 1), date(2026, 9, 1))
+    pnl = reports.build_pnl_report(*args, 'sku', 'final', True, 1)
+    abc = reports.build_abc_report(*args, 'sku', '', True, 1)
+    assert pnl.reportState == 'preliminary'
+    assert pnl.sourceStatus == abc.sourceStatus == 'partial'
+    assert 'WB_FINANCE_SOURCE_INCOMPLETE' in pnl.blockerIds
+    assert 'WB_FINANCE_SOURCE_INCOMPLETE' in abc.blockerIds
+
+
+def test_all_history_22_percent_includes_delayed_operations_of_exact_report(tax_db, report_cache):
+    sources, _ = report_cache
+    _policy(tax_db, '1970-01-01T00:00:00', 2200, reference='all-history-confirmation')
+    finance = _cache(_fact(100000, 2), {'2026-08-28': _fact(60000), '2026-09-01': _fact(40000)})
+    finance.update(dateFrom='2026-09-01', dateTo='2026-09-01')
+    sources.update(finance=finance, ads={'aggregates': {'123': {'adSpendKopecks': 0}}})
+    pnl = reports.build_pnl_report(date(2026, 9, 1), date(2026, 9, 1), 'sku', 'preliminary', True, 1)
+    assert pnl.rows[0].taxKopecks == 22000
+    assert pnl.rows[0].netProfitKopecks == 78000
+
+
+@pytest.mark.parametrize('complete', [True, False])
+def test_pnl_keeps_ads_only_products_and_never_guesses_missing_sales(tax_db, report_cache, complete):
+    sources, _ = report_cache
+    _policy(tax_db, '1970-01-01T00:00:00', 2200, reference='all-history')
+    finance = _cache(_fact(200000), {'2026-09-01': _fact(200000)})
+    finance.update(pagesLoaded=1, rowsCount=1, sourceComplete=complete,
+                   dateFrom='2026-09-01', dateTo='2026-09-01')
+    sources.update(finance=finance, ads={'aggregates': {'456': {'adSpendKopecks': 5000}}})
+    args = (date(2026, 9, 1), date(2026, 9, 1))
+    pnl = reports.build_pnl_report(*args, 'sku', 'preliminary', True, 1)
+    abc = reports.build_abc_report(*args, 'sku', '', True, 1)
+    row = next(r for r in pnl.rows if r.rowId == 'nm-456')
+    assert row.adSpendKopecks == 5000
+    assert row.netProfitKopecks == (-5000 if complete else None)
+    assert pnl.totals.netProfitKopecks == abc.filteredSummary.profitKopecks
+
+
 def test_signed_return_tax_survives_runtime_response_model(tax_db, report_cache, monkeypatch):
     from app.routers import wb_reports_sprint_d as router
     sources, _stored = report_cache
@@ -111,7 +256,7 @@ def test_signed_return_tax_survives_runtime_response_model(tax_db, report_cache,
     assert payload["totals"]["netProfitKopecks"] == -56
     assert next(item["amountKopecks"] for item in payload["manualCosts"] if item["costId"] == "tax") == -4
     with pytest.raises(ValidationError):
-        ManualCost(costId="storage", label="Storage", amountKopecks=-4, allocationBase="sku", sourceStatus="fresh", blockerIds=[])
+        ManualCost(costId="unverified-manual", label="Other", amountKopecks=-4, allocationBase="sku", sourceStatus="fresh", blockerIds=[])
 
 
 def test_generated_contract_allows_signed_return_revenue_and_tax_only(tax_db, report_cache):
@@ -122,7 +267,7 @@ def test_generated_contract_allows_signed_return_revenue_and_tax_only(tax_db, re
     payload = reports.build_pnl_report(date(2026, 9, 1), date(2026, 9, 1), "sku", "preliminary", True, 1).model_dump(mode="json")
     contract = TypeAdapter(PnlReportResponse)
     assert contract.validate_python(payload).rows[0].revenueKopecks == -60
-    payload["manualCosts"][0]["amountKopecks"] = -4
+    payload["manualCosts"][0].update(costId="unverified-manual", amountKopecks=-4)
     with pytest.raises(ValidationError):
         contract.validate_python(payload)
 
@@ -134,7 +279,7 @@ def test_pnl_tax_resolver_failure_retries_but_unconfirmed_policy_is_cached(repor
     monkeypatch.setattr(reports, "legacy_finance_tax_revision", lambda org: "stable")
     calls = []
     reason = "tax_policy_unavailable" if transient else "tax_policy_unconfirmed"
-    def taxes(*args):
+    def taxes(*args, **kwargs):
         calls.append(True)
         return {"123": {"taxKopecks": None if len(calls) == 1 else 7500,
                         "factTaxState": "missing" if len(calls) == 1 else "configured",

@@ -23,6 +23,13 @@ it('hides the old RNP period while the next scoped cache response is pending', a
   const secondGate = new Promise<void>(resolve => { releaseSecond = resolve })
   try {
     const page = await browser.newPage({ serviceWorkers: 'block' })
+    // The mocked HTTP origin is not a secure context. Production localhost /
+    // HTTPS has randomUUID; retain browser crypto entropy in this fixture.
+    await page.addInitScript(() => {
+      if (!crypto.randomUUID) Object.defineProperty(crypto, 'randomUUID', {
+        value: () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join(''),
+      })
+    })
     const unexpected: string[] = []
     const errors: string[] = []
     const periods: string[][] = []
@@ -80,7 +87,9 @@ it('hides the old RNP period while the next scoped cache response is pending', a
     expect(await dataRows.count()).toBe(50)
     expect(await page.locator('#tab-rnp [data-vella-island="rnp-kpi-strip"]').count()).toBe(0)
     const headers = (await page.locator('#tab-rnp thead th').allTextContents()).map(text => text.replace('?', '').trim())
-    expect(headers.indexOf('Показы') + 1).toBe(headers.indexOf('Перешли в карточку'))
+    expect(headers).not.toContain('Показы')
+    expect(headers).not.toContain('CTR из показов в клики, %')
+    expect(headers).toContain('Показы рекламы')
     expect(headers.indexOf('Клики / CTR рекламы') + 1).toBe(headers.indexOf('Реклама'))
     expect(headers).toContain('Добавили в отложенные')
     expect(headers).toContain('CR из карточки в корзину, %')
@@ -90,8 +99,7 @@ it('hides the old RNP period while the next scoped cache response is pending', a
     const firstCells = dataRows.first().locator('td')
     expect(await firstCells.count()).toBe(headers.length)
     expect(await page.locator('#tab-rnp [data-vella-island="rnp-live-table-body"] > tr:last-child td').getAttribute('colspan')).toBe(String(headers.length))
-    expect(await firstCells.nth(headers.indexOf('Показы')).innerText()).toBe('100')
-    expect(await firstCells.nth(headers.indexOf('CTR из показов в клики, %')).innerText()).toBe('10%')
+    expect(await firstCells.nth(headers.indexOf('Перешли в карточку')).innerText()).toContain('10')
     expect(await firstCells.nth(headers.indexOf('Добавили в отложенные')).innerText()).toBe('2')
     expect(await firstCells.nth(headers.indexOf('Заказали, шт / сумма')).innerText()).toContain('123 ₽')
     expect(await firstCells.nth(headers.indexOf('Выкупили, шт / сумма')).innerText()).toContain('0 ₽')

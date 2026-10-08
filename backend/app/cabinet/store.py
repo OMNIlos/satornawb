@@ -164,6 +164,8 @@ def _run_db(db_fn):
     except SQLAlchemyError:
         if get_settings().wb_live_sync_enabled:
             raise HTTPException(503, detail={"code": "WB_LIVE_UNAVAILABLE"}) from None
+        if getattr(get_settings(), 'environment', 'local').lower() not in {'local', 'dev', 'development', 'test'}:
+            raise HTTPException(503, detail={"code": "CABINET_STORAGE_UNAVAILABLE"}) from None
         return None
 
 
@@ -330,6 +332,10 @@ def _append_audit_event(
 
 
 def _ensure_defaults(session: Session | None = None) -> None:
+    if getattr(get_settings(), 'environment', 'local').lower() not in {'local', 'dev', 'development', 'test'}:
+        if session is None:
+            raise HTTPException(503, detail={"code": "CABINET_STORAGE_UNAVAILABLE"})
+        return  # Never seed demo users or known passwords on the VPS.
     if get_settings().wb_live_sync_enabled:
         if session is None:
             raise HTTPException(503, detail={"code": "WB_LIVE_UNAVAILABLE"})

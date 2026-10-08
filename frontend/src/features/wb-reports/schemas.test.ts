@@ -33,13 +33,14 @@ describe('WB 19.05 report contract schemas', () => {
     expect(PnlTotalsSchema.parse(row).revenueKopecks).toBe(revenue)
     expect(ManualCostSchema.parse({ costId: 'tax', label: 'Tax', amountKopecks: tax,
       allocationBase: 'sku', sourceStatus: 'partial', blockerIds: [] }).amountKopecks).toBe(tax)
-    expect(PnlRowSchema.safeParse({ ...row, cogsKopecks: -1 }).success).toBe(false)
+    expect(PnlRowSchema.parse({ ...row, cogsKopecks: -1, commissionKopecks: -2,
+      logisticsKopecks: -3, storageKopecks: -4, overheadKopecks: -5 }).storageKopecks).toBe(-4)
   })
 
-  test('keeps non-tax manual costs nonnegative', () => {
-    for (const costId of ['storage', 'overhead']) {
+  test('keeps arbitrary manual costs nonnegative but preserves settlement credits', () => {
+    for (const costId of ['storage', 'overhead', 'unverified-manual']) {
       expect(ManualCostSchema.safeParse({ costId, label: 'Cost', amountKopecks: -4,
-        allocationBase: 'sku', sourceStatus: 'fresh', blockerIds: [] }).success).toBe(false)
+        allocationBase: 'sku', sourceStatus: 'fresh', blockerIds: [] }).success).toBe(costId !== 'unverified-manual')
     }
   })
 

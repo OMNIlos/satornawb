@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
+from app.repricer_cache.store import FINANCE_REVENUE_BASIS, FINANCE_SCHEMA_VERSION
 from app.routers import wb_repricer_bff
 
 
@@ -14,7 +14,7 @@ def test_daily_stitch_skips_only_known_duplicate_days(monkeypatch, known_dates):
     days = [first] * 50 + [last]
     payloads = {
         f"finance_synthetic_{index}": {
-            "revenueBasis": "retailAmount", "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
+            "revenueBasis": FINANCE_REVENUE_BASIS, "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
             "dailyAggregates": {day: {"123": {"additionalPaymentKopecks": -100}}},
         }
         for index, day in enumerate(days)
@@ -55,7 +55,7 @@ def test_daily_stitch_skips_only_known_duplicate_days(monkeypatch, known_dates):
         "coveredDays": 2,
         "requestedDays": 2,
         "missingDates": [],
-        "revenueBasis": "retailAmount",
+        "revenueBasis": FINANCE_REVENUE_BASIS,
         "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
     }
     assert reads == (["finance_synthetic_0", "finance_synthetic_50"] if known_dates else list(payloads))
@@ -66,7 +66,7 @@ def test_numeric_preset_uses_covering_date_range_cache(monkeypatch) -> None:
         "dateFrom": "2026-08-26",
         "dateTo": "2026-09-01",
         "periodDays": 7,
-        "revenueBasis": "retailAmount",
+        "revenueBasis": FINANCE_REVENUE_BASIS,
         "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
         "dailyAggregates": {
             "2026-08-26": {"123": {"buyerRevenueKopecks": 100}},
@@ -105,7 +105,7 @@ def test_period_reader_rejects_previous_withdrawal_semantics(monkeypatch, path, 
     row = {"sellerRevenueKopecks": 10000, "paymentScheduleKopecks": 1000,
            "additionalPaymentKopecks": 1000 if previous else -1000}
     cache = {"dateFrom": "2026-08-26", "dateTo": "2026-09-01",
-             "revenueBasis": "retailAmount", "financeSchemaVersion": schema,
+             "revenueBasis": FINANCE_REVENUE_BASIS, "financeSchemaVersion": schema,
              "aggregates": {"123": row}, "dailyAggregates": {"2026-08-26": {"123": row}}}
     key = f"{prefix}_2026-08-26_2026-09-01"
     if path == "daily_union":

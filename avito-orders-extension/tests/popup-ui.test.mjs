@@ -13,7 +13,8 @@ function section(id) {
 
 test('popup opens on a focused collect screen', () => {
   assert.match(html, /data-screen="collect"/)
-  assert.match(section('collectScreen'), /Собрать заказы/)
+  assert.match(section('collectScreen'), /id="collectBtn"[^>]*>Собрать всё/)
+  assert.match(section('collectScreen'), /<details class="advanced-collection">/)
   assert.doesNotMatch(section('collectScreen'), /accessToken/)
   assert.doesNotMatch(section('collectScreen'), /logsList/)
 })

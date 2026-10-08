@@ -9,6 +9,15 @@ from fastapi import BackgroundTasks, Request
 from app.avito.orders_picking_xlsx import build_avito_orders_picking_xlsx
 from app.avito.orders_queue import fetch_full_queue, merge_queue_rows, select_queue
 from app.routers import avito_orders
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_label_and_photo_store(monkeypatch):
+    """Queue unit tests don't depend on a developer's database or credentials."""
+    from app.avito import listing_photos
+    monkeypatch.setattr(listing_photos, "photo_index", lambda _: {})
+    monkeypatch.setattr(avito_orders, "enrich_labels", lambda *_: None)
 
 
 def order(order_id: str, status: str, updated: str = "2026-09-30T10:00:00+00:00") -> AvitoOrderRow:
@@ -17,6 +26,157 @@ def order(order_id: str, status: str, updated: str = "2026-09-30T10:00:00+00:00"
         statusSource="avito_api", statusObservedAt=updated, sourceStatus="fresh",
         items=[AvitoOrderItem(itemId="item-1", title="Товар", size="M", color="чёрный")],
     )
+
+def test_all_active_includes_returns_pending_confirmation_not_history():
+    rows = [order(str(index), status) for index, status in enumerate(['ready_to_ship', 'in_transit', 'on_return', 'closed', 'canceled', 'on_confirmation', 'in_dispute'])]
+    assert [row.status for row in select_queue(rows, 'active')] == ['ready_to_ship', 'in_transit', 'on_return']
+    assert select_queue(rows, 'returns') == [rows[2]]
+    rows[2].returnStatus = 'received'
+    assert select_queue(rows, 'returns') == []
+    assert rows[2] not in select_queue(rows, 'active')
+
+
+@pytest.mark.parametrize('api_status,browser_status,observed,expected', [
+    ('ready_to_ship', 'on_return', '2026-10-05T10:00:00Z', 'on_return'),
+    ('in_transit', 'ready_to_ship', '2026-10-05T10:00:00Z', 'ready_to_ship'),
+    ('on_return', 'ready_to_ship', '2026-09-29T10:00:00Z', 'on_return'),
+    ('ready_to_ship', None, '2026-10-05T10:00:00Z', 'unknown'),
+    ('ready_to_ship', 'on_return', None, 'unknown'),
+])
+def test_export_reconciles_observed_status_not_stale_api(api_status, browser_status, observed, expected, monkeypatch):
+    cached = {'rows': [order('1', api_status).model_dump()]}
+    snapshot = AvitoOrdersBrowserSnapshot(capturedAt=observed, orders=[
+        AvitoOrdersBrowserOrder(orderId='1', accountId='account-1', status=browser_status)])
+    monkeypatch.setattr(avito_orders, '_saved_queue_for_export', lambda _: (SimpleNamespace(organization_id=1), cached))
+    monkeypatch.setattr(avito_orders, '_browser_snapshot_from_cache', lambda _: snapshot)
+    exported = []
+    monkeypatch.setattr(avito_orders, 'build_avito_orders_picking_xlsx', lambda rows, **kwargs: exported.append([r.orderId for r in rows]) or b'xlsx')
+    for mode in ('ready_to_ship', 'returns'):
+        avito_orders._queue_xlsx_response(Request({'type': 'http', 'headers': []}), mode=mode, account_id=None)
+    assert exported == [['1'] if expected == 'ready_to_ship' else [], ['1'] if expected == 'on_return' else []]
+
+
+def test_unknown_browser_status_does_not_default_to_ready():
+    snapshot = AvitoOrdersBrowserSnapshot(orders=[AvitoOrdersBrowserOrder(orderId='1')])
+    assert avito_orders._browser_snapshot_rows(snapshot, statuses=['ready_to_ship']) == []
+
+@pytest.mark.parametrize('phase', ['received', 'completed', 'closed'])
+@pytest.mark.parametrize('observed,newer', [('2026-10-08T12:00:00Z', True), ('2026-09-29T12:00:00Z', False)])
+def test_terminal_browser_return_reconciliation_respects_observation_time(phase, observed, newer):
+    row = order('returned', 'on_return')
+    row.returnStatus = 'ready_for_pickup'
+    row.returnStatusSource = 'avito_api'
+    snapshot = AvitoOrdersBrowserSnapshot(capturedAt=observed, returns=[
+        AvitoOrdersBrowserOrder(orderId='returned', accountId='account-1', status='on_return', returnStatus=phase)])
+    assert avito_orders._browser_snapshot_rows(snapshot, statuses=['on_return']) == []
+    evidence = avito_orders._browser_snapshot_rows(snapshot, statuses=[])
+    assert evidence[0].status == 'closed' and evidence[0].returnStatus == phase
+    avito_orders._reconcile_export_statuses([row], evidence, None)
+    assert row.status == ('closed' if newer else 'on_return')
+    assert bool(select_queue([row], 'active')) is not newer
+    assert bool(select_queue([row], 'returns')) is not newer
+    assert bool(select_queue([row], 'history')) is newer
+    assert snapshot.returns[0].status == 'on_return'
+
+def test_queue_adds_browser_only_active_orders_reconciles_terminal_and_isolates_accounts(monkeypatch):
+    actor = SimpleNamespace(organization_id=1)
+    cached = {'complete': True, 'lastSuccessfulRefresh': datetime.now(timezone.utc).isoformat(),
+              'rows': [order('finished', 'ready_to_ship').model_dump(mode='json'),
+                       order('same-id', 'in_transit').model_dump(mode='json')]}
+    snapshot = AvitoOrdersBrowserSnapshot(capturedAt='2026-10-08T12:00:00Z', orders=[
+        AvitoOrdersBrowserOrder(orderId=key, accountId=account, status=status)
+        for key, account, status in [('browser-ready', 'account-1', 'ready_to_ship'),
+                                     ('buyer-pickup', 'account-1', 'in_transit'),
+                                     ('active-return', 'account-1', 'on_return'),
+                                     ('finished', 'account-1', 'delivered'),
+                                     ('unknown', 'account-1', 'unknown'),
+                                     ('same-id', 'account-2', 'on_return')]])
+    monkeypatch.setattr(avito_orders, '_orders_client_for_request', lambda _: (actor, None, None))
+    monkeypatch.setattr(avito_orders, '_read_queue_cache', lambda *_: ('synthetic', cached))
+    monkeypatch.setattr(avito_orders, '_browser_snapshot_from_cache', lambda _: snapshot)
+    monkeypatch.setattr(avito_orders, '_enrich_orders_with_return_matches', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(avito_orders, '_pickup_unreceived', lambda rows, *_: rows)
+    result = avito_orders.get_avito_orders_queue(Request({'type': 'http', 'headers': []}), BackgroundTasks(),
+        mode='active', account_id='account-1', search='', history_from=None, page=1, limit=50, force_refresh=False)
+    assert {row['orderId'] for row in result['rows']} == {'same-id', 'browser-ready', 'buyer-pickup', 'active-return'}
+    assert next(row['status'] for row in result['rows'] if row['orderId'] == 'same-id') == 'in_transit'
+    assert result['summary']['total'] == 4
+    assert result['summary']['modeCounts']['history'] == 1
+
+
+def test_returns_xlsx_has_only_return_columns_and_exact_identifiers():
+    from xml.etree import ElementTree as ET
+    row = order('00012345678901234567', 'on_return')
+    row.marketplaceId = '00012345678901234567'
+    row.items[0].itemId = '000987654'
+    row.returnPickupPlace = 'Москва, ул. Тестовая, 2'
+    row.returnPickupDeadline = '12.10.2026'
+    row.returnPickupCode = '001234'
+    row.shipmentNumber = 'unrelated-shipment'
+    row.stickerLabelId = 99
+    row.stickerNumberState = 'confirmed'
+    def forbidden_label(_):
+        pytest.fail('Returns must not read or embed labels')
+    content = build_avito_orders_picking_xlsx([row], date_from=date.today(), returns=True,
+        image_loader=lambda _: None, label_loader=forbidden_label)
+    with ZipFile(BytesIO(content)) as archive:
+        sheet = ET.fromstring(archive.read('xl/worksheets/sheet1.xml'))
+        ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+        headers = [el.text for el in sheet.findall('.//s:row[@r="1"]//s:t', ns)]
+        assert len(headers) == 11
+        assert 'Стикер' not in headers and 'Номер отправления' not in headers
+        assert headers[6:] == ['Номер заказа', 'ID товара Авито', 'Место получения возврата', 'Срок получения', 'Код возврата']
+        for ref, expected in [('G2', row.marketplaceId), ('H2', '000987654'), ('I2', row.returnPickupPlace), ('J2', '12.10.2026'), ('K2', '001234')]:
+            cell = sheet.find(f'.//s:c[@r="{ref}"]', ns)
+            assert cell.attrib['t'] == 'inlineStr' and cell.find('.//s:t', ns).text == expected
+        assert sheet.find('s:autoFilter', ns).attrib['ref'] == 'A1:K2'
+    regular = build_avito_orders_picking_xlsx([row], date_from=date.today(), image_loader=lambda _: None)
+    with ZipFile(BytesIO(regular)) as archive:
+        text = archive.read('xl/worksheets/sheet1.xml').decode()
+        assert 'Стикер' in text and 'Номер отправления' in text
+
+
+def test_export_status_does_not_cross_accounts():
+    rows = [order('1', 'ready_to_ship')]
+    browser = order('1', 'on_return', '2026-10-05T10:00:00Z')
+    browser.accountId = 'other-account'
+    avito_orders._reconcile_export_statuses(rows, [browser], None)
+    assert rows[0].status == 'ready_to_ship' and len(rows) == 2
+
+def test_reconcile_account_identity_requires_one_exact_account():
+    api = order('api', 'ready_to_ship')
+    api.accountId = None
+    api.marketplaceId = '70000000532427280'
+    browser = order('70000000532427280', 'ready_to_ship', '2026-10-08T10:00:00Z')
+    avito_orders._reconcile_export_statuses([api], [browser], None)
+    assert api.accountId == 'account-1'
+    api.accountId = None
+    other = browser.model_copy(update={'accountId': 'account-2'})
+    avito_orders._reconcile_export_statuses([api], [browser, other], None)
+    assert api.accountId is None
+
+def test_label_collection_targets_only_outbound_ready_orders(monkeypatch):
+    snapshot = AvitoOrdersBrowserSnapshot(orders=[
+        AvitoOrdersBrowserOrder(orderId=status, accountId='account-1', status=status)
+        for status in ['ready_to_ship', 'in_transit', 'on_return', 'closed']],
+        returns=[AvitoOrdersBrowserOrder(orderId='return', accountId='account-1', status='on_return')])
+    monkeypatch.setattr(avito_orders, '_label_organization', lambda _: 1)
+    monkeypatch.setattr(avito_orders, '_browser_snapshot_from_cache', lambda _: snapshot)
+    monkeypatch.setattr(avito_orders, 'get_source_cache', lambda *a, **kw: None)
+    result = avito_orders.get_label_collection_context(Request({'type': 'http', 'headers': []}))
+    assert result['total'] == 1
+    assert [row['orderId'] for row in result['missing']] == ['ready_to_ship']
+
+
+def test_returns_export_distinguishes_collection_failure_and_ambiguous_source():
+    row = order('1', 'on_return')
+    row.returnFieldStates = {'returnPickupPlace': 'unavailable', 'returnPickupDeadline': 'collection_failed', 'returnPickupCode': 'ambiguous'}
+    content = build_avito_orders_picking_xlsx([row], date_from=date.today(), returns=True, image_loader=lambda _: None)
+    with ZipFile(BytesIO(content)) as archive:
+        text = archive.read('xl/worksheets/sheet1.xml').decode()
+        assert 'Не найдено в деталях возврата' in text
+        assert 'Ошибка сбора: повторите сбор возвратов' in text
+        assert 'Неоднозначные данные: нужна проверка' in text
 
 
 def test_export_cache_is_credential_scoped_and_never_requests_oauth(monkeypatch):
@@ -51,7 +211,7 @@ def test_saved_export_works_during_refresh_outage_and_with_old_statuses(monkeypa
         with ZipFile(BytesIO(response.body)) as book:
             sheet = book.read('xl/worksheets/sheet1.xml').decode()
             assert 'актуальность статусов не подтверждена' not in sheet
-            assert '<dimension ref="A1:J2"' in sheet
+            assert '<dimension ref="A1:K2"' in sheet
             assert 'Снимок:' not in sheet and 'Заказов:' not in sheet
         assert response.headers['content-disposition'].endswith('.xlsx"')
 
@@ -63,6 +223,28 @@ def test_export_without_any_saved_snapshot_is_explicit_error(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         avito_orders._queue_xlsx_response(Request({'type': 'http', 'headers': []}), mode='ready_to_ship', account_id=None)
     assert exc.value.status_code == 404
+
+
+def test_export_embeds_saved_order_photo_without_refetching_cdn(monkeypatch):
+    from PIL import Image
+    from app.avito import listing_photos
+
+    row = order('saved-photo-order', 'ready_to_ship')
+    row.items[0].imageUrl = 'https://70.img.avito.st/expired.jpg'
+    cached = {'rows': [row.model_dump(mode='json')], 'complete': True}
+    photo = BytesIO()
+    Image.new('RGB', (60, 60), 'red').save(photo, format='JPEG')
+    monkeypatch.setattr(avito_orders, '_saved_queue_for_export', lambda _: (SimpleNamespace(organization_id=1), cached))
+    monkeypatch.setattr(avito_orders, '_browser_snapshot_from_cache', lambda _: None)
+    monkeypatch.setattr(avito_orders, 'enrich_labels', lambda *_: None)
+    monkeypatch.setattr(listing_photos, 'photo_index', lambda _: {('account-1', 'item-1'): 17})
+    monkeypatch.setattr(listing_photos, 'read_photo', lambda _org, _id: photo.getvalue())
+    monkeypatch.setattr(avito_orders, '_load_image', lambda _: (_ for _ in ()).throw(AssertionError('CDN must not be fetched')))
+
+    response = avito_orders._queue_xlsx_response(Request({'type': 'http', 'headers': []}), mode='ready_to_ship', account_id='account-1')
+    with ZipFile(BytesIO(response.body)) as book:
+        assert any(name.startswith('xl/media/image') for name in book.namelist())
+        assert 'Фото не получено' not in book.read('xl/worksheets/sheet1.xml').decode()
 
 
 def test_export_photo_fetching_has_one_shared_deadline():
@@ -245,7 +427,7 @@ def test_new_snapshot_enriches_cached_queue_without_provider_refresh(monkeypatch
     cached = {'rows': [row.model_dump(mode='json')], 'complete': True,
               'lastSuccessfulRefresh': datetime.now(timezone.utc).isoformat()}
     snapshot = AvitoOrdersBrowserSnapshot(capturedAt=datetime.now(timezone.utc).isoformat(), orders=[AvitoOrdersBrowserOrder(
-        orderId='order-1', accountId='account-1', shipmentNumber='001 286 40390', shipmentNumberState='confirmed', items=[{
+        orderId='order-1', accountId='account-1', status='ready_to_ship', shipmentNumber='001 286 40390', shipmentNumberState='confirmed', items=[{
             'itemId': 'item-1', 'size': '48 (M)', 'color': 'Чёрный',
             'imageUrl': 'https://70.img.avito.st/synthetic.jpg',
             'sources': {'size': 'description', 'color': 'listing', 'imageUrl': 'listing'},
@@ -356,7 +538,7 @@ def test_xlsx_has_offline_image_freeze_filters_and_safe_text():
         assert '00000123456789012345' in sheet and 't="inlineStr"' in sheet
         assert '<f>' not in sheet and 'HYPERLINK' in sheet
         assert 'Проверить: из объявления' in sheet
-        assert '<pane ySplit="1"' in sheet and '<autoFilter ref="A1:J2"' in sheet
+        assert '<pane ySplit="1"' in sheet and '<autoFilter ref="A1:K2"' in sheet
         assert '<mergeCell' not in sheet
         assert b'$1:$1' in book.read('xl/workbook.xml')
         assert '_xlnm.Print_Titles' in book.read('xl/workbook.xml').decode()

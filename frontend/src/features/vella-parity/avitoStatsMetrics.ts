@@ -69,8 +69,9 @@ export function threeDayTrend(timeline: StatsDay[], key: MetricKey, end: string,
   const delta = current - previous
   const direction = Math.abs(delta) < 1e-9 ? 'flat' : delta > 0 ? 'up' : 'down'
   if (direction === 'flat') return { direction, label: 'Без изменений', rangeLabel } as const
+  const absolute = `${delta > 0 ? '+' : ''}${delta.toLocaleString('ru-RU', { maximumFractionDigits: key === 'conversionPct' ? 2 : key === 'spendKopecks' ? 2 : 0 })}`
   const label = key === 'conversionPct'
-    ? `${delta > 0 ? '+' : ''}${delta.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} п.п.`
-    : previous === 0 ? 'Рост с 0' : `${delta > 0 ? '+' : ''}${(delta / previous * 100).toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%`
+    ? `${absolute} п.п.${previous === 0 ? ' (с 0)' : ` (${delta > 0 ? '+' : ''}${(delta / previous * 100).toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%)`}`
+    : `${absolute}${key === 'spendKopecks' ? ' ₽' : ''}${previous === 0 ? ' (с 0)' : ` (${delta > 0 ? '+' : ''}${(delta / previous * 100).toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%)`}`
   return { direction, label, rangeLabel } as const
 }

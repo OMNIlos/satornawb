@@ -202,8 +202,10 @@ def test_content_pagination_keeps_categories_beyond_2000_cards(monkeypatch):
         return {"cards": cards, "cursor": {"nmID": start + len(cards), "updatedAt": "2026-09-15"}}
 
     monkeypatch.setattr(bff, "_request_or_raise_content_cards", page)
-    assert len(bff._fetch_content_cards("complete", wb_token="synthetic")) == 2101
+    pages = []
+    assert len(bff._fetch_content_cards("complete", wb_token="synthetic", page_callback=lambda page: pages.append(page))) == 2101
     assert len(calls) == 22
+    assert [len(page) for page in pages] == [100] * 21 + [1]
 
 
 def test_stitch_uses_newest_complete_day_once(monkeypatch):

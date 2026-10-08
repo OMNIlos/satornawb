@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from starlette.concurrency import run_in_threadpool
 
 from app.cabinet.schemas import (
     AuditEventView,
@@ -63,9 +64,48 @@ from app.platform.integrations.credential_store import (
 )
 from app.platform.integrations.wb_credentials import fetch_wb_seller_id
 from app.security.marketplace_credentials import MAX_SECRET_FIELD_BYTES
+from app.security import organization_openai
 
 
 router = APIRouter(tags=["cabinet"])
+
+
+@router.get("/api/v1/cabinet/openai-key")
+def get_openai_key_status(request: Request):
+    actor = _require_permission("cabinet:read", request)
+    return DataEnvelope(data=organization_openai.key_status(actor.organization_id))
+
+
+@router.put("/api/v1/cabinet/openai-key")
+async def put_openai_key(request: Request):
+    actor = _require_permission("integrations:write", request)
+    # Parse this sensitive payload ourselves: validation responses must not
+    # echo Pydantic input values containing a credential.
+    if request.headers.get("content-length", "0").isdigit() and int(request.headers.get("content-length", "0")) > 2048:
+        raise HTTPException(400, detail="OPENAI_KEY_INVALID")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 2048:
+            raise HTTPException(400, detail="OPENAI_KEY_INVALID")
+    try:
+        import json
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or set(payload) != {"apiKey"}:
+            raise ValueError
+    except (ValueError, TypeError, UnicodeError):
+        raise HTTPException(400, detail="OPENAI_KEY_INVALID") from None
+    try:
+        view = await run_in_threadpool(organization_openai.save_key, actor.organization_id, payload["apiKey"])
+    except organization_openai.OpenAiKeyError as error:
+        raise HTTPException(400 if str(error) == "OPENAI_KEY_INVALID" else 503, detail=str(error)) from None
+    return DataEnvelope(data=view)
+
+
+@router.delete("/api/v1/cabinet/openai-key")
+def delete_openai_key(request: Request):
+    actor = _require_permission("integrations:write", request)
+    return DataEnvelope(data=organization_openai.delete_key(actor.organization_id))
 
 
 def _enqueue_wb_onboarding_sync(organization_id: int) -> None:

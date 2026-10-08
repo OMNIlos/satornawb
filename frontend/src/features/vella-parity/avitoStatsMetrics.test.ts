@@ -32,12 +32,12 @@ describe('real daily Avito statistics', () => {
   })
   it('compares two complete adjacent three-day windows and excludes today', () => {
     const data = [...days, { date: '2026-10-01', views: 90000 }]
-    expect(threeDayTrend(data, 'views', '2026-10-01', '2026-10-01')).toMatchObject({ direction: 'up', label: '+100%' })
-    expect(threeDayTrend(data, 'impressions', '2026-10-01', '2026-10-01')).toMatchObject({ direction: 'down', label: '-50%' })
+    expect(threeDayTrend(data, 'views', '2026-10-01', '2026-10-01')).toMatchObject({ direction: 'up', label: '+300 (+100%)' })
+    expect(threeDayTrend(data, 'impressions', '2026-10-01', '2026-10-01')).toMatchObject({ direction: 'down', label: '-600 (-50%)' })
     expect(threeDayTrend(data, 'favorites', '2026-10-01', '2026-10-01')).toMatchObject({ direction: 'flat' })
   })
   it('uses weighted conversion and percentage points, not the average of daily percentages', () => {
-    expect(threeDayTrend(days, 'conversionPct', '2026-09-30', '2026-10-01')).toMatchObject({ direction: 'up', label: '+5 п.п.' })
+    expect(threeDayTrend(days, 'conversionPct', '2026-09-30', '2026-10-01')).toMatchObject({ direction: 'up', label: '+5 п.п. (+50%)' })
   })
   it('does not turn missing or incomplete days into zero or fabricated growth', () => {
     expect(threeDayTrend(days.slice(1), 'views', '2026-09-30', '2026-10-01').direction).toBe('missing')
@@ -47,12 +47,12 @@ describe('real daily Avito statistics', () => {
   it('handles zero baselines, falling to zero and genuine zero changes', () => {
     expect(threeDayTrend(days, 'orders', '2026-09-30', '2026-10-01').label).toBe('Без изменений')
     const fromZero = days.map((day, i) => ({ ...day, views: i < 3 ? 0 : 10 }))
-    expect(threeDayTrend(fromZero, 'views', '2026-09-30', '2026-10-01').label).toBe('Рост с 0')
-    expect(threeDayTrend(fromZero.map(day => ({ ...day, views: 10 - day.views })), 'views', '2026-09-30', '2026-10-01').label).toBe('-100%')
+    expect(threeDayTrend(fromZero, 'views', '2026-09-30', '2026-10-01').label).toBe('+30 (с 0)')
+    expect(threeDayTrend(fromZero.map(day => ({ ...day, views: 10 - day.views })), 'views', '2026-09-30', '2026-10-01').label).toBe('-30 (-100%)')
   })
   it('converts kopecks exactly once and uses the same growth direction for expenses', () => {
     expect(metricValue({ spendKopecks: 12345 }, 'spendKopecks')).toBe(123.45)
-    expect(threeDayTrend(days, 'spendKopecks', '2026-09-30', '2026-10-01')).toMatchObject({ direction: 'up', label: '+50%' })
+    expect(threeDayTrend(days, 'spendKopecks', '2026-09-30', '2026-10-01')).toMatchObject({ direction: 'up', label: '+150 ₽ (+50%)' })
   })
   it('presets are inclusive and calendar-month arithmetic handles month ends', () => {
     expect(quickPeriod('7', '2026-10-01')).toEqual({ dateFrom: '2026-09-25', dateTo: '2026-10-01' })

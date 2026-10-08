@@ -33,22 +33,45 @@ it('searches Week by SKU, product name and the supplied product segment without 
   const browser = await chromium.launch({ headless: true })
   try {
     const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1512, height: 982 } })
-    await page.clock.setFixedTime(new Date('2026-09-09T12:00:00Z'))
+    await page.addInitScript(() => {
+      if (!crypto.randomUUID) Object.defineProperty(crypto, 'randomUUID', {
+        value: () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join(''),
+      })
+    })
+    await page.clock.setFixedTime(new Date('2026-10-07T12:00:00Z'))
     const queries: string[] = [], unexpected: string[] = [], errors: string[] = []
+    const exports: Array<{ headers: string[]; rows: string[][] }> = []
+    let partialComplete = false
+    let missingJobs = 0
+    let releaseLate = () => {}
+    const lateGate = new Promise<void>(resolve => { releaseLate = resolve })
     page.on('pageerror', error => errors.push(error.message))
-    await page.route('**/*', route => {
+    await page.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url())
       if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/wb/reports/week-over-week') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
+      if (request.method() === 'GET' && url.pathname === '/api/v1/wb-repricer/cache/coverage') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: { days: [] } }) })
+      if (request.method() === 'POST' && url.pathname === '/api/wb/reports/week-over-week/jobs') {
+        missingJobs += 1; partialComplete = true
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ state: 'completed', stage: 'completed', percent: 100 }) })
+      }
+      if (request.method() === 'POST' && url.pathname === '/api/wb/reports/week-over-week/table.xlsx') {
+        exports.push(request.postDataJSON())
+        return route.fulfill({ contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', body: Buffer.from('synthetic-xlsx') })
+      }
       if (request.method() !== 'GET' || url.origin !== 'http://satorna.test' || url.pathname !== '/api/wb/reports/week-over-week/latest-cache') {
         unexpected.push(`${request.method()} ${url.pathname}`); return route.abort()
       }
       queries.push(url.search)
+      if (url.searchParams.get('to') === '2026-09-17') await lateGate
+      const partial = url.searchParams.get('to') === '2026-09-19' && !partialComplete
       return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
-        meta: { freshnessState: 'fresh', sourceType: 'operational' },
+        meta: { freshnessState: partial ? 'partial' : 'fresh', sourceType: 'operational' }, cache: { fresh: !partial },
+        warning: partial ? 'Сравнение неполное: отсутствует предыдущий источник' : null,
+        headline: 'Период 2026-08-01 — 2026-08-07; сравнение 2026-07-25 — 2026-07-31.',
         filters: { dateRange: { from: url.searchParams.get('from'), to: url.searchParams.get('to') } },
-        rows, reportJob: null,
+        rows: rows.map((row, index) => ({ ...row, sales: partial ? null : { units: index + 1, kopecks: (index + 1) * 100, deltaPct: null }, orders: { units: index + 1, kopecks: (index + 1) * 100, deltaPct: 10 }, price: { kopecks: 100 }, baskets: { units: index + 1, deltaPct: -10 } })), reportJob: null,
       }) })
     })
     await page.goto('http://satorna.test/wb/reports/week-over-week')
@@ -60,6 +83,9 @@ it('searches Week by SKU, product name and the supplied product segment without 
     const dataRows = surface.locator('tr[data-report-row="week"]')
     await surface.getByText('Synthetic Alpha garment', { exact: true }).waitFor({ timeout: 15_000 })
     expect(await dataRows.count()).toBe(50)
+    expect(await surface.getByText('Период 2026-08-01 — 2026-08-07; сравнение 2026-07-25 — 2026-07-31.', { exact: true }).count()).toBe(0)
+    expect(await dataRows.first().getByText('↑ +10%', { exact: true }).evaluate(el => getComputedStyle(el).color)).toBe('rgb(5, 150, 105)')
+    expect(await dataRows.first().getByText('↓ -10%', { exact: true }).evaluate(el => getComputedStyle(el).color)).toBe('rgb(220, 38, 38)')
     const search = surface.getByPlaceholder('Артикул, товар или сегмент...')
     for (const [query, expectedProduct] of [
       ['SYNTHETIC-WEEK-B', 'Synthetic Beta garment'],
@@ -81,6 +107,77 @@ it('searches Week by SKU, product name and the supplied product segment without 
     const query = new URLSearchParams(queries[0])
     expect([query.get('from'), query.get('to'), query.get('groupBy'), query.get('source'), query.get('preset')])
       .toEqual(['2026-08-01', '2026-08-07', 'sku', 'operational', 'custom'])
+
+    // Use real date-picker controls: never press Apply or Update.
+    const choose = async (boundary: 'from' | 'to', iso: string) => {
+      await page.locator(boundary === 'from' ? '#globalPeriodRange' : '#globalPeriodRangeTo').click()
+      const calendar = page.getByRole('dialog', { name: 'Календарь доступных данных WB' })
+      const month = iso.slice(0, 7) === '2026-09' ? 'сентябрь' : 'август'
+      while (!(await calendar.locator('.products-cache-calendar-nav strong').innerText()).toLocaleLowerCase('ru').includes(month)) {
+        const text = (await calendar.locator('.products-cache-calendar-nav strong').innerText()).toLocaleLowerCase('ru')
+        await calendar.getByRole('button', { name: text.includes('август') ? 'Следующий месяц' : 'Предыдущий месяц' }).click()
+      }
+      await calendar.locator(`button[aria-label^="${iso}:"]`).click()
+    }
+    await choose('from', '2026-09-09')
+    await choose('to', '2026-09-16')
+    await expect.poll(() => surface.locator('.week-periods').innerText()).toContain('2026-09-01 — 2026-09-08 · 8 дн.')
+    await dataRows.first().waitFor()
+    await choose('to', '2026-09-17')
+    await expect.poll(() => queries.some(q => new URLSearchParams(q).get('to') === '2026-09-17')).toBe(true)
+    expect(await dataRows.count()).toBe(0)
+    await choose('to', '2026-09-18')
+    await expect.poll(() => surface.locator('.week-periods').innerText()).toContain('2026-08-30 — 2026-09-08 · 10 дн.')
+    await dataRows.first().waitFor()
+    releaseLate()
+    await expect.poll(() => surface.locator('.week-periods').innerText()).toContain('2026-09-09 — 2026-09-18 · 10 дн.')
+    // Missing previous sales (including a zero comparison base) stays unavailable.
+    expect(await surface.locator('.week-workbench .stat').first().locator('.stat-val').innerText()).toBe('—')
+    expect((await surface.locator('.week-workbench .stat').first().innerText()).replace(/\s/g, ' ')).toContain('1 326 шт')
+    for (const viewport of [{ width: 1512, height: 982 }, { width: 1100, height: 700 }, { width: 780, height: 900 }]) {
+      await page.setViewportSize(viewport)
+      const geometry = await surface.evaluate(tab => {
+        const workspace = tab.querySelector<HTMLElement>('.week-table-workspace')!
+        const rect = workspace.getBoundingClientRect()
+        workspace.scrollTop = 250; workspace.scrollLeft = 300
+        return { bottom: rect.bottom, viewport: innerHeight, height: rect.height, scrollTop: workspace.scrollTop,
+          scrollLeft: workspace.scrollLeft, sticky: getComputedStyle(workspace.querySelector('thead')!).position }
+      })
+      expect(Math.abs(geometry.bottom - geometry.viewport)).toBeLessThan(2)
+      expect(geometry.height).toBeGreaterThan(180)
+      expect(geometry.scrollTop).toBeGreaterThan(0)
+      expect(geometry.scrollLeft).toBeGreaterThan(0)
+      expect(geometry.sticky).toBe('sticky')
+    }
+    await page.setViewportSize({ width: 1512, height: 982 })
+    await surface.locator('.week-table-workspace').evaluate(el => { el.scrollTop = 0; el.scrollLeft = 0 })
+    if (process.env.SATORNA_WEEK_SCREENSHOT) await page.screenshot({ path: process.env.SATORNA_WEEK_SCREENSHOT })
+    const salesHeader = surface.locator('thead th').nth(1)
+    await salesHeader.click()
+    expect(await dataRows.first().innerText()).toContain('Synthetic product 50')
+    await surface.getByRole('button', { name: 'Экспорт XLSX', exact: true }).click()
+    await expect.poll(() => exports.length).toBe(1)
+    expect(exports[0].rows).toHaveLength(51)
+    expect(exports[0].rows[0][0]).toBe('2026-09-09 — 2026-09-18 (10 дн.)')
+    expect(exports[0].rows[0][1]).toBe('2026-08-30 — 2026-09-08 (10 дн.)')
+    // Row 51 was outside the initial render window; the same descending sort
+    // must put it first in the complete exported row set.
+    expect(exports[0].rows[0][2]).toContain('Synthetic product 51')
+    expect(await dataRows.first().innerText()).toContain('Synthetic product 51')
+    await search.fill('SYNTHETIC-WEEK-B')
+    await surface.getByRole('button', { name: 'Экспорт XLSX', exact: true }).click()
+    await expect.poll(() => exports.length).toBe(2)
+    expect(exports[1].rows).toHaveLength(1)
+    expect(exports[1].rows[0][2]).toContain('Synthetic Beta garment')
+    await search.fill('')
+    await choose('to', '2026-09-19')
+    await expect.poll(() => missingJobs).toBe(1)
+    await expect.poll(() => queries.filter(q => new URLSearchParams(q).get('to') === '2026-09-19').length).toBe(2)
+    await expect.poll(async () => (await surface.locator('.week-workbench .stat').first().innerText()).replace(/\s/g, ' ')).toContain('1 326 шт')
+    await choose('from', '2026-09-02')
+    await choose('to', '2026-09-08')
+    await expect.poll(() => surface.locator('.week-periods').innerText()).toContain('2026-08-26 — 2026-09-01 · 7 дн.')
+    await dataRows.first().waitFor()
     expect(unexpected).toEqual([])
     expect(errors).toEqual([])
   } finally { await browser.close() }

@@ -471,26 +471,19 @@ def _baskets_daily_seed_from_recent_cache(
     seed_key = f"baskets_{_period_cache_suffix((seed_end - seed_start).days + 1, date_from=seed_start, date_to=seed_end)}"
     seed_caches: list[dict[str, Any]] = []
     exact_cache = get_source_cache(organization_id, seed_key, slim=False) or {}
+    from app.wb_api.source_freshness import source_is_fresh
+    if exact_cache.get("fetchedAt") and not source_is_fresh(exact_cache):
+        exact_cache = {}
     if isinstance(exact_cache.get("dailyAggregates"), dict):
         seed_caches.append(exact_cache)
-        if exact_cache.get("dateFrom") and exact_cache.get("dateTo"):
-            selected_daily = {
-                day_key: rows
-                for day_key, rows in exact_cache["dailyAggregates"].items()
-                if isinstance(day_key, str)
-                and isinstance(rows, dict)
-                and range_start.date().isoformat() <= day_key <= range_end.date().isoformat()
-            }
-            selected_chunks = [
-                dict(chunk)
-                for chunk in (exact_cache.get("chunks") if isinstance(exact_cache.get("chunks"), list) else [])
-                if isinstance(chunk, dict) and range_start.date().isoformat() <= str(chunk.get("date") or "") <= range_end.date().isoformat()
-            ]
-            return selected_daily, selected_chunks
+        # A partial exact-range cache is not the only reusable source. Continue
+        # looking through overlapping fresh ranges before scheduling WB calls.
     overlap_start = range_start.date()
     overlap_end = range_end.date()
     for cache_meta in list_source_cache_ranges_by_prefix(organization_id, "baskets_", limit=100):
         if not isinstance(cache_meta, dict):
+            continue
+        if cache_meta.get("fetchedAt") and not source_is_fresh(cache_meta):
             continue
         cache_range = _cache_range_from_payload(cache_meta)
         if cache_range is None:
@@ -508,7 +501,7 @@ def _baskets_daily_seed_from_recent_cache(
             seed_caches.append(cache)
     selected_daily: dict[str, dict[str, dict[str, Any]]] = {}
     selected_chunks: list[dict[str, Any]] = []
-    seen_chunk_keys: set[tuple[str, int]] = set()
+    selected_scores: dict[str, tuple[int, str]] = {}
     for seed_cache in seed_caches:
         seed_daily = seed_cache.get("dailyAggregates")
         if isinstance(seed_daily, dict):
@@ -518,22 +511,26 @@ def _baskets_daily_seed_from_recent_cache(
                     and isinstance(rows, dict)
                     and overlap_start.isoformat() <= day_key <= overlap_end.isoformat()
                 ):
-                    selected_daily[day_key] = rows
-        for chunk in (seed_cache.get("chunks") if isinstance(seed_cache.get("chunks"), list) else []):
-            if not isinstance(chunk, dict):
-                continue
-            day = str(chunk.get("date") or "")
-            if not (overlap_start.isoformat() <= day <= overlap_end.isoformat()):
-                continue
-            try:
-                chunk_key = (day, int(chunk.get("chunkIndex")))
-            except (TypeError, ValueError):
-                continue
-            if chunk_key in seen_chunk_keys:
-                continue
-            selected_chunks.append(dict(chunk))
-            seen_chunk_keys.add(chunk_key)
+                    source_chunks = seed_cache.get("chunks")
+                    day_chunks = [dict(chunk) for chunk in (source_chunks if isinstance(source_chunks, list) else [])
+                        if isinstance(chunk, dict) and chunk.get("type") == "daily" and chunk.get("date") == day_key]
+                    # Pick ONE consistent snapshot per day. Unioning completed
+                    # chunks while replacing their rows could falsely skip data.
+                    complete = bool(day_chunks) and all(chunk.get("status") == "done" for chunk in day_chunks)
+                    legacy_complete = not day_chunks and seed_cache.get("dailyDetailStatus") == "complete"
+                    score = (100000 if complete or legacy_complete else sum(chunk.get("status") == "done" for chunk in day_chunks), str(seed_cache.get("fetchedAt") or ""))
+                    if day_key not in selected_scores or score > selected_scores[day_key]:
+                        selected_scores[day_key] = score
+                        selected_daily[day_key] = rows
+                        selected_chunks = [chunk for chunk in selected_chunks if chunk.get("date") != day_key] + day_chunks
     return selected_daily, selected_chunks
+
+
+def _merge_baskets_daily_seed(previous_daily: dict, previous_chunks: list, seed_daily: dict, seed_chunks: list) -> tuple[dict, list]:
+    # Rows and completion checkpoints belong to the same daily snapshot.
+    retained = [chunk for chunk in previous_chunks
+                if isinstance(chunk, dict) and chunk.get("date") not in seed_daily]
+    return {**previous_daily, **seed_daily}, retained + seed_chunks
 
 
 def _parse_iso(value: Any) -> datetime | None:
@@ -1383,9 +1380,21 @@ def refresh_wb_data_sources(
                         retryAfterSeconds=progress.get("retryAfterSeconds"),
                     )
 
-                cards = _fetch_content_cards(scenario, wb_token=wb_token, progress_callback=report_content_progress)
-                save_source_cache(organization_id, "content_cards", {"cards": cards, "count": len(cards)})
-                finish_step(step, _step_ok("content", count=len(cards)))
+                from app.platform.catalog.photos import save_missing_catalog_photos
+                saved_photos = 0
+                def save_photo_page(page):
+                    nonlocal saved_photos
+                    saved_photos += save_missing_catalog_photos(organization_id, page)['saved']
+                cards = _fetch_content_cards(scenario, wb_token=wb_token,
+                    progress_callback=report_content_progress, page_callback=save_photo_page)
+                save_source_cache(organization_id, "content_cards", {"cards": cards, "count": len(cards)}, strict=True)
+                photos = save_missing_catalog_photos(organization_id, cards)
+                photos['saved'] += saved_photos
+                result = _step_ok("content", count=len(cards), catalogPhotos=photos)
+                if photos.get('reason'):
+                    result.update(status='partial', error=photos['reason'],
+                        message='Карточки WB сохранены. Для сохранения фото в общий каталог требуется однозначное подключение кабинета WB.')
+                finish_step(step, result)
             except Exception as exc:
                 finish_step(step, _step_error("content", exc))
 
@@ -1432,7 +1441,8 @@ def refresh_wb_data_sources(
         if "finance" in resolved_sources:
             step = start_step("finance")
             try:
-                finance_payload = fetch_finance_report_aggregates(scenario, wb_token=wb_token, date_from=range_start, date_to=range_end)
+                finance_options = {"repricer_operations_org": organization_id} if trigger.startswith("reports-") else {}
+                finance_payload = fetch_finance_report_aggregates(scenario, wb_token=wb_token, date_from=range_start, date_to=range_end, **finance_options)
                 canonical_snapshot = shadow_ingest_legacy_finance_payload(
                     organization_id,
                     finance_payload,
@@ -1536,6 +1546,9 @@ def refresh_wb_data_sources(
                 else:
                     baskets_cache_key = f"baskets_{period_suffix}"
                     previous_baskets_cache = get_source_cache(organization_id, baskets_cache_key, slim=False) or {}
+                    from app.wb_api.source_freshness import source_is_fresh
+                    if previous_baskets_cache.get("fetchedAt") and not source_is_fresh(previous_baskets_cache):
+                        previous_baskets_cache = {}
                     previous_daily_aggregates = previous_baskets_cache.get("dailyAggregates") if isinstance(previous_baskets_cache.get("dailyAggregates"), dict) else {}
                     previous_chunks = previous_baskets_cache.get("chunks") if isinstance(previous_baskets_cache.get("chunks"), list) else []
                     previous_cache_from = _parse_iso(previous_baskets_cache.get("dateFrom"))
@@ -1554,23 +1567,8 @@ def refresh_wb_data_sources(
                         range_end=range_end,
                     )
                     if seed_daily_aggregates:
-                        previous_daily_aggregates = {**previous_daily_aggregates, **seed_daily_aggregates}
-                        existing_chunk_keys: set[tuple[str, int]] = set()
-                        for item in previous_chunks:
-                            if not isinstance(item, dict) or item.get("date") is None or item.get("chunkIndex") is None:
-                                continue
-                            try:
-                                existing_chunk_keys.add((str(item.get("date")), int(item.get("chunkIndex"))))
-                            except (TypeError, ValueError):
-                                continue
-                        for chunk in seed_chunks:
-                            try:
-                                chunk_key = (str(chunk.get("date")), int(chunk.get("chunkIndex")))
-                            except (TypeError, ValueError):
-                                continue
-                            if chunk_key not in existing_chunk_keys:
-                                previous_chunks.append(chunk)
-                                existing_chunk_keys.add(chunk_key)
+                        previous_daily_aggregates, previous_chunks = _merge_baskets_daily_seed(
+                            previous_daily_aggregates, previous_chunks, seed_daily_aggregates, seed_chunks)
 
                     # Refresh short rolling windows; retain checkpoints only when resuming a partial fetch.
                     if resolved_period_days <= 2 and previous_baskets_cache.get("dailyDetailStatus") != "partial":
@@ -1615,10 +1613,11 @@ def refresh_wb_data_sources(
                         daily_status = "deferred"
                     payload = {
                         **payload,
+                        "aggregateComplete": True,
                         "dailyAggregates": daily_aggregates,
                         "dailyAggregatesDays": len(daily_aggregates),
                         "dailyDetailStatus": daily_status,
-                        **({"chunks": preserved_chunks} if preserved_chunks else {}),
+                        **({"dailyBatchCount": max(1, (len(nm_ids) + 999) // 1000), "chunks": previous_chunks} if baskets_include_daily_detail else ({"chunks": preserved_chunks} if preserved_chunks else {})),
                         **({"dailyDetailDeferredAt": _utc_now().isoformat()} if not baskets_include_daily_detail and not preserved_daily_aggregates else {}),
                         **({"dailyDetailPreservedAt": _utc_now().isoformat(), "dailyDetailPreservedBy": "aggregate_refresh"} if not baskets_include_daily_detail and preserved_daily_aggregates else {}),
                     }

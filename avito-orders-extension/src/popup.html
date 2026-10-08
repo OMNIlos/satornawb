@@ -38,13 +38,18 @@
           </div>
         </div>
 
-        <button id="collectBtn" class="primary-action" type="button">Собрать заказы и возвраты</button>
-        <button id="labelsBtn" class="primary-action" type="button">Получить этикетки</button>
-        <button id="listingPhotosBtn" class="primary-action" type="button">Сохранить фото объявлений</button>
+        <button id="collectBtn" class="primary-action" type="button">Собрать всё</button>
+        <p id="orderProgress" class="status-line" role="status" aria-live="polite"></p>
+        <details class="advanced-collection">
+        <summary>Диагностика и отдельные операции</summary>
+        <button id="retryBtn" class="secondary-action" type="button">Повторить недостающее</button>
+        <button id="labelsBtn" class="secondary-action" type="button">Получить недостающие этикетки</button>
+        <button id="listingPhotosBtn" class="secondary-action" type="button">Фото активных объявлений</button>
         <button id="stopListingPhotosBtn" type="button" hidden>Остановить сбор фото</button>
         <p id="listingPhotosStatus" role="status">Фото сохраняются один раз. Повторный сбор загружает только недостающие.</p>
+        </details>
         <p id="collectTokenHint" class="token-hint">Сначала вставьте токен Satorna в настройках.</p>
-        <p id="status" class="status-line">Нажмите сбор. Расширение само откроет заказы Avito.</p>
+        <p id="status" class="status-line" role="status" aria-live="polite">Нажмите сбор. Расширение само откроет заказы Avito.</p>
 
         <div class="run-summary">
           <div>
@@ -96,7 +101,7 @@
               <select id="sizeMode">
                 <option value="none">Не собирать</option>
                 <option value="description">Из описания</option>
-                <option value="chat_ai">Из чата с AI</option>
+                <option value="chat_ai">Размер из чата с покупателем (AI)</option>
               </select>
             </label>
           </div>

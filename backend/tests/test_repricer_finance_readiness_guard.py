@@ -5,7 +5,7 @@ from datetime import date
 import pytest
 
 from app import repricer_tasks
-from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
+from app.repricer_cache.store import FINANCE_REVENUE_BASIS, FINANCE_SCHEMA_VERSION
 
 
 @pytest.mark.parametrize(
@@ -19,20 +19,20 @@ from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
             False,
         ),
         (
-            {"revenueBasis": "retailAmount", "financeSchemaVersion": FINANCE_SCHEMA_VERSION},
+            {"revenueBasis": FINANCE_REVENUE_BASIS, "financeSchemaVersion": FINANCE_SCHEMA_VERSION},
             {},
             True,
             False,
         ),
         (
-            {"revenueBasis": "retailAmount", "financeSchemaVersion": FINANCE_SCHEMA_VERSION},
-            {"revenueBasis": "retailAmount", "financeSchemaVersion": FINANCE_SCHEMA_VERSION},
+            {"revenueBasis": FINANCE_REVENUE_BASIS, "financeSchemaVersion": FINANCE_SCHEMA_VERSION},
+            {"revenueBasis": FINANCE_REVENUE_BASIS, "financeSchemaVersion": FINANCE_SCHEMA_VERSION},
             True,
             True,
         ),
         (
             {"revenueBasis": "sellerPayout", "financeSchemaVersion": "v3"},
-            {"revenueBasis": "retailAmount", "financeSchemaVersion": FINANCE_SCHEMA_VERSION},
+            {"revenueBasis": FINANCE_REVENUE_BASIS, "financeSchemaVersion": FINANCE_SCHEMA_VERSION},
             True,
             False,
         ),

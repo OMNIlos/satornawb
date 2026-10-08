@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, File, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -40,6 +40,114 @@ from app.repricer_sync import (
 router = APIRouter(tags=["catalog-v2"])
 
 
+@router.post("/api/v2/wb/costs/import")
+def import_wb_costs(
+    request: Request, preview: bool = Query(default=True),
+    previewHash: str | None = Query(default=None), accountId: int | None = Query(default=None),
+    replaceExamples: bool = Query(default=False),
+    file: UploadFile = File(...),
+    session: Session = Depends(get_db_session),
+):
+    # The actor is resolved from the authenticated request, never from the workbook.
+    import hashlib
+    from collections import Counter
+    from app.platform.economics.cost_import import parse_cost_rows, plan_digest
+    actor = actor_from_request(request)
+    for permission in ("catalog:read", "costs:read", "costs:write"):
+        _require(actor, permission)
+    member = _cost_membership(session, actor)
+    accounts = list(session.scalars(select(MarketplaceAccountRow.marketplace_account_id).where(
+        MarketplaceAccountRow.organization_id == actor.organization_id,
+        MarketplaceAccountRow.marketplace == "wb", MarketplaceAccountRow.status == "connected")).all())
+    if member.scope_mode != "all":
+        accounts = [value for value in accounts if value in (member.allowed_account_ids or [])]
+    if accountId is not None:
+        accounts = [value for value in accounts if value == accountId]
+    if len(accounts) != 1:
+        raise HTTPException(409, detail="Выберите один доступный кабинет WB для импорта")
+    account_id = accounts[0]
+    content = file.file.read(10 * 1024 * 1024 + 1)
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(413, detail="Максимальный размер файла — 10 МБ")
+    try:
+        rows = parse_cost_rows(content)
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(422, detail="Не удалось прочитать XLSX: проверьте колонки nmID и Себестоимость") from exc
+    if not rows or len(rows) > 20000:
+        raise HTTPException(422, detail="В файле должно быть от 1 до 20000 строк")
+    mapping, ambiguous = CatalogService(session, actor.organization_id).resolve_wb_product_skus(
+        account_id, [row["nmId"] for row in rows if row["nmId"] is not None])
+    service = CostsService(session, actor.organization_id)
+    file_hash = hashlib.sha256(content).hexdigest()
+    sku_counts = Counter(mapping.get(row["nmId"]) for row in rows if not row["error"])
+    from datetime import datetime, timezone
+    costs = service.get_costs_at(list(set(mapping.values())), datetime.now(timezone.utc))
+    links: dict[int, set[int]] = {}
+    for sku_id, product_id in session.execute(select(
+        MarketplaceOfferRow.catalog_sku_id, MarketplaceOfferRow.marketplace_product_id).where(
+        MarketplaceOfferRow.organization_id == actor.organization_id,
+        MarketplaceOfferRow.catalog_sku_id.in_(list(set(mapping.values()))))):
+        links.setdefault(sku_id, set()).add(product_id)
+    for row in rows:
+        if row["error"]:
+            continue
+        sku = mapping.get(row["nmId"])
+        if row["nmId"] in ambiguous or sku is None:
+            row["error"] = "Товар не найден или имеет несколько SKU; проверьте привязку вариантов"
+            continue
+        if sku_counts[sku] > 1:
+            row["error"] = "Несколько строк меняют общую себестоимость одного SKU"
+            continue
+        if len(links.get(sku, set())) > 1:
+            row["error"] = "Общая себестоимость нескольких карточек: измените её в таблице с подтверждением"
+            continue
+        _require_cost_sku_scope(session, actor, sku)
+        current = costs[sku]
+        reference = f"excel:{account_id}:{file_hash}:{sku}"
+        if replaceExamples:
+            reference += ':replace-examples'
+        historical = replaceExamples and current.source == 'user-example' and current.value_state == 'assumed'
+        existing = service._by_reference("manual-current", reference) or service._by_reference('example-replacement', reference)
+        row.update(catalogSkuId=sku, oldAmountKopecks=current.amount_kopecks,
+                   expectedVersion=current.cost_version_id, reference=reference, alreadyApplied=existing is not None,
+                   replacesExample=historical, effectiveFrom=current.effective_from.isoformat() if historical else None)
+    digest = plan_digest(rows)
+    if not preview and previewHash != digest:
+        raise HTTPException(409, detail="Данные изменились после проверки. Повторите предварительный просмотр")
+    saved = 0
+    if not preview:
+        for row in rows:
+            if row["error"] or row.get("alreadyApplied"):
+                continue
+            try:
+                save = service.replace_example_cost if row['replacesExample'] else service.set_current_cost
+                save(catalog_sku_id=row["catalogSkuId"], amount_kopecks=row["amountKopecks"],
+                    expected_cost_version_id=row["expectedVersion"], source_reference=row["reference"], created_by_user_id=actor.user_id)
+                saved += 1
+            except (CostConflictError, CostValidationError, CostNotFoundError):
+                session.rollback()
+                row["error"] = "Стоимость изменилась или недоступна; проверьте строку повторно"
+    return {"preview": preview, "previewHash": digest, "accountId": account_id, "rows": rows,
+            "ready": sum(not row["error"] and not row.get("alreadyApplied") for row in rows),
+            "saved": saved, "errors": sum(bool(row["error"]) for row in rows),
+            "skipped": sum(bool(row.get("alreadyApplied")) for row in rows)}
+
+
+@router.get("/api/v2/wb/costs/accounts")
+def cost_import_accounts(request: Request, session: Session = Depends(get_db_session)):
+    actor = actor_from_request(request)
+    _require(actor, "catalog:read")
+    _require(actor, "costs:read")
+    member = _cost_membership(session, actor)
+    rows = session.scalars(select(MarketplaceAccountRow).where(
+        MarketplaceAccountRow.organization_id == actor.organization_id,
+        MarketplaceAccountRow.marketplace == "wb", MarketplaceAccountRow.status == "connected")).all()
+    return [{"id": row.marketplace_account_id, "name": f"WB · {row.external_account_id}"} for row in rows
+            if member.scope_mode == "all" or row.marketplace_account_id in (member.allowed_account_ids or [])]
+
+
 def get_catalog_actor(request: Request) -> ActorContext:
     return actor_from_request(request)
 
@@ -55,17 +163,40 @@ def _require(actor: ActorContext, permission: str) -> None:
 def _require_cost_sku_scope(session: Session, actor: ActorContext, catalog_sku_id: int) -> None:
     from app.infra.db import set_tenant_context
     set_tenant_context(session, actor.organization_id)
-    membership = session.scalar(select(IamMembershipRow).where(
-        IamMembershipRow.organization_id == actor.organization_id,
-        IamMembershipRow.user_id == actor.user_id, IamMembershipRow.is_active.is_(True)))
-    if membership is None:
-        raise HTTPException(status_code=403, detail={"code": "NO_ACCESS"})
+    membership = _cost_membership(session, actor)
     if membership.scope_mode != "all":
         accounts = set(session.scalars(select(MarketplaceOfferRow.marketplace_account_id).where(
             MarketplaceOfferRow.organization_id == actor.organization_id,
             MarketplaceOfferRow.catalog_sku_id == catalog_sku_id)).all())
         if not accounts or not accounts.issubset(set(membership.allowed_account_ids or [])):
             raise HTTPException(status_code=403, detail={"code": "NO_ACCESS"})
+
+
+def _cost_membership(session: Session, actor: ActorContext) -> IamMembershipRow:
+    """Migrate an existing authorized legacy user, never reactivate a denied member."""
+    from app.cabinet.orm import LkUserRow, LkUserPermissionRow
+    from app.cabinet.store import _sync_membership
+    from app.cabinet.permissions import permissions_from_profile
+    from app.infra.db import set_tenant_context
+    set_tenant_context(session, actor.organization_id)
+    member = session.scalar(select(IamMembershipRow).where(
+        IamMembershipRow.organization_id == actor.organization_id, IamMembershipRow.user_id == actor.user_id))
+    if member is None:
+        user = session.scalar(select(LkUserRow).where(LkUserRow.organization_id == actor.organization_id,
+            LkUserRow.user_id == actor.user_id, LkUserRow.is_active.is_(True)))
+        if user is None:
+            raise HTTPException(403, detail={"code": "NO_ACCESS"})
+        permissions = set(session.scalars(select(LkUserPermissionRow.permission).where(
+            LkUserPermissionRow.user_id == actor.user_id)).all()) | set(permissions_from_profile(user.permission_profile))
+        if not {"costs:read", "catalog:read"}.issubset(permissions):
+            raise HTTPException(403, detail={"code": "NO_ACCESS", "message": "Нет права просмотра себестоимости"})
+        _sync_membership(session, user, permissions)
+        session.flush()
+        member = session.scalar(select(IamMembershipRow).where(
+            IamMembershipRow.organization_id == actor.organization_id, IamMembershipRow.user_id == actor.user_id))
+    if member is None or not member.is_active:
+        raise HTTPException(403, detail={"code": "NO_ACCESS", "message": "Доступ участника отключён"})
+    return member
 
 
 def _cost_view(cost: CostValue, *, visible: bool) -> CostView:
@@ -341,10 +472,8 @@ def get_wb_product_current_cost(
     # Legacy table has no explicit account identity. Never guess among accounts.
     if len(accounts) != 1:
         raise HTTPException(status_code=409, detail={"code": "COST_ACCOUNT_AMBIGUOUS", "message": "Требуется однозначный WB-аккаунт"})
-    membership = session.scalar(select(IamMembershipRow).where(
-        IamMembershipRow.organization_id == actor.organization_id,
-        IamMembershipRow.user_id == actor.user_id, IamMembershipRow.is_active.is_(True)))
-    if membership is None or (membership.scope_mode != "all" and accounts[0] not in (membership.allowed_account_ids or [])):
+    membership = _cost_membership(session, actor)
+    if membership.scope_mode != "all" and accounts[0] not in (membership.allowed_account_ids or []):
         raise HTTPException(status_code=403, detail={"code": "NO_ACCESS"})
     mapping, ambiguous = CatalogService(session, actor.organization_id).resolve_wb_product_skus(accounts[0], [nmId])
     if nmId in ambiguous or nmId not in mapping:

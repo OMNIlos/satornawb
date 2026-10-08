@@ -273,6 +273,37 @@ class CostsService:
             created_by_user_id=created_by_user_id,
         )
 
+    def replace_example_cost(
+        self, *, catalog_sku_id: int, amount_kopecks: int,
+        expected_cost_version_id: int, source_reference: str, created_by_user_id: str,
+    ) -> CostValue:
+        """Explicitly replace a user-requested example, retaining its audit history."""
+        if self.session.get_bind().dialect.name == "sqlite":
+            connection = self.session.connection()
+            if not connection.connection.driver_connection.in_transaction:
+                self.session.execute(text("BEGIN IMMEDIATE"))
+        self._sku(catalog_sku_id)
+        self.session.scalar(select(CatalogSkuRow).where(
+            CatalogSkuRow.organization_id == self.organization_id,
+            CatalogSkuRow.catalog_sku_id == catalog_sku_id,
+        ).with_for_update())
+        existing = self._by_reference('example-replacement', source_reference)
+        example = self.session.scalar(select(CatalogCostVersionRow).where(
+            CatalogCostVersionRow.organization_id == self.organization_id,
+            CatalogCostVersionRow.catalog_sku_id == catalog_sku_id,
+            CatalogCostVersionRow.cost_version_id == expected_cost_version_id,
+            CatalogCostVersionRow.source == 'user-example',
+            CatalogCostVersionRow.value_state == 'assumed',
+        ))
+        if example is None:
+            raise CostConflictError('Only an explicitly marked example can be replaced historically')
+        if existing is None and self.get_current_cost(catalog_sku_id).cost_version_id != expected_cost_version_id:
+            raise CostConflictError('cost version changed; reload before saving')
+        return self.set_cost(catalog_sku_id=catalog_sku_id, amount_kopecks=amount_kopecks,
+            value_state='configured', effective_from=_db_utc(example.effective_from),
+            source='example-replacement', source_reference=source_reference, evidence_status='dated',
+            supersedes_cost_version_id=expected_cost_version_id, created_by_user_id=created_by_user_id)
+
     def get_costs_at(self, catalog_sku_ids: list[int], at: datetime) -> dict[int, CostValue]:
         for sku_id in catalog_sku_ids:
             self._validate_sku_id(sku_id)

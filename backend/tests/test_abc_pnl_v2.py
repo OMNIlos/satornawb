@@ -33,7 +33,7 @@ from app.routers.finance_v2 import get_finance_actor
 
 PERIOD = Period(date(2026, 8, 17), date(2026, 8, 23))
 GLOBAL_BLOCKERS = {
-    "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
+    "WB_PNL_CLASSIFICATION_NOT_CANONICAL",
 }
 
 
@@ -292,8 +292,8 @@ def test_abc_pnl_v2_is_cache_only_and_reconciles(
     assert payload["summary"]["cashbackCommissionChangeKopecks"] == -125
     assert payload["summary"]["loyaltyNetCostKopecks"] == 875
     assert payload["summary"]["profitAfterLoyaltyKopecks"] == 80_377
-    assert payload["summary"]["netProfitKopecks"] is None
-    assert payload["summary"]["profitBeforeInternalExpensesKopecks"] is None
+    assert payload["summary"]["netProfitKopecks"] == 80_377
+    assert payload["summary"]["profitBeforeInternalExpensesKopecks"] == 80_377
     assert payload["summary"]["internalExpensesKopecks"] == 0
     assert payload["items"][0]["settlementProfitKopecks"] == 100_800
     assert payload["items"][0]["economicsValueState"] == "configured"
@@ -305,8 +305,8 @@ def test_abc_pnl_v2_is_cache_only_and_reconciles(
     assert payload["items"][0]["cashbackCommissionChangeKopecks"] == -125
     assert payload["items"][0]["loyaltyNetCostKopecks"] == 875
     assert payload["items"][0]["profitAfterLoyaltyKopecks"] == 80_377
-    assert payload["items"][0]["netProfitKopecks"] is None
-    assert payload["items"][0]["profitBeforeInternalExpensesKopecks"] is None
+    assert payload["items"][0]["netProfitKopecks"] == 80_377
+    assert payload["items"][0]["profitBeforeInternalExpensesKopecks"] == 80_377
     assert payload["items"][0]["internalExpensesKopecks"] == 0
     assert payload["items"][0]["profitClass"] is None
     assert payload["items"][0]["abcCode"] is None
@@ -318,7 +318,7 @@ def test_abc_pnl_v2_is_cache_only_and_reconciles(
     assert len(payload["meta"]["advertisingSnapshotChecksum"]) == 64
     assert payload["meta"]["advertisingEvidenceStatus"] == "raw"
     assert payload["meta"]["blockerIds"] == [
-        "WB_PNL_TAX_POLICY_NOT_CONFIRMED_750",
+        "WB_PNL_CLASSIFICATION_NOT_CANONICAL",
             ]
     assert set(payload["meta"]["blockerIds"]) == GLOBAL_BLOCKERS
     assert payload["meta"]["snapshot"]["operationCount"] == 1

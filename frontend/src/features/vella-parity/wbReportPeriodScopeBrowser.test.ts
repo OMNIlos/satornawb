@@ -41,6 +41,11 @@ it.each([
   const browser = await chromium.launch({ headless: true })
   try {
     const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
+    await page.addInitScript(() => {
+      if (!crypto.randomUUID) Object.defineProperty(crypto, 'randomUUID', {
+        value: () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join(''),
+      })
+    })
     await page.clock.setFixedTime(new Date('2026-09-09T12:00:00Z'))
     const requests: string[] = [], unexpected: string[] = [], errors: string[] = []
     page.on('pageerror', error => errors.push(error.message))
@@ -91,3 +96,57 @@ it.each([
     expect(errors).toEqual([])
   } finally { await browser.close() }
 }, 45_000)
+
+it('shows historical ads before optional budgets and rejects the old-period budget response', async () => {
+  const browser = await chromium.launch({ headless: true })
+  let releaseOld!: () => void
+  const oldPending = new Promise<void>(resolve => { releaseOld = resolve })
+  try {
+    const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
+    await page.addInitScript(() => {
+      if (!crypto.randomUUID) Object.defineProperty(crypto, 'randomUUID', { value: () => '12345678901234567890123456789012' })
+    })
+    const budgetRequests: string[] = [], unexpected: string[] = []
+    await page.route('**/*', async route => {
+      const request = route.request(), url = new URL(request.url())
+      if (url.pathname === '/wb/reports/ads') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.resourceType() === 'image') return route.abort()
+      if (url.origin === 'https://fonts.googleapis.com') return route.fulfill({ contentType: 'text/css', body: '' })
+      if (request.method() === 'POST' && url.pathname === '/api/wb/reports/work-demand/release') return route.fulfill({ contentType: 'application/json', body: '{}' })
+      const from = url.searchParams.get('from'), to = url.searchParams.get('to')
+      if (url.pathname === '/api/wb/reports/ads/latest-cache') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+        filters: { dateRange: { from, to } }, rows: [{ campaignId: '11', campaignName: 'Synthetic campaign', adSpendKopecks: from === '2026-08-08' ? 22200 : 11100 }],
+        kpis: [{ id: 'ad_spend', value: from === '2026-08-08' ? '22200' : '11100' }, { id: 'campaign_budget', value: '—' }], reportJob: null,
+      }) })
+      if (url.pathname === '/api/wb/reports/ads/budgets') {
+        budgetRequests.push(String(from))
+        const nextPeriod = from === '2026-08-08'
+        if (!nextPeriod) await oldPending
+        try {
+          return await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ dateFrom: from, dateTo: to,
+            rows: [{ campaignId: '11', budgetTotalKopecks: nextPeriod ? 250000 : 999000 }],
+            kpi: { id: 'campaign_budget', value: nextPeriod ? '250000' : '999000' }, budgetRefresh: { state: 'completed', collected: 1, total: 1 },
+          }) })
+        } catch { return } // The old request was correctly aborted during navigation.
+      }
+      unexpected.push(url.pathname); return route.abort()
+    })
+    await page.goto('http://satorna.test/wb/reports/ads')
+    await page.addScriptTag({ content: bundleCode })
+    const surface = page.locator('#tab-ads')
+    await surface.locator('[data-report-row="ads"]').first().waitFor({ timeout: 15000 })
+    await expect.poll(() => budgetRequests.length).toBe(1)
+    expect(await surface.innerText()).toContain('111')
+    await page.evaluate(() => {
+      const runtime = window as unknown as { __vellaReportPeriods?: Record<string, unknown> }
+      runtime.__vellaReportPeriods = { ...runtime.__vellaReportPeriods, ads: { days: 7, mode: 'custom', fromIso: '2026-08-08', toIso: '2026-08-14', label: 'New period' } }
+      window.dispatchEvent(new CustomEvent('vella:report-period-updated', { detail: { reportKey: 'ads' } }))
+    })
+    await expect.poll(() => budgetRequests.length).toBe(2)
+    await expect.poll(async () => (await surface.innerText()).includes('2 500') || (await surface.innerText()).includes('2 500')).toBe(true)
+    releaseOld()
+    await page.waitForTimeout(100)
+    expect(await surface.innerText()).not.toMatch(/9[\s\u00a0]990/)
+    expect(unexpected).toEqual([])
+  } finally { releaseOld(); await browser.close() }
+}, 45000)

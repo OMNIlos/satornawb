@@ -57,6 +57,7 @@ def _fail(message: str):
 
 @pytest.fixture
 def stats_runtime(monkeypatch):
+    monkeypatch.setattr("app.platform.economics.legacy_catalog.catalog_facts", lambda _org: {})
     goods = [_good(1)]
     storage: dict[tuple[int, str], dict] = {}
     save_calls: list[tuple[int, str]] = []

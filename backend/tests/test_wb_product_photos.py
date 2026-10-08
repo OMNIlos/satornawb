@@ -1,6 +1,6 @@
 import pytest
 
-from app.repricer_bff import _extract_wb_media_url, _wb_public_photo_url
+from app.repricer_bff import _extract_wb_media_url
 from app.routers.wb_repricer_bff import _repricer_stats_item
 
 
@@ -18,5 +18,6 @@ def test_content_photo_uses_thumbnail_before_large_image_and_stats_preserves_url
     assert item["imageUrl"] == item["photoUrl"] == small
 
 
-def test_missing_content_photo_keeps_existing_public_fallback():
-    assert _extract_wb_media_url({"photos": []}, 12345678) == _wb_public_photo_url(12345678)
+def test_missing_content_photo_does_not_guess_a_cdn_shard():
+    assert _extract_wb_media_url({"photos": []}, 12345678) is None
+    assert _extract_wb_media_url(None, 12345678) is None

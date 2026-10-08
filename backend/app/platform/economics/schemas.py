@@ -33,6 +33,6 @@ class CostSetRequest(BaseModel):
 
 
 class CurrentCostSetRequest(BaseModel):
-    amountKopecks: int = Field(strict=True, ge=0, le=9_007_199_254_740_991)
+    amountKopecks: int = Field(strict=True, ge=0, le=2_147_483_647)
     expectedCostVersionId: int | None = Field(ge=1)
     sourceReference: str = Field(min_length=1, max_length=255, pattern=r".*\S.*")

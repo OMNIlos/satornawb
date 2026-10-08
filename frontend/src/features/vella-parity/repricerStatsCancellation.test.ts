@@ -1,7 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { installRepricerStatsLiveBridge } from './VellaHtmlParityPage'
+import { resetLiveRepricerParityCache } from '../wb-repricer/liveParityData'
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { resetLiveRepricerParityCache(); vi.unstubAllGlobals() })
 
 it.each(['reload', 'dispose', 'later-page'] as const)('cancels obsolete statistics transport on %s', async action => {
   vi.stubGlobal('window', {
@@ -21,7 +22,7 @@ it.each(['reload', 'dispose', 'later-page'] as const)('cancels obsolete statisti
   const load = window.__vellaLoadLiveRepricerStats!
   const promises = [load()]
   try {
-    expect(pending).toHaveLength(1)
+    await vi.waitFor(() => expect(pending).toHaveLength(1))
     if (action === 'later-page') {
       pending[0]!.finish()
       await vi.waitFor(() => expect(pending).toHaveLength(2))
@@ -29,9 +30,15 @@ it.each(['reload', 'dispose', 'later-page'] as const)('cancels obsolete statisti
     const obsolete = pending.at(-1)!
     if (action === 'reload') promises.push(load())
     else dispose()
-    expect(obsolete.signal?.aborted).toBe(true)
-    if (action === 'reload') expect(pending[1]!.signal?.aborted).toBe(false)
+    await Promise.resolve()
+    if (action === 'reload') {
+      // An identical in-flight read is shared; cancelling its old consumer
+      // must not cancel the new consumer or duplicate the provider read.
+      expect(pending).toHaveLength(1)
+      expect(obsolete.signal?.aborted).toBe(false)
+    }
     else {
+      expect(obsolete.signal?.aborted).toBe(true)
       expect(await load()).toBeNull()
       expect(window.__vellaLoadLiveRepricerStats).toBeUndefined()
     }

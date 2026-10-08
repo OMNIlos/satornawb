@@ -15,7 +15,30 @@ Chrome Manifest V3 extension for collecting Avito seller order details that are 
 9. Click `Создать токен` or `Перегенерировать токен`.
 10. Paste the long-lived `sat_avito_...` token into the extension popup.
 11. Choose what to collect: product photos, color/article from description, and size from description or chat AI.
-12. Click `Собрать заказы`; the extension opens `https://www.avito.ru/orders` and sends the collected data to Satorna.
+12. Click `Собрать всё`; the extension opens `https://www.avito.ru/orders` and collects operational orders, returns, chats, product photos and labels into Satorna. Optional retry tools are under diagnostics.
+
+## Customer-chat size (0.2.9)
+
+Select «Размер из чата с покупателем (AI)» in collection settings, then collect orders.
+Only chats linked from operational order details are read (at most 50 recent
+messages). The collector preserves message authors, IDs, times and exact
+account/order/listing identity. It never scans the entire inbox or sends messages.
+The backend validates the seller's size question or an explicit customer-initiated
+selection (including «М оформляю»), and the latest unambiguous buyer choice before
+confirming the configured AI's structured output against that
+same buyer message. Only a minimal question/reply exchange is sent to AI;
+credentials stay on the server. One checkpoint makes at most one bounded AI call
+(40 candidates); any excess or failed confirmation is explicitly reviewable.
+
+The normalized size and original answer are saved with provenance. Orders and
+the existing XLSX Size column show confirmed values or a review reason; listing
+sizes are never substituted in this mode. Unknown
+message authors, missing dates, unavailable chat access, multiple-order/item
+ambiguity, or missing server AI configuration require review rather than guesses.
+Other collection modes and local/production backend configuration are unchanged.
+Unexpected successful-HTTP chat payloads are reported as collection failures,
+not as missing customer replies. Native `hasMore` marks incomplete history;
+unverified older-page cursors are never guessed.
 
 Default Satorna URL: `https://satorna-wb.vercel.app`. Existing settings for the retired `ogni-frontend.vercel.app` deployment are migrated automatically. The popup also supports an explicit server address.
 
@@ -67,11 +90,23 @@ Payload shape:
 ## Notes
 
 The collector prefers stable `data-marker`, link, image, and visible text selectors. It uses list pagination and label-generation controls, never shipping, publishing, or price-changing actions.
-# Одноразовый сбор фото объявлений (локальная версия 0.2.5)
+# Сбор с продолжением (версия 0.2.7)
+
+Обычный лист подбора сначала проверяет свежесть сохранённых наблюдений (10 минут).
+Если данные устарели, запускается существующий сбор через расширение и затем
+повторная проверка БД. Если актуальность не подтверждена, устаревший файл не
+скачивается. Адрес сайта и адрес в настройках расширения должны совпадать.
+Лист возвратов экспортирует сохранённые данные без запуска сбора и открытия вкладок.
+Вкладка «Все активные» включает и заказы, найденные расширением, даже когда их
+нет в ответе API; более новый завершённый статус не заменяется старым активным.
+
+Детали обрабатываются пятью параллельными задачами, после каждой пачки результат сохраняется. Готовые поля повторно берутся из БД; подтверждённый вариант заказа не заменяется характеристиками объявления. Ограничение Авито прекращает новые задачи. Незагруженный список не считается пустым и не стирает предыдущие данные.
+
+`npm run build` обновляет `dist` и ZIP `frontend/public/downloads/satorna-avito-orders-extension.zip`. Сборка frontend также упаковывает актуальное расширение. Установка нового ZIP требует обновить расширение в Chrome; backend с новыми маршрутами должен быть развёрнут отдельно.
 
 Обновите распакованное расширение и нажмите «Сохранить фото объявлений».
 Репрайсер должен быть хотя бы один раз загружен в Satorna: список объявлений берётся из его сохранённых данных.
-Расширение получает только объявления без сохранённой фотографии. В служебной вкладке проходит страницы списка Авито Pro и собирает фотографии пачками (включая CSS-миниатюры), привязывая их по ID объявления. Ожидает готовность карточек и пагинации, а не загрузку всех ресурсов страницы. Сами изображения скачиваются и сохраняются четырьмя параллельными обработчиками. Только оставшиеся фото ищет в отдельных объявлениях, используя одну служебную вкладку.
+Расширение получает только активные объявления без сохранённой фотографии. В служебной вкладке проходит страницы списка Авито Pro и собирает фотографии пачками (включая CSS-миниатюры), привязывая их по ID объявления. Ожидает готовность карточек и пагинации, а не загрузку всех ресурсов страницы. Изображения скачиваются и сохраняются пятью параллельными обработчиками. Только недостающие фото ищет в отдельных объявлениях, не более пяти одновременно. Для заказов и возвратов фото сохраняются независимо от активности объявления.
 В БД сохраняются сами изображения и миниатюры; таблица читает их из Satorna, без повторного обхода Авито.
 Повторный запуск пропускает сохранённые снимки и продолжает недостающие. Закрывать popup можно.
 Отдельные объявления без фото пропускаются без остановки всего сбора. При остановке браузера или проверке безопасности сохранённое не теряется. Проверка безопасности остаётся в открытой вкладке для ручного прохождения; затем запустите сбор ещё раз.

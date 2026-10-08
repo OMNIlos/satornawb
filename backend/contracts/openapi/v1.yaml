@@ -177,22 +177,18 @@ components:
                 type:
                   - integer
                   - "null"
-                minimum: 0
               commissionKopecks:
                 type:
                   - integer
                   - "null"
-                minimum: 0
               logisticsKopecks:
                 type:
                   - integer
                   - "null"
-                minimum: 0
               storageKopecks:
                 type:
                   - integer
                   - "null"
-                minimum: 0
               adSpendKopecks:
                 type:
                   - integer
@@ -206,7 +202,6 @@ components:
                 type:
                   - integer
                   - "null"
-                minimum: 0
               netProfitKopecks:
                 type:
                   - integer
@@ -326,7 +321,7 @@ components:
                   <<: *pnlManualCostProperties
                   costId:
                     type: string
-                    const: tax
+                    enum: [tax, storage, overhead]
                   amountKopecks:
                     type:
                       - integer
