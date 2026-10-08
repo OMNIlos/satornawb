@@ -40,7 +40,7 @@ Unexpected successful-HTTP chat payloads are reported as collection failures,
 not as missing customer replies. Native `hasMore` marks incomplete history;
 unverified older-page cursors are never guessed.
 
-Default Satorna URL: `https://satorna-wb.vercel.app`. Existing settings for the retired `ogni-frontend.vercel.app` deployment are migrated automatically. The popup also supports an explicit server address.
+Default Satorna URL: `https://comcookie.store`. Existing settings for the retired `satorna-wb.vercel.app` and `ogni-frontend.vercel.app` deployments are migrated automatically. The popup also supports an explicit server address.
 
 ## Local Satorna
 

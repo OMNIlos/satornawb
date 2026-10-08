@@ -1,6 +1,8 @@
 // Shared by the popup and service worker; never infer a server from an Avito page.
 globalThis.SatornaConnection = {
-  defaultUrl: 'https://satorna-wb.vercel.app',
+  defaultUrl: 'https://comcookie.store',
+  // Earlier hosted addresses of the same platform: saved settings move to defaultUrl.
+  retiredUrls: ['https://ogni-frontend.vercel.app', 'https://satorna-wb.vercel.app'],
   localUrl: 'http://127.0.0.1:5177',
   normalize(value) {
     let url
@@ -12,7 +14,7 @@ globalThis.SatornaConnection = {
       || !(url.protocol === 'https:' || (url.protocol === 'http:' && loopback))) {
       throw new Error('Нужен адрес без пути и пароля: HTTPS либо HTTP на localhost/127.0.0.1')
     }
-    return url.origin === 'https://ogni-frontend.vercel.app' ? this.defaultUrl : url.origin
+    return this.retiredUrls.includes(url.origin) ? this.defaultUrl : url.origin
   },
   async read() {
     const legacy = await chrome.storage.sync.get({ backendUrl: this.defaultUrl, accessToken: '' })

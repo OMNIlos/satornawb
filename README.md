@@ -48,12 +48,19 @@ npm run build
 
 ## Frontend deployment
 
-The production deployment is managed by Vercel from the `frontend/` directory.
+Production runs on the Beget server at `https://comcookie.store`: nginx
+serves the built `frontend/dist` and proxies `/api/*` on the same host to the
+backend container, so the browser talks to a single origin.
 
-Expected Vercel settings:
+```bash
+deploy/frontend-release.sh                     # build this commit and make it live
+deploy/frontend-release.sh --list              # releases on the server, * marks the live one
+deploy/frontend-release.sh --switch <release>  # make an uploaded release live (rollback)
+```
 
-- Framework preset: Vite
-- Root directory: `frontend`
-- Install command: `npm install`
-- Build command: `npm run build`
-- Output directory: `dist`
+- Build flags: `deploy/frontend-production.env`.
+- nginx site: `deploy/nginx/comcookie.store.conf`.
+- The script needs Node 22.12+, rsync and the `satorna-api` SSH alias.
+
+The former Vercel deployment (`satorna-wb.vercel.app`) is frozen and receives no
+new releases; `frontend/vercel.json` and `frontend/api/` only matter to it.

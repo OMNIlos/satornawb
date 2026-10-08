@@ -195,7 +195,7 @@ Use `/browse` from gstack for all web browsing. Never use `mcp__claude-in-chrome
 | UI визуальный аудит | `/design-review` |
 | Перед merge модулей с auth/tokens | `/cso` |
 | Дебаг бага | `/investigate` (auto-freeze on module) |
-| Деплой/PR | `/ship` (Vercel auto-deploys через `.claude/deploy-if-changed.sh`) |
+| Деплой/PR | `/ship` (фронтенд выкладывается на Beget: `deploy/frontend-release.sh`, не Vercel) |
 | Обновить доку после фичи | `/document-release` |
 | Еженедельный ретро | `/retro` (без `global`) |
 
@@ -213,7 +213,7 @@ Use `/browse` from gstack for all web browsing. Never use `mcp__claude-in-chrome
 
 - `/retro global` — нет других YC-проектов
 - `/office-hours` для пересмотра уже одобренного ТЗ — TZ-WB.md и TZ-Avito.md финализированы
-- `/setup-deploy` — Vercel auto-deploy уже настроен через `.claude/deploy-if-changed.sh`
+- `/setup-deploy` — деплой фронтенда уже настроен: `deploy/frontend-release.sh` (Beget, `comcookie.store`)
 - `/connect-chrome` / `mcp__claude-in-chrome__*` — только `/browse` (Playwright)
 
 ### Конфликты со superpowers
