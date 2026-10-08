@@ -79,6 +79,9 @@ node "$repo_root/deploy/package-extensions.mjs" --origin=https://comcookie.store
 node "$repo_root/deploy/package-extensions.mjs" --origin=https://api.elfprint-system.ru
 mkdir -p dist/api-downloads
 cp public/downloads/satorna-{avito-orders,wb-prices}-extension.zip dist/api-downloads/
+node "$repo_root/deploy/package-extensions.mjs" --origin=https://api.elfprint-system.ru:8443
+mkdir -p dist/api-8443-downloads
+cp public/downloads/satorna-{avito-orders,wb-prices}-extension.zip dist/api-8443-downloads/
 cp dist/downloads/satorna-{avito-orders,wb-prices}-extension.zip public/downloads/
 if [ ! -s dist/index.html ] || ! ls dist/assets/*.js >/dev/null 2>&1; then
   echo "The build produced no site in frontend/dist." >&2

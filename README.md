@@ -60,6 +60,9 @@ deploy/frontend-release.sh --switch <release>  # make an uploaded release live (
 
 - Build flags: `deploy/frontend-production.env`.
 - nginx site: `deploy/nginx/comcookie.store.conf`.
+- Alternate HTTPS entry: `https://api.elfprint-system.ru:8443`, configured by
+  `deploy/nginx/api.elfprint-system.ru.conf`; allow TCP 8443 in the server firewall.
+- Extension downloads on each entry point are packaged for that exact origin.
 - The script needs Node 22.12+, rsync and the `satorna-api` SSH alias.
 
 The former Vercel deployment (`satorna-wb.vercel.app`) is frozen and receives no
