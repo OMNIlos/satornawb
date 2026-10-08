@@ -47,7 +47,9 @@ jobs:
           import os, secrets
           with open(os.environ['GITHUB_ENV'], 'a') as stream:
               for name in ('POSTGRES_PASSWORD', 'POSTGRES_ADMIN_PASSWORD', 'VELLA_AUTH_SECRET'):
-                  stream.write(name + '=' + secrets.token_hex(32) + '\n')
+                  value = secrets.token_hex(32)
+                  print('::add-mask::' + value)
+                  stream.write(name + '=' + value + '\n')
           PY
       - name: Validate and build full production backend and frontend
         run: |
@@ -63,8 +65,9 @@ jobs:
         run: |
           docker run -d --name satorna-ci-web --network satorna-ci_default -e SATORNA_DOMAIN=http://localhost -p 127.0.0.1:18080:80 satorna-web:vps
           python - <<'PY'
-          import io, json, time, urllib.request, zipfile
-          base = 'http://127.0.0.1:18080'
+          import io, json, time, urllib.error, urllib.request, zipfile
+          # Host must match the CI-only Caddy site (http://localhost).
+          base = 'http://localhost:18080'
           for attempt in range(20):
               try:
                   assert json.load(urllib.request.urlopen(base + '/health/ready'))['status'] == 'ready'
@@ -73,6 +76,12 @@ jobs:
                   if attempt == 19: raise
                   time.sleep(1)
           assert b'<html' in urllib.request.urlopen(base + '/settings/profile').read().lower()
+          try:
+              urllib.request.urlopen(base + '/api/v1/cabinet/me')
+              raise AssertionError('Protected API unexpectedly allowed anonymous access')
+          except urllib.error.HTTPError as error:
+              assert error.code == 401
+              assert json.load(error)['error']['message'] == 'AUTH_REQUIRED'
           for name, version in [('wb-prices', '0.1.10'), ('avito-orders', '0.2.18')]:
               data = urllib.request.urlopen(base + '/downloads/satorna-' + name + '-extension.zip').read()
               with zipfile.ZipFile(io.BytesIO(data)) as archive:
