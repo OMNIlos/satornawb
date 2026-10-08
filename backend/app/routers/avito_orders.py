@@ -18,12 +18,15 @@ from app.avito.listings import AvitoListingDetailsFetchRequest, AvitoListingsFet
 from app.avito.orders import (
     AVITO_ORDER_STATUSES,
     AvitoOrderRow,
+    AvitoOrdersBrowserOrder,
     AvitoOrdersBrowserSnapshot,
     AvitoOrdersFetchRequest,
     build_avito_orders_client,
     merge_browser_snapshot_orders,
+    _parsed_time,
 )
 from app.avito.orders_ai import enrich_avito_orders_snapshot_with_ai
+from app.avito.browser_cache import merge_snapshot
 from app.avito.orders_picking_xlsx import build_avito_orders_picking_xlsx, picking_issues, _load_image
 from app.avito.images_store import load_product_image
 from app.avito.labels_store import enrich_labels, read_artifact, save_pdf
@@ -131,8 +134,29 @@ class LabelCollectionStatus(BaseModel):
 def get_label_collection_context(request: Request):
     organization_id = _label_organization(request)
     snapshot = _browser_snapshot_from_cache(organization_id)
-    return {"accountIds": sorted({row.accountId or "" for row in snapshot.orders}) if snapshot else [],
+    # Only outbound orders awaiting shipment need a newly generated label.
+    # Returns keep their saved historical label, but never require reprinting.
+    rows = _browser_snapshot_rows(snapshot, statuses=["ready_to_ship"]) if snapshot else []
+    enrich_labels(rows, organization_id)
+    missing = [row for row in rows if not row.stickerLabelId]
+    return {"accountIds": sorted({row.accountId or "" for row in rows}),
+            "total": len(rows), "saved": len(rows) - len(missing),
+            "missing": [{"orderId": row.marketplaceId or row.orderId, "shipmentNumber": row.shipmentNumber, "accountId": row.accountId or ""} for row in missing],
             "status": get_source_cache(organization_id, "avito_label_collection", slim=False)}
+
+
+@router.get("/api/v1/avito/orders/browser-collection-context")
+def get_browser_collection_context(request: Request):
+    snapshot = _browser_snapshot_from_cache(_label_organization(request))
+    # Only collection fields, never buyer contacts/chat text or provider credentials.
+    fields = {"orderId", "marketplaceId", "accountId", "accountName", "jobNumber", "shipmentNumber", "shipmentNumberState", "pageUrl"}
+    item_fields = {"itemId", "lineIndex", "itemUrl", "imageUrl", "imageUrls", "size", "descriptionSize", "color", "sources", "sellerArticle"}
+    rows = []
+    for row in [*snapshot.orders, *snapshot.returns] if snapshot else []:
+        value = row.model_dump(include=fields)
+        value["items"] = [item.model_dump(include=item_fields) for item in row.items]
+        rows.append(value)
+    return {"orders": rows}
 
 
 @router.post("/api/v1/avito/orders/labels/collection-status")
@@ -545,10 +569,14 @@ def _enrich_missing_colors_from_public_avito(rows: list[AvitoOrderRow]) -> None:
 
 def _browser_snapshot_rows(snapshot: AvitoOrdersBrowserSnapshot, *, statuses: list[str]) -> list[AvitoOrderRow]:
     rows: list[AvitoOrderRow] = []
-    browser_orders = [(order, order.status or "ready_to_ship") for order in snapshot.orders]
+    browser_orders = [(order, order.status or "unknown") for order in snapshot.orders]
     browser_orders.extend((order, order.status or "on_return") for order in snapshot.returns)
     for index, (order, fallback_status) in enumerate(browser_orders):
         row_status = fallback_status
+        # Native terminal returns may retain the broad on_return status. This
+        # classification does not confirm inventory receipt or change Avito.
+        if row_status == "on_return" and order.returnStatus in {"received", "completed", "closed"}:
+            row_status = "closed"
         if statuses and row_status not in statuses:
             continue
         items = [
@@ -561,8 +589,15 @@ def _browser_snapshot_rows(snapshot: AvitoOrdersBrowserSnapshot, *, statuses: li
                 "size": item.size,
                 "color": item.color,
                 "imageUrl": item.imageUrl,
+                "lineIndex": item.lineIndex if item.lineIndex is not None else item_index,
+                "sources": item.sources,
+                "descriptionSize": item.descriptionSize,
+                "sizeMode": item.sizeMode,
+                "sizeState": item.sizeState,
+                "sizeReason": item.sizeReason,
+                "sizeEvidence": item.sizeEvidence,
             }
-            for item in order.items
+            for item_index, item in enumerate(order.items)
         ]
         total = sum((item.priceKopecks or 0) * (item.quantity or 1) for item in order.items)
         rows.append(
@@ -573,9 +608,21 @@ def _browser_snapshot_rows(snapshot: AvitoOrdersBrowserSnapshot, *, statuses: li
                     "accountId": order.accountId,
                     "accountName": order.accountName or "Авито",
                     "status": row_status,
+                    "statusSource": "avito_browser",
+                    "statusObservedAt": order.statusObservedAt or snapshot.capturedAt,
                     "deliveryService": order.deliveryService,
+                    "dropoffProvider": order.dropoffProvider,
                     "trackNumber": order.trackNumber,
+                    "jobNumber": order.jobNumber,
+                    "shipmentNumber": order.shipmentNumber,
+                    "shipmentNumberState": order.shipmentNumberState,
+                    "returnStatus": order.returnStatus,
+                    "returnPickupCode": order.returnPickupCode,
+                    "returnPickupPlace": order.returnPickupPlace,
+                    "returnPickupDeadline": order.returnPickupDeadline,
+                    "returnFieldStates": order.returnFieldStates,
                     "buyerName": order.buyerName,
+                    "buyerId": order.buyerId,
                     "recipientName": order.recipientName,
                     "totalKopecks": total or None,
                     "items": items or [{"title": "Товар Авито", "quantity": 1}],
@@ -745,19 +792,20 @@ def _listing_dicts_from_cache(organization_id: int, start: date, end: date, acce
 
 
 def _enrich_orders_from_listing_rows(rows: list[AvitoOrderRow], listing_rows: list[dict[str, Any]]) -> None:
-    by_item_id = {
-        str(row.get("itemId") or row.get("id") or row.get("avitoId") or ""): row
-        for row in listing_rows
-        if row.get("itemId") or row.get("id") or row.get("avitoId")
-    }
+    by_item_id: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in listing_rows:
+        identity = str(row.get("itemId") or row.get("id") or row.get("avitoId") or "")
+        if identity:
+            by_item_id.setdefault((str(row.get("accountId") or ""), identity), []).append(row)
     for order in rows:
         for item in order.items:
-            listing = by_item_id.get(str(item.itemId or ""))
-            if not listing:
+            matches = by_item_id.get((str(order.accountId or ""), str(item.itemId or "")), [])
+            if len(matches) != 1:
                 continue
+            listing = matches[0]
             if not item.sellerArticle:
                 item.sellerArticle = _text_or_none(listing.get("sellerArticle"), listing.get("seller_article"), listing.get("vendorCode"), listing.get("sku"))
-            if not item.size:
+            if not item.size and item.sizeMode != "chat_ai":
                 item.size = _text_or_none(listing.get("size"), listing.get("productSize"), listing.get("product_size"))
             if not item.color:
                 item.color = _text_or_none(listing.get("color"), listing.get("colour"))
@@ -859,6 +907,20 @@ def save_avito_orders_browser_snapshot(request: Request, snapshot: AvitoOrdersBr
             raise HTTPException(status_code=403, detail="NO_ACCESS:cabinet:read")
         organization_id = actor.organization_id
     previous = _browser_snapshot_from_cache(organization_id)
+    # Confirmation is server-owned even when a client supplies another mode.
+    # Sanitize BEFORE merging durable checkpoints; saved proofs stay trusted.
+    for row in [*snapshot.orders, *snapshot.returns]:
+        for item in row.items:
+            incoming_chat = item.sizeMode == "chat_ai" or item.sources.get("size") == "chat_ai"
+            item.sizeState = None
+            item.sizeReason = None
+            item.sizeEvidence = {}
+            if incoming_chat:
+                item.sizeMode = "chat_ai"
+                item.size = None
+                item.sizeState = "needs_review"
+                item.sizeReason = "ai_confirmation_missing"
+                item.sources.pop("size", None)
     if previous and previous.capturedAt and snapshot.capturedAt:
         try:
             old_time = datetime.fromisoformat(previous.capturedAt.replace("Z", "+00:00"))
@@ -867,11 +929,68 @@ def save_avito_orders_browser_snapshot(request: Request, snapshot: AvitoOrdersBr
                 return {"ok": True, "browserSnapshot": _browser_snapshot_meta(previous), "ignored": "older_snapshot"}
         except ValueError:
             pass
-    snapshot, ai_extraction = enrich_avito_orders_snapshot_with_ai(snapshot)
+    # Collect details only for operational rows. Terminal rows carry status
+    # reconciliation only: retain saved details, never import arbitrary history.
+    allowed = {"ready_to_ship", "in_transit", "on_return"}
+    credentials = get_organization_avito_credentials_secret(organization_id)
+    queue: dict[str, Any] = {}
+    if credentials:
+        key = scoped_avito_cache_key(AVITO_ORDERS_QUEUE_KEY, f"{credentials.client_id}\0{credentials.client_secret}")
+        queue = get_source_cache(organization_id, key, slim=False) or {}
+    known_api_rows = [AvitoOrdersBrowserOrder.model_validate(row) for row in queue.get("rows", [])]
+    def operational_rows(section: str) -> list:
+        result = []
+        saved = getattr(previous, section) if previous else []
+        for row in getattr(snapshot, section):
+            if row.status in allowed and row.returnStatus not in {"received", "completed", "closed"}:
+                result.append(row)
+                continue
+            if row.status not in {"closed", "canceled", "delivered"} and row.returnStatus not in {"received", "completed", "closed"}:
+                continue
+            number = row.orderId or row.marketplaceId
+            # Browser and API can use different aliases for the same order.
+            # Deduplicate the same account/order, but reject account collisions.
+            candidates = {}
+            for old in [*known_api_rows, *saved]:
+                if number and number in {old.orderId, old.marketplaceId} and (not row.accountId or row.accountId == old.accountId):
+                    candidates[(old.accountId, old.marketplaceId or old.orderId)] = old
+            matches = list(candidates.values())
+            if len(matches) != 1 or not matches[0].accountId:
+                continue
+            old = matches[0]
+            result.append(old.model_copy(update={
+                "status": "closed" if row.returnStatus in {"received", "completed", "closed"} else row.status,
+                "returnStatus": row.returnStatus or old.returnStatus,
+                "statusObservedAt": snapshot.capturedAt,
+            }))
+        return result
+    snapshot = snapshot.model_copy(update={"orders": operational_rows("orders"), "returns": operational_rows("returns")})
+    size_mode = ((snapshot.collector or {}).get("options") or {}).get("sizeMode")
+    if size_mode in {"chat_ai", "description", "none"}:
+        for row in [*snapshot.orders, *snapshot.returns]:
+            if row.status in allowed:
+                for item in row.items:
+                    item.sizeMode = size_mode
+    snapshot = AvitoOrdersBrowserSnapshot.model_validate(merge_snapshot(snapshot.model_dump(mode="json"), previous.model_dump(mode="json") if previous else None))
+    # Resolve blank browser account IDs only against the CURRENT credential's
+    # saved queue and an unambiguous exact order ID; never enumerate old accounts.
+    if credentials:
+        for row in [*snapshot.orders, *snapshot.returns]:
+            if row.accountId:
+                continue
+            numbers = {row.orderId, row.marketplaceId} - {None, ""}
+            accounts = {old.get("accountId") for old in queue.get("rows", [])
+                        if numbers.intersection({old.get("orderId"), old.get("marketplaceId")}) and old.get("accountId")}
+            if len(accounts) == 1:
+                row.accountId = accounts.pop()
+    snapshot, ai_extraction = enrich_avito_orders_snapshot_with_ai(snapshot, trusted_prior=previous, organization_id=organization_id)
     snapshot = snapshot.model_copy(update={"aiExtraction": ai_extraction})
     payload = snapshot.model_dump(mode="json")
     payload["savedAt"] = _now_iso()
     save_source_cache(organization_id, AVITO_ORDERS_BROWSER_SNAPSHOT_KEY, payload)
+    persisted = get_source_cache(organization_id, AVITO_ORDERS_BROWSER_SNAPSHOT_KEY, slim=False, strict=True)
+    if not persisted or persisted.get("savedAt") != payload["savedAt"]:
+        raise HTTPException(503, "AVITO_SNAPSHOT_NOT_SAVED")
     if snapshot.returns:
         return_rows = _browser_snapshot_rows(snapshot, statuses=["on_return"])
         enrich_existing_return_candidates(organization_id, extract_return_candidates(return_rows))
@@ -1019,7 +1138,9 @@ def get_avito_orders_queue(
             cached = {**cached, "complete": False, "error": {"code": "refresh_in_progress", "retryable": True}}
     all_rows = _queue_cached_rows(cached)
     # Uploaded details must be visible without re-fetching the marketplace queue.
-    merge_browser_snapshot_orders(all_rows, _browser_snapshot_from_cache(actor.organization_id))
+    snapshot = _browser_snapshot_from_cache(actor.organization_id)
+    _reconcile_export_statuses(all_rows, _browser_snapshot_rows(snapshot, statuses=[]) if snapshot else [], cached.get("lastSuccessfulRefresh"))
+    merge_browser_snapshot_orders(all_rows, snapshot)
     enrich_labels(all_rows, actor.organization_id)
     selected = select_queue(all_rows, mode, account_id)
     if mode == "return_pickup":
@@ -1035,6 +1156,11 @@ def get_avito_orders_queue(
     selected.sort(key=lambda row: row.createdAt or "", reverse=True)
     start = (page - 1) * limit
     page_rows = selected[start:start + limit]
+    from app.avito.listing_photos import photo_index
+    saved_photos = photo_index(actor.organization_id)
+    for row in page_rows:
+        for item in row.items:
+            item.photoId = saved_photos.get((row.accountId or "", item.itemId))
     _enrich_orders_with_return_matches(page_rows, organization_id=actor.organization_id)
     account_rows = [row for row in all_rows if not account_id or row.accountId == account_id]
     counts = {name: len(select_queue(account_rows, name)) for name in (
@@ -1090,7 +1216,7 @@ def post_avito_return_operation(request: Request, return_item_id: int, payload: 
         cached = _load_orders_queue(actor.organization_id, access_token, client)
         if not cached.get("complete") or _queue_age_seconds(cached, datetime.now(timezone.utc)) > 600:
             raise HTTPException(status_code=503, detail="AVITO_ORDERS_QUEUE_NOT_FRESH")
-        targets = [row for row in select_queue(_queue_cached_rows(cached), "ready_to_ship") if row.orderId == payload.linkedOrderId]
+        targets = [row for row in select_queue(_queue_cached_rows(cached), "ready_to_ship") if row.orderId == payload.linkedOrderId and row.statusSource == "avito_api"]
         target = targets[0] if len(targets) == 1 else None
         if target is None or not any(
             match.returnItemId == return_item_id and match.score == 100
@@ -1269,8 +1395,59 @@ def get_avito_orders_picking_list_xlsx(
     account_id: str | None = Query(default=None, alias="accountId"),
     search: str = Query(default="", max_length=200),
     ready_only: bool = Query(default=False, alias="readyOnly"),
+    require_fresh: bool = Query(default=False, alias="requireFresh"),
 ) -> Response:
-    return _queue_xlsx_response(request, mode="ready_to_ship", account_id=account_id, search=search, ready_only=ready_only)
+    return _queue_xlsx_response(request, mode="ready_to_ship", account_id=account_id, search=search, ready_only=ready_only, require_fresh=require_fresh is True)
+
+
+def _picking_freshness(cached: dict[str, Any], snapshot: AvitoOrdersBrowserSnapshot | None, account_id: str | None, now: datetime) -> dict[str, Any]:
+    # Observation time, not DB save time: enrichment must not rejuvenate old statuses.
+    def recent(value: Any) -> bool:
+        observed = _parsed_time(value)
+        return bool(observed and 0 <= (now - observed).total_seconds() <= 600)
+
+    if snapshot is not None:
+        collector = snapshot.collector or {}
+        captured_at = snapshot.capturedAt
+        rows = [*snapshot.orders, *snapshot.returns]
+        covered = set(collector.get("coveredAccountIds") or [row.accountId for row in rows if row.accountId])
+        cached_rows = _queue_cached_rows(cached)
+        # Check the same resolved identities and statuses used for export, not
+        # obsolete API rows that omitted their account identity.
+        _reconcile_export_statuses(cached_rows, _browser_snapshot_rows(snapshot, statuses=[]), cached.get("lastSuccessfulRefresh"))
+        export_rows = [row for row in [*cached_rows, *rows] if row.status == "ready_to_ship" and (not account_id or row.accountId == account_id)]
+        required = {account_id} if account_id else {row.accountId for row in export_rows}
+        account_matches = bool(covered) and None not in required and required.issubset(covered)
+        # A complete scan of account A cannot certify an old cached order of A
+        # which was not seen at all. That old order could already be terminal.
+        api_recent = cached.get("complete") is True and recent(cached.get("lastSuccessfulRefresh"))
+        cached_covered = all(api_recent or any(
+            row.accountId == saved.accountId
+            and bool({row.orderId, row.marketplaceId} - {None, ""})
+            and bool(({row.orderId, row.marketplaceId} - {None, ""}) & ({saved.orderId, saved.marketplaceId} - {None, ""}))
+            and recent(row.statusObservedAt or captured_at)
+            for row in rows
+        ) for saved in cached_rows if saved.status == "ready_to_ship" and (not account_id or saved.accountId == account_id))
+        observations_recent = all(recent(row.statusObservedAt or captured_at) for row in rows
+                                  if row.status == "ready_to_ship" and (not account_id or row.accountId == account_id))
+        complete = collector.get("status") == "completed" and collector.get("checkpoint") is False and account_matches and cached_covered and observations_recent
+    else:
+        captured_at = cached.get("lastSuccessfulRefresh")
+        rows = _queue_cached_rows(cached)
+        complete = cached.get("complete") is True and (not account_id or any(row.accountId == account_id for row in rows))
+    try:
+        observed = datetime.fromisoformat(str(captured_at).replace("Z", "+00:00"))
+        age = (now - observed).total_seconds() if observed.tzinfo else None
+    except (ValueError, TypeError):
+        age = None
+    fresh = bool(complete and age is not None and 0 <= age <= 600)
+    return {"fresh": fresh, "observedAt": captured_at, "maxAgeSeconds": 600, "reason": None if fresh else "collection_incomplete_or_stale"}
+
+
+@router.get("/api/v1/avito/orders/picking-list/freshness")
+def get_avito_picking_freshness(request: Request, account_id: str | None = Query(default=None, alias="accountId")) -> dict[str, Any]:
+    actor, cached = _saved_queue_for_export(request)
+    return _picking_freshness(cached, _browser_snapshot_from_cache(actor.organization_id), account_id, datetime.now(timezone.utc))
 
 
 @router.get("/api/v1/avito/orders/picking-list/preview")
@@ -1280,7 +1457,9 @@ def get_avito_picking_preview(request: Request, account_id: str | None = Query(d
     if not cached.get("complete") or _queue_age_seconds(cached, datetime.now(timezone.utc)) > 600:
         raise HTTPException(status_code=503, detail="AVITO_ORDERS_QUEUE_NOT_FRESH")
     rows = _queue_cached_rows(cached)
-    merge_browser_snapshot_orders(rows, _browser_snapshot_from_cache(actor.organization_id))
+    snapshot = _browser_snapshot_from_cache(actor.organization_id)
+    _reconcile_export_statuses(rows, _browser_snapshot_rows(snapshot, statuses=[]) if snapshot else [], cached.get("lastSuccessfulRefresh"))
+    merge_browser_snapshot_orders(rows, snapshot)
     enrich_labels(rows, actor.organization_id)
     rows = _filter_picking_search(select_queue(rows, "ready_to_ship", account_id), search)
     excluded = [{"orderId": row.orderId, "number": row.marketplaceId, "issues": picking_issues(row)} for row in rows if picking_issues(row)]
@@ -1303,20 +1482,65 @@ def get_avito_orders_returns_list_xlsx(
     request: Request,
     account_id: str | None = Query(default=None, alias="accountId"),
 ) -> Response:
-    return _queue_xlsx_response(request, mode="return_pickup", account_id=account_id)
+    return _queue_xlsx_response(request, mode="returns", account_id=account_id)
 
 
-def _queue_xlsx_response(request: Request, *, mode: str, account_id: str | None, search: str = "", ready_only: bool = False) -> Response:
+def _reconcile_export_statuses(rows: list[AvitoOrderRow], browser_rows: list[AvitoOrderRow], refreshed_at: str | None) -> None:
+    """Prefer newer observed states, never promote unknown/ambiguous orders to shipping."""
+    for row in rows:
+        if row.accountId:
+            continue
+        ids = {row.orderId, row.marketplaceId} - {None, ""}
+        accounts = {other.accountId for other in [*rows, *browser_rows]
+                    if other.accountId and ids.intersection({other.orderId, other.marketplaceId})}
+        if len(accounts) == 1:
+            row.accountId = accounts.pop()
+    for browser in browser_rows:
+        ids = {browser.orderId, browser.marketplaceId} - {None, ""}
+        matches = [row for row in rows if ids.intersection({row.orderId, row.marketplaceId})
+                   and (not browser.accountId or not row.accountId or browser.accountId == row.accountId)]
+        if not matches:
+            rows.append(browser)
+            continue
+        if len(matches) != 1:
+            continue
+        row = matches[0]
+        observed = _parsed_time(browser.statusObservedAt)
+        previous = _parsed_time(row.statusObservedAt) or _parsed_time(row.statusFetchedAt) or _parsed_time(refreshed_at)
+        if observed and (not previous or observed > previous):
+            row.status = browser.status
+            row.statusSource = "avito_browser"
+            row.statusObservedAt = browser.statusObservedAt
+        elif row.status != browser.status and (not observed or not previous or observed == previous):
+            # Conflicting states without an ordering are not proof it is safe to ship.
+            row.status = "unknown"
+
+
+def _queue_xlsx_response(request: Request, *, mode: str, account_id: str | None, search: str = "", ready_only: bool = False, require_fresh: bool = False) -> Response:
     # Export is a database read, never an OAuth request/full provider sync.
-    # Export the saved snapshot even during refresh/provider outage. Freshness
-    # is disclosed in the application; the workbook contains only the table.
+    # The normal UI requests a freshness guard; returns retain saved-data export.
     actor, cached = _saved_queue_for_export(request)
-    if "rows" not in cached:
+    snapshot = _browser_snapshot_from_cache(actor.organization_id)
+    if require_fresh and not _picking_freshness(cached, snapshot, account_id, datetime.now(timezone.utc))["fresh"]:
+        raise HTTPException(status_code=409, detail="AVITO_ORDERS_QUEUE_NOT_FRESH")
+    if "rows" not in cached and not (snapshot and (snapshot.orders or snapshot.returns)):
         raise HTTPException(status_code=404, detail="AVITO_ORDERS_NO_SAVED_SNAPSHOT")
     all_rows = _queue_cached_rows(cached)
-    merge_browser_snapshot_orders(all_rows, _browser_snapshot_from_cache(actor.organization_id))
+    # Newly collected orders need not wait for a separate API refresh to be
+    # downloadable. Keep cached API records and add only unmatched exact IDs.
+    _reconcile_export_statuses(all_rows, _browser_snapshot_rows(snapshot, statuses=[]) if snapshot else [], cached.get("lastSuccessfulRefresh"))
+    merge_browser_snapshot_orders(all_rows, snapshot)
     enrich_labels(all_rows, actor.organization_id)
     rows = select_queue(all_rows, mode, account_id)
+    if mode == "ready_to_ship":
+        selected_keys = {(row.accountId, row.orderId) for row in rows}
+        rows.extend(row for row in all_rows if row.statusSource == "avito_browser"
+                    and row.status == "ready_to_ship" and (not account_id or row.accountId == account_id)
+                    and (row.accountId, row.orderId) not in selected_keys)
+    if mode == "returns":
+        # A picking document is not an inventory receipt. Include returns with
+        # incomplete pickup details too; missing fields remain explicit.
+        rows = [row for row in all_rows if row.status == "on_return" and row.returnStatus not in {"received", "completed", "closed"} and (not account_id or row.accountId == account_id)]
     rows = _filter_picking_search(rows, search)
     if ready_only:
         rows = [row for row in rows if not picking_issues(row)]
@@ -1324,11 +1548,38 @@ def _queue_xlsx_response(request: Request, *, mode: str, account_id: str | None,
             raise HTTPException(status_code=409, detail="AVITO_PICKING_NO_READY_ORDERS")
     if mode == "return_pickup":
         rows = _pickup_unreceived(rows, actor.organization_id, account_id)
+    # Export from our saved bytes first. CDN links can expire or time out,
+    # which previously turned a stored photo into "Фото не получено".
+    from app.avito.listing_photos import photo_index, read_photo
+    saved_photo_ids = photo_index(actor.organization_id)
+    item_accounts: dict[str, set[str]] = {}
+    for row in rows:
+        for item in row.items:
+            if item.itemId:
+                item_accounts.setdefault(item.itemId, set()).add(row.accountId or "")
+    generic_ambiguous = {item_id for item_id, accounts in item_accounts.items() if len(accounts) > 1}
+    saved_bytes: dict[str, tuple[bytes, str]] = {}
+    for row in rows:
+        for item in row.items:
+            if not item.itemId:
+                continue
+            photo_id = saved_photo_ids.get((row.accountId or "", item.itemId))
+            if photo_id is None and item.itemId not in generic_ambiguous:
+                photo_id = saved_photo_ids.get(("", item.itemId))
+            if photo_id is None:
+                continue
+            key = f"saved-photo:{photo_id}"
+            if key not in saved_bytes:
+                data = read_photo(actor.organization_id, photo_id)
+                if data:
+                    saved_bytes[key] = (data, "jpeg")
+            if key in saved_bytes:
+                item.imageUrl = key
     as_of = str(cached.get("lastSuccessfulRefresh") or "Время обновления неизвестно")
-    content = build_avito_orders_picking_xlsx(rows, date_from=date.today(), as_of=as_of, returns=mode == "return_pickup",
+    content = build_avito_orders_picking_xlsx(rows, date_from=date.today(), as_of=as_of, returns=mode in {"return_pickup", "returns"},
         label_loader=lambda label_id: read_artifact(actor.organization_id, label_id),
-        image_loader=lambda url: load_product_image(actor.organization_id, url, _load_image))
-    name = "returns" if mode == "return_pickup" else "picking"
+        image_loader=lambda url: saved_bytes.get(url) or load_product_image(actor.organization_id, url, lambda _url: None))
+    name = "returns" if mode in {"return_pickup", "returns"} else "picking"
     filename = f"avito-{name}-list-{date.today().isoformat()}.xlsx"
     return Response(
         content=content,

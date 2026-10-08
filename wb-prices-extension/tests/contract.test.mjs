@@ -20,6 +20,29 @@ const goods = {
   items: [{ nmId: 1025784485, sizeId: 123, sellerPriceKopecks: 170000, sellerPriceObservedAt: '2026-09-16T08:59:00Z' }],
 }
 
+test('wallet amount is read only from an explicit displayed price; differing or missing size prices are ambiguous', () => {
+  const c = contract()
+  assert.equal(c.visibleWalletKopecks('1 397 ₽с WB Кошельком', 142600), 139700)
+  assert.equal(c.visibleWalletKopecks('1 397,50 ₽ с WB Кошельком', 142600), 139750)
+  for (const text of ['1 426 ₽ 1 397 ₽ с WB Кошельком', '1 397 ₽ 4 300 ₽ с WB Кошельком', 'Скидка 2% с WB Кошельком', '1 397 ₽ без кошелька', '0 ₽ с WB Кошельком', '9 999 ₽ с WB Кошельком']) assert.equal(c.visibleWalletKopecks(text, 142600), null)
+  const product = { id: 101, sizes: [{ optionId: 201, price: { product: 142600 } }] }
+  assert.deepEqual(plain(c.walletSingleSizeNmIds({ products: [product] })), [101])
+  product.sizes.push({ optionId: 202, price: { product: 142600 } })
+  assert.deepEqual(plain(c.walletSingleSizeNmIds({ products: [product] })), [])
+  delete product.sizes[1].price
+  assert.deepEqual(plain(c.walletSingleSizeNmIds({ products: [product] })), [])
+})
+
+test('MAIN cannot inject wallet amounts; trusted isolated observations validate and preserve exact-size wallet values', () => {
+  const c = contract()
+  const message = { source: c.SOURCE, type: 'observations', items: [{ nmId: 1025784485, sizeId: 123, buyerPriceNoWalletKopecks: 130800, buyerPriceWithWalletKopecks: 128000 }] }
+  assert.equal(c.sanitizePageMessage(message, page).items[0].buyerPriceWithWalletKopecks, undefined)
+  const clean = c.sanitizePageMessage(message, page, true)
+  assert.equal(c.snapshotItems(clean.items, goods.items, '2026-09-16T09:00:00Z').items[0].buyerPriceWithWalletKopecks, 128000)
+  message.items[0].buyerPriceWithWalletKopecks = 999999
+  assert.equal(c.sanitizePageMessage(message, page, true).items[0].buyerPriceWithWalletKopecks, undefined)
+})
+
 test('only the viewed product detail response supplies positive integer kopecks; wallet is not inferred', () => {
   const payload = { secret: 'never-forward', products: [
     { id: 1025784485, sizes: [

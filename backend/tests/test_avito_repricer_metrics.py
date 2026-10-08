@@ -12,9 +12,11 @@ def test_item_metrics_and_zero_denominators():
         "orderConversionPct": None, "averageContactCostKopecks": None}
     assert metrics.row_metrics({"contacts": 5, "views": 100})["averageContactCostKopecks"] is None
     assert metrics.trend(20, 10)["percent"] == 100
+    assert metrics.trend(20, 10)["delta"] == 10
     assert metrics.trend(5, 10)["direction"] == "down"
     assert metrics.trend(0, 0)["direction"] == "flat"
     assert metrics.trend(5, 0)["percent"] is None
+    assert metrics.trend(5, 0)["delta"] == 5
     assert metrics.trend(None, 4)["direction"] == "missing"
 
 

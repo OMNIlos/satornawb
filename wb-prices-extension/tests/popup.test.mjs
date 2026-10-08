@@ -4,15 +4,15 @@ import test from 'node:test'
 import vm from 'node:vm'
 
 const empty = { status: 'disconnected', totalOffers: 0, observedOffers: 0, accepted: 0, ignored: 0, unmatched: 0, partialSellers: 0 }
-async function load(initial = empty, failCommand = false) {
+async function load(initial = empty, failCommand = false, permission = true) {
   let state = initial
-  const elements = new Map(); const sent = []
+  const elements = new Map(); const sent = []; const permissionRequests = []
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, { value: '', textContent: '', disabled: false, hidden: false, handlers: {}, addEventListener(name, fn) { this.handlers[name] = fn } })
     return elements.get(id)
   }
-  const context = vm.createContext({ Date, Number, document: { getElementById: element }, setInterval: () => 1,
-    chrome: { runtime: { sendMessage: async (message) => {
+  const context = vm.createContext({ Date, Number, URL, document: { getElementById: element }, setInterval: () => 1,
+    chrome: { permissions: { request: async value => { permissionRequests.push(value); return permission } }, runtime: { sendMessage: async (message) => {
       sent.push(message)
       if (failCommand && message.type !== 'status') throw new Error('private transport detail')
       if (message.type === 'connect') state = { ...empty, status: 'ready', totalOffers: 4 }
@@ -20,9 +20,10 @@ async function load(initial = empty, failCommand = false) {
     } } } })
   const path = new URL('../src/popup.js', import.meta.url)
   assert.ok(existsSync(path), 'popup is implemented')
+  vm.runInContext(readFileSync(new URL('../src/connection.js', import.meta.url), 'utf8'), context)
   vm.runInContext(readFileSync(path, 'utf8'), context)
   await new Promise((resolve) => setImmediate(resolve))
-  return { element, sent }
+  return { element, sent, permissionRequests }
 }
 
 test('a pasted token alone never presents connected state, and verified connect clears its input', async () => {
@@ -46,11 +47,11 @@ test('partial coverage and server acknowledgements remain distinct and unknown e
   assert.equal(h.element('reason').textContent.includes('secret'), false)
 })
 
-test('waiting cycle can be stopped and displays the next run without claiming full coverage', async () => {
-  const h = await load({ ...empty, status: 'waiting', totalOffers: 5, observedOffers: 2, reason: 'partial_coverage', nextRunAt: Date.now() + 1200000 })
-  assert.equal(h.element('stop').disabled, false)
-  assert.match(h.element('status').textContent, /Следующий проход/)
-  assert.match(h.element('next-run').textContent, /20 минут|Следующий/)
+test('completed partial pass has no automatic repeat and preserves honest coverage', async () => {
+  const h = await load({ ...empty, status: 'waiting', totalOffers: 5, observedOffers: 2, reason: 'partial_coverage', nextRunAt: null })
+  assert.equal(h.element('stop').disabled, true)
+  assert.match(h.element('status').textContent, /завершён частично/)
+  assert.match(h.element('next-run').textContent, /второго круга нет/)
   assert.equal(h.element('coverage').textContent, '2 / 5')
 })
 
@@ -66,4 +67,29 @@ test('paused collection exposes its WB tab through an explicit button', async ()
   assert.equal(h.element('show-tab').disabled, false)
   await h.element('show-tab').handlers.click()
   assert.equal(h.sent.at(-1).type, 'show_tab')
+})
+
+test('custom server requests exactly its origin permission and submits it explicitly', async () => {
+  const h = await load({ ...empty, backendUrl: 'https://saved.example' })
+  assert.equal(h.element('backend-url').value, 'https://saved.example')
+  h.element('backend-url').value = 'https://new.example/'
+  h.element('token').value = `sat_wbp_${'a'.repeat(43)}`
+  await h.element('connect-form').handlers.submit({ preventDefault() {} })
+  assert.equal(h.permissionRequests[0].origins[0], 'https://new.example/*')
+  assert.equal(h.sent.at(-1).backendUrl, 'https://new.example')
+  assert.equal(h.element('backend-url').value, 'https://new.example/')
+})
+
+test('denied permission never sends the token and leaves a clear error', async () => {
+  const h = await load(empty, false, false)
+  h.element('token').value = 'private-token'
+  await h.element('connect-form').handlers.submit({ preventDefault() {} })
+  assert.equal(h.sent.filter(message => message.type === 'connect').length, 0)
+  assert.match(h.element('reason').textContent, /Разрешите/)
+  assert.equal(h.element('connect').disabled, false)
+})
+
+test('server editing is disabled during active collection', async () => {
+  const h = await load({ ...empty, status: 'running', backendUrl: 'https://saved.example' })
+  assert.equal(h.element('backend-url').disabled, true)
 })

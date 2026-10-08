@@ -17,9 +17,35 @@ from app.avito.orders import AvitoOrderRow
 
 HEADERS = [
     "№", "Фото", "Наименование", "Размер", "Цвет", "Количество, шт.",
-    "Номер отправления", "Стикер", "Номер заказа", "ID товара Авито",
+    "Номер отправления", "Стикер", "Номер заказа", "ID товара Авито", "Пункт приема",
 ]
 RETURN_HEADERS = ["Место получения возврата", "Срок получения", "Код возврата"]
+
+CHAT_SIZE_REASONS = {
+    "chat_response_invalid": "Авито вернуло некорректные данные чата",
+    "chat_message_incomplete": "Сообщение слишком длинное: нужна проверка полного ответа",
+    "chat_not_collected": "Чат не собран", "chat_unavailable": "Чат недоступен",
+    "chat_collection_failed": "Ошибка сбора чата", "chat_identity_mismatch": "Связь чата с заказом не подтверждена",
+    "chat_account_mismatch": "Аккаунт чата не совпадает", "message_author_unknown": "Автор сообщения не определён",
+    "chat_customer_identity_missing": "Покупатель чата не определён",
+    "chat_identity_missing": "Связь чата с заказом не подтверждена", "multiple_or_missing_channels": "Чат не определён",
+    "multiple_orders_or_items": "Нельзя определить товар или заказ", "size_question_not_found": "Вопрос о размере не найден",
+    "message_timestamp_missing": "Нет времени сообщения", "customer_reply_missing": "Ответ покупателя не найден",
+    "ambiguous_reply": "Размер неоднозначен", "multiple_sizes": "Указано несколько размеров",
+    "ambiguous_correction": "Изменение размера неоднозначно", "rejected_size": "Размер отклонён покупателем",
+    "unrelated_numbers": "Нет явного размера одежды", "unsafe_reply": "Ответ требует ручной проверки",
+    "openai_api_key_missing": "AI не настроен", "ai_request_or_response_failed": "Ошибка AI-разбора",
+    "chat_history_incomplete": "История чата неполная: размер не найден",
+    "ai_evidence_not_confirmed": "AI не подтвердил ответ покупателя", "ai_confirmation_missing": "Нет подтверждения AI",
+}
+
+
+def picking_size(item) -> str:
+    if item.sizeMode == "chat_ai":
+        if item.sizeState == "confirmed" and item.size:
+            return item.size
+        return "Проверить: " + CHAT_SIZE_REASONS.get(item.sizeReason or "", "Размер из чата не подтверждён")
+    return (item.size or "Не получено") + ("\nПроверить: из объявления" if item.sources.get("size") in {"description", "description_fallback"} else "")
 
 
 def picking_issues(order: AvitoOrderRow) -> list[str]:
@@ -36,7 +62,7 @@ def picking_issues(order: AvitoOrderRow) -> list[str]:
     for item in order.items:
         if not item.imageUrl:
             issues.append("Фото не получено")
-        if not item.size or item.sources.get("size") in {"description", "description_fallback"}:
+        if not item.size or item.sources.get("size") in {"description", "description_fallback"} or (item.sizeMode == "chat_ai" and item.sizeState != "confirmed"):
             issues.append("Размер требует проверки")
         if not item.color or item.sources.get("color") in {"listing", "browser_unspecified"}:
             issues.append("Цвет требует проверки")
@@ -75,8 +101,8 @@ def _cell(ref: str, value: Any, style: int = 2) -> str:
     return f'<c r="{ref}" s="{style}" t="inlineStr"><is><t>{escape(text)}</t></is></c>'
 
 
-def _row(row_index: int, values: list[Any], style: int = 2, *, image: bool = False, label: bool = False) -> str:
-    cells = [_cell(f"{_col_ref(column)}{row_index}", value, 6 if column == 8 and row_index >= 2 else style) for column, value in enumerate(values, start=1)]
+def _row(row_index: int, values: list[Any], style: int = 2, *, image: bool = False, label: bool = False, returns: bool = False) -> str:
+    cells = [_cell(f"{_col_ref(column)}{row_index}", value, 6 if not returns and column == 8 and row_index >= 2 else style) for column, value in enumerate(values, start=1)]
     height = ' ht="104" customHeight="1"' if label or image else ""
     return f'<row r="{row_index}"{height}>{"".join(cells)}</row>'
 
@@ -91,16 +117,22 @@ def _picking_rows(orders: list[AvitoOrderRow], *, returns: bool = False) -> list
                 len(rows) + 1,
                 "",
                 item.title or "Не получено",
-                (item.size or "Не получено") + ("\nПроверить: из объявления" if item.sources.get("size") in {"description", "description_fallback"} else ""),
+                picking_size(item),
                 (item.color or "Не получено") + ("\nПроверить: из объявления" if item.sources.get("color") in {"listing", "browser_unspecified"} else ""),
                 item.quantity,
                 order.shipmentNumber or "Не собрано",
                 order.stickerNumber if order.stickerNumberState == "confirmed" and order.stickerLabelId else "Этикетка не получена",
                 order.marketplaceId or "Не получено",
                 item.itemId or "Не получено",
+                order.dropoffProvider or "Не собрано",
             ]
             if returns:
-                values += [order.returnPickupPlace or "—", order.returnPickupDeadline or "—", order.returnPickupCode or "—"]
+                values = values[:6] + values[8:10] + [getattr(order, field) or (
+                    "Неоднозначные данные: нужна проверка" if order.returnFieldStates.get(field) == "ambiguous"
+                    else "Ошибка сбора: повторите сбор возвратов" if order.returnFieldStates.get(field) == "collection_failed"
+                    else "Не найдено в деталях возврата" if order.returnFieldStates.get(field) == "unavailable"
+                    else "Не собрано: выполните сбор возвратов")
+                    for field in ("returnPickupPlace", "returnPickupDeadline", "returnPickupCode")]
             rows.append((values, item.imageUrl))
     return rows
 
@@ -211,7 +243,7 @@ def build_avito_orders_picking_xlsx(
 ) -> bytes:
     rows = _picking_rows(orders, returns=returns)
     loaded_images = _prefetch_images((url for _, url in rows), image_loader)
-    headers = HEADERS + (RETURN_HEADERS if returns else [])
+    headers = HEADERS[:6] + HEADERS[8:10] + RETURN_HEADERS if returns else HEADERS
     # The downloadable sheet starts with the table, without report banners.
     # Freshness information belongs to the application, not extra sheet rows.
     sheet_rows = [_row(1, headers, style=1)]
@@ -229,7 +261,7 @@ def build_avito_orders_picking_xlsx(
         if image_id:
             cx, cy = _photo_extent(media[image_url][1])
             anchors.append(f'''<xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>{offset - 1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="{cx}" cy="{cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="{offset}" name="Photo {offset}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId{image_id}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>''')
-        label_id = row_labels[offset - 2]
+        label_id = None if returns else row_labels[offset - 2]
         label_key = f"label:{label_id}"
         if label_id and label_loader and label_key not in media:
             data = label_loader(label_id)
@@ -246,7 +278,7 @@ def build_avito_orders_picking_xlsx(
             anchors.append(f'''<xdr:oneCellAnchor><xdr:from><xdr:col>7</xdr:col><xdr:colOff>19050</xdr:colOff><xdr:row>{offset - 1}</xdr:row><xdr:rowOff>19050</xdr:rowOff></xdr:from><xdr:ext cx="{cx}" cy="{cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="{100000 + offset}" name="Transport barcode {offset}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId{lid}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>''')
         elif label_id:
             values[7] = "Изображение этикетки недоступно"
-        sheet_rows.append(_row(offset, values, style=2, image=bool(image_id or label_image), label=bool(label_image)))
+        sheet_rows.append(_row(offset, values, style=2, image=bool(image_id or label_image), label=bool(label_image), returns=returns))
 
     sheet_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
@@ -257,7 +289,7 @@ def build_avito_orders_picking_xlsx(
     <col min="1" max="1" width="6" customWidth="1"/>
     <col min="2" max="2" width="19" customWidth="1"/>
     <col min="3" max="3" width="36" customWidth="1"/>
-    <col min="8" max="8" width="47" customWidth="1"/>
+    {'<col min="9" max="9" width="42" customWidth="1"/><col min="10" max="11" width="24" customWidth="1"/>' if returns else '<col min="8" max="8" width="47" customWidth="1"/>'}
   </cols>
   <sheetData>
     {"".join(sheet_rows)}

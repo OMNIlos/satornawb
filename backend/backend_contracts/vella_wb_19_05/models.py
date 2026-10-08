@@ -73,8 +73,8 @@ class ManualCost(BaseModel):
 
     @model_validator(mode="after")
     def validate_signed_tax(self) -> ManualCost:
-        if self.costId != "tax" and self.amountKopecks is not None and self.amountKopecks < 0:
-            raise ValueError("Only factual tax may be negative after returns")
+        if self.costId not in {"tax", "storage", "overhead"} and self.amountKopecks is not None and self.amountKopecks < 0:
+            raise ValueError("Only settlement tax, storage and overhead may include credits")
         return self
 
 
@@ -92,14 +92,20 @@ class PnlRow(BaseModel):
     brandId: Optional[str]
     managerId: Optional[str]
     skuId: Optional[str]
+    nmId: Optional[int] = None
+    sku: Optional[str] = None
+    productName: Optional[str] = None
+    category: Optional[str] = None
+    photoUrl: Optional[str] = None
     revenueKopecks: Optional[int] = None
-    cogsKopecks: Optional[int] = Field(default=None, ge=0)
-    commissionKopecks: Optional[int] = Field(default=None, ge=0)
-    logisticsKopecks: Optional[int] = Field(default=None, ge=0)
-    storageKopecks: Optional[int] = Field(default=None, ge=0)
+    # Net settlement cost can be negative when returns exceed sales.
+    cogsKopecks: Optional[int] = None
+    commissionKopecks: Optional[int] = None
+    logisticsKopecks: Optional[int] = None
+    storageKopecks: Optional[int] = None
     adSpendKopecks: Optional[int] = Field(default=None, ge=0)
     taxKopecks: Optional[int] = None
-    overheadKopecks: Optional[int] = Field(default=None, ge=0)
+    overheadKopecks: Optional[int] = None
     netProfitKopecks: Optional[int]
     marginPct: Optional[float]
     sourceStatus: SourceStatus

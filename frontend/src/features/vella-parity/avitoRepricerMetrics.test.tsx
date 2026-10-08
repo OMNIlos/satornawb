@@ -15,8 +15,9 @@ describe('Avito repricer presentation without a browser', () => {
     expect(strip).toContain('repeat(2, minmax(180px, 1fr))')
   })
   it('shows item-specific arrows and keeps missing comparison distinct from zero', () => {
-    expect(renderToStaticMarkup(createElement(AvitoRepricerMetric, { value: 12, trend: { direction: 'up', percent: 20 } }))).toContain('↑ +20%')
-    expect(renderToStaticMarkup(createElement(AvitoRepricerMetric, { value: 12, trend: { direction: 'down', percent: -20 } }))).toContain('↓ -20%')
+    expect(renderToStaticMarkup(createElement(AvitoRepricerMetric, { value: 12, trend: { direction: 'up', delta: 2, percent: 20 } }))).toContain('↑ +2 (+20%)')
+    expect(renderToStaticMarkup(createElement(AvitoRepricerMetric, { value: 12, trend: { direction: 'down', delta: -2, percent: -20 } }))).toContain('↓ -2 (-20%)')
+    expect(renderToStaticMarkup(createElement(AvitoRepricerMetric, { value: 12, trend: { direction: 'up', percent: 20 } }))).toContain('Нет сравнения')
     expect(renderToStaticMarkup(createElement(AvitoRepricerMetric, { value: 0 }))).toContain('Нет сравнения')
   })
   it('renders uncropped 66px photos and honest fallback', () => {

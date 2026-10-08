@@ -49,3 +49,18 @@ def test_guard_blocks_sockets_outside_read_and_resets_after_error(monkeypatch):
     with socket.socket() as sock:
         with pytest.raises(OSError):
             sock.connect(("127.0.0.1", 1))
+
+
+def test_local_report_broker_does_not_allow_other_socket_destinations(monkeypatch):
+    import socket
+    monkeypatch.setattr(socket.socket, 'connect', socket.socket.connect)
+    monkeypatch.setattr(socket.socket, 'connect_ex', socket.socket.connect_ex)
+    monkeypatch.setattr(httpx.Client, 'send', httpx.Client.send)
+    calls = []
+    module.install_readonly_network_guard(lambda sock, address: calls.append(address), lambda sock, address: 0, local_broker_port=59999)
+    with socket.socket() as sock:
+        sock.connect(('127.0.0.1', 59999))
+        for address in [('127.0.0.1', 6379), ('example.com', 59999), ('example.com', 443)]:
+            with pytest.raises(OSError):
+                sock.connect(address)
+    assert calls == [('127.0.0.1', 59999)]

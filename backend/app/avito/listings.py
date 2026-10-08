@@ -74,6 +74,7 @@ class AvitoListingsFetchResult(BaseModel):
 
 class AvitoListingsClient(Protocol):
     def fetch_listings(self, request: AvitoListingsFetchRequest) -> AvitoListingsFetchResult:
+        self.analytics_error = None
         ...
 
     def fetch_listing_details(self, request: AvitoListingDetailsFetchRequest) -> AvitoListingsFetchResult:
@@ -110,7 +111,7 @@ class LiveAvitoListingsClient(LiveAvitoStatsClient):
                 status="blocked",
                 error=self._fetch_error(exc, fallback_code="avito_listings_failed", fallback_blocker="AVITO_LISTINGS"),
             )
-        return AvitoListingsFetchResult(status="synced", accounts=accounts, rows=rows, diagnostics=diagnostics)
+        return AvitoListingsFetchResult(status="partial" if self.analytics_error else "synced", accounts=accounts, rows=rows, diagnostics=diagnostics, error=self.analytics_error)
 
     def fetch_listing_details(self, request: AvitoListingDetailsFetchRequest) -> AvitoListingsFetchResult:
         item_ids = list(dict.fromkeys(str(item_id).strip() for item_id in request.itemIds if str(item_id).strip()))
@@ -171,7 +172,13 @@ class LiveAvitoListingsClient(LiveAvitoStatsClient):
             account.itemCount = len(account_items)
             account.activeItemCount = sum(1 for item in account_items if str(item.get("status") or "active") == "active")
             account.inactiveItemCount = max(0, account.itemCount - account.activeItemCount)
-            stats_by_item = self._v2_item_analytics_for_account(client, request, account.accountId)
+            try:
+                stats_by_item = self._v2_item_analytics_for_account(client, request, account.accountId)
+            except Exception as exc:
+                # Inventory is valid even when optional selected-period
+                # analytics fail. Keep metrics unavailable, not zero.
+                self.analytics_error = self._fetch_error(exc, fallback_code="avito_analytics_failed", fallback_blocker="AVITO_STATS")
+                stats_by_item = {}
             for item in account_items:
                 stats = stats_by_item.get(item["itemId"], {})
                 account_name = by_account.get(item["accountId"], account).accountName

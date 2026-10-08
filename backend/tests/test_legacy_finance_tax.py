@@ -47,7 +47,8 @@ def _fact(revenue, sales=1, returns=0):
 
 
 def _cache(total, daily=None):
-    result = {"revenueBasis": "retailAmount", "financeSchemaVersion": "v4", "aggregates": {"123": total}}
+    from app.repricer_bff import FINANCE_REVENUE_BASIS, FINANCE_SCHEMA_VERSION
+    result = {"revenueBasis": FINANCE_REVENUE_BASIS, "financeSchemaVersion": FINANCE_SCHEMA_VERSION, "aggregates": {"123": total}}
     if daily is not None:
         result["dailyAggregates"] = {day: {"123": values} for day, values in daily.items()}
     return result

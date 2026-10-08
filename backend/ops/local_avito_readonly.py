@@ -1,5 +1,6 @@
 """Opt-in local Avito OAuth and read endpoints. Provider mutations stay denied."""
 import re
+import json
 from urllib.parse import parse_qs
 
 
@@ -17,11 +18,23 @@ READ_PATHS = (
 
 def allowed_request(request):
     url = request.url
+    # Local Avito extraction only; no broad OpenAI endpoint permission and no
+    # provider business mutation. The production client remains unchanged.
+    if (request.method == "POST" and url.scheme == "https" and url.host == "api.openai.com"
+            and url.port in (None, 443) and not url.username and not url.password
+            and url.path == "/v1/responses" and not url.query and "cookie" not in request.headers):
+        try:
+            body = json.loads(request.content)
+            format_ = body.get("text", {}).get("format", {})
+            return (body.get("store") is False and format_.get("name") == "avito_order_item_extraction"
+                    and format_.get("type") == "json_schema" and format_.get("strict") is True)
+        except (ValueError, TypeError, AttributeError):
+            return False
     # Product images used by the offline picking workbook. Never carry account
     # credentials to the CDN, follow redirects, or allow arbitrary hosts.
     if (request.method == "GET" and url.scheme == "https" and url.port in (None, 443)
             and not url.username and not url.password
-            and re.fullmatch(r"(?:[0-9]+\.)?img\.avito\.st", url.host)
+            and re.fullmatch(r"(?:[a-z0-9]+\.)?img\.avito\.st", url.host)
             and "authorization" not in request.headers and "cookie" not in request.headers):
         return True
     if (url.scheme != "https" or url.host != "api.avito.ru"

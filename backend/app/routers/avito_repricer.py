@@ -33,7 +33,7 @@ AVITO_REPRICER_STRATEGIES: list[dict[str, Any]] = [
         "id": "none",
         "name": "Без стратегии",
         "metric": "none",
-        "description": "Цена не меняется автоматически, товар не попадает в работу репрайсера.",
+        "description": "",
         "enabled": False,
     },
     {

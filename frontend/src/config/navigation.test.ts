@@ -25,11 +25,9 @@ describe('navigation role visibility', () => {
     const pnl = findNavItemByPath('/wb/reports/pnl')
     const expenses = findNavItemByPath('/wb/reports/expenses')
     expect(pnl).toBeDefined()
-    expect(expenses).toBeDefined()
+    expect(expenses).toBeUndefined()
     expect(isItemVisible(pnl!, 'finance')).toBe(true)
-    expect(isItemVisible(expenses!, 'finance')).toBe(true)
     expect(isItemVisible(pnl!, 'production')).toBe(false)
-    expect(isItemVisible(expenses!, 'production')).toBe(false)
   })
 
   it('shows the print list to production without exposing settings', () => {
@@ -43,7 +41,7 @@ describe('navigation role visibility', () => {
 
   it('shows review workspaces to review role without finance-only reports', () => {
     const ids = visibleIdsFor('reviews')
-    expect(ids).toContain('avito-overview')
+    expect(ids).not.toContain('avito-overview')
     expect(ids).toContain('avito-notifications')
     expect(ids).toContain('wb-reviews')
     expect(ids).toContain('avito-reviews')
@@ -62,10 +60,9 @@ describe('navigation role visibility', () => {
     expect(isItemVisible(stats!, 'manager')).toBe(true)
   })
 
-  it('uses Avito overview as the module entrypoint', () => {
-    const overview = findNavItemByPath('/avito')
-    expect(overview?.id).toBe('avito-overview')
-    expect(isItemVisible(overview!, 'production')).toBe(true)
+  it('does not expose the removed Avito overview', () => {
+    expect(findNavItemByPath('/avito')).toBeUndefined()
+    expect(findNavItemByPath('/avito/repricer')?.id).toBe('avito-repricer')
   })
 
   it('keeps Avito notifications as a separate Avito workspace', () => {

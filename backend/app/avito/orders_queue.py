@@ -12,7 +12,7 @@ from app.avito.orders import (
 )
 
 
-ACTIVE_STATUSES = {"on_confirmation", "ready_to_ship", "in_transit", "on_return", "in_dispute"}
+ACTIVE_STATUSES = {"ready_to_ship", "in_transit", "on_return"}
 HISTORY_STATUSES = {"delivered", "closed", "canceled"}
 PICKUP_RETURN_STATUSES = {"ready_for_pickup", "ready_to_pickup", "pickup_ready", "can_pickup"}
 INBOUND_RETURN_STATUSES = {"started", "in_transit", "return_in_transit", "on_the_way"}
@@ -63,6 +63,8 @@ def merge_queue_rows(
                 row.returnStatusSource = prior.returnStatusSource
                 row.returnStatusObservedAt = prior.returnStatusObservedAt
             row.shipmentNumberHistory = list(prior.shipmentNumberHistory)
+            if not row.dropoffProvider:
+                row.dropoffProvider = prior.dropoffProvider
             if row.shipmentNumberState == "ambiguous":
                 if prior.shipmentNumber:
                     row.shipmentNumberHistory.append({"number": prior.shipmentNumber, "source": prior.shipmentNumberSource, "observedAt": prior.shipmentNumberObservedAt})
@@ -77,8 +79,17 @@ def merge_queue_rows(
                     old_item = matches[0] if len(matches) == 1 else None
                 if old_item:
                     for field in ("brand", "sellerArticle", "size", "color", "imageUrl"):
+                        if field == "size" and item.sizeMode == "chat_ai":
+                            continue
                         if not getattr(item, field):
                             setattr(item, field, getattr(old_item, field))
+                            if field in old_item.sources:
+                                item.sources[field] = old_item.sources[field]
+                            if field == "size":
+                                item.sizeMode = old_item.sizeMode
+                                item.sizeState = old_item.sizeState
+                                item.sizeReason = old_item.sizeReason
+                                item.sizeEvidence = dict(old_item.sizeEvidence)
         rows[order_key(row)] = row
     # Missing rows are retained as uncertain. An incomplete provider response
     # must never silently turn a previously active order into an export row.
@@ -161,11 +172,11 @@ def queue_mode(row: AvitoOrderRow) -> str:
 def select_queue(rows: list[AvitoOrderRow], mode: str, account_id: str | None = None) -> list[AvitoOrderRow]:
     account_rows = [row for row in rows if not account_id or row.accountId == account_id]
     if mode == "ready_to_ship":
-        return [row for row in account_rows if row.status == "ready_to_ship" and row.statusSource == "avito_api" and row.sourceStatus == "fresh"]
+        return [row for row in account_rows if row.status == "ready_to_ship" and row.sourceStatus == "fresh"]
     if mode == "in_transit":
         return [row for row in account_rows if row.status == "in_transit"]
     if mode == "returns":
-        return [row for row in account_rows if row.status == "on_return" and return_phase(row) != "unknown"]
+        return [row for row in account_rows if row.status == "on_return" and row.returnStatus not in {"received", "completed", "closed"}]
     if mode == "return_inbound":
         return [row for row in account_rows if row.status == "on_return" and return_phase(row) == "inbound"]
     if mode == "return_pickup":
@@ -174,4 +185,4 @@ def select_queue(rows: list[AvitoOrderRow], mode: str, account_id: str | None = 
         return [row for row in account_rows if queue_mode(row) == "history"]
     if mode == "review":
         return [row for row in account_rows if queue_mode(row) == "review" or (row.status == "on_return" and return_phase(row) == "unknown")]
-    return [row for row in account_rows if queue_mode(row) == "active"]
+    return [row for row in account_rows if row.status in ACTIVE_STATUSES and row.returnStatus not in {"received", "completed", "closed"}]

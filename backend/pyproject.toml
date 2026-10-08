@@ -9,6 +9,7 @@ description = "Vella WB Sprint A backend skeleton"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.124",
+  "python-multipart>=0.0.20,<0.1",
   "pydantic>=2.12",
   "sqlalchemy>=2.0",
   "alembic>=1.13",

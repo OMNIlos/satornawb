@@ -69,6 +69,31 @@ class AvitoOrderAction(BaseModel):
     required: bool = False
 
 
+class AvitoChatMessage(BaseModel):
+    id: str = Field(default="", max_length=128)
+    role: Literal["seller", "buyer", "unknown"] = "unknown"
+    text: str = Field(default="", max_length=1000)
+    createdAt: str | None = None
+    orderId: str | None = None
+    itemId: str | None = None
+    quoted: bool = False
+
+
+class AvitoChatEvidence(BaseModel):
+    accountId: str | None = None
+    orderId: str | None = None
+    itemId: str | None = None
+    channelId: str | None = None
+    buyerId: str | None = None
+    sellerId: str | None = None
+    sellerAuthorId: str | None = None
+    capturedAt: str | None = None
+    state: str = "unavailable"
+    reason: str | None = None
+    truncated: bool = False
+    messages: list[AvitoChatMessage] = Field(default_factory=list, max_length=50)
+
+
 class AvitoOrderItem(BaseModel):
     itemId: str | None = None
     lineIndex: int | None = Field(default=None, ge=0)
@@ -79,10 +104,15 @@ class AvitoOrderItem(BaseModel):
     brand: str | None = None
     size: str | None = None
     descriptionSize: str | None = None
+    sizeMode: str | None = None
+    sizeState: str | None = None
+    sizeReason: str | None = None
+    sizeEvidence: dict[str, Any] = Field(default_factory=dict)
     sources: dict[str, str | None] = Field(default_factory=dict)
     color: str | None = None
     imageUrl: str | None = None
     barcode: str | None = None
+    photoId: int | None = None
     returnMatches: list[AvitoReturnMatch] = Field(default_factory=list)
     reuseSuggestion: AvitoReturnMatch | None = None
 
@@ -98,6 +128,7 @@ class AvitoOrderRow(BaseModel):
     canonicalStatus: str | None = None
     deliveryType: str | None = None
     deliveryService: str | None = None
+    dropoffProvider: str | None = None
     createdAt: str | None = None
     updatedAt: str | None = None
     buyerName: str | None = None
@@ -126,6 +157,7 @@ class AvitoOrderRow(BaseModel):
     returnPickupPlace: str | None = None
     returnPickupDeadline: str | None = None
     returnPickupCode: str | None = None
+    returnFieldStates: dict[str, str] = Field(default_factory=dict)
     totalKopecks: int | None = Field(default=None, ge=0)
     items: list[AvitoOrderItem] = Field(default_factory=list)
     availableActions: list[AvitoOrderAction] = Field(default_factory=list)
@@ -144,6 +176,11 @@ class AvitoOrdersBrowserItem(BaseModel):
     brand: str | None = None
     size: str | None = None
     descriptionSize: str | None = None
+    sizeMode: str | None = None
+    sizeState: str | None = None
+    sizeReason: str | None = None
+    sizeEvidence: dict[str, Any] = Field(default_factory=dict)
+    chatEvidence: AvitoChatEvidence | None = None
     sources: dict[str, str | None] = Field(default_factory=dict)
     color: str | None = None
     imageUrl: str | None = None
@@ -159,15 +196,19 @@ class AvitoOrdersBrowserOrder(BaseModel):
     accountId: str | None = None
     accountName: str | None = None
     status: str | None = None
+    statusObservedAt: str | None = None
     deliveryService: str | None = None
+    dropoffProvider: str | None = None
     trackNumber: str | None = None
     shipmentNumber: str | None = None
     shipmentNumberState: str | None = None
     returnPickupPlace: str | None = None
     returnPickupDeadline: str | None = None
     returnPickupCode: str | None = None
+    returnFieldStates: dict[str, str] = Field(default_factory=dict)
     returnStatus: str | None = None
     buyerName: str | None = None
+    buyerId: str | None = None
     recipientName: str | None = None
     pageUrl: str | None = None
     items: list[AvitoOrdersBrowserItem] = Field(default_factory=list)
@@ -296,8 +337,31 @@ def _browser_item_matches(item: AvitoOrderItem, browser_item: AvitoOrdersBrowser
 
 
 def _merge_browser_item(item: AvitoOrderItem, browser_item: AvitoOrdersBrowserItem) -> None:
+    if browser_item.sizeMode in {"description", "none"} and item.sizeMode == "chat_ai":
+        item.sizeMode = browser_item.sizeMode
+        item.size = browser_item.size
+        item.sizeState = None
+        item.sizeReason = None
+        item.sizeEvidence = {}
+        item.sources.pop("size", None)
+    if browser_item.sizeMode == "chat_ai":
+        item.sizeMode = "chat_ai"
+        item.sizeState = browser_item.sizeState or "needs_review"
+        item.sizeReason = browser_item.sizeReason
+        item.sizeEvidence = dict(browser_item.sizeEvidence)
+        item.size = browser_item.size if item.sizeState == "confirmed" else None
+        item.sources.pop("size", None)
+        if item.size:
+            item.sources["size"] = "chat_ai"
     fields = ("size", "color", "imageUrl", "sellerArticle", "brand")
     original = {field: getattr(item, field) for field in fields}
+    # A later confirmed buyer variant supersedes a listing-only suggestion.
+    strong_sources = {"order_row", "order_detail", "chat_ai"}
+    for field in ("size", "color"):
+        if (getattr(browser_item, field) and browser_item.sources.get(field) in strong_sources
+                and item.sources.get(field) in {"description", "description_fallback", "listing", "browser_unspecified"}):
+            setattr(item, field, None)
+            original[field] = None
     listing_matches = _same_identity(item.itemId, browser_item.itemId)
     sources = dict(browser_item.sources)
     # v0.2 collectors omitted provenance for details-page photos and color.
@@ -352,6 +416,8 @@ def merge_browser_snapshot_orders(rows: list[AvitoOrderRow], snapshot: AvitoOrde
             row.accountName = browser_order.accountName
         if browser_order.deliveryService and not row.deliveryService:
             row.deliveryService = browser_order.deliveryService
+        if browser_order.dropoffProvider:
+            row.dropoffProvider = browser_order.dropoffProvider
         if browser_order.jobNumber and not row.jobNumber:
             row.jobNumber = browser_order.jobNumber
         if browser_order.returnStatus and snapshot.capturedAt and row.returnStatusSource != "avito_api":
@@ -362,8 +428,15 @@ def merge_browser_snapshot_orders(rows: list[AvitoOrderRow], snapshot: AvitoOrde
                 row.returnStatusSource = "browser_return_instruction"
                 row.returnStatusObservedAt = snapshot.capturedAt
         for field in ("returnPickupPlace", "returnPickupDeadline", "returnPickupCode"):
+            if browser_order.returnFieldStates.get(field) == "ambiguous" and row.returnStatusSource != "avito_api":
+                observed = _parsed_time(snapshot.capturedAt)
+                previous = _parsed_time(row.returnStatusObservedAt)
+                if observed and (not previous or observed >= previous):
+                    setattr(row, field, None)
             if getattr(browser_order, field) and not getattr(row, field):
                 setattr(row, field, getattr(browser_order, field))
+            if not getattr(row, field) and browser_order.returnFieldStates.get(field):
+                row.returnFieldStates[field] = browser_order.returnFieldStates[field]
         if browser_order.trackNumber and not row.trackNumber:
             row.trackNumber = browser_order.trackNumber
         if browser_order.shipmentNumber and snapshot.capturedAt and row.shipmentNumberState != "ambiguous":

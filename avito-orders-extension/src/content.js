@@ -22,7 +22,7 @@ const SIZE_VALUES = ['5XL', '4XL', '3XL', '2XL', 'XXL', 'XL', 'XS', 'S', 'M', 'L
 const DEFAULT_COLLECT_OPTIONS = {
   photoMode: 'one',
   colorFromDescription: true,
-  sizeMode: 'description',
+  sizeMode: 'chat_ai',
   articleFromDescription: true,
 }
 
@@ -236,15 +236,13 @@ function buildAvitoItemUrl(title, itemId) {
 }
 
 function orderIdentity(text, root) {
-  const attrId = root.getAttribute('data-order-id') || root.getAttribute('data-id')
-  const href = first(root, ['a[href*="/orders/"]'])?.getAttribute('href') || ''
-  const hrefId = href.match(/orders\/([a-zа-яё0-9_-]+)/i)?.[1]
-  const textId = text.match(/(?:заказ|отправление|№)\s*[:#№-]?\s*([a-zа-яё0-9_-]{4,})/iu)?.[1]
-  return attrId || hrefId || textId || null
+  const attrId = root.getAttribute('data-order-id')
+  const textId = text.match(/(?:номер\s+заказа|заказ\s*№|заказ\s*[:#])\s*(\d{10,20})\b/iu)?.[1]
+  return (attrId && /^\d{10,20}$/.test(attrId) ? attrId : null) || orderIdFromLink(root) || textId || null
 }
 
 function marketplaceIdentity(text) {
-  return text.match(/\b([0-9]{5,})\b/u)?.[1] || null
+  return text.match(/(?:номер\s+заказа|заказ\s*№|заказ\s*[:#])\s*(\d{10,20})\b/iu)?.[1] || null
 }
 
 function trackNumber(text) {
@@ -259,21 +257,44 @@ function trackNumber(text) {
 }
 
 function deliveryService(text) {
-  if (/яндекс\s+доставк/iu.test(text)) return 'Яндекс Доставка'
+  if (/яндекс\s+доставк|яндекс\s+доставки/iu.test(text)) return 'Яндекс Доставка'
   if (/сдэк/iu.test(text)) return 'СДЭК'
-  if (/почта\s+россии/iu.test(text)) return 'Почта России'
+  if (/почт[аы]\s+россии/iu.test(text)) return 'Почта России'
   if (/авито/iu.test(text)) return 'Авито'
   return null
 }
 
+function dropoffProvider(text) {
+  const lines = String(text || '').split(/[\n.!]/u)
+  const providers = lines.flatMap((line, index) => {
+    if (!/(?:отнесите|сдайте|отправьте|пункт[а-яё]*\s+при[её]ма)/iu.test(line) || /возврат/iu.test(line)) return []
+    const following = lines[index + 1] || ''
+    const text = line + (following.length <= 150 && !/возврат|получатель|покупатель/iu.test(following) ? '\n' + following : '')
+    return [deliveryService(text)]
+  }).filter(provider => ['Почта России', 'Яндекс Доставка', 'СДЭК'].includes(provider))
+  const unique = [...new Set(providers)]
+  return unique.length === 1 ? unique[0] : null
+}
+
 function statusFromText(text) {
   const value = String(text || '').toLocaleLowerCase('ru-RU')
-  if (value.includes('возврат')) return 'on_return'
-  if (value.includes('отправьте заказ')) return 'ready_to_ship'
-  if (value.includes('ждёт выдачи') || value.includes('ждет выдачи') || value.includes('едет к покупателю')) return 'in_transit'
-  if (value.includes('напишите поддержке') || value.includes('спор')) return 'in_dispute'
   if (value.includes('заказ отмен')) return 'canceled'
-  if (value.includes('заверш')) return 'closed'
+  if (/^\s*выдан покупателю(?:[\s.!?]|$)/u.test(value)) return 'delivered'
+  if (globalThis.SatornaAvitoReturnDetails.extract(value).status === 'received'
+      || globalThis.SatornaAvitoReturnDetails.extract(value.trimStart().split('\n')[0]).status === 'received') return 'closed'
+  const terminal = value.split(/[\n.!?]/u).some(line => !/(?:не\s|ещ[её]|если|когда|будет|должен)/u.test(line)
+    && /^(?:\s*заказ\s+)?\s*заверш[её]н(?:\s|$)|^\s*можно получить оплату/u.test(line))
+  if (terminal) return 'closed'
+  if (/^\s*возврат\s*[:—-]?\s*(?:едет к вам|едет к продавцу|едет обратно|в пути)(?:\s|[.!?]|$)/mu.test(value)) return 'on_return'
+  if (/подтвердите возврат|на возврате|возврат\s*[:—-]?\s*заберите|возврат (?:можно забрать|в пути|едет обратно|готов к)/u.test(value)) return 'on_return'
+  if (/отправьте заказ|жд[уёе]т отправки/u.test(value)) return 'ready_to_ship'
+  if (/жд[её]т выдачи покупателю|доставлен в пункт выдачи|едет к покупателю|в пути/u.test(value)) return 'in_transit'
+  if (value.split(/[\n.!?]/u).some(line => !/(?:не\s|ещ[её]|если|когда|будет|должен)/u.test(line)
+    && /(?:^|\s)выдан покупателю(?:\s|$)/u.test(line))) return 'delivered'
+  if (value.split(/[\n.!?]/u).some(line => !/(?:не\s|ещ[её]|если|когда|будет|должен)/u.test(line) && /^\s*заказ (?:доставлен|получен)\s*$/u.test(line))) return 'closed'
+  if (value.includes('напишите поддержке') || value.includes('спор')) return 'in_dispute'
+  if (/^\s*жд[уёе]т подтверждения(?:\s|[.!?]|$)/mu.test(value)) return 'awaiting_confirmation'
+  if (value.includes('заказ отмен')) return 'canceled'
   return null
 }
 
@@ -377,14 +398,45 @@ function orderCandidates() {
       const text = textOf(node)
       return text.length > 30 && /(заказ|отправлен|достав|трек|получател|покупател|авито доставка)/iu.test(text)
     })
-    .slice(0, 80)
+}
+
+function collectionBlocked() {
+  return /доступ ограничен|проверка безопасности|слишком много запросов|too many requests|подтвердите,? что вы не робот/iu.test((document.body?.innerText || '').slice(0, 6000))
+}
+
+async function loadedOrderCandidates() {
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
+  const found = new Map()
+  let stable = 0, signature = '', hydrated = false
+  for (let step = 0; step < 60; step++) {
+    if (collectionBlocked()) throw new Error('AVITO_BLOCKED: Авито запросил проверку безопасности. Сбор остановлен, готовые данные сохранены.')
+    const rows = orderCandidates()
+    for (const row of rows) {
+      const key = orderIdFromLink(row) || orderIdentity(textOf(row), row)
+      if (key) found.set(key, row)
+    }
+    if (!found.size && /(?:у вас пока нет заказов|заказов нет|нет заказов|ничего не найдено)/iu.test(document.body?.innerText || '')) return { rows: [], complete: true }
+    const next = `${found.size}:${document.documentElement.scrollHeight}`
+    stable = next === signature ? stable + 1 : 0
+    signature = next
+    if (found.size) hydrated = true
+    if (hydrated && stable >= 4) {
+      const nextButton = document.querySelector('[data-marker="pagination-button/next"], a[rel="next"], button[aria-label="Следующая страница"]')
+      const hasNext = nextButton && !nextButton.disabled && nextButton.getAttribute('aria-disabled') !== 'true'
+      return { rows: [...found.values()], complete: !hasNext, hasNext: Boolean(hasNext), reason: hasNext ? 'В Авито остались следующие страницы заказов.' : '' }
+    }
+    window.scrollTo(0, document.documentElement.scrollHeight)
+    await pause(300)
+  }
+  if (!found.size) throw new Error('Авито не загрузил список заказов. Сохранённые данные не изменены.')
+  return { rows: [...found.values()], complete: false, reason: 'Не подтверждена загрузка всего списка Авито.' }
 }
 
 function orderDetailsLink(root) {
-  return first(root, [
-    'a[href^="/orders/"]',
-    'a[href*="/orders/"]',
-  ])
+  return Array.from(root.querySelectorAll('a[href]')).find(link => {
+    try { const url = new URL(link.getAttribute('href'), 'https://www.avito.ru'); return ['www.avito.ru', 'avito.ru'].includes(url.hostname) && /^\/orders\/\d{10,20}\/?$/.test(url.pathname) }
+    catch (_error) { return false }
+  }) || null
 }
 
 function orderIdFromLink(root) {
@@ -632,6 +684,7 @@ function htmlItemIds(root) {
 async function waitForDomReady(timeoutMs = 8000) {
   const startedAt = Date.now()
   while (Date.now() - startedAt < timeoutMs) {
+    if (collectionBlocked()) throw new Error('AVITO_BLOCKED: Авито запросил проверку безопасности; повторные запросы остановлены.')
     const bodyText = textOf(document.body)
     const hasOrderText = /заказ|доставка|трек|отправ|стоимость|итого/iu.test(bodyText)
     const hasItemText = /описание|характеристики|размер|цвет|артикул/iu.test(bodyText)
@@ -670,13 +723,17 @@ async function extractCurrentPageDetails(optionsPayload) {
     metas: metaDebug(document),
     htmlItemIds: htmlItemIds(document),
     itemId: itemIdFromUrl(location.href),
-    status: statusFromText(text),
+    status: statusFromText(rawText),
     deliveryService: deliveryService(text),
+    dropoffProvider: dropoffProvider(rawText),
     trackNumber: trackNumber(text),
     shipmentNumber: shipment.number,
     shipmentNumberState: shipment.state,
     returnStatus: returnDetails.status,
     returnPickupCode: returnDetails.pickupCode,
+    returnPickupPlace: returnDetails.pickupPlace,
+    returnPickupDeadline: returnDetails.pickupDeadline,
+    returnFieldStates: returnDetails.fieldStates,
     chatText: null,
     textPreview: rawText.slice(0, 1000),
   }
@@ -723,11 +780,15 @@ function mergeItemDetails(item, details, options) {
   if (photos.length) item.imageUrls = photos
   if (details.description) item.description = details.description
   if (options.articleFromDescription && !item.sellerArticle) item.sellerArticle = parseArticle(text)
-  if (options.colorFromDescription && !item.color) {
-    item.color = parseColor(text)
-    if (item.color) item.sources.color = source
+  if (options.colorFromDescription && (!item.color || (source === 'order_detail' && ['listing', 'browser_unspecified'].includes(item.sources.color)))) {
+    const color = parseColor(text)
+    if (color) { item.color = color; item.sources.color = source }
   }
   const explicitSize = globalThis.SatornaAvitoItemSize.parseExplicitListingSize(text)
+  if (options.sizeMode !== 'chat_ai' && explicitSize && source === 'order_detail' && !['order_row', 'order_detail', 'chat_ai'].includes(item.sources.size)) {
+    item.size = explicitSize
+    item.sources.size = 'order_detail'
+  }
   globalThis.SatornaAvitoSizePolicy.applySizeEvidence(
     item,
     options.sizeMode,
@@ -737,6 +798,7 @@ function mergeItemDetails(item, details, options) {
 }
 
 async function enrichOrderFromDetails(order, options) {
+  const errors = []
   let hasRowItemUrl = order.items?.some((item) => item.itemUrl)
   if ((!hasRowItemUrl || options.sizeMode === 'chat_ai') && order.pageUrl && order.items?.[0]) {
     let timezone = ''
@@ -764,18 +826,44 @@ async function enrichOrderFromDetails(order, options) {
       hasRowItemUrl = true
     }
     let orderChat = null
+    // Account ownership comes from the same native order session, not from
+    // whether this order happens to expose a messenger link.
+    const session = globalThis.SatornaAvitoPageState?.readSessionIdentity?.(document)
+    if (!order.accountId && session?.accountId && (!direct?.chatBinding?.sellerId || direct.chatBinding.sellerId === session.accountId)) {
+      order.accountId = session.accountId
+    }
     if (globalThis.SatornaAvitoOrderChat.shouldCollectOrderChat(options.sizeMode, direct?.channelIds)) {
-      orderChat = await globalThis.SatornaAvitoOrderChat.loadOrderChat(direct.channelIds, globalThis.fetch)
+      const accountId = order.accountId || direct?.chatBinding?.sellerId || session?.accountId || null
+      const sessionMatches = session && session.accountId === accountId && (!direct?.chatBinding?.sellerId || direct.chatBinding.sellerId === accountId)
+      const binding = { accountId,
+        sellerId: direct?.chatBinding?.sellerId || order.accountId || (sessionMatches ? session.accountId : null),
+        sellerAuthorId: sessionMatches ? session.authorId : null,
+        buyerId: direct?.chatBinding?.buyerId || null,
+        orderId: order.orderId || order.marketplaceId, itemId: order.items[0].itemId }
+      if (!order.accountId && binding.accountId) order.accountId = binding.accountId
+      if (binding.buyerId) order.buyerId = binding.buyerId
+      orderChat = await globalThis.SatornaAvitoOrderChat.loadOrderChat(direct.channelIds, globalThis.fetch, binding)
+      if (orderChat.requests?.some(request => [429, 439].includes(request.status))) errors.push('AVITO_BLOCKED: chat HTTP 429')
       logEvent('info', 'order chat collected', {
         orderId: order.orderId,
         channelIds: direct.channelIds.length,
         rawMessages: orderChat.rawCount,
         retainedMessages: orderChat.retainedCount,
         truncated: orderChat.truncated,
-        requests: orderChat.requests,
+        failedRequests: orderChat.requests?.filter(request => request.status !== 200).length || 0,
       })
     }
-    if (order.items?.[0] && orderChat?.chatText) order.items[0].chatText = orderChat.chatText
+    if (order.items?.[0] && options.sizeMode === 'chat_ai') {
+      for (const item of order.items) {
+        item.sizeMode = 'chat_ai'
+        item.size = null
+        delete item.sources.size
+        item.chatText = null
+        item.chatEvidence = orderChat?.chatEvidence ? { ...orderChat.chatEvidence, itemId: item.itemId }
+          : { accountId: order.accountId || null, orderId: order.orderId || order.marketplaceId,
+              itemId: item.itemId, state: 'unavailable', reason: order.items.length > 1 ? 'multiple_orders_or_items' : 'chat_not_collected', messages: [] }
+      }
+    }
     logEvent(candidate?.itemUrl ? 'info' : 'warn', 'order listing resolved from orders-list API', {
       orderId: order.orderId,
       itemTitle: order.items[0].title || '',
@@ -789,7 +877,6 @@ async function enrichOrderFromDetails(order, options) {
   const detailUrls = [order.pageUrl].filter((url) => url && !url.includes('#') && (!hasRowItemUrl || needsOrderInstruction))
   const imageLimit = options.photoMode === 'two' ? 2 : 1
   let orderDetails = null
-  const errors = []
   for (const url of detailUrls) {
     const response = await requestTabDetails(url, {
       ...options,
@@ -807,9 +894,17 @@ async function enrichOrderFromDetails(order, options) {
 
   if (!order.status) order.status = orderDetails.status
   if (!order.deliveryService) order.deliveryService = orderDetails.deliveryService
+  if (orderDetails.dropoffProvider) order.dropoffProvider = orderDetails.dropoffProvider
   if (!order.trackNumber) order.trackNumber = orderDetails.trackNumber
   if (orderDetails.returnStatus) order.returnStatus = orderDetails.returnStatus
   if (orderDetails.returnPickupCode) order.returnPickupCode = orderDetails.returnPickupCode
+  if (orderDetails.returnPickupPlace) order.returnPickupPlace = orderDetails.returnPickupPlace
+  if (orderDetails.returnPickupDeadline) order.returnPickupDeadline = orderDetails.returnPickupDeadline
+  order.returnFieldStates = { ...(order.returnFieldStates || {}), ...(orderDetails.returnFieldStates || {}) }
+  for (const field of ['returnPickupPlace', 'returnPickupDeadline', 'returnPickupCode']) {
+    if (order.returnFieldStates[field] === 'ambiguous') order[field] = null
+    else if (order[field]) order.returnFieldStates[field] = 'collected'
+  }
   if (orderDetails.shipmentNumber) {
     order.shipmentNumber = orderDetails.shipmentNumber
     order.shipmentNumberState = 'confirmed'
@@ -834,7 +929,8 @@ async function enrichOrderFromDetails(order, options) {
       images: orderImages,
     }, options)
     const itemUrl = item.itemUrl || itemUrls[itemIndex] || itemUrls[0]
-    const itemResponse = itemUrl ? await requestTabDetails(itemUrl, options) : null
+    const needsListing = !item.imageUrl || !item.size || !item.color || (options.articleFromDescription && !item.sellerArticle)
+    const itemResponse = itemUrl && needsListing ? await requestTabDetails(itemUrl, options) : null
     if (!itemUrl) {
       const renderReason = orderDetails.detailNotRendered
         ? 'деталка Avito не отдала контент заказа'
@@ -1091,6 +1187,7 @@ function showCollectorOverlay(lines, variant = 'info', stats = {}) {
 
 function collectOrder(root, options) {
   const text = textOf(root)
+  const rawText = String(root?.innerText || root?.textContent || text)
   const imageLimit = options.photoMode === 'two' ? 2 : 1
   const visibleImages = options.photoMode === 'none' ? [] : visibleProductImages(root, imageLimit)
   const fallbackPhotos = options.photoMode === 'none' ? [] : imageUrls(root, imageLimit)
@@ -1105,18 +1202,22 @@ function collectOrder(root, options) {
   if (!orderId && !marketplaceId) return null
   const itemPhotos = visibleImages.map((image) => image.url).filter(Boolean)
   const photos = itemPhotos.length ? itemPhotos : fallbackPhotos
-  const shipment = globalThis.SatornaAvitoShipmentNumber.extract(text)
-  const returnDetails = globalThis.SatornaAvitoReturnDetails.extract(text)
+  const shipment = globalThis.SatornaAvitoShipmentNumber.extract(rawText)
+  const returnDetails = globalThis.SatornaAvitoReturnDetails.extract(rawText)
   return {
     orderId,
     marketplaceId,
-    status: statusFromText(text),
+    status: statusFromText(rawText),
     deliveryService: deliveryService(text),
+    dropoffProvider: dropoffProvider(rawText) || deliveryService(text),
     trackNumber: trackNumber(text),
     shipmentNumber: shipment.number,
     shipmentNumberState: shipment.state,
     returnStatus: returnDetails.status,
     returnPickupCode: returnDetails.pickupCode,
+    returnPickupPlace: returnDetails.pickupPlace,
+    returnPickupDeadline: returnDetails.pickupDeadline,
+    returnFieldStates: Object.fromEntries(Object.entries(returnDetails.fieldStates).map(([field, state]) => [field, state === 'unavailable' ? 'not_collected' : state])),
     buyerName: text.match(/(?:покупатель|получатель)\s*[:—-]\s*([а-яёa-z .-]{2,40})/iu)?.[1]?.trim() || null,
     pageUrl: absoluteUrl(orderDetailsLink(root)?.getAttribute('href'))
       || (/\/orders\/[^/?#]+/i.test(location.pathname) ? location.href : null),
@@ -1180,16 +1281,37 @@ async function collectSnapshot(optionsPayload) {
   const orderWord = collectionLabel === 'возвратов' ? 'Возврат' : 'Заказ'
   logEvent('info', 'collection started on orders page', { url: location.href, collectionLabel, options })
   showCollectorOverlay([`Ищем ${collectionLabel} на странице Avito...`], 'info', { phase: `Подготовка сбора ${collectionLabel}` })
-  const candidates = orderCandidates()
+  const discovered = await loadedOrderCandidates()
+  const candidates = discovered.rows
   logEvent('info', 'order rows found', { count: candidates.length })
   highlightOrderRows(candidates)
-  const collected = []
+  const collected = new Array(candidates.length)
   let detailPages = 0
   let itemPages = 0
+  let processed = 0
   const detailErrors = []
-  for (let index = 0; index < candidates.length; index += 1) {
-    const baseOrder = collectOrder(candidates[index], options)
-    if (baseOrder) {
+  const unknownOrderIds = new Set()
+  let blocked = false
+  // Keep a hard cap on Avito detail tabs. A failed row must not stop the batch.
+  for (let batchStart = 0; batchStart < candidates.length; batchStart += 5) {
+    if (blocked) break
+    await Promise.all(candidates.slice(batchStart, batchStart + 5).map(async (candidate, offset) => {
+    const index = batchStart + offset
+    const baseOrder = collectOrder(candidate, options)
+    if (!baseOrder || !baseOrder.status) {
+      const key = baseOrder?.orderId || baseOrder?.marketplaceId || `row-${index + 1}`
+      unknownOrderIds.add(key)
+      logEvent('warn', 'order skipped: status not recognized', { orderId: key })
+    }
+    // Reconcile already saved orders without opening historical detail pages.
+    // The backend accepts these status-only rows only against a unique saved identity.
+    if (baseOrder && (['closed', 'canceled', 'delivered'].includes(baseOrder.status) || ['received', 'completed', 'closed'].includes(baseOrder.returnStatus))) {
+      collected[index] = { orderId: baseOrder.orderId, marketplaceId: baseOrder.marketplaceId,
+        accountId: baseOrder.accountId || null, status: baseOrder.status,
+        returnStatus: baseOrder.returnStatus, items: [] }
+    }
+    if (baseOrder && ['ready_to_ship', 'in_transit', 'on_return'].includes(baseOrder.status) && !['received', 'completed', 'closed'].includes(baseOrder.returnStatus)) {
+      globalThis.SatornaOrderCache?.reuse(baseOrder, optionsPayload?.savedOrders || [])
       logEvent('info', 'order row parsed', {
         index: index + 1,
         total: candidates.length,
@@ -1201,7 +1323,7 @@ async function collectSnapshot(optionsPayload) {
         sources: baseOrder.items?.[0]?.sources || {},
         image: Boolean(baseOrder.items?.[0]?.imageUrl),
       })
-      const previewOrders = dedupeOrders([...collected, baseOrder])
+      const previewOrders = dedupeOrders([...collected.filter(Boolean), baseOrder])
       const { items: previewItems, missing: previewMissing } = missingSummary(previewOrders, options)
       showCollectorOverlay([
         `${orderWord} ${index + 1} из ${candidates.length}`,
@@ -1216,10 +1338,25 @@ async function collectSnapshot(optionsPayload) {
         items: previewItems.length,
         missing: previewMissing,
       })
-      const enriched = await enrichOrderFromDetails(baseOrder, options)
+      let enriched
+      try {
+        enriched = options.sizeMode !== 'chat_ai' && globalThis.SatornaOrderCache?.complete(baseOrder) && (baseOrder.status !== 'on_return' || (baseOrder.returnPickupPlace && baseOrder.returnPickupDeadline && baseOrder.returnPickupCode))
+          ? { order: baseOrder, checked: false, itemPages: 0, errors: [] }
+          : await enrichOrderFromDetails(baseOrder, options)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        enriched = { order: baseOrder, checked: false, itemPages: 0, errors: [message] }
+      }
       if (enriched.checked) detailPages += 1
       itemPages += enriched.itemPages || 0
       if (enriched.errors?.length) detailErrors.push(...enriched.errors)
+      if (enriched.errors?.length && enriched.order.status === 'on_return') {
+        enriched.order.returnFieldStates = { ...(enriched.order.returnFieldStates || {}) }
+        for (const field of ['returnPickupPlace', 'returnPickupDeadline', 'returnPickupCode']) {
+          if (!enriched.order[field] && enriched.order.returnFieldStates[field] !== 'ambiguous') enriched.order.returnFieldStates[field] = 'collection_failed'
+        }
+      }
+      if (enriched.errors?.some(error => /AVITO_BLOCKED|HTTP (?:429|439)|проверка безопасности/iu.test(error))) blocked = true
       logEvent(enriched.checked ? 'info' : 'warn', 'order enrichment finished', {
         orderId: enriched.order.orderId,
         checked: enriched.checked,
@@ -1236,7 +1373,11 @@ async function collectSnapshot(optionsPayload) {
           article: enriched.order.items?.[0]?.sellerArticle || null,
         },
       })
-      collected.push(enriched.order)
+      collected[index] = ['ready_to_ship', 'in_transit', 'on_return'].includes(enriched.order.status) && !['received', 'completed', 'closed'].includes(enriched.order.returnStatus) ? enriched.order
+        : (['closed', 'canceled', 'delivered'].includes(enriched.order.status) || ['received', 'completed', 'closed'].includes(enriched.order.returnStatus)) ? { orderId: enriched.order.orderId,
+          marketplaceId: enriched.order.marketplaceId, accountId: enriched.order.accountId || null,
+          status: enriched.order.status, returnStatus: enriched.order.returnStatus, items: [] } : null
+      if (!enriched.order.status) unknownOrderIds.add(enriched.order.orderId || `row-${index + 1}`)
       const liveItem = enriched.order.items?.[0] || {}
       const liveMissing = requestedMissing(liveItem, options)
       showCollectorOverlay([
@@ -1248,35 +1389,52 @@ async function collectSnapshot(optionsPayload) {
         candidates: candidates.length,
         total: candidates.length,
         processed: index + 1,
-        orders: dedupeOrders(collected).length,
-        items: collected.flatMap((item) => item.items || []).length,
-        missing: missingSummary(dedupeOrders(collected), options).missing,
+        orders: dedupeOrders(collected.filter(Boolean)).length,
+        items: collected.filter(Boolean).flatMap((item) => item.items || []).length,
+        missing: missingSummary(dedupeOrders(collected.filter(Boolean)), options).missing,
       })
     }
-    if (index === 0 || (index + 1) % 2 === 0 || index + 1 === candidates.length) {
-      const partialOrders = dedupeOrders(collected)
+    processed += 1
+    if (processed === 1 || processed % 2 === 0 || processed === candidates.length) {
+      const partialOrders = dedupeOrders(collected.filter(Boolean))
       const { items: partialItems, missing: partialMissing } = missingSummary(partialOrders, options)
       showCollectorOverlay([
-        `Обработано ${collectionLabel}: ${index + 1} из ${candidates.length}`,
+        `Обработано ${collectionLabel}: ${processed} из ${candidates.length}`,
         `Позиций собрано: ${partialItems.length}`,
         detailErrors.length ? 'Часть данных не найдена, подробности в логах расширения' : 'Сбор идёт нормально',
       ], 'info', {
         phase: `Собираем данные ${collectionLabel}`,
         candidates: candidates.length,
         total: candidates.length,
-        processed: index + 1,
+        processed,
         orders: partialOrders.length,
         items: partialItems.length,
         missing: partialMissing,
       })
     }
-    await sleep(120)
+    }))
+    // A durable checkpoint after each bounded batch survives a closed tab,
+    // failed returns page and a restarted extension service worker.
+    const partial = dedupeOrders(collected.filter(Boolean))
+    const checkpoint = { capturedAt: new Date().toISOString(), pageUrl: location.href,
+      collector: { checkpoint: true, options },
+      orders: collectionLabel === 'возвратов' ? [] : partial,
+      returns: collectionLabel === 'возвратов' ? partial : [] }
+    await new Promise(resolve => chrome.runtime.sendMessage({ type: 'AVITO_ORDERS_CHECKPOINT', payload: checkpoint,
+      progress: { processed, total: candidates.length, phase: collectionLabel,
+        ready: partial.filter(row => globalThis.SatornaOrderCache?.complete(row)).length } }, () => {
+      void chrome.runtime.lastError
+      resolve()
+    }))
   }
-  const orders = dedupeOrders(collected)
+  const orders = dedupeOrders(collected.filter(Boolean))
+  if (!discovered.complete || blocked) detailErrors.push(discovered.reason || 'Сбор остановлен из-за ограничения Авито')
+  if (unknownOrderIds.size) detailErrors.push(`Статус не распознан у ${unknownOrderIds.size} заказов; они не собраны. Требуется проверка.`)
+  const complete = discovered.complete && !blocked && !unknownOrderIds.size
   const { items, missing } = missingSummary(orders, options)
   logEvent('info', 'collection completed on orders page', {
     candidates: candidates.length,
-    orders: orders.length,
+    orders: orders.filter(row => row.items?.length).length,
     items: items.length,
     detailPages,
     itemPages,
@@ -1284,16 +1442,17 @@ async function collectSnapshot(optionsPayload) {
     detailErrors: detailErrors.slice(-10),
   })
   showCollectorOverlay([
-    `Собрано ${collectionLabel}: ${orders.length}`,
+    `Собрано ${collectionLabel}: ${orders.filter(row => row.items?.length).length}`,
     `Позиций для производства: ${items.length}`,
     `Не хватает: фото ${missing.imageUrl}, размер ${missing.size}, цвет ${missing.color}, артикул ${missing.sellerArticle}`,
     'Данные собраны в браузере. Подтверждение сохранения появится после отправки в Satorna.',
-  ], 'ok', {
-    phase: `Сбор ${collectionLabel} завершен`,
+    ...(complete ? [] : [detailErrors.at(-1)]),
+  ], complete ? 'ok' : 'warn', {
+    phase: complete ? `Сбор ${collectionLabel} завершен` : `Сбор ${collectionLabel} неполный`,
     candidates: candidates.length,
     total: candidates.length,
     processed: candidates.length,
-    orders: orders.length,
+    orders: orders.filter(row => row.items?.length).length,
     items: items.length,
     missing,
   })
@@ -1301,9 +1460,14 @@ async function collectSnapshot(optionsPayload) {
     capturedAt: new Date().toISOString(),
     pageUrl: location.href,
     collector: {
-      status: 'completed',
+      status: complete ? 'completed' : 'partial',
+      checkpoint: !complete,
+      unknownStatuses: unknownOrderIds.size,
+      coveredAccountIds: [globalThis.SatornaAvitoPageState?.readSessionIdentity?.(document)?.accountId].filter(Boolean),
+      hasNext: discovered.hasNext && !blocked,
+      error: !complete ? detailErrors.at(-1) : null,
       candidates: candidates.length,
-      orders: orders.length,
+      orders: orders.filter(row => row.items?.length).length,
       items: items.length,
       missing,
       options,

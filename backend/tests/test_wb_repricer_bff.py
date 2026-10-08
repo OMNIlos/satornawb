@@ -21,6 +21,16 @@ def client() -> TestClient:
     return TestClient(create_app())
 
 
+@pytest.fixture(autouse=True)
+def isolated_shared_catalog(monkeypatch, tmp_path):
+    """Legacy source fixtures have no canonical catalog; SQL costs are tested separately."""
+    monkeypatch.setattr("app.platform.economics.legacy_catalog.catalog_facts", lambda org: {})
+    from app.repricer_persistence import store
+    monkeypatch.setattr(store, "_STATE_FILE", tmp_path / "repricer-state.json")
+    monkeypatch.setattr(store, "_MEMORY_RUNTIME_STATE", {})
+    monkeypatch.setattr(store, "_MEMORY_ALGORITHM_SETTINGS", {})
+
+
 def test_catalog_goods_rate_limit_does_not_fallback_spam_same_endpoint():
     fake = FakeWbApiClient(
         errors={"/api/v2/list/goods/filter": 429},
@@ -104,6 +114,7 @@ def test_repricer_sku_list_blocks_cached_goods_without_user_wb_token(monkeypatch
         "app.routers.wb_repricer_bff.list_cached_goods",
         lambda _organization_id: [{"vendorCode": "FBBT_42", "nmID": 123456, "sizes": [{"price": 129000, "discountedPrice": 119900}]}],
     )
+    monkeypatch.setattr(wb_repricer_bff_router, "cached_goods_meta", lambda org: {"pagesCached": 1, "totalCached": 1})
     api = client()
 
     listing = api.get("/api/v1/wb-repricer/sku", headers=auth_headers(api, "viewer"))
@@ -374,7 +385,7 @@ def test_repricer_list_summary_prefers_fact_margin_over_planned_period_margin():
     assert summary["adSkuCount"] == 1
 
 
-def test_repricer_list_summary_backfills_missing_other_expenses_from_revenue():
+def test_repricer_list_summary_does_not_invent_five_percent_other_expenses():
     summary = _repricer_list_summary(
         [
             {
@@ -390,11 +401,11 @@ def test_repricer_list_summary_backfills_missing_other_expenses_from_revenue():
         ]
     )
 
-    assert summary["missingOtherExpensesKopecks"] == 50_000
-    assert summary["otherExpensesKopecks"] == 50_000
-    assert summary["expensesKopecks"] == 550_000
-    assert summary["marginKopecks"] == 250_000
-    assert summary["avgMarginPct"] == 25.0
+    assert summary["missingOtherExpensesKopecks"] == 0
+    assert summary["otherExpensesKopecks"] == 0
+    assert summary["expensesKopecks"] == 500_000
+    assert summary["marginKopecks"] == 300_000
+    assert summary["avgMarginPct"] == 30.0
 
 
 def test_repricer_list_summary_subtracts_unassigned_raw_storage_from_margin():
@@ -461,7 +472,9 @@ def test_repricer_bff_sku_settings_match_frontend_shape(monkeypatch):
     assert body["meta"]["articleId"] == "FBBT_42"
     assert body["meta"]["nmId"] == 123456
     assert body["settings"]["automationEnabled"] is True
-    assert body["analytics"]["avgPriceWithSppKopecks"] is not None
+    # No sales-funnel price was provided in this fixture. Do not manufacture it
+    # from the current seller price or the historical SPP percentage.
+    assert body["analytics"]["avgPriceWithSppKopecks"] is None
     assert body["settings"]["promoBoostEnabled"] is False
     assert body["settings"]["promoBoostPct"] == 25
     assert body["settings"]["promoBoostHours"] == 48
@@ -905,7 +918,7 @@ def test_period_stats_aggregates_include_supplier_orders_spp(monkeypatch):
     assert payload["dailyAggregates"]["2026-05-28"]["123456"]["ordersUnits"] == 1
 
 
-def test_build_sku_row_uses_orders_spp_when_live_buyer_price_is_missing():
+def test_build_sku_row_keeps_historical_spp_separate_from_missing_live_price():
     row = repricer_bff_module._build_sku_row(
         "TEST_ORDERS_SPP",
         nm_id=123456,
@@ -921,11 +934,13 @@ def test_build_sku_row_uses_orders_spp_when_live_buyer_price_is_missing():
         period_aggregate={"ordersUnits": 1, "sppPct": 26, "sppSource": "supplier.orders.spp"},
     )
 
-    assert row["analytics"]["sppPct"] == 26
-    assert row["analytics"]["sppSource"] == "supplier.orders.spp"
-    assert row["analytics"]["buyerPriceNoWalletKopecks"] == 90_502
+    assert row["analytics"]["periodSppPct"] == 26
+    assert row["analytics"]["sppPct"] is None
+    assert row["analytics"]["sppSource"] is None
+    assert row["analytics"]["buyerPriceNoWalletKopecks"] is None
     assert row["analytics"]["sppAccountingMode"] == "spp_only"
-    assert row["analytics"]["accountedBuyerPriceKopecks"] == 90_502
+    assert row["analytics"]["accountedBuyerPriceKopecks"] is None
+    assert row["analytics"]["marginBaseKopecks"] == 90_502
 
 
 def test_build_sku_row_prefers_live_buyer_price_over_period_spp():
@@ -999,12 +1014,13 @@ def test_build_sku_row_can_account_spp_plus_configured_wallet():
 
     assert row["analytics"]["sppAccountingMode"] == "spp_plus_wallet"
     assert row["analytics"]["accountedWbWalletPct"] == 4.0
-    assert row["analytics"]["accountedPlatformDiscountPct"] == 28.96
-    assert row["analytics"]["buyerPriceNoWalletKopecks"] == 90_502
-    assert row["analytics"]["accountedBuyerPriceKopecks"] == 86_800
+    assert row["analytics"]["accountedPlatformDiscountPct"] is None
+    assert row["analytics"]["buyerPriceNoWalletKopecks"] is None
+    assert row["analytics"]["accountedBuyerPriceKopecks"] is None
+    assert row["analytics"]["marginBaseKopecks"] == 86_800
 
 
-def test_build_sku_row_margin_uses_planned_indeepa_formula_and_tariff_commission():
+def test_build_sku_row_preserves_tariff_but_does_not_plan_margin_without_buyout():
     previous_settings = dict(repricer_bff_module.ALGORITHM_SETTINGS_STATE)
     previous_overrides = dict(repricer_bff_module.SKU_SETTINGS_OVERRIDES)
     repricer_bff_module.ALGORITHM_SETTINGS_STATE.update({"sppAccountingMode": "spp_plus_wallet", "wbWalletType": 4})
@@ -1046,14 +1062,13 @@ def test_build_sku_row_margin_uses_planned_indeepa_formula_and_tariff_commission
     assert row["analytics"]["reportCommissionPct"] == 7
     assert row["analytics"]["commissionSource"] == "tariffs.commission.kgvpMarketplace"
     assert row["analytics"]["commissionState"] == "ok"
-    assert row["analytics"]["accountedBuyerPriceKopecks"] == 139_400
+    assert row["analytics"]["accountedBuyerPriceKopecks"] is None
     assert row["analytics"]["marginMode"] == "planned_indeepa"
-    assert row["analytics"]["marginKopecks"] == 41_348
-    assert row["analytics"]["plannedMarginKopecks"] == 41_348
-    assert row["analytics"]["plannedPeriodMarginKopecks"] == 41_348
-    assert row["analytics"]["plannedOtherExpensesKopecks"] == 8_715
-    assert row["analytics"]["plannedTaxKopecks"] == 10_458
-    assert row["analytics"]["marginPct"] == 23.7
+    assert row["analytics"]["plannedMarginState"] == "missing_inputs"
+    assert row["analytics"]["marginKopecks"] is None
+    assert row["analytics"]["plannedMarginKopecks"] is None
+    assert row["analytics"]["plannedPeriodMarginKopecks"] is None
+    assert row["analytics"]["marginPct"] is None
 
 
 def test_cyrillic_longsleeve_article_uses_longsleeve_defaults_and_official_spp():
@@ -1082,19 +1097,19 @@ def test_cyrillic_longsleeve_article_uses_longsleeve_defaults_and_official_spp()
     assert row["settings"]["cogsKopecks"] == 44_000
     assert row["settings"]["logisticsKopecks"] == 4_100
     assert row["settings"]["wbCommissionPct"] == 10.31
-    assert row["analytics"]["sppPct"] == 16.69
-    assert row["analytics"]["buyerPriceNoWalletKopecks"] == 145_209
-    assert row["analytics"]["accountedBuyerPriceKopecks"] == 139_400
+    assert row["analytics"]["sppPct"] is None
+    assert row["analytics"]["periodSppPct"] == 16.69
+    assert row["analytics"]["buyerPriceNoWalletKopecks"] is None
+    assert row["analytics"]["accountedBuyerPriceKopecks"] is None
     assert row["analytics"]["baseWbCommissionPct"] == 7.0
     assert row["analytics"]["commissionSource"] == "finance.commissionPct"
     assert row["analytics"]["commissionDisplayPct"] == 10.3
     assert row["analytics"]["commissionState"] == "fallback"
     assert row["analytics"]["reportCommissionPct"] == 7.0
-    assert row["analytics"]["marginKopecks"] == 96_235
-    assert row["analytics"]["plannedPeriodMarginKopecks"] == 96_235
-    assert row["analytics"]["plannedOtherExpensesKopecks"] == 8_715
-    assert row["analytics"]["plannedTaxKopecks"] == 10_458
-    assert row["analytics"]["marginPct"] == 55.2
+    assert row["analytics"]["plannedMarginState"] == "missing_inputs"
+    assert row["analytics"]["marginKopecks"] is None
+    assert row["analytics"]["plannedPeriodMarginKopecks"] is None
+    assert row["analytics"]["marginPct"] is None
 
 
 def test_missing_tariff_commission_uses_finance_report_percent_as_fallback():
@@ -1166,7 +1181,8 @@ def test_repricer_bff_frontend_strategy_catalog_and_sku_shape(monkeypatch):
     catalog = api.get("/api/v1/wb-repricer/strategies/catalog")
     assert catalog.status_code == 200
     payload = catalog.json()
-    assert payload["total"] == 13
+    assert payload["total"] == 14
+    assert any(item["id"] == "night_price_mode" for item in payload["items"])
     assert any(item["name"] == "Неликвид" for item in payload["items"])
     assert any(item["name"] == "Контроль оборачиваемости" for item in payload["items"])
 
@@ -1345,6 +1361,9 @@ def test_repricer_bff_bulk_strategy_assignment_uses_full_sku_index(monkeypatch):
 
 def test_sku_list_page_limits_backend_row_build_for_unfiltered_first_page(monkeypatch):
     captured: dict[str, object] = {}
+    monkeypatch.setattr(wb_repricer_bff_router, "_load_repricer_sku_snapshot_page", lambda *a, **kw: None)
+    monkeypatch.setattr(wb_repricer_bff_router, "_build_repricer_sku_snapshot", lambda *a, **kw: {})
+    monkeypatch.setattr(wb_repricer_bff_router, "cached_goods_meta", lambda org: {"totalCached": 1000, "pagesCached": 1})
 
     def fake_list_repricer_skus_for_request(_request, _scenario, **kwargs):
         captured["max_items"] = kwargs.get("max_items", "missing")
@@ -1426,8 +1445,9 @@ def test_sku_list_page_limits_backend_row_build_for_unfiltered_first_page(monkey
     assert payload["summary"]["skuCount"] == 2
     assert payload["summary"]["revenueKopecks"] == 300_000
     assert payload["summary"]["expensesKopecks"] == 39_000
-    assert payload["summary"]["marginKopecks"] == 111_000
-    assert payload["summary"]["avgMarginPct"] == 37.0
+    # An old aggregate profit is not authoritative without dated cost/tax.
+    assert payload["summary"]["marginKopecks"] is None
+    assert payload["summary"]["avgMarginPct"] is None
     assert payload["summary"]["ordersUnits"] == 4
     assert payload["summary"]["salesUnits"] == 3
 
@@ -1927,7 +1947,7 @@ def test_repricer_catalog_goods_uses_live_filter_method(monkeypatch):
     assert fake.requests[0].path == "/api/v2/list/goods/filter"
 
 
-def test_finance_report_revenue_uses_sales_minus_returns_by_seller_discount_price(monkeypatch):
+def test_finance_report_revenue_uses_seller_discounted_unit_price_net_of_returns(monkeypatch):
     monkeypatch.setattr(repricer_bff_module, "_finance_report_last_request_at", 0.0)
     fake = FakeWbApiClient(
         fixtures={
@@ -2028,7 +2048,7 @@ def test_finance_report_revenue_uses_sales_minus_returns_by_seller_discount_pric
     assert row["sellerRevenueKopecks"] == 250_000
     assert row["revenueGrossKopecks"] == 250_000
     assert row["platformDiscountKopecks"] == 49_975
-    assert row["commissionFormulaKopecks"] == 62_500
+    assert row["commissionFormulaKopecks"] == 50_006
     assert row["salesUnits"] == 3
     assert row["returnsUnits"] == 1
     assert row["netSalesUnits"] == 2
@@ -2044,18 +2064,20 @@ def test_finance_report_revenue_uses_sales_minus_returns_by_seller_discount_pric
     assert row["deductionKopecks"] == 3_000
     assert row["deductionChargedKopecks"] == 6_000
     assert row["deductionCompensationKopecks"] == 3_000
-    assert row["additionalPaymentKopecks"] == 11_000
+    # Raw additionalPayment is a signed reward expense; canonical credits
+    # carry its inverse sign, matching platform.finance.service.
+    assert row["additionalPaymentKopecks"] == -11_000
     assert row["unitKeyedSalesCount"] == 2
     assert row["unitKeyedReturnsCount"] == 1
     diagnostics = payload["diagnostics"]
-    assert diagnostics["tax"]["taxPct"] == 6
+    assert diagnostics["tax"]["taxPct"] is None
     assert diagnostics["tax"]["taxIncludedInExpenses"] is False
-    assert diagnostics["totals"]["taxKopecks"] == 15_000
+    assert diagnostics["totals"]["taxKopecks"] is None
     assert diagnostics["totals"]["storageKopecks"] == 3_000
     assert diagnostics["totals"]["acceptanceKopecks"] == 4_000
     assert diagnostics["totals"]["penaltyReturnedKopecks"] == 2_000
     assert diagnostics["totals"]["deductionCompensationKopecks"] == 3_000
-    assert diagnostics["totals"]["additionalPaymentKopecks"] == 11_000
+    assert diagnostics["totals"]["additionalPaymentKopecks"] == -11_000
     assert diagnostics["storageAcceptance"]["rawRowsAvailable"] is True
     assert diagnostics["storageAcceptance"]["paidStorageFieldRequested"] is True
     assert diagnostics["storageAcceptance"]["paidAcceptanceFieldRequested"] is True
@@ -2076,15 +2098,15 @@ def test_finance_report_revenue_uses_sales_minus_returns_by_seller_discount_pric
     assert correction["normalized"]["penaltyKopecks"] == -2_000
     assert correction["normalized"]["deductionKopecks"] == -3_000
     assert correction["normalized"]["additionalPaymentKopecks"] == 4_000
-    assert correction["normalized"]["expenseFormulaContributionKopecks"] == -9_000
+    assert correction["normalized"]["expenseFormulaContributionKopecks"] == -1_000
     assert diagnostics["skuSummaries"][0]["taxIncludedInExpenses"] is False
-    assert diagnostics["skuSummaries"][0]["expensesWithoutTaxKopecks"] == 67_500
-    assert diagnostics["skuSummaries"][0]["expensesIfTaxIncludedKopecks"] == 82_500
+    assert diagnostics["skuSummaries"][0]["expensesWithoutTaxKopecks"] == 37_000
+    assert diagnostics["skuSummaries"][0]["expensesIfTaxIncludedKopecks"] is None
     assert payload["rowsCount"] == 5
-    assert fake.requests[0].jsonBody["limit"] == 100_000
+    assert fake.requests[0].jsonBody["limit"] == 10_000
     assert fake.requests[0].jsonBody["rrdId"] == 0
     assert fake.requests[0].jsonBody["dateFrom"] == "2026-06-01"
-    assert fake.requests[0].jsonBody["dateTo"] == "2026-06-04"
+    assert fake.requests[0].jsonBody["dateTo"] == "2026-06-03"  # Inclusive finance endpoint bound
     assert payload["dateTo"] == "2026-06-03"
     assert fake.requests[0].jsonBody["period"] == "daily"
     assert {
@@ -2926,7 +2948,7 @@ def test_period_stats_retries_statistics_429_retry_after(monkeypatch):
     assert sleeps == [repricer_bff_module._STATISTICS_REPORT_MIN_INTERVAL_S, repricer_bff_module._STATISTICS_REPORT_MIN_INTERVAL_S + 1.0]
 
 
-def test_finance_net_profit_subtracts_wb_costs_cogs_ads_and_other_expenses_without_tax():
+def test_finance_uses_actual_expenses_and_keeps_profit_unknown_without_dated_tax():
     row = repricer_bff_module._build_sku_row(
         "TEST_01",
         nm_id=123456,
@@ -2975,22 +2997,22 @@ def test_finance_net_profit_subtracts_wb_costs_cogs_ads_and_other_expenses_witho
     assert analytics["sellerRevenueKopecks"] == 260_000
     assert analytics["buyerRevenueKopecks"] == 200_025
     assert analytics["platformDiscountKopecks"] == 59_975
-    assert analytics["commissionKopecks"] == 60_000
+    assert analytics["commissionKopecks"] == 10_000
     assert analytics["financeCommissionKopecks"] == 10_000
     assert analytics["commissionFormulaKopecks"] == 60_000
-    assert analytics["commissionCalcMode"] == "finance_formula"
-    assert analytics["otherExpensesKopecks"] == 13_000
-    assert analytics["taxKopecks"] == 15_600
+    assert analytics["commissionCalcMode"] == "finance_actual"
+    assert analytics["otherExpensesKopecks"] == 0
+    assert analytics["taxKopecks"] is None
     assert analytics["taxPct"] == 6
-    assert analytics["acquiringKopecks"] == 8_606
-    assert analytics["expensesKopecks"] == 100_606
-    assert analytics["netProfitKopecks"] == 69_394
-    assert analytics["factNetProfitKopecks"] == 69_394
-    assert analytics["plannedPeriodMarginKopecks"] == 130_394
-    assert analytics["plannedCommissionKopecks"] == 0
+    assert analytics["acquiringKopecks"] == 1_000
+    assert analytics["expensesKopecks"] == 30_000
+    assert analytics["netProfitKopecks"] is None
+    assert analytics["factNetProfitKopecks"] is None
+    assert analytics["plannedPeriodMarginKopecks"] is None
+    assert analytics["plannedCommissionKopecks"] is None
     assert analytics["plannedAcquiringKopecks"] == 8_606
-    assert analytics["plannedForwardLogisticsKopecks"] == 9_000
-    assert analytics["plannedReturnLogisticsKopecks"] == 9_000
+    assert analytics["plannedForwardLogisticsKopecks"] is None
+    assert analytics["plannedReturnLogisticsKopecks"] is None
     assert analytics["plannedOtherExpensesKopecks"] == 13_000
     assert analytics["plannedTaxKopecks"] == 15_600
     assert analytics["adSpendKopecks"] == 7_000
@@ -3265,7 +3287,9 @@ def test_ads_spend_aggregates_reports_progress_by_campaign_batches(monkeypatch):
     ] == [
         ("campaigns", 0, 120, 0, 3),
         ("fullstats", 50, 120, 1, 3),
+        ("fullstats-wait", 50, 120, 1, 3),
         ("fullstats", 100, 120, 2, 3),
+        ("fullstats-wait", 100, 120, 2, 3),
         ("fullstats", 120, 120, 3, 3),
     ]
 
@@ -3367,6 +3391,7 @@ def test_ads_fullstats_retries_wb_internal_recovery_conflict(monkeypatch):
 
 
 def test_refresh_ads_endpoint_starts_background_sync_without_waiting_for_fullstats(monkeypatch):
+    monkeypatch.setattr(wb_repricer_bff_router, "_full_sync_covers_range", lambda *a: (True, {}))
     started: list[dict[str, object]] = []
     background_calls: list[dict[str, object]] = []
 
@@ -3411,6 +3436,7 @@ def test_refresh_ads_endpoint_starts_background_sync_without_waiting_for_fullsta
 
 
 def test_refresh_ads_endpoint_does_not_force_start_over_running_sync(monkeypatch):
+    monkeypatch.setattr(wb_repricer_bff_router, "_full_sync_covers_range", lambda *a: (True, {}))
     started: list[dict[str, object]] = []
 
     def fake_begin_wb_sync(**kwargs):
@@ -5330,6 +5356,7 @@ def test_repricer_sku_timeseries_groups_raw_rows_by_day_hour_and_changelog(monke
 
 
 def test_repricer_sku_list_uses_covering_month_sync_daily_cache_for_week(monkeypatch):
+    from app.repricer_cache.store import FINANCE_SCHEMA_VERSION
     source_state = {
         "wb_sync_status": {
             "state": "completed",
@@ -5340,6 +5367,7 @@ def test_repricer_sku_list_uses_covering_month_sync_daily_cache_for_week(monkeyp
             "steps": [],
         },
         "finance_2026-06-01_2026-06-30": {
+            "revenueBasis": "retailAmount", "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
             "fetchedAt": "2026-06-30T08:00:00+00:00",
             "dateFrom": "2026-06-01",
             "dateTo": "2026-06-30",
@@ -5387,6 +5415,9 @@ def test_repricer_sku_list_uses_covering_month_sync_daily_cache_for_week(monkeyp
         },
     }
 
+    # These fixtures represent fetched days with no events, not absent days.
+    for offset in range(30):
+        source_state["baskets_2026-06-01_2026-06-30"]["dailyAggregates"].setdefault((date(2026, 6, 1) + timedelta(days=offset)).isoformat(), {})
     monkeypatch.setattr("app.routers.wb_repricer_bff._request_wb_token", lambda _request: None)
     monkeypatch.setattr(
         "app.routers.wb_repricer_bff.actor_from_request",
@@ -5448,6 +5479,8 @@ def test_period_source_cache_uses_covering_detail_cache_without_sync_status(monk
         },
     }
 
+    for offset in range(40):
+        source_state["baskets_2026-06-01_2026-07-10"]["dailyAggregates"].setdefault((date(2026, 6, 1) + timedelta(days=offset)).isoformat(), {})
     monkeypatch.setattr(wb_repricer_bff_router, "get_wb_sync_status", lambda _organization_id: {})
     monkeypatch.setattr(wb_repricer_bff_router, "get_source_cache", lambda _organization_id, key, **_kwargs: source_state.get(key))
     monkeypatch.setattr(
@@ -5477,6 +5510,7 @@ def test_period_source_cache_uses_covering_detail_cache_without_sync_status(monk
         21,
         datetime(2026, 6, 20, tzinfo=timezone.utc),
         datetime(2026, 7, 10, tzinfo=timezone.utc),
+        require_full_sync_coverage=False,
     )
 
     assert payload["dateFrom"] == "2026-06-20"

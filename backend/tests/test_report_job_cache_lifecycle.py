@@ -16,8 +16,28 @@ START, END = date(2026, 8, 17), date(2026, 8, 23)
 PARAMS = {"preset": "custom", "from": str(START), "to": str(END)}
 
 
+def test_completed_repricer_finance_job_survives_get_and_is_connection_scoped(runtime, monkeypatch):
+    from app import repricer_page_finance as page
+    monkeypatch.setattr(reports, "has_permission", lambda *args: True)
+    token = ["synthetic-connection-one"]
+    monkeypatch.setattr(reports, "get_user_wb_token_secret", lambda *args: token[0])
+    monkeypatch.setattr(page, "missing_page_ranges", lambda *args: [])
+    params = {**PARAMS, "source": "repricer-finance"}
+    response = runtime.api.post("/api/wb/reports/stats/jobs", params=params)
+    assert response.status_code == 200
+    assert response.json()["state"] == response.json()["stage"] == "completed"
+    result = runtime.api.get("/api/wb/reports/stats/jobs", params=params)
+    assert result.status_code == 200 and result.json()["state"] == "completed"
+    assert runtime.builds == runtime.refreshes == []
+    token[0] = "synthetic-connection-two"
+    assert runtime.api.get("/api/wb/reports/stats/jobs", params=params).json()["state"] == "idle"
+    assert runtime.api.post("/api/wb/reports/pnl/jobs", params=params).status_code == 400
+    assert runtime.api.post("/api/wb/reports/stats/jobs", params={**PARAMS, "source": "repricer-finance:forged"}).status_code == 400
+
+
 @pytest.fixture
 def runtime(monkeypatch):
+    monkeypatch.setattr('app.platform.economics.legacy_catalog.catalog_facts', lambda org: {})
     state = SimpleNamespace(cache={}, writes=[], builds=[], refreshes=[], ready=False, tax_revision="synthetic-confirmation")
 
     def save(org, key, payload):
@@ -45,6 +65,7 @@ def runtime(monkeypatch):
     )
     monkeypatch.setattr(reports, "_abc_economics_version", lambda org: "cafef00d")
     monkeypatch.setattr(reports, "legacy_finance_tax_revision", lambda org: state.tax_revision)
+    monkeypatch.setattr(reports, "_digest_source_revision", lambda *args: state.tax_revision)
     readiness = lambda *args, **kw: (state.ready, [] if state.ready else ["ads"])
     monkeypatch.setattr(reports, "_report_daily_sources_ready", readiness)
     monkeypatch.setattr(repricer_tasks, "_report_snapshot_sources_ready", readiness)
@@ -63,7 +84,7 @@ def runtime(monkeypatch):
     monkeypatch.setattr(
         repricer_tasks.refresh_report_sources_for_org,
         "delay",
-        lambda *args: enqueue(state.refreshes, args),
+        lambda *args, **kwargs: enqueue(state.refreshes, args),
     )
     state.api = TestClient(create_app())
     state.api.headers.update(auth_headers(state.api, "viewer"))
@@ -194,7 +215,7 @@ def test_cached_report_reads_preserve_active_job_without_writes(
 
 
 @pytest.mark.parametrize("report_id", ["abc", "pnl", "week-over-week"])
-@pytest.mark.parametrize("state", ["completed", "failed"])
+@pytest.mark.parametrize("state", ["completed", "failed", "paused"])
 @pytest.mark.parametrize(
     "suffix,params",
     [("", PARAMS), ("/jobs", PARAMS), ("/latest-cache", {}), ("/latest-cache", PARAMS)],
@@ -204,7 +225,7 @@ def test_cached_reads_preserve_finished_source_refresh(
 ):
     key, job = seed(runtime, report_id, state=state, stage=state)
     job.update(kind="report_source_refresh", sync={"state": "completed"})
-    if state == "failed":
+    if state in {"failed", "paused"}:
         job["error"] = "synthetic build failure"
     runtime.cache[1, key] = deepcopy(job)
     response = runtime.api.get(f"/api/wb/reports/{report_id}{suffix}", params=params)
@@ -218,9 +239,21 @@ def test_cached_reads_preserve_finished_source_refresh(
     assert runtime.writes == runtime.builds == runtime.refreshes == []
 
 
+def test_retry_queue_does_not_show_the_previous_attempt_error(runtime):
+    key, job = seed(runtime, "week-over-week", state="failed", stage="failed")
+    job.update(kind="report_source_refresh", error="previous WB HTTP 429")
+    runtime.cache[1, key] = deepcopy(job)
+    response = runtime.api.post("/api/wb/reports/week-over-week/jobs", params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()["state"] == "queued"
+    assert response.json()["error"] is None
+    assert runtime.cache[1, key]["error"] is None
+
+
 @pytest.mark.parametrize("report_id", ["abc", "pnl", "week-over-week"])
 @pytest.mark.parametrize("state", ["completed", "failed"])
 def test_normal_start_can_use_cache_after_finished_source_refresh(runtime, report_id, state):
+    runtime.ready = True
     key, job = seed(runtime, report_id, state=state, stage=state)
     job.update(kind="report_source_refresh", sync={"state": "completed"})
     runtime.cache[1, key] = deepcopy(job)
@@ -390,8 +423,36 @@ def test_finished_daily_wait_can_enqueue_once_after_sources_arrive(runtime):
         assert response.status_code == 200
         assert response.json()["state"] == "queued"
         assert response.json()["reused"] is reused
-    assert len(runtime.builds) == 1
-    assert runtime.refreshes == []
+    # SKU-level totals alone cannot produce campaign budgets.
+    assert runtime.builds == []
+    assert len(runtime.refreshes) == 1
+
+
+@pytest.mark.parametrize("cache_state", ["partial", "expired", "invalidated"])
+def test_partial_campaign_report_retries_campaign_collector_not_sku_builder(runtime, monkeypatch, cache_state):
+    runtime.ready = True
+    cache_key = reports._report_cache_key(
+        "ads", START, END, "sku", "operational", organization_id=1, finance_allowed=False,
+    )
+    runtime.cache[1, cache_key] = {
+        "completedAt": (datetime.now(timezone.utc) - timedelta(days=3)).isoformat() if cache_state == "expired" else reports._utc_now_iso(),
+        "report": {
+            "campaignDetailsCollected": True,
+            "meta": {"freshnessState": "partial" if cache_state == "partial" else "fresh"},
+            "rows": [{"campaignId": 1, "budget": None if cache_state == "partial" else 1000}],
+        },
+    }
+    if cache_state == "invalidated":
+        # The old campaign snapshot can be rejected by a newer source revision
+        # even though SKU sources themselves are fresh. Keep its collector.
+        monkeypatch.setattr(reports, "_report_payload_cache_is_usable", lambda *a, **kw: False)
+    for reused in (False, True):
+        response = runtime.api.post("/api/wb/reports/ads/jobs", params=PARAMS)
+        assert response.status_code == 200
+        assert response.json()["state"] == "queued"
+        assert response.json()["reused"] is reused
+    assert runtime.builds == []
+    assert len(runtime.refreshes) == 1
 
 
 @pytest.mark.parametrize("waiting", ["waiting_daily_detail", "waiting_baskets_detail"])
@@ -502,7 +563,7 @@ def test_pnl_prepares_1c_before_either_dispatch(
     )
     monkeypatch.setattr(
         repricer_tasks.refresh_report_sources_for_org, "delay",
-        lambda *args: enqueue("refresh", args),
+        lambda *args, **kwargs: enqueue("refresh", args),
     )
     headers = auth_headers(runtime.api, "finance_viewer" if finance_allowed else "viewer")
     key = reports._report_job_cache_key(
@@ -531,6 +592,7 @@ def test_pnl_prepares_1c_before_either_dispatch(
 
 
 def test_pnl_completed_cache_does_not_request_1c(runtime, monkeypatch):
+    runtime.ready = True
     key, _ = seed(runtime, "pnl", state="completed", stage="completed")
     monkeypatch.setattr(
         reports, "get_cash_flow_for_period",
@@ -555,12 +617,43 @@ def seed_digest(runtime, *, cached=True, state="running", stage="funnel"):
         runtime.cache[1, reports._digest_cache_key(START, END)] = {
             "dateFrom": str(START), "dateTo": str(END),
             "completedAt": reports._utc_now_iso(),
+            "sourceComplete": True, "sourceRevision": runtime.tax_revision,
             "digest": {
                 "cacheVersion": reports.DIGEST_REPORT_PAYLOAD_VERSION,
                 "meta": {"freshnessState": "cached"}, "rows": [{"sku": "SKU-1"}],
             },
         }
     return key, job
+
+
+@pytest.mark.parametrize('ready', [False, True])
+def test_statistics_on_open_queues_only_missing_sources(runtime, ready):
+    runtime.ready = ready
+    response = runtime.api.post('/api/wb/reports/stats/jobs', params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()['state'] == ('completed' if ready else 'queued')
+    assert runtime.builds == []
+    assert len(runtime.refreshes) == (0 if ready else 1)
+    if not ready:
+        assert runtime.refreshes[0][2] == 'stats'
+        again = runtime.api.post('/api/wb/reports/stats/jobs', params=PARAMS)
+        assert again.json()['reused'] is True
+        assert len(runtime.refreshes) == 1
+
+
+@pytest.mark.parametrize('changed', ['coverage', 'revision'])
+def test_partial_or_outdated_digest_does_not_block_source_refresh(runtime, changed):
+    seed_digest(runtime, state='completed', stage='completed')
+    cached = runtime.cache[1, reports._digest_cache_key(START, END)]
+    if changed == 'coverage':
+        cached['sourceComplete'] = False
+    else:
+        cached['sourceRevision'] = 'older-source'
+    runtime.ready = False
+    response = runtime.api.post('/api/wb/reports/digest/refresh', params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()['state'] == 'queued'
+    assert len(runtime.refreshes) == 1 and runtime.builds == []
 
 
 @pytest.mark.parametrize("cached", [False, True])
@@ -606,7 +699,9 @@ def test_digest_failed_refresh_remains_visible_with_fresh_cache(runtime, suffix)
 @pytest.mark.parametrize("state", ["queued", "running"])
 @pytest.mark.parametrize("heartbeat", ["missing", "expired"])
 @pytest.mark.parametrize("suffix", ["", "/status", "/refresh"])
-def test_digest_abandoned_job_is_stale_and_restarts_once(runtime, state, heartbeat, suffix):
+@pytest.mark.parametrize("sources_ready", [False, True])
+def test_digest_abandoned_job_is_stale_and_restarts_once(runtime, state, heartbeat, suffix, sources_ready):
+    runtime.ready = sources_ready
     key, job = seed_digest(runtime, cached=False, state=state)
     if heartbeat == "missing":
         job.pop("updatedAt")
@@ -629,8 +724,13 @@ def test_digest_abandoned_job_is_stale_and_restarts_once(runtime, state, heartbe
         assert response.status_code == 200
         assert response.json()["state"] == "queued"
         assert response.json()["reused"] is reused
-    assert runtime.builds == [(1, str(START), str(END), False, None)]
-    assert runtime.refreshes == []
+    if sources_ready:
+        assert runtime.builds == [(1, str(START), str(END), False, None)]
+        assert runtime.refreshes == []
+    else:
+        assert runtime.builds == []
+        assert len(runtime.refreshes) == 1
+        assert runtime.refreshes[0][2:] == ('digest', str(START), str(END), 'sku', 'operational', False, None)
 
 
 def test_digest_latest_exposes_stale_job_with_fresh_cache(runtime):
@@ -647,6 +747,7 @@ def test_digest_latest_exposes_stale_job_with_fresh_cache(runtime):
 
 @pytest.mark.parametrize("state", ["missing", "completed", "stale", "failed"])
 def test_digest_refresh_keeps_fresh_cache_fast_path(runtime, state):
+    runtime.ready = True
     key, job = seed_digest(runtime, state=state, stage=state)
     if state == "missing":
         runtime.cache.pop((1, key))

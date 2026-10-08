@@ -147,7 +147,8 @@ function findOrderPayloadCandidates(root, expectedTitle = '') {
       }
     }
     idMatches.sort((left, right) => left.distance - right.distance)
-    const itemId = idMatches[0]?.itemId
+    const uniqueIds = [...new Set(idMatches.map(match => match.itemId))]
+    const itemId = uniqueIds.length === 1 ? uniqueIds[0] : null
     if (!itemId) continue
     const imageUrls = globalThis.SatornaAvitoItemPhoto?.extractPayloadImages?.(context, 5) || []
     candidates.push({
@@ -289,21 +290,67 @@ function extractChannelIds(root) {
   const values = []
   const patterns = [
     /"channelId"\s*:\s*"([^"]+)"/gi,
-    /channelId(?:%3D|=)(u2[iI]-[~]?[a-zA-Z0-9_-]+)/gi,
-    /(u2[iI]-[~]?[a-zA-Z0-9_-]{8,})/g,
+    /channelId(?:%3D|=)(u2[iI]-[a-zA-Z0-9_~%-]+)/gi,
+    /(u2[iI]-[a-zA-Z0-9_~-]{8,})(?![a-zA-Z0-9_~%\-])/g,
   ]
   for (const pattern of patterns) {
     for (const match of source.matchAll(pattern)) {
-      let value = String(match[1] || match[0] || '').split('&')[0]
+      let value = String(match[1] || match[0] || '')
       try {
         value = decodeURIComponent(value)
       } catch (_error) {
         // Keep the original value.
       }
-      if (/^u2[iI]-[~]?[a-zA-Z0-9_-]{8,}$/.test(value) && !values.includes(value)) values.push(value)
+      value = value.split('&')[0]
+      if (/^u2[iI]-[a-zA-Z0-9_~-]{8,}$/.test(value) && !values.includes(value)) values.push(value)
     }
   }
   return values
+}
+
+function extractChatBinding(payloads) {
+  const sellerIds = new Set(), buyerIds = new Set(), seen = new WeakSet()
+  function visit(value, depth = 0) {
+    if (!value || typeof value !== 'object' || depth > 10 || seen.has(value)) return
+    seen.add(value)
+    for (const [key, actor] of Object.entries(value)) {
+      if (['seller', 'buyer'].includes(key) && actor && typeof actor === 'object') {
+        let id = actor.id ?? actor.userId ?? actor.user_id
+        // Native order BDUI identifies the buyer by the public profile userKey.
+        if (key === 'buyer' && id == null && typeof actor.deeplink === 'string') {
+          try {
+            const link = new URL(actor.deeplink)
+            if (link.protocol === 'ru.avito:' && link.host === '1' && link.pathname === '/user/profile') id = link.searchParams.get('userKey')
+          } catch (_error) { /* Missing identity remains reviewable. */ }
+        }
+        if (id != null) (key === 'seller' ? sellerIds : buyerIds).add(String(id))
+      }
+      if (key === 'sellerId' && actor != null && typeof actor !== 'object') sellerIds.add(String(actor))
+      if (key === 'buyerId' && actor != null && typeof actor !== 'object') buyerIds.add(String(actor))
+      if (actor && typeof actor === 'object') visit(actor, depth + 1)
+    }
+  }
+  payloads.forEach(payload => visit(payload))
+  return { sellerId: sellerIds.size === 1 ? [...sellerIds][0] : null, buyerId: buyerIds.size === 1 ? [...buyerIds][0] : null }
+}
+
+function readSessionIdentity(root) {
+  // Read only the two identity fields, never cookies, email or credentials.
+  for (const script of Array.from(root?.scripts || [])) {
+    if (script.src) continue
+    const match = String(script.textContent || '').match(/window\.__preloadedState__\s*=\s*("(?:\\.|[^"\\])*")/)
+    if (!match) continue
+    try {
+      let state = JSON.parse(match[1])
+      if (typeof state === 'string') state = JSON.parse(state)
+      const user = state?.user
+      if (user?.isEmployee || state?.layout?.accountHierarchy?.isEmployeeMode) return null
+      const accountId = String(user?.id || '')
+      const authorId = String(user?.hashedId || '')
+      return /^\d+$/.test(accountId) && /^[\w~-]+$/.test(authorId) ? { accountId, authorId } : null
+    } catch (_error) { return null }
+  }
+  return null
 }
 
 async function loadCandidatesFromOrderResources(resourceUrls, expectedTitle = '', fetchApi = globalThis.fetch) {
@@ -314,24 +361,33 @@ async function loadCandidatesFromOrderResources(resourceUrls, expectedTitle = ''
   const payloads = []
   const requests = []
   for (const url of urls) {
-    try {
-      const response = await fetchApi(url, {
-        method: 'GET',
-        credentials: 'include',
-        cache: 'no-store',
-        headers: { Accept: 'application/json' },
-      })
-      if (!response?.ok) {
-        requests.push({ url, status: Number(response?.status || 0), candidates: 0 })
-        continue
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await fetchApi(url, {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(15000),
+        })
+        if (!response?.ok) {
+          requests.push({ url, status: Number(response?.status || 0), candidates: 0 })
+          if (attempt === 0 && Number(response?.status) >= 500) {
+            await new Promise(resolve => setTimeout(resolve, 500))
+            continue
+          }
+          break
+        }
+        const payload = await response.json()
+        payloads.push(payload)
+        const count = findOrderPayloadCandidates(payload, expectedTitle).length
+          || findCandidates(payload, expectedTitle).length
+        requests.push({ url, status: Number(response.status || 200), candidates: count })
+        break
+      } catch (_error) {
+        requests.push({ url, status: 0, candidates: 0, error: 'order_resource_unavailable' })
+        if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 500))
       }
-      const payload = await response.json()
-      payloads.push(payload)
-      const count = findOrderPayloadCandidates(payload, expectedTitle).length
-        || findCandidates(payload, expectedTitle).length
-      requests.push({ url, status: Number(response.status || 200), candidates: count })
-    } catch (error) {
-      requests.push({ url, status: 0, candidates: 0, error: error instanceof Error ? error.message : String(error) })
     }
   }
   return {
@@ -343,6 +399,7 @@ async function loadCandidatesFromOrderResources(resourceUrls, expectedTitle = ''
     )).sort((left, right) => right.score - left.score).slice(0, 20),
     requests,
     channelIds: payloads.flatMap(extractChannelIds).filter((value, index, all) => all.indexOf(value) === index),
+    chatBinding: extractChatBinding(payloads),
     resourceText: payloads.map(relevantPayloadText).filter(Boolean).join('\n').slice(0, 30000),
   }
 }
@@ -373,11 +430,13 @@ async function loadCandidateForOrderPage(
 }
 
 globalThis.SatornaAvitoPageState = {
+  readSessionIdentity,
   findCandidates,
   findOrderPayloadCandidates,
   collectFromDocument,
   networkResourceUrls,
   extractChannelIds,
+  extractChatBinding,
   inspectDocument,
   profileOrderResourceUrl,
   loadCandidatesFromOrderResources,

@@ -6,7 +6,7 @@ import { chromium } from 'playwright'
 import { build } from 'vite'
 import { expect, it } from 'vitest'
 
-it('keeps current buyer columns separate and removes only the product margin column without shifting cells', async () => {
+it('keeps current buyer columns separate and shows factual margin without shifting cells', async () => {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const result = await build({ root, configFile: false, envFile: false, logLevel: 'silent', plugins: [react()],
     define: { 'process.env.NODE_ENV': '"test"', 'import.meta.env.VITE_API_BASE_URL': '""', 'import.meta.env.VITE_WB_LIVE_ENABLED': '"false"' },
@@ -79,11 +79,12 @@ it('keeps current buyer columns separate and removes only the product margin col
     expect.soft(await cell('AVERAGE-ONLY', 'priceWithWallet').innerText()).toBe('нет данных')
     expect.soft(await cell('BUYER-LOW', 'priceWithWallet').innerText()).toBe('нет данных')
     expect.soft(compact(await cell('BUYER-HIGH', 'priceWithWallet').innerText())).toBe('1700₽скошельком')
-    expect(await page.locator('#mainTable [data-column-id="mg"]').count()).toBe(0)
-    expect(await page.locator('#mainTable thead th').count()).toBe(20)
-    expect(await page.locator('#mainTable colgroup col').count()).toBe(20)
+    expect(await page.locator('#mainTable thead [data-column-id="mg"]').count()).toBe(1)
+    expect(await page.locator('#mainTable thead th').count()).toBe(21)
+    expect(await page.locator('#mainTable colgroup col').count()).toBe(21)
     for (const row of rows) {
-      expect(await page.locator(`#tbody tr[data-sku="${row.sku}"] td`).count()).toBe(20)
+      expect(await page.locator(`#tbody tr[data-sku="${row.sku}"] td`).count()).toBe(21)
+      expect(await cell(row.sku, 'mg').innerText()).toContain('—') // Fixture has planned values only.
       expect(await cell(row.sku, 'currentCost').getByRole('textbox').count()).toBe(1)
       expect(await cell(row.sku, 'currentCost').innerText()).not.toContain('Себестоимость…')
       expect(await cell(row.sku, 'currentCost').getByRole('textbox').evaluate(el => getComputedStyle(el).borderTopColor)).toBe('rgb(37, 99, 235)')

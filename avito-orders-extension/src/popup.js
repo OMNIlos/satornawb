@@ -9,6 +9,19 @@ const colorFromDescriptionInput = document.getElementById('colorFromDescription'
 const articleFromDescriptionInput = document.getElementById('articleFromDescription')
 const saveBtn = document.getElementById('saveBtn')
 const collectBtn = document.getElementById('collectBtn')
+const retryBtn = document.getElementById('retryBtn')
+const progressEl = document.getElementById('orderProgress')
+function renderOrderProgress(progress) {
+  if (!progress) return
+  const problem = Math.max(0, (progress.processed || 0) - (progress.ready || 0))
+  progressEl.textContent = `${progress.phase || 'Сбор'}: ${progress.processed || 0} из ${progress.total || 0}. Поля готовы: ${progress.ready || 0}. Требуют проверки: ${problem}.`
+}
+chrome.storage.local.get('orderCollectionProgress').then(stored => renderOrderProgress(stored.orderCollectionProgress))
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.orderCollectionProgress) renderOrderProgress(changes.orderCollectionProgress.newValue)
+  if (area === 'sync' && changes.lastStatus) setStatus(changes.lastStatus.newValue)
+})
+retryBtn.addEventListener('click', () => collectBtn.click())
 const labelsBtn = document.getElementById('labelsBtn')
 const listingPhotosBtn = document.getElementById('listingPhotosBtn')
 const stopListingPhotosBtn = document.getElementById('stopListingPhotosBtn')
@@ -33,7 +46,8 @@ listingPhotosBtn.addEventListener('click', async () => {
   if (connectionDirty || !accessTokenInput.value.trim()) {
     setActiveScreen('settings'); setStatus('Сначала сохраните адрес и токен Satorna'); return
   }
-  await chrome.runtime.sendMessage({ type: 'AVITO_LISTING_PHOTOS_COLLECT' })
+  const result = await chrome.runtime.sendMessage({ type: 'AVITO_LISTING_PHOTOS_COLLECT' })
+  if (!result?.ok) { setStatus(result?.error || 'Не удалось запустить сбор фото'); return }
   await renderListingPhotos()
 })
 stopListingPhotosBtn.addEventListener('click', async () => {
@@ -61,7 +75,7 @@ let saveFeedbackTimer = 0
 const DEFAULT_COLLECT_OPTIONS = {
   photoMode: 'one',
   colorFromDescription: true,
-  sizeMode: 'description',
+  sizeMode: 'chat_ai',
   articleFromDescription: true,
 }
 
@@ -143,6 +157,11 @@ async function loadSettings() {
     lastSnapshotAt: '',
   })
   Object.assign(settings, await SatornaConnection.read())
+  const migration = await chrome.storage.sync.get({ chatSizeDefaultVersion: 0 })
+  if (migration.chatSizeDefaultVersion < 1) {
+    settings.collectOptions = { ...settings.collectOptions, sizeMode: settings.collectOptions?.sizeMode === 'none' ? 'none' : 'chat_ai' }
+    await chrome.storage.sync.set({ collectOptions: settings.collectOptions, chatSizeDefaultVersion: 1 })
+  }
   savedBackendUrl = SatornaConnection.normalize(settings.backendUrl)
   backendUrlInput.value = savedBackendUrl
   const options = { ...DEFAULT_COLLECT_OPTIONS, ...(settings.collectOptions || {}) }
@@ -250,7 +269,7 @@ labelsBtn.addEventListener('click', async () => {
   setStatus('Открываем печать этикеток. Ждём PDF Авито…')
   try {
     const result = await chrome.runtime.sendMessage({ type: 'AVITO_LABELS_COLLECT' })
-    setStatus(result?.ok ? result.message : result?.error || 'Не удалось получить этикетки')
+    setStatus(result?.message || result?.error || 'Не удалось получить этикетки')
   } catch { setStatus('Связь с расширением прервалась. Повторите получение этикеток.') }
   finally { labelsBtn.disabled = false }
 })

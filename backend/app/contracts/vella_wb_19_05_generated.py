@@ -88,13 +88,13 @@ class Row(BaseModel):
     managerId: str | None
     skuId: str | None
     revenueKopecks: int | None
-    cogsKopecks: conint(ge=0) | None
-    commissionKopecks: conint(ge=0) | None
-    logisticsKopecks: conint(ge=0) | None
-    storageKopecks: conint(ge=0) | None
+    cogsKopecks: int | None
+    commissionKopecks: int | None
+    logisticsKopecks: int | None
+    storageKopecks: int | None
     adSpendKopecks: conint(ge=0) | None
     taxKopecks: int | None
-    overheadKopecks: conint(ge=0) | None
+    overheadKopecks: int | None
     netProfitKopecks: int | None
     marginPct: float | None
     sourceStatus: SourceStatus
@@ -130,7 +130,7 @@ class ManualCosts(BaseModel):
 
 
 class ManualCosts1(BaseModel):
-    costId: Literal['tax']
+    costId: Literal['tax', 'storage', 'overhead']
     label: constr(min_length=1)
     amountKopecks: int | None
     allocationBase: AllocationBase

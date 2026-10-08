@@ -55,12 +55,24 @@ def get_legacy_finance_taxes(
     if not finance_cache_uses_current_revenue_basis(finance_cache):
         return {key: _missing("tax_revenue_basis_unconfirmed") for key in aggregates}
     dates = [period.date_from + timedelta(days=offset) for offset in range(period.days)]
-    instants = {day: _day_end(day) for day in dates}
     nm_ids = {key: int(key) for key in aggregates if key.isdigit() and int(key) > 0}
     daily: dict[str, list[tuple[date, dict[str, Any]]]] = {}
     has_daily = isinstance(finance_cache.get("dailyAggregates"), dict)
+    business_dates = set(dates)
+    # A settlement report can include delayed operations whose saleDt precedes
+    # the requested report period. Its aggregate includes those operations too.
+    # Reconcile every business day ONLY when this is the exact report window;
+    # apply the dated policy/cost at the operation's original business date.
+    if (has_daily and str(finance_cache.get("dateFrom"))[:10] == str(period.date_from)
+            and str(finance_cache.get("dateTo"))[:10] == str(period.date_to)):
+        for raw_day in finance_cache["dailyAggregates"]:
+            try:
+                business_dates.add(date.fromisoformat(raw_day))
+            except (ValueError, TypeError):
+                continue
+    instants = {day: _day_end(day) for day in business_dates}
     if has_daily:
-        for day in dates:
+        for day in sorted(business_dates):
             values = finance_cache["dailyAggregates"].get(day.isoformat()) or {}
             if isinstance(values, dict):
                 for key, value in values.items():
@@ -130,7 +142,10 @@ def get_legacy_finance_taxes(
                         (instants[dates[0]], fact)
                     ]
                     values = [costs.get((sku_id, instant)) for instant, _ in points]
-                    confirmed = all(value is not None and value.value_state == "configured"
+                    def usable(value):
+                        return value is not None and (value.value_state == 'configured' or
+                            (value.value_state == 'assumed' and value.source == 'user-example'))
+                    confirmed = all(usable(value)
                                     and value.evidence_status == "dated" and type(value.amount_kopecks) is int
                                     for value in values)
                     # Daily units cannot be split around an intraday edit.
@@ -142,12 +157,13 @@ def get_legacy_finance_taxes(
                     )
                     if not has_daily:
                         all_values = [costs.get((sku_id, instant)) for instant in instants.values()]
-                        confirmed = confirmed and all(value is not None and value.value_state == "configured"
+                        confirmed = confirmed and all(usable(value)
                             and value.evidence_status == "dated" and value.amount_kopecks == values[0].amount_kopecks
                             for value in all_values)
                     confirmed = confirmed and all(type(row.get(field)) is int
                         for _, row in points for field in ("salesUnits", "returnsUnits"))
                     result[key].update(
+                        settlementCogsState='assumed' if confirmed and any(value.value_state == 'assumed' for value in values) else 'configured' if confirmed else 'missing',
                         settlementCogsKopecks=sum(value.amount_kopecks * (row["salesUnits"] - row["returnsUnits"])
                             for value, (_, row) in zip(values, points)) if confirmed else None,
                         settlementCogsReason=None if confirmed else "dated_cost_missing_or_daily_basis_incomplete",
@@ -167,6 +183,10 @@ def legacy_finance_tax_revision(organization_id: int) -> str:
         statements.append(select(func.count()).select_from(model).where(model.organization_id == organization_id).scalar_subquery())
         if hasattr(model, "updated_at"):
             statements.append(select(func.max(model.updated_at)).where(model.organization_id == organization_id).scalar_subquery())
+    # Photo backfill only fills missing URLs. Count changes even when multiple
+    # batches commit within SQLite's one-second updated_at resolution.
+    statements.append(select(func.count(func.nullif(MarketplaceProductRow.image_url, ''))).where(
+        MarketplaceProductRow.organization_id == organization_id).scalar_subquery())
     try:
         with get_session_factory()() as session:
             _prepare_read(session, organization_id)

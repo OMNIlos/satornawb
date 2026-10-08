@@ -17,7 +17,7 @@ test('extract only exact listing OpenGraph photo; CDN and URL allowlists', () =>
   assert.equal(listingUrl('https://evil.test/item_123', '123'), null)
 })
 
-test('bulk upload is parallel but bounded to four workers', async () => {
+test('bulk upload is parallel but bounded to five workers', async () => {
   let active = 0, peak = 0
   const rows = Array.from({ length: 12 }, (_, i) => ({ ...item, itemId: String(100+i), url: `https://www.avito.ru/item_${100+i}`, imageUrl: cdn }))
   const result = await collect({ ...options, fetchImpl: async url => {
@@ -31,7 +31,7 @@ test('bulk upload is parallel but bounded to four workers', async () => {
     return json({photoId: 1})
   } })
   assert.equal(result.saved, 12)
-  assert.equal(peak, 4)
+  assert.equal(peak, 5)
 })
 
 test('complete database requires just one manifest request, zero Avito fetches', async () => {

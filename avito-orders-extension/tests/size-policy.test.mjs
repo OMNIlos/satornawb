@@ -14,12 +14,14 @@ test('description mode sets final size and provenance', () => {
   assert.deepEqual(item, { size: '54 (XL)', sources: { size: 'description' } })
 })
 
-test('chat AI mode keeps description only as fallback evidence', () => {
+test('chat AI mode never confirms listing or plain unattributed chat sizes', () => {
   const item = { sources: {} }
   apply(item, 'chat_ai', '54 (XL)', 'Сначала M\nНет, тогда L')
   assert.deepEqual(item, {
     descriptionSize: '54 (XL)',
-    chatText: 'Сначала M\nНет, тогда L',
+    sizeMode: 'chat_ai',
+    size: null,
+    chatText: null,
     sources: {},
   })
 })
@@ -36,4 +38,11 @@ test('a later page without size does not erase already collected explicit size',
   apply(item, 'description', null)
   assert.equal(item.size, '48 (M)')
   assert.equal(item.sources.size, 'description')
+})
+
+test('switching from chat mode removes chat confirmation rather than mislabelling a listing size', () => {
+  const item = { size: 'M', sizeMode: 'chat_ai', sizeState: 'confirmed', sizeEvidence: { reply: 'M' }, sources: { size: 'chat_ai' } }
+  apply(item, 'description', 'XL')
+  assert.equal(item.size, 'XL'); assert.equal(item.sizeMode, 'description')
+  assert.equal(item.sources.size, 'description'); assert.deepEqual(item.sizeEvidence, {})
 })

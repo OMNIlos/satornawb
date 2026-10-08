@@ -84,10 +84,31 @@
     return parseProducts(payload, new Set(nmIds))
   }
 
-  function sanitizePageMessage(value, page) {
+  function walletSingleSizeNmIds(payload) {
+    if (!Array.isArray(payload?.products) || payload.products.length > 1000) return []
+    return payload.products.filter(product => integer(product?.id) && Array.isArray(product.sizes)
+      // A catalog tile has no selected optionId; identical regular prices do
+      // not establish identical wallet prices across different sizes.
+      && product.sizes.length === 1
+      && new Set(product.sizes.map(size => size?.optionId)).size === product.sizes.length
+      && product.sizes.every(size => integer(size?.optionId) && integer(size?.price?.product)
+        && size.price.product === product.sizes[0].price.product)).map(product => product.id)
+  }
+
+  function visibleWalletKopecks(text, buyer) {
+    if (typeof text !== 'string' || !/с\s+WB\s+Кошельком/i.test(text) || text.length > 300) return null
+    // Read the first explicitly displayed amount, not a percentage or old price.
+    const amount = text.match(/^\s*(\d[\d\s\u00a0\u202f]*(?:[,.]\d{1,2})?)\s*₽/)
+    if (!amount || (text.match(/₽/g) || []).length !== 1) return null
+    const value = Math.round(Number(amount[1].replace(/[\s\u00a0\u202f]/g, '').replace(',', '.')) * 100)
+    return integer(value) && value <= buyer ? value : null
+  }
+
+  function sanitizePageMessage(value, page, allowWallet = false) {
     if (!pageIdentity(page) || value?.source !== SOURCE) return null
     if (value.type === 'blocked' && ['http_403', 'http_429', 'challenge'].includes(value.code)) {
-      return { type: 'blocked', code: value.code }
+      return { type: 'blocked', code: value.code, ...(value.code === 'http_429'
+        && integer(value.retryAfterSeconds) && value.retryAfterSeconds <= 86400 ? { retryAfterSeconds: value.retryAfterSeconds } : {}) }
     }
     const isCatalog = Boolean(sellerId(page) && integer(value.catalogPage) && Number.isSafeInteger(value.productCount) && value.productCount >= 0 && value.productCount <= 1000)
     const loadedNmId = integer(value.loadedNmId) && value.loadedNmId === cardNmId(page) ? value.loadedNmId : null
@@ -99,9 +120,13 @@
       seen.add(key(item))
       const clean = { nmId: item.nmId, sizeId: item.sizeId, buyerPriceNoWalletKopecks: item.buyerPriceNoWalletKopecks }
       if (integer(item.supplierId)) clean.supplierId = item.supplierId
+      if (allowWallet && integer(item.buyerPriceWithWalletKopecks)
+        && item.buyerPriceWithWalletKopecks <= item.buyerPriceNoWalletKopecks) clean.buyerPriceWithWalletKopecks = item.buyerPriceWithWalletKopecks
       items.push(clean)
     }
-    return { type: 'observations', items, ...(isCatalog ? { catalogPage: value.catalogPage, productCount: value.productCount } : {}), ...(loadedNmId ? { loadedNmId } : {}) }
+    const uniform = Array.isArray(value.walletSingleSizeNmIds) && value.walletSingleSizeNmIds.length <= 1000
+      ? [...new Set(value.walletSingleSizeNmIds.filter(id => integer(id) && items.some(item => item.nmId === id)))] : []
+    return { type: 'observations', items, ...(uniform.length ? { walletSingleSizeNmIds: uniform } : {}), ...(isCatalog ? { catalogPage: value.catalogPage, productCount: value.productCount } : {}), ...(loadedNmId ? { loadedNmId } : {}) }
   }
 
   function validateCatalogPage(value, page, expected = null, now = Date.now()) {
@@ -132,7 +157,9 @@
         || observation.buyerPriceNoWalletKopecks > offer.sellerPriceKopecks || seen.has(key(observation))) continue
       seen.add(key(observation))
       items.push({ nmId: offer.nmId, sizeId: offer.sizeId, sellerPriceKopecks: offer.sellerPriceKopecks,
-        buyerPriceNoWalletKopecks: observation.buyerPriceNoWalletKopecks, buyerPriceWithWalletKopecks: null, observedAt })
+        buyerPriceNoWalletKopecks: observation.buyerPriceNoWalletKopecks,
+        buyerPriceWithWalletKopecks: integer(observation.buyerPriceWithWalletKopecks)
+          && observation.buyerPriceWithWalletKopecks <= observation.buyerPriceNoWalletKopecks ? observation.buyerPriceWithWalletKopecks : null, observedAt })
     }
     return { items, ignored: observations.length - items.length }
   }
@@ -150,5 +177,5 @@
   }
 
   globalThis.WbPricesContract = Object.freeze({ SOURCE, WB_ORIGIN, integer, key, cardNmId, sellerId, pageIdentity, catalogPage, isDetailRequest,
-    parseDetail, parsePublicDetail, sanitizePageMessage, validateCatalogPage, snapshotItems, isTrustedPopupSender, isTrustedPageSender })
+    parseDetail, parsePublicDetail, walletSingleSizeNmIds, visibleWalletKopecks, sanitizePageMessage, validateCatalogPage, snapshotItems, isTrustedPopupSender, isTrustedPageSender })
 })()

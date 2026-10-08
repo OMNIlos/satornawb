@@ -5,6 +5,17 @@ const source = readFileSync(new URL('./VellaHtmlParityPage.tsx', import.meta.url
 const legacySource = readFileSync(new URL('../wb-repricer/WbRepricerStatsPage.tsx', import.meta.url), 'utf8')
 
 describe('Repricer stats live source', () => {
+  it('does not recreate simulator and puts trends in product cells, not headers', () => {
+    const sidebar = source.slice(source.indexOf('const ShellSidebarIsland'), source.indexOf('const ShellTopbarIsland'))
+    expect(sidebar).not.toContain('nav-label">Симулятор')
+    expect(sidebar).toContain("node.remove()")
+    const trends = source.slice(source.indexOf('function updateStatsTrends'), source.indexOf('function applyStatsFilters'))
+    expect(trends).toContain('td[data-stats-column]')
+    expect(trends).toContain('cell.appendChild(label)')
+    expect(trends).not.toContain('header.insertBefore')
+    expect(trends).toContain("['ads', 'finance']")
+    expect(trends).toContain("=== 'ok'")
+  })
   it('loads the repricer stats tab from the backend stats endpoint', () => {
     expect(source).toContain('loadLiveRepricerStats')
     expect(source).toContain('window.__vellaLoadLiveRepricerStats')

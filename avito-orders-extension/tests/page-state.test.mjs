@@ -5,6 +5,53 @@ globalThis.location = { href: 'https://www.avito.ru/orders' }
 delete globalThis.SatornaAvitoItemPhoto
 await import(`../src/item-photo.js?red=${Date.now()}`)
 
+test('extracts native clickstream chat IDs with a tilde inside the ID', async () => {
+  await import('../src/page-state.js')
+  const channel = 'u2i-n~syntheticBuyerItem'
+  const redirect = `ru.avito://1/channel/show?channelId=${channel}&isMiniMessenger=true`
+  const wrapped = `ru.avito://1/clickstream?id=order_chat&redirect=${encodeURIComponent(redirect)}`
+  assert.deepEqual(globalThis.SatornaAvitoPageState.extractChannelIds({messagesDeeplink: wrapped}), [channel])
+  assert.deepEqual(globalThis.SatornaAvitoPageState.extractChannelIds({channelId: channel}), [channel])
+  assert.deepEqual(globalThis.SatornaAvitoPageState.extractChannelIds({link: 'channelId=u2i-n%7EsyntheticBuyerItem'}), [channel])
+  assert.deepEqual(globalThis.SatornaAvitoPageState.extractChannelIds({link: 'channelId=u2i-longPrefix%7EsyntheticBuyerItem'}), ['u2i-longPrefix~syntheticBuyerItem'])
+})
+
+test('order profile retries transient failures once, but never retries access restrictions', async () => {
+  await import('../src/page-state.js')
+  for (const status of [503, 403, 429]) {
+    let attempts = 0
+    const result = await globalThis.SatornaAvitoPageState.loadCandidatesFromOrderResources(
+      ['https://www.avito.ru/web/2/profile/order?referenceID=70000000532427280'], '',
+      async (_url, options) => {
+        assert.ok(options.signal)
+        attempts += 1
+        return attempts === 1 ? { ok: false, status } : { ok: true, status: 200, json: async () => ({ channelId: 'u2i-synthetic' }) }
+      },
+    )
+    assert.equal(attempts, status === 503 ? 2 : 1)
+    assert.equal(result.requests.at(-1).status, status === 503 ? 200 : status)
+  }
+})
+
+test('extracts unique order buyer/seller binding and rejects conflicting actors', async () => {
+  await import(`../src/page-state.js?binding=${Date.now()}`)
+  const extract = globalThis.SatornaAvitoPageState.extractChatBinding
+  assert.deepEqual(extract([{ order: { buyer: { id: 123 }, seller: { userId: 456 } } }]), { buyerId: '123', sellerId: '456' })
+  assert.deepEqual(extract([{ buyerId: 123, sellerId: 456 }, { buyerId: 789 }]), { buyerId: null, sellerId: '456' })
+  assert.deepEqual(extract([{ buyer: { deeplink: 'ru.avito://1/user/profile?userKey=buyer-public' } }]), { buyerId: 'buyer-public', sellerId: null })
+  assert.deepEqual(extract([{ buyer: { deeplink: 'https://foreign.example/user/profile?userKey=buyer-public' } }]), { buyerId: null, sellerId: null })
+})
+
+test('current numeric account and hashed chat author are read only from native bootstrap', async () => {
+  await import(`../src/page-state.js?session=${Date.now()}`)
+  const root = (user, layout = {}) => ({ scripts: [{ textContent: `window.__preloadedState__ = ${JSON.stringify(JSON.stringify({ user, layout }))};` }] })
+  const read = globalThis.SatornaAvitoPageState.readSessionIdentity
+  assert.deepEqual(read(root({ id: 12345, hashedId: 'seller-public' })), { accountId: '12345', authorId: 'seller-public' })
+  assert.equal(read(root({ id: 12345, hashedId: 'seller-public', isEmployee: true })), null)
+  assert.equal(read(root({ id: 12345, hashedId: 'seller-public' }, { accountHierarchy: { isEmployeeMode: true } })), null)
+  assert.equal(read(root({ id: 12345 })), null)
+})
+
 test('finds an Avito item hidden in React order-detail props', async () => {
   delete globalThis.SatornaAvitoPageState
   await import(`../src/page-state.js?red=${Date.now()}`).catch(() => {})

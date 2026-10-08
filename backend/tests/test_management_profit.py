@@ -30,6 +30,20 @@ def test_owner_example_is_248000_before_internal_and_198000_net():
     assert result.blocker_ids == ()
 
 
+def test_confirmed_22_percent_is_deducted_from_sales_not_added_or_extracted():
+    zero_expenses = {key: 0 for key in inputs() if key.endswith("_kopecks")}
+    result = abc_pnl.calculate_management_profit(**(inputs() | zero_expenses | {
+        "sales_kopecks": 100_000_000, "tax_basis_points": 2200,
+    }))
+    assert result.tax_kopecks == 22_000_000
+    assert result.net_profit_kopecks == 78_000_000
+    resolved = abc_pnl.calculate_management_profit(**(inputs() | zero_expenses | {
+        "sales_kopecks": 100_000_000, "tax_basis_points": None,
+        "resolved_tax_kopecks": result.tax_kopecks, "resolved_tax_confirmed": True,
+    }))
+    assert resolved.net_profit_kopecks == result.net_profit_kopecks
+
+
 @pytest.mark.parametrize(
     "internal,net", [(None, None), (0, 24_800_000), (30_000_000, -5_200_000)]
 )

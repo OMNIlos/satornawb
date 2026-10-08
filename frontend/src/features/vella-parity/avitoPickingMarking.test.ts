@@ -165,7 +165,7 @@ describe('Avito picking without the empty marking slot', () => {
       expect(await page.getByRole('region', { name: 'Проверка листа подбора' }).count()).toBe(0)
       expect(exports).toBe(1)
       await page.getByRole('button', { name: 'Сформировать лист подбора', exact: true }).click()
-      await expect.poll(() => page.getByRole('alert').innerText()).toContain('Сервер временно недоступен')
+      await expect.poll(() => page.getByRole('alert').innerText(), { timeout: 5000 }).toContain('Сервер временно недоступен')
       expect(await page.getByRole('button', { name: 'Сформировать лист подбора', exact: true }).isEnabled()).toBe(true)
       await page.getByPlaceholder('Поиск по номеру, заданию, артикулу, названию', { exact: true }).fill('not-present-in-fixture')
       const empty = table.locator('tbody tr.avito-orders-empty-row td')

@@ -28,12 +28,19 @@ os.environ.update(
     VELLA_REPRICER_LOCAL_PRICE_APPLY_ENABLED="false",
     VELLA_REDIS_URL="redis://127.0.0.1:59999/0",
     VELLA_CELERY_BROKER_URL="redis://127.0.0.1:59999/0",
+    VELLA_CELERY_RESULT_BACKEND="redis://127.0.0.1:59999/1",
 )
 # This preview must never initiate provider traffic, even after an accidental
 # button click. Listening and accepting localhost HTTP do not use connect().
 def deny_connect(*args, **kwargs):
     raise OSError("External actions disabled in isolated local preview")
-if "--avito-readonly" in sys.argv:
+if "--wb-readonly" in sys.argv:
+    from load_local_wb_readonly import install_readonly_network_guard, allowed_request as wb_read_allowed
+    from local_avito_readonly import allowed_request as avito_read_allowed
+    install_readonly_network_guard(socket.socket.connect, socket.socket.connect_ex,
+        request_allowed=lambda request: wb_read_allowed(request) or ("--avito-readonly" in sys.argv and avito_read_allowed(request)),
+        local_broker_port=59999 if "--report-queue" in sys.argv or "--report-worker" in sys.argv else None)
+elif "--avito-readonly" in sys.argv:
     from load_local_wb_readonly import install_readonly_network_guard
     from local_avito_readonly import allowed_request
     install_readonly_network_guard(socket.socket.connect, socket.socket.connect_ex,
@@ -68,5 +75,17 @@ for table in Base.metadata.tables.values():
 
 app = create_app()
 create_all_for_local_dev()
+from local_wb_browser_prices import install_local_browser_price_storage
+install_local_browser_price_storage()
+if "--report-queue" in sys.argv or "--report-worker" in sys.argv:
+    if "--wb-readonly" not in sys.argv:
+        raise RuntimeError("Report queue requires the WB read-only guard")
+    from app.infra.celery_app import celery_app
+    celery_app.conf.task_routes = {**celery_app.conf.task_routes, **{
+        name: {"queue": "satorna.local.readonly-reports"} for name in (
+            "reports.build_report_for_org", "reports.build_digest_for_org", "reports.refresh_report_sources_for_org", "reports.refresh_budget_step")}}
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=58017, log_level="warning")
+    if "--report-worker" in sys.argv:
+        celery_app.worker_main(["worker", "--pool=solo", "--concurrency=1", "--queues=satorna.local.readonly-reports", "--without-gossip", "--without-mingle", "--without-heartbeat", "--loglevel=WARNING"])
+    else:
+        uvicorn.run(app, host="127.0.0.1", port=58017, log_level="warning")

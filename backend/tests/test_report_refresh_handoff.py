@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from contextlib import nullcontext
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -47,6 +47,8 @@ def runtime(monkeypatch):
 
     monkeypatch.setattr(tasks, "_report_refresh_wb_token", lambda *args: "synthetic")
     monkeypatch.setattr(tasks, "refresh_wb_data_sources", refresh)
+    monkeypatch.setattr(reports, '_report_daily_sources_ready', lambda *a, **kw: (state.ready, [] if state.ready else ['finance']))
+    monkeypatch.setattr(reports, '_digest_source_revision', lambda *a: 'test-source-revision')
     monkeypatch.setattr(
         tasks,
         "_report_snapshot_sources_ready",
@@ -112,7 +114,110 @@ def refresh_args(report_id):
     )
 
 
-@pytest.mark.parametrize("report_id", ["ads", "pnl"])
+def test_rate_limited_source_retries_only_missing_sources_without_blocking_worker(runtime, monkeypatch):
+    monkeypatch.setattr(tasks, 'refresh_wb_data_sources', lambda **kw: {
+        'state': 'failed', 'steps': [{'source': 'finance', 'status': 'error',
+        'error': 'rate limit exceeded; повтор через 125 сек'}]})
+    queued = []
+    monkeypatch.setattr(tasks.refresh_report_sources_for_org, 'apply_async',
+                        lambda args=None, kwargs=None, **kw: queued.append({**kw, 'kwargs': kwargs, 'args': args}) or SimpleNamespace(id='retry'))
+    with pytest.raises(Retry):
+        run_as_worker(tasks.refresh_report_sources_for_org, refresh_args('pnl'))
+    assert queued[0]['countdown'] == 125
+    assert queued[0]['kwargs']['refresh_missing_only'] is True
+    assert runtime.writes[-1]['state'] == 'queued'
+    assert runtime.writes[-1]['stage'] == 'rate_limit'
+
+
+def test_rate_limited_source_stops_after_three_retries(runtime, monkeypatch):
+    monkeypatch.setattr(tasks, 'refresh_wb_data_sources', lambda **kw: {
+        'state': 'failed', 'steps': [{'source': 'finance', 'status': 'error', 'error': 'HTTP 429'}]})
+    with pytest.raises(tasks.ReportSourceRateLimited):
+        run_as_worker(tasks.refresh_report_sources_for_org, refresh_args('pnl'), retries=3)
+    assert runtime.writes[-1]['state'] == 'failed'
+
+
+def test_authentication_failure_is_not_rate_limit_retry():
+    assert tasks._report_rate_limit_delay({'steps': [{'status': 'error', 'error': 'HTTP 403'}]}) is None
+
+
+def test_rate_limit_queue_is_reusable_through_retry_delay_and_normal_grace():
+    now = datetime.now(timezone.utc)
+    job = {'state': 'queued', 'stage': 'rate_limit', 'retryAfterSeconds': 60,
+           'updatedAt': (now - timedelta(seconds=45)).isoformat()}
+    assert reports._report_job_is_reusable(job)
+    assert not reports._report_job_is_reusable({**job, 'stage': 'queued'})
+    assert not reports._report_job_is_reusable({**job, 'updatedAt': (now - timedelta(seconds=95)).isoformat()})
+
+
+@pytest.mark.parametrize("windows", [[(date(2026, 8, 17), date(2026, 8, 23))], []])
+def test_repricer_finance_job_never_mutates_legacy_reports(runtime, monkeypatch, windows):
+    from app import repricer_page_finance as page
+    monkeypatch.setattr(page, "missing_page_ranges", lambda *args: windows)
+    collected = []
+    monkeypatch.setattr(tasks.repricer_bff_module, "fetch_finance_report_aggregates", lambda *args, **kw: collected.append((args, kw)))
+    args = list(refresh_args("stats"))
+    args[6] = "repricer-finance:" + page.connection_key("synthetic")
+    result = run_as_worker(tasks.refresh_report_sources_for_org, tuple(args), {"refresh_missing_only": True})
+    assert result["state"] == result["stage"] == "completed"
+    assert result["kind"] == "report_source_refresh"
+    assert len(collected) == len(windows)
+    if windows:
+        assert collected[0][0] == ("complete",)
+        assert collected[0][1]["repricer_operations_org"] == 1
+        assert collected[0][1]["date_from"].date() == windows[0][0]
+    assert runtime.refreshes == runtime.queue == []
+
+
+def test_repricer_connection_change_records_failed_job(runtime):
+    args = list(refresh_args("stats")); args[6] = "repricer-finance:old-connection"
+    with pytest.raises(RuntimeError, match="connection changed"):
+        run_as_worker(tasks.refresh_report_sources_for_org, tuple(args))
+    assert runtime.writes[-1]["state"] == "failed"
+    assert runtime.refreshes == runtime.queue == []
+
+
+def test_leaving_view_pauses_worker_without_losing_saved_source_batches(runtime, monkeypatch):
+    from app.wb_api.report_reads import ReportDemandEnded, active_report_read
+    def finish_batch_then_cancel(**kwargs):
+        runtime.cache[1, 'persisted-source-batch'] = {'rows': [{'nmId': 123}]}
+        raise ReportDemandEnded()
+    monkeypatch.setattr(tasks, 'refresh_wb_data_sources', finish_batch_then_cancel)
+    result = run_as_worker(tasks.refresh_report_sources_for_org, refresh_args('pnl'))
+    assert result['state'] == 'paused'
+    assert runtime.cache[1, 'persisted-source-batch']['rows'] == [{'nmId': 123}]
+    assert runtime.queue == []
+    assert active_report_read.get() is None
+
+
+def test_advertising_refresh_publishes_statistics_before_optional_budgets(runtime, monkeypatch):
+    calls = []
+    def collect(**kw):
+        assert kw['include_budgets'] is False and kw['group_by'] == 'campaign'
+        calls.append('collect')
+        return SimpleNamespace(source_status='fresh')
+    monkeypatch.setattr(reports, 'build_ads_attribution_snapshot', collect)
+    monkeypatch.setattr(reports, '_map_ads_to_report_response', lambda *a: {'rows': [{'campaignId': '123', 'budgetTotalKopecks': 12000}]})
+    def save(**kw):
+        calls.append('save')
+        assert kw['payload']['rows'][0]['budgetTotalKopecks'] == 12000
+        return kw['payload']
+    monkeypatch.setattr(reports, 'save_ads_report_cache', save)
+    monkeypatch.setattr(reports, 'save_ads_history_snapshots', lambda **kw: calls.append('history'))
+    monkeypatch.setattr(reports, '_save_exact_report_payload_cache', lambda **kw: calls.append('exact-cache'))
+    from app import wb_report_budgets
+    def optional_start(*args):
+        assert runtime.writes[-1]['state'] == 'completed'
+        calls.append('budgets')
+        raise RuntimeError('optional queue unavailable')
+    monkeypatch.setattr(wb_report_budgets, 'start', optional_start)
+    result = run_as_worker(tasks.refresh_report_sources_for_org, refresh_args('ads'))
+    assert result['state'] == 'completed'
+    assert calls == ['collect', 'save', 'history', 'exact-cache', 'budgets']
+    assert runtime.refreshes == runtime.queue == []  # No duplicate SKU-only API collection.
+
+
+@pytest.mark.parametrize("report_id", ["abc", "pnl"])
 def test_refresh_hands_off_without_completing_a_waiting_report(runtime, report_id):
     with pytest.raises(Ignore):
         run_as_worker(tasks.refresh_report_sources_for_org, refresh_args(report_id))
@@ -155,6 +260,15 @@ def test_1c_retry_requeues_only_build_with_same_identity_and_context(runtime):
     assert result["sync"] == kwargs["source_refresh"]
     assert len(runtime.refreshes) == 1
     assert not any(row.get("state") == "failed" for row in runtime.writes)
+
+
+def test_financial_pnl_does_not_wait_for_optional_1c(runtime):
+    runtime.ready = True
+    args = list(refresh_args("pnl"))
+    args[6] = "financial"
+    result = run_as_worker(tasks.build_report_for_org, tuple(args))
+    assert result["state"] == "completed"
+    assert not any(row.get("state") == "waiting_1c" for row in runtime.writes)
 
 
 def test_failed_replacement_remains_a_failed_refresh(runtime):
@@ -207,6 +321,7 @@ def test_standalone_build_keeps_existing_contract(runtime):
 
 
 def test_digest_refresh_replaces_inline_build_with_same_task(runtime):
+    runtime.ready = True
     with pytest.raises(Ignore):
         run_as_worker(tasks.refresh_report_sources_for_org, refresh_args("digest"))
     assert len(runtime.queue) == len(runtime.refreshes) == 1
@@ -226,6 +341,7 @@ def test_digest_refresh_replaces_inline_build_with_same_task(runtime):
 
 @pytest.mark.parametrize("fail", [False, True])
 def test_digest_builder_preserves_refresh_context_at_every_stage(runtime, monkeypatch, fail):
+    runtime.ready = True
     sync = {"state": "completed", "steps": [{"source": "finance", "status": "ok"}]}
 
     def funnel(**kwargs):
@@ -263,8 +379,24 @@ def test_digest_builder_preserves_refresh_context_at_every_stage(runtime, monkey
 
 
 def test_standalone_digest_build_keeps_five_positional_arguments(runtime):
+    runtime.ready = True
     result = run_as_worker(tasks.build_digest_for_org, (1, "2026-08-17", "2026-08-23", False, None))
     assert result["state"] == "completed"
     for job in runtime.writes:
         assert "kind" not in job and "sync" not in job
     assert runtime.refreshes == runtime.queue == []
+
+
+def test_page_demand_refresh_only_fetches_missing_source(runtime, monkeypatch):
+    monkeypatch.setattr(reports, '_report_missing_source_ranges', lambda org, source, **kwargs: [] if source == 'finance' else [(kwargs['date_from'], kwargs['date_to'])])
+    with pytest.raises(Ignore):
+        run_as_worker(tasks.refresh_report_sources_for_org, refresh_args('pnl'), {'refresh_missing_only': True})
+    assert runtime.refreshes[0]['sources'] == ('ads',)
+
+
+def test_page_demand_refresh_reuses_all_saved_sources(runtime, monkeypatch):
+    monkeypatch.setattr(reports, '_report_missing_source_ranges', lambda *args, **kwargs: [])
+    with pytest.raises(Ignore):
+        run_as_worker(tasks.refresh_report_sources_for_org, refresh_args('pnl'), {'refresh_missing_only': True})
+    assert runtime.refreshes == []
+    assert len(runtime.queue) == 1

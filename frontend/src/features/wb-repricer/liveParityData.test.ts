@@ -289,6 +289,20 @@ describe('effective backend minimum price', () => {
 })
 
 describe('dated factual tax contract', () => {
+  test.each([12000, 0, -12000, null])('uses settlement profit %s even without planned tariffs or buyout forecasts', profit => {
+    const row = {
+      meta: { articleId: 'SETTLED', name: 'Observed', status: 'auto', currentPriceKopecks: 500000, basketsLast7d: 0, basketNorm: 0 },
+      settings: { cogsKopecks: 80000 },
+      analytics: { settlementFormulaVersion: 'wb-final-payout-cogs-tax-v1', settlementProfitKopecks: profit,
+        settlementCogsState: 'assumed', financeState: 'ok', salesUnits: 3, returnsUnits: 1,
+        revenueKopecks: 100000, commissionState: 'no_data', buyoutPct: null, marginKopecks: 999999, marginPct: 99 },
+    } as LiveRepricerSkuRow
+    const product = mapLiveRepricerRowToParityProduct(row, 0)
+    expect(product.mgRub).toBe(profit == null ? null : profit / 200)
+    expect(product.mg).toBe(profit == null ? null : profit / 1000)
+    expect(product.marginMode).toBe('actual_settlement')
+    expect(product.marginAssumed).toBe(true)
+  })
   test.each([
     { state: 'missing', fact: null, net: null, expected: null },
     { state: 'missing', fact: 50000, net: 50000, expected: null },
@@ -296,7 +310,7 @@ describe('dated factual tax contract', () => {
     { state: 'configured', fact: null, net: 50000, expected: null },
     { state: 'configured', fact: 25000, net: 50000, expected: 250 },
     { state: undefined, fact: undefined, net: 50000, expected: 500 },
-    { state: undefined, fact: undefined, net: null, expected: 1200 },
+    { state: undefined, fact: undefined, net: null, expected: null },
   ])('keeps factual $state/$fact separate from the current-price plan', ({ state, fact, net, expected }) => {
     const row = {
       meta: { articleId: 'FACT-TAX', name: 'Synthetic tax contract', status: 'auto', currentPriceKopecks: 220000, basketsLast7d: 1, basketNorm: 1 },
@@ -310,8 +324,8 @@ describe('dated factual tax contract', () => {
     } as LiveRepricerSkuRow
     const product = mapLiveRepricerRowToParityProduct(row, 0)
     expect(product.netSku).toBe(expected)
-    expect(product.mgRub).toBe(100)
-    expect(product.netPerUnit).toBe(100)
+    expect(product.mgRub).toBeNull() // A planned margin must never fill the factual column.
+    expect(product.netPerUnit).toBeNull()
     expect(product.factTaxState).toBe(state)
   })
 })

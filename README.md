@@ -2,6 +2,12 @@
 
 Public source snapshot of the Satorna marketplace operations platform.
 
+## VPS release preparation — 2026-10-08
+
+Full current frontend/backend and both Chrome extensions are included. See [VPS setup and integration checks](deploy/README.md) for the production Compose stack, private configuration, fresh database, editable WB server URL and encrypted OpenAI key entry. Local databases, live keys and runtime order artifacts are not distributed.
+
+The historical production snapshot below is not evidence of deployment of this branch. This release must pass its CI gates and then be verified with your DNS/TLS and authorized marketplace browser sessions.
+
 ## Structure
 
 - `frontend/` — Vite, React and TypeScript application with Vercel API routes.

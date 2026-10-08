@@ -245,6 +245,9 @@ def test_list_source_cache_ranges_avoids_payload_and_parses_legacy_key(monkeypat
                 {**records[0], "revenue_basis": "synthetic-seller-revenue",
                  "finance_schema_version": "synthetic-v2"},
                 {**records[0], "daily_aggregate_dates": []},
+                {**records[0], "daily_aggregate_dates": '["2026-07-11", "2026-07-12"]'},
+                {**records[0], "daily_aggregate_dates": 'null'},
+                {**records[0], "daily_aggregate_dates": 'not-json'},
             ])
 
     class FakeSession:
@@ -273,6 +276,10 @@ def test_list_source_cache_ranges_avoids_payload_and_parses_legacy_key(monkeypat
     assert result[1]["financeSchemaVersion"] == "synthetic-v2"
     assert result[2]["dailyAggregateDates"] == []
     assert result[2]["dailyAggregatesDays"] == 0
+    assert result[3]["dailyAggregateDates"] == ["2026-07-11", "2026-07-12"]
+    assert result[3]["dailyAggregatesDays"] == 2
+    assert result[4]["dailyAggregatesDays"] is None
+    assert result[5]["dailyAggregateDates"] == []
 
 
 def test_slim_finance_source_cache_drops_raw_rows():
@@ -298,6 +305,12 @@ def test_save_finance_source_cache_omits_raw_rows():
         },
     )
     assert "rows" not in saved
+
+
+def test_report_acknowledgement_rejects_failed_database_save():
+    from app.routers.wb_reports_bff import save_source_cache as save_report_cache
+    with pytest.raises(RuntimeError, match="сохранить данные в БД"):
+        save_report_cache(99, "reports_job_stats", {"state": "completed"})
 
 
 def test_slim_source_cache_preserves_category_fields():

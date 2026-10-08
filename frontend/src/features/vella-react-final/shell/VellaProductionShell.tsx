@@ -39,7 +39,7 @@ const reportItems: NavItem[] = [
 ]
 
 const repricerItems: NavItem[] = [
-  { label: 'Все товары', path: '/wb/repricer', icon: <Package size={15} />, count: '1 482' },
+  { label: 'Репрайсер', path: '/wb/repricer', icon: <Package size={15} />, count: '1 482' },
   { label: 'Диагностика цен', path: '/wb/repricer/stats', icon: <BarChart3 size={15} />, count: 'черновик', tone: 'warn' },
   { label: 'Стратегии', path: '/wb/templates', icon: <FileSpreadsheet size={15} />, count: 5 },
   { label: 'История', path: '/wb/repricer/changelog', icon: <Repeat2 size={15} /> },
@@ -60,7 +60,7 @@ const reportTabs: NavItem[] = [
 ]
 
 const repricerTabs: NavItem[] = [
-  { label: 'Все товары', path: '/wb/repricer', icon: <Package size={14} />, count: '1 482' },
+  { label: 'Репрайсер', path: '/wb/repricer', icon: <Package size={14} />, count: '1 482' },
   { label: 'Диагностика цен', path: '/wb/repricer/stats', icon: <BarChart3 size={14} />, count: 'черновик', tone: 'warn' },
   { label: 'Стратегии', path: '/wb/templates', icon: <FileSpreadsheet size={14} />, count: 5 },
   { label: 'История', path: '/wb/repricer/changelog', icon: <Repeat2 size={14} /> },

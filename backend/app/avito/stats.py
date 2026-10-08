@@ -319,13 +319,19 @@ class LiveAvitoStatsClient:
         per_page = 99
         page = 1
         public_image_fetches = 0
+        seen_pages: set[tuple[str, ...]] = set()
+        seen_items: set[tuple[str, str]] = set()
         while True:
             response = client.get(f"{self.base_url}/core/v1/items", params={"per_page": per_page, "page": page, "status": AVITO_ITEM_LIST_STATUSES}, headers=self._headers())
             response.raise_for_status()
             payload = response.json()
-            rows = payload.get("resources") or payload.get("items") or payload.get("data") if isinstance(payload, dict) else payload
+            rows = next((payload[key] for key in ("resources", "items", "data") if key in payload), None) if isinstance(payload, dict) else payload
             if not isinstance(rows, list):
-                return result
+                raise ValueError("Avito inventory response does not contain a listing array")
+            signature = tuple(str(row.get("id") or row.get("itemId") or row.get("item_id") or "") for row in rows if isinstance(row, dict))
+            if signature and signature in seen_pages:
+                raise ValueError("Avito inventory repeated a page; catalog is incomplete")
+            seen_pages.add(signature)
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -339,7 +345,10 @@ class LiveAvitoStatsClient:
                     image_url = self._public_image_url(client, item_url)
                 item = self._listing_item_payload(row, default_account)
                 item["imageUrl"] = image_url
-                result.append(item)
+                key = (str(item.get("accountId") or ""), str(item["itemId"]))
+                if key not in seen_items:
+                    result.append(item)
+                    seen_items.add(key)
             if len(rows) < per_page:
                 break
             page += 1

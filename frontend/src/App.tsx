@@ -1,4 +1,5 @@
-import { lazy, Suspense, type ComponentType } from 'react'
+import { lazy, Suspense, useLayoutEffect, type ComponentType } from 'react'
+import { setWbDemandRoute } from '@/lib/wbDemand'
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { RouteErrorBoundary } from '@/components/RouteErrorBoundary'
 import { ThemeProvider } from '@/components/ThemeProvider'
@@ -8,6 +9,7 @@ import { AuthProvider } from './features/auth/AuthProvider'
 import { LoginPage } from './features/auth/LoginPage'
 import { RegisterPage } from './features/auth/RegisterPage'
 import { PublicOnlyAuth, RequireAuth } from './features/auth/AuthRoutes'
+import { WbPrivacyPage } from './features/privacy/WbPrivacyPage'
 
 const TemplatesPage = lazyRoute(() => import('./features/wb-repricer/TemplatesPage').then(({ TemplatesPage }) => ({ default: TemplatesPage })))
 const VellaFoundationWorkbench = lazyRoute(() => import('./components/vella/VellaFoundationWorkbench').then(({ VellaFoundationWorkbench }) => ({ default: VellaFoundationWorkbench })))
@@ -17,7 +19,6 @@ const VellaReactApp = lazyRoute(() => import('./features/vella-react/VellaReactA
 const VellaHtmlRepricer = lazyRoute(() => import('./components/vella-system/html/VellaHtmlRepricer').then(({ VellaHtmlRepricer }) => ({ default: VellaHtmlRepricer })))
 const WbRepricerPage = lazyRoute(() => import('./features/wb-repricer/WbRepricerPage').then(({ WbRepricerPage }) => ({ default: WbRepricerPage })))
 const WbRepricerChangelogPage = lazyRoute(() => import('./features/wb-repricer/WbRepricerChangelogPage').then(({ WbRepricerChangelogPage }) => ({ default: WbRepricerChangelogPage })))
-const WbRepricerSimulatorPage = lazyRoute(() => import('./features/wb-repricer/WbRepricerSimulatorPage').then(({ WbRepricerSimulatorPage }) => ({ default: WbRepricerSimulatorPage })))
 const WbRepricerStatsPage = lazyRoute(() => import('./features/wb-repricer/WbRepricerStatsPage').then(({ WbRepricerStatsPage }) => ({ default: WbRepricerStatsPage })))
 const WbReportsPage = lazyRoute(() => import('./features/wb-reports/WbReportsPage').then(({ WbReportsPage }) => ({ default: WbReportsPage })))
 const WbSourcesPage = lazyRoute(() => import('./features/wb-sources/WbSourcesPage').then(({ WbSourcesPage }) => ({ default: WbSourcesPage })))
@@ -67,6 +68,7 @@ function VellaHtmlParityPage() {
 
 function RoutedApp() {
   const location = useLocation()
+  useLayoutEffect(() => { setWbDemandRoute(`${location.key}:${location.pathname}${location.search}`) }, [location.key, location.pathname, location.search])
   return (
     <RouteErrorBoundary resetKey={location.pathname}>
       <Suspense fallback={<RouteLoading />}>
@@ -134,7 +136,7 @@ function RoutedApp() {
               <Route path="/wb/repricer/stats" element={<VellaHtmlParityPage />} />
               <Route path="/wb/repricer/sku/:articleId" element={<VellaHtmlParityPage />} />
               <Route path="/wb/repricer/changelog" element={<VellaHtmlParityPage />} />
-              <Route path="/wb/repricer/simulator" element={<WbRepricerSimulatorPage />} />
+              <Route path="/wb/repricer/simulator" element={<Navigate to="/wb/repricer" replace />} />
               <Route path="/wb/repricer/liquidation" element={<VellaHtmlParityPage />} />
               <Route path="/wb/repricer/promos" element={<VellaHtmlParityPage />} />
               <Route path="/wb/repricer/work-status" element={<VellaHtmlParityPage />} />
@@ -148,7 +150,7 @@ function RoutedApp() {
               <Route path="/wb/reports/abc" element={<VellaHtmlParityPage />} />
               <Route path="/wb/reports/rnp" element={<VellaHtmlParityPage />} />
               <Route path="/wb/reports/pnl" element={<VellaHtmlParityPage />} />
-              <Route path="/wb/reports/expenses" element={<VellaHtmlParityPage />} />
+              <Route path="/wb/reports/expenses" element={<Navigate to="/wb/reports/pnl" replace />} />
               <Route path="/wb/reports/ads" element={<VellaHtmlParityPage />} />
               <Route path="/wb/reports/sales" element={<VellaHtmlParityPage />} />
               <Route path="/wb/reports/stock" element={<VellaHtmlParityPage />} />
@@ -157,8 +159,8 @@ function RoutedApp() {
               <Route path="/wb/sources" element={<VellaHtmlParityPage />} />
               <Route path="/wb/reviews" element={<VellaHtmlParityPage />} />
               <Route path="/notifications" element={<VellaHtmlParityPage />} />
-              <Route path="/avito" element={<VellaHtmlParityPage />} />
-              <Route path="/avito/overview" element={<VellaHtmlParityPage />} />
+              <Route path="/avito" element={<Navigate to="/avito/repricer" replace />} />
+              <Route path="/avito/overview" element={<Navigate to="/avito/repricer" replace />} />
               <Route path="/avito/chats" element={<VellaHtmlParityPage />} />
               <Route path="/avito/inbox" element={<VellaHtmlParityPage />} />
               <Route path="/avito/messages" element={<VellaHtmlParityPage />} />
@@ -212,14 +214,21 @@ function RoutedApp() {
   )
 }
 
+export function AppEntryRoutes() {
+  return (
+    <Routes>
+      <Route path="/wb/privacy" element={<WbPrivacyPage />} />
+      <Route path="*" element={<AuthProvider><RoutedApp /></AuthProvider>} />
+    </Routes>
+  )
+}
+
 export default function App() {
   return (
     <ThemeProvider>
-      <AuthProvider>
-        <BrowserRouter>
-          <RoutedApp />
-        </BrowserRouter>
-      </AuthProvider>
+      <BrowserRouter>
+        <AppEntryRoutes />
+      </BrowserRouter>
     </ThemeProvider>
   )
 }

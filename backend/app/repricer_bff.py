@@ -18,7 +18,7 @@ from fastapi import HTTPException
 
 from app.config import get_settings
 from app.modules.wb_repricing_calculation import settings_minimum_price_kopecks
-from app.repricer_cache.store import FINANCE_SCHEMA_VERSION, get_source_cache, save_source_cache
+from app.repricer_cache.store import FINANCE_REVENUE_BASIS, FINANCE_SCHEMA_VERSION, get_source_cache, save_source_cache
 from app.wb_api.client import (
     FakeWbApiClient,
     RateLimitedWbApiClient,
@@ -538,6 +538,7 @@ def build_finance_diagnostics_from_aggregates(
     finance_taxes: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     totals = {
+        "adSpendKopecks": 0,
         "sellerRevenueKopecks": 0,
         "buyerRevenueKopecks": 0,
         "salesUnits": 0,
@@ -609,6 +610,10 @@ def build_finance_diagnostics_from_aggregates(
         totals["storageKopecks"] += _finance_int(row.get("storageKopecks"))
         totals["acceptanceKopecks"] += _finance_int(row.get("acceptanceKopecks"))
         totals["acquiringKopecks"] += _finance_int(row.get("acquiringKopecks"))
+        totals["adSpendKopecks"] += _finance_int(row.get("adSpendKopecks"))
+
+    if any(type(row.get("adSpendKopecks")) is not int for row in aggregates.values()):
+        totals["adSpendKopecks"] = None
 
     adjustment_rows: list[dict[str, Any]] = []
     if raw_rows is not None:
@@ -1743,9 +1748,21 @@ def _finance_loyalty_cost_kopecks(item: dict[str, Any]) -> int:
     )
 
 
-def _finance_seller_revenue_kopecks(item: dict[str, Any], _quantity: int) -> int:
-    raw_total = _finance_raw_first(item, "retailAmount", "retail_amount")
-    return _kopecks_from_rub(raw_total) if raw_total is not None else 0
+def _finance_seller_revenue_kopecks(item: dict[str, Any], quantity: int) -> int:
+    # Seller's discounted sale price, not WB's buyer payment or seller payout.
+    # The API field is a unit price. Keep decimal rounding at the operation grain.
+    raw = _finance_raw_first(item, "retailPriceWithDisc", "retail_price_withdisc_rub")
+    value = _number_or_none(raw)
+    if value is None or not isfinite(value):
+        return 0
+    return int((Decimal(str(raw).replace(",", ".")) * abs(quantity) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _finance_operation_date(item: dict[str, Any]) -> date | None:
+    doc = str(item.get("docTypeName") or item.get("doc_type_name") or "").strip().lower()
+    if doc in {"продажа", "возврат"} and _finance_seller_revenue_kopecks(item, 1):
+        return _date_from_any(item.get("saleDt") or item.get("sale_dt"))
+    return _date_from_any(item.get("saleDt") or item.get("rrDate") or item.get("date"))
 
 
 def _finalize_finance_commission(row: dict[str, Any]) -> None:
@@ -2096,8 +2113,10 @@ def _http_exception_is_retryable_transport(exc: HTTPException) -> bool:
 
 
 def _request_or_raise(client: RateLimitedWbApiClient, request: WbApiRequest) -> Any:
+    from app.wb_api.report_reads import active_report_read
     last_response: WbApiResponseEnvelope | None = None
-    for attempt in range(_WB_TRANSPORT_MAX_ATTEMPTS):
+    attempts = 1 if active_report_read.get() is not None else _WB_TRANSPORT_MAX_ATTEMPTS
+    for attempt in range(attempts):
         response = client.request(request)
         last_response = response
         if response.ok:
@@ -2107,7 +2126,7 @@ def _request_or_raise(client: RateLimitedWbApiClient, request: WbApiRequest) -> 
                 if response.statusCode != 200:
                     raise HTTPException(status_code=502, detail="WB_FINANCE_INVALID_RESPONSE")
             return _ensure_ok(response.data, request.path)
-        if not _is_retryable_transport_response(response) or attempt >= _WB_TRANSPORT_MAX_ATTEMPTS - 1:
+        if not _is_retryable_transport_response(response) or attempt >= attempts - 1:
             _raise_upstream_error(response)
         time.sleep(_WB_TRANSPORT_RETRY_DELAYS_S[min(attempt, len(_WB_TRANSPORT_RETRY_DELAYS_S) - 1)])
     if last_response is not None:
@@ -2160,6 +2179,9 @@ def _ads_fullstats_has_transient_error(exc: HTTPException) -> bool:
 def _request_or_raise_calendar(client: RateLimitedWbApiClient, request: WbApiRequest) -> Any:
     """Calendar API allows ~1 req/s; serialize and retry WB 429 responses."""
     global _promotions_calendar_last_request_at
+    from app.wb_api.report_reads import active_report_read
+    if active_report_read.get() is not None:
+        return _request_or_raise(client, request)
     last_exc: HTTPException | None = None
     for attempt in range(_PROMOTIONS_CALENDAR_MAX_ATTEMPTS):
         now = time.monotonic()
@@ -2183,6 +2205,9 @@ def _request_or_raise_calendar(client: RateLimitedWbApiClient, request: WbApiReq
 def _request_or_raise_finance_report(client: RateLimitedWbApiClient, request: WbApiRequest) -> Any:
     """Finance detailed report is seller-limited to roughly one request per minute."""
     global _finance_report_last_request_at
+    from app.wb_api.report_reads import active_report_read
+    if active_report_read.get() is not None:
+        return _request_or_raise(client, request)
     if isinstance(getattr(client, "inner", None), FakeWbApiClient):
         return _request_or_raise(client, request)
     last_exc: HTTPException | None = None
@@ -2210,6 +2235,9 @@ def _request_or_raise_finance_report(client: RateLimitedWbApiClient, request: Wb
 def _request_or_raise_stock_report(client: RateLimitedWbApiClient, request: WbApiRequest) -> Any:
     """Stocks report is seller-limited; serialize wb/mp requests and honor WB retry headers."""
     global _stock_report_last_request_at
+    from app.wb_api.report_reads import active_report_read
+    if active_report_read.get() is not None:
+        return _request_or_raise(client, request)
     last_exc: HTTPException | None = None
     for attempt in range(_STOCK_REPORT_MAX_ATTEMPTS):
         if get_settings().wb_api_mode == "real":
@@ -2235,6 +2263,9 @@ def _request_or_raise_stock_report(client: RateLimitedWbApiClient, request: WbAp
 def _request_or_raise_statistics_report(client: RateLimitedWbApiClient, request: WbApiRequest) -> Any:
     """Statistics supplier reports are seller-limited; serialize orders/sales and honor WB retry headers."""
     global _statistics_report_last_request_at
+    from app.wb_api.report_reads import active_report_read
+    if active_report_read.get() is not None:
+        return _request_or_raise(client, request)
     last_exc: HTTPException | None = None
     for attempt in range(_STATISTICS_REPORT_MAX_ATTEMPTS):
         with _statistics_report_lock:
@@ -2266,6 +2297,13 @@ def _request_or_raise_ads_fullstats(
 ) -> Any:
     """Ads fullstats is a heavy endpoint: WB allows about one request every 20 seconds."""
     global _ads_fullstats_last_request_at
+    from app.wb_api.report_reads import active_report_read
+    if active_report_read.get() is not None:
+        from app.wb_api.ads_runtime import _request_with_retry
+        response = _request_with_retry(client, request, min_interval_s=_ADS_FULLSTATS_MIN_INTERVAL_S)
+        if response.ok:
+            return _ensure_ok(response.data, request.path)
+        _raise_upstream_error(response)
     last_exc: HTTPException | None = None
     transient_attempts = 0
     for attempt in range(_ADS_FULLSTATS_MAX_ATTEMPTS):
@@ -2396,6 +2434,9 @@ def _request_or_raise_sales_funnel_products(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> Any:
     """Sales funnel products is seller-limited; serialize pages and honor WB Retry-After."""
+    from app.wb_api.report_reads import active_report_read
+    if active_report_read.get() is not None:
+        return _request_or_raise(client, request)
     last_exc: HTTPException | None = None
     for attempt in range(_SALES_FUNNEL_PRODUCTS_MAX_ATTEMPTS):
         try:
@@ -2690,6 +2731,7 @@ def _fetch_content_cards(
     wb_token: str | None = None,
     *,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    page_callback: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> list[dict[str, Any]]:
     client = RateLimitedWbApiClient(inner=build_wb_content_client(scenario, token_override=wb_token))
     cursor: dict[str, Any] | None = None
@@ -2705,7 +2747,14 @@ def _fetch_content_cards(
             WbApiRequest(method="POST", path="/content/v2/get/cards/list", jsonBody=request_body),
             progress_callback=progress_callback,
         )
-        page = payload.get("cards", []) if isinstance(payload, dict) else []
+        if not isinstance(payload, dict) or not isinstance(payload.get("cards"), list):
+            raise RuntimeError("WB вернул некорректный список карточек; прежний каталог сохранён")
+        page = payload["cards"]
+        if any(not isinstance(card, dict) or not str(card.get("nmID", "")).isdigit()
+               or int(card["nmID"]) <= 0 for card in page):
+            raise RuntimeError("WB вернул карточку без корректного ID; прежний каталог сохранён")
+        if page_callback and page:
+            page_callback(page)
         fresh = 0
         for card in page:
             nm_id = int(card.get("nmID") or 0)
@@ -2723,9 +2772,14 @@ def _fetch_content_cards(
                     "progressTotal": max(len(cards), (page_index + 2) * 100) if page and len(page) >= 100 else len(cards),
                 }
             )
-        next_cursor = payload.get("cursor") if isinstance(payload, dict) else None
-        if not page or len(page) < 100 or fresh == 0 or not isinstance(next_cursor, dict):
+        next_cursor = payload.get("cursor")
+        if len(page) < 100:
             break
+        if (fresh == 0 or not isinstance(next_cursor, dict)
+                or not isinstance(next_cursor.get("updatedAt"), str) or not next_cursor["updatedAt"].strip()
+                or not str(next_cursor.get("nmID", "")).isdigit() or int(next_cursor["nmID"]) <= 0
+                or (cursor and all(next_cursor.get(key) == cursor.get(key) for key in ("updatedAt", "nmID")))):
+            raise RuntimeError("WB не подтвердил следующую страницу карточек; прежний каталог сохранён")
         cursor = {"updatedAt": next_cursor.get("updatedAt"), "nmID": next_cursor.get("nmID")}
     return cards
 
@@ -3162,6 +3216,7 @@ def _sales_funnel_metrics(source: dict[str, Any]) -> dict[str, Any]:
         "impressions": int(impressions) if impressions is not None else None,
         "wishlistCount": int(wishlist_count) if wishlist_count is not None else None,
         "buyoutCount": buyout_count,
+        "cancelCount": _first_number(source, "cancelCount", "cancelledCount", "canceledCount"),
         "buyoutSumKopecks": _first_kopecks(source, "buyoutSum", "buyoutsSumRub", "buyoutsSum"),
         "buyoutPct": buyout_pct,
         "buyoutSource": "sales_funnel.conversions.buyoutPercent" if buyout_pct is not None else None,
@@ -3519,6 +3574,9 @@ def fetch_finance_report_aggregates(
     *,
     date_from: datetime,
     date_to: datetime | None = None,
+    revenue_only: bool = False,
+    repricer_operations_org: int | None = None,
+    page_collected_callback=None,
 ) -> dict[str, Any]:
     client = RateLimitedWbApiClient(inner=build_wb_finance_client(scenario, token_override=wb_token))
     date_to = date_to or _utc_now()
@@ -3558,12 +3616,25 @@ def fetch_finance_report_aggregates(
         "acquiringPercent",
         "forPay",
     ]
-    limit = 100_000
+    if revenue_only:
+        fields = ["rrdId", "nmId", "docTypeName", "quantity", "retailAmount",
+                  "retailPriceWithDisc", "saleDt", "rrDate"]
+    limit = 50_000 if revenue_only else 10_000
     rrd_id = 0
     rows: list[dict[str, Any]] = []
     seen_rrd_ids: dict[int, dict[str, Any]] = {}
     duplicate_rows_skipped = 0
     pages_loaded = 0
+    checkpoint_key = None
+    if repricer_operations_org is not None and wb_token and not revenue_only:
+        from app.repricer_page_finance import connection_key
+        checkpoint_key = f"repricer_finance_progress_{connection_key(wb_token)}_{date_from.date()}_{date_to.date()}"
+        checkpoint = get_source_cache(repricer_operations_org, checkpoint_key, slim=False) or {}
+        if checkpoint.get("sourceComplete") is False and checkpoint.get("fields") == fields and checkpoint.get("limit") == limit:
+            rows = checkpoint.get("operations") or []
+            seen_rrd_ids = {int(row["rrdId"]): row for row in rows}
+            rrd_id = int(checkpoint.get("cursor") or 0)
+            pages_loaded = int(checkpoint.get("pagesLoaded") or 0)
     while True:
         payload = _request_or_raise_finance_report(
             client,
@@ -3613,13 +3684,42 @@ def fetch_finance_report_aggregates(
                 revenue = _number_or_none(_finance_raw_first(item, "retailAmount", "retail_amount"))
                 if revenue is None or not isfinite(revenue * 100):
                     raise HTTPException(status_code=502, detail="WB_FINANCE_INVALID_TRADE_REVENUE")
+                seller_price = _number_or_none(_finance_raw_first(item, "retailPriceWithDisc", "retail_price_withdisc_rub"))
+                if seller_price is None or not isfinite(seller_price * 100):
+                    raise HTTPException(status_code=502, detail="WB_FINANCE_INVALID_SELLER_PRICE")
             seen_rrd_ids[item_rrd_id] = item
             rows.append(item)
         pages_loaded += 1
         if item_rrd_id <= rrd_id:
             raise HTTPException(status_code=502, detail="WB_FINANCE_CURSOR_STALLED")
         rrd_id = item_rrd_id
+        if checkpoint_key:
+            save_source_cache(repricer_operations_org, checkpoint_key, {
+                "operations": rows, "fields": fields, "limit": limit,
+                "cursor": rrd_id, "pagesLoaded": pages_loaded,
+                "dateFrom": str(date_from.date()), "dateTo": str(date_to.date()),
+                "sourceComplete": False,
+            }, strict=True)
+        if page_collected_callback is not None:
+            page_collected_callback(pages_loaded, len(rows))
 
+    if checkpoint_key:
+        from app.repricer_page_finance import save_operations
+        save_operations(repricer_operations_org, wb_token, date_from.date(), date_to.date(), rows)
+        save_source_cache(repricer_operations_org, checkpoint_key, {"sourceComplete": True}, strict=True)
+
+    result = aggregate_finance_report_rows(rows, date_from=date_from, date_to=date_to)
+    result.update(pagesLoaded=pages_loaded, duplicateRowsSkipped=duplicate_rows_skipped,
+                  sourceComplete=True, requestedFields=fields, revenueOnly=revenue_only)
+    return result
+
+
+def aggregate_finance_report_rows(
+    rows: list[dict[str, Any]], *, date_from: datetime, date_to: datetime,
+) -> dict[str, Any]:
+    """Rebuild arbitrary periods from original operations, never rounded day totals."""
+    source_rows = rows
+    fields = list(_FINANCE_DIAGNOSTIC_RAW_FIELDS)
     result: dict[str, dict[str, Any]] = {}
     global_rows: list[dict[str, Any]] = []
 
@@ -3683,14 +3783,17 @@ def fetch_finance_report_aggregates(
         if not row.get("vendorCode"):
             row["vendorCode"] = str(item.get("vendorCode") or item.get("vendor_code") or "").strip()
         row["rowsCount"] += 1
-        quantity = int(_number_or_none(item.get("quantity") or item.get("saleQuantity") or 1) or 1)
+        quantity = int(_number_or_none(item.get("quantity", item.get("saleQuantity", 1))) or 0)
         buyer_revenue_kopecks = _first_kopecks(item, "retailAmount", "retail_amount")
         seller_revenue_kopecks = _finance_seller_revenue_kopecks(item, quantity)
+        sale_day = _finance_operation_date(item)
+        if sale_day is None or not date_from.date() <= sale_day <= date_to.date():
+            seller_revenue_kopecks = 0
         seller_revenue_available = (
             _finance_raw_first(
                 item,
-                "retailAmount",
-                "retail_amount",
+                "retailPriceWithDisc",
+                "retail_price_withdisc_rub",
             )
             is not None
         )
@@ -3717,7 +3820,7 @@ def fetch_finance_report_aggregates(
             row["revenueGrossKopecks"] += seller_revenue_kopecks
             row["grossSalesKopecks"] += seller_revenue_kopecks
             if commission_pct is not None:
-                row["commissionFormulaKopecks"] += round(seller_revenue_kopecks * commission_pct / 100)
+                row["commissionFormulaKopecks"] += round(buyer_revenue_kopecks * commission_pct / 100)
         elif doc_type_name == "возврат":
             if unit_key:
                 return_unit_keys = row["_returnUnitKeys"]
@@ -3731,7 +3834,7 @@ def fetch_finance_report_aggregates(
             row["revenueGrossKopecks"] -= seller_revenue_kopecks
             row["returnsKopecks"] += seller_revenue_kopecks
             if commission_pct is not None:
-                row["commissionFormulaKopecks"] -= round(seller_revenue_kopecks * commission_pct / 100)
+                row["commissionFormulaKopecks"] -= round(buyer_revenue_kopecks * commission_pct / 100)
         if doc_type_name in {"продажа", "возврат"} and (buyer_revenue_kopecks or seller_revenue_kopecks):
             row["_settlementRows"] += 1
         document_sign = -1 if doc_type_name == "возврат" else 1
@@ -3848,7 +3951,7 @@ def fetch_finance_report_aggregates(
     daily_result: dict[str, dict[str, dict[str, Any]]] = {}
     daily_global_rows: dict[str, list[dict[str, Any]]] = {}
     for item in rows:
-        item_date = _date_from_any(item.get("saleDt") or item.get("rrDate") or item.get("date"))
+        item_date = _finance_operation_date(item)
         if item_date is None:
             continue
         nm_id = int(item.get("nmId") or item.get("nmID") or item.get("nm_id") or 0)
@@ -3903,14 +4006,16 @@ def fetch_finance_report_aggregates(
         if not row.get("vendorCode"):
             row["vendorCode"] = str(item.get("vendorCode") or item.get("vendor_code") or "").strip()
         row["rowsCount"] += 1
-        quantity = int(_number_or_none(item.get("quantity") or item.get("saleQuantity") or 1) or 1)
+        quantity = int(_number_or_none(item.get("quantity", item.get("saleQuantity", 1))) or 0)
         buyer_revenue_kopecks = _first_kopecks(item, "retailAmount", "retail_amount")
         seller_revenue_kopecks = _finance_seller_revenue_kopecks(item, quantity)
+        if not date_from.date() <= item_date <= date_to.date():
+            seller_revenue_kopecks = 0
         seller_revenue_available = (
             _finance_raw_first(
                 item,
-                "retailAmount",
-                "retail_amount",
+                "retailPriceWithDisc",
+                "retail_price_withdisc_rub",
             )
             is not None
         )
@@ -3933,7 +4038,7 @@ def fetch_finance_report_aggregates(
             row["revenueGrossKopecks"] += seller_revenue_kopecks
             row["grossSalesKopecks"] += seller_revenue_kopecks
             if commission_pct is not None:
-                row["commissionFormulaKopecks"] += round(seller_revenue_kopecks * commission_pct / 100)
+                row["commissionFormulaKopecks"] += round(buyer_revenue_kopecks * commission_pct / 100)
         elif doc_type_name == "возврат":
             if unit_key:
                 return_unit_keys = row["_returnUnitKeys"]
@@ -3947,7 +4052,7 @@ def fetch_finance_report_aggregates(
             row["revenueGrossKopecks"] -= seller_revenue_kopecks
             row["returnsKopecks"] += seller_revenue_kopecks
             if commission_pct is not None:
-                row["commissionFormulaKopecks"] -= round(seller_revenue_kopecks * commission_pct / 100)
+                row["commissionFormulaKopecks"] -= round(buyer_revenue_kopecks * commission_pct / 100)
         if doc_type_name in {"продажа", "возврат"} and (buyer_revenue_kopecks or seller_revenue_kopecks):
             row["_settlementRows"] += 1
         document_sign = -1 if doc_type_name == "возврат" else 1
@@ -4015,7 +4120,7 @@ def fetch_finance_report_aggregates(
     return {
         "aggregates": result,
         "dailyAggregates": daily_result,
-        "rows": rows,
+        "rows": source_rows,
         "diagnostics": build_finance_diagnostics_from_aggregates(
             result,
             raw_rows=rows,
@@ -4025,10 +4130,8 @@ def fetch_finance_report_aggregates(
         ),
         "count": len(result),
         "rowsCount": len(rows),
-        "duplicateRowsSkipped": duplicate_rows_skipped,
-        "pagesLoaded": pages_loaded,
         "requestedFields": fields,
-        "revenueBasis": "retailAmount",
+        "revenueBasis": FINANCE_REVENUE_BASIS,
         "financeSchemaVersion": FINANCE_SCHEMA_VERSION,
         "dateFrom": date_from.date().isoformat(),
         "dateTo": date_to.date().isoformat(),
@@ -4650,7 +4753,7 @@ def _wb_public_photo_url(nm_id: int | None) -> str | None:
 
 def _extract_wb_media_url(payload: dict[str, Any] | None, nm_id: int | None = None) -> str | None:
     if not isinstance(payload, dict):
-        return _wb_public_photo_url(nm_id)
+        return None
     for key in ("photoUrl", "imageUrl", "previewUrl", "bigPhoto", "smallPhoto", "c246x328", "c516x688", "square", "tm", "big"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
@@ -4667,7 +4770,9 @@ def _extract_wb_media_url(payload: dict[str, Any] | None, nm_id: int | None = No
                     nested = _extract_wb_media_url(item, nm_id=None)
                     if nested:
                         return nested
-    return _wb_public_photo_url(nm_id)
+    # CDN sharding cannot be reliably inferred from an nmID. Only return
+    # a photo supplied by WB or saved for this exact product.
+    return None
 
 
 def _build_sku_row(
@@ -4707,12 +4812,16 @@ def _build_sku_row(
     buyer_price_source: str | None = None,
     buyer_price_observed_at: str | None = None,
     buyer_price_expires_at: str | None = None,
+    canonical_cost_kopecks: int | None = None,
 ) -> dict[str, Any]:
     meta_overrides = _sku_meta_seed(article_id, use_demo_data)
     if meta_overrides["status"] == "warmup":
         meta_overrides["basketNormSource"] = "fallback"
 
     settings = _sku_cost_settings(article_id, use_demo_data=use_demo_data)
+    if canonical_cost_kopecks is not None:
+        settings["cogsKopecks"] = canonical_cost_kopecks
+        settings["cogsSource"] = "catalog"
     current_status = _status_after_settings(article_id, str(meta_overrides["status"]), bool(settings["automationEnabled"]))
     price_kopecks = discounted_price_kopecks or current_price_kopecks
     local_price_override_active = (
@@ -5273,6 +5382,20 @@ SETTLEMENT_PROFIT_VERSION = "wb-final-payout-cogs-tax-v1"
 SETTLEMENT_ABC_VERSION = "wb-units-profit-cumulative-80-95-v1"
 
 
+def settlement_payable_confirmed(finance: dict[str, Any]) -> bool:
+    if type(finance.get("payableKopecks")) is not int:
+        return False
+    if "settlementPayableConfirmed" in finance:
+        return finance["settlementPayableConfirmed"] is True
+    if finance.get("commissionSource") == "buyerRevenueKopecks-payableKopecks-acquiringKopecks":
+        return True
+    # Observed expense-only rows have no sale payout to confirm. Do not infer
+    # this for missing rows, netted sale/return pairs, or incomplete fields.
+    return (type(finance.get("rowsCount")) is int and finance["rowsCount"] > 0
+            and all(type(finance.get(key)) is int and finance[key] == 0 for key in
+                    ("salesUnits", "returnsUnits", "buyerRevenueKopecks", "payableKopecks", "commissionKopecks", "acquiringKopecks")))
+
+
 def settlement_profit_metrics(finance: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """WB settlement only. Commission/acquiring already in payable; no Ads double debit.
 
@@ -5284,9 +5407,9 @@ def settlement_profit_metrics(finance: dict[str, Any], context: dict[str, Any]) 
              "deductionKopecks", "loyaltyCostKopecks", "adSpendKopecks")
     fields = (*costs, "payableKopecks", "additionalPaymentKopecks")
     blockers = []
-    if finance.get("commissionSource") != "buyerRevenueKopecks-payableKopecks-acquiringKopecks":
+    if not settlement_payable_confirmed(finance):
         blockers.append("settlement_payable_unconfirmed")
-    if any(type(finance.get(field)) is not int for field in fields):
+    if finance.get("settlementComponentsConfirmed") is False or any(type(finance.get(field)) is not int for field in fields):
         blockers.append("settlement_components_missing")
     payout = None if blockers else (finance["payableKopecks"]
         - sum(finance[field] for field in costs) + finance["additionalPaymentKopecks"])
@@ -5302,6 +5425,7 @@ def settlement_profit_metrics(finance: dict[str, Any], context: dict[str, Any]) 
             "settlementAdvertisingKopecks": finance.get("adSpendKopecks"),
             "finalPayoutKopecks": payout,
             "settlementCogsKopecks": cogs if type(cogs) is int else None,
+            "settlementCogsState": context.get("settlementCogsState", "missing"),
             "settlementProfitKopecks": None if blockers else payout - cogs - tax,
             "settlementBlockers": blockers}
 
@@ -5461,6 +5585,8 @@ def list_repricer_skus(
         else cached_commission_tariffs(scenario, wb_token=wb_token, organization_id=organization_id)
     )
     rows: list[dict[str, Any]] = []
+    from app.platform.economics.legacy_catalog import catalog_facts
+    facts = catalog_facts(organization_id) if organization_id is not None and not use_demo_data else {}
     for good in goods:
         vendor_code = str(good.get("vendorCode") or "")
         if not vendor_code:
@@ -5496,7 +5622,8 @@ def list_repricer_skus(
         )
         content_sizes = card.get("sizes") or []
         chrt_ids = [int(chrt_id) for size in content_sizes for chrt_id in size.get("skus", []) if int(chrt_id) > 0]
-        image_url = _extract_wb_media_url(card, nm_id) or _extract_wb_media_url(good, nm_id)
+        fact = facts.get(nm_id, {})
+        image_url = fact.get("photoUrl") or _extract_wb_media_url(card, nm_id) or _extract_wb_media_url(good, nm_id)
         rows.append(
             _build_sku_row(
                 vendor_code,
@@ -5531,6 +5658,7 @@ def list_repricer_skus(
                 list_view=list_view,
                 subject_id=subject_id,
                 image_url=image_url,
+                canonical_cost_kopecks=fact.get("currentCostKopecks"),
                 buyer_price_source=price_size.get("buyerPriceSource") or good.get("buyerPriceSource"),
                 buyer_price_observed_at=price_size.get("buyerPriceObservedAt") or good.get("buyerPriceObservedAt"),
                 buyer_price_expires_at=price_size.get("buyerPriceExpiresAt"),
@@ -6390,6 +6518,8 @@ def get_repricer_liquidation(
             {
                 "articleId": article_id,
                 "name": row["meta"]["name"],
+                "photoUrl": row["meta"].get("photoUrl") or row["meta"].get("imageUrl"),
+                "nmId": row["meta"].get("nmId"),
                 "currentPriceKopecks": current_price_kopecks,
                 "pMinKopecks": pmin_kopecks,
                 "stockUnits": stock_units,
@@ -6419,6 +6549,8 @@ def get_repricer_liquidation(
             {
                 "articleId": article_id,
                 "name": sku["meta"]["name"],
+                "photoUrl": sku["meta"].get("photoUrl") or sku["meta"].get("imageUrl"),
+                "nmId": sku["meta"].get("nmId"),
                 "pMinKopecks": _liquidation_pmin_kopecks(sku),
                 "stockUnits": stock_units,
                 "stockValueKopecks": int(item["currentPriceKopecks"]) * stock_units if stock_units is not None else None,

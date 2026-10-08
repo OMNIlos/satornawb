@@ -5,6 +5,14 @@ import { build } from 'vite'
 import react from '@vitejs/plugin-react'
 import { expect, it } from 'vitest'
 
+async function prepareBrowser(page: import('playwright').Page) {
+  await page.addInitScript(() => {
+    if (!crypto.randomUUID) Object.defineProperty(crypto, 'randomUUID', {
+      value: () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join(''),
+    })
+  })
+}
+
 const reports = [
   { report: 'stock', tab: 'stock', empty: 'За выбранный период нет остатков', error: 'Остатки не загрузились' },
   { report: 'week-over-week', tab: 'week', empty: 'За выбранный период нет сравнения', error: 'Сравнение недель не загрузилось' },
@@ -28,6 +36,7 @@ it.each(reports.flatMap(report => ['empty', 'failure'].map(outcome => ({ ...repo
     const gate = new Promise<void>(resolve => { release = resolve })
     try {
       const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
+      await prepareBrowser(page)
       const unexpected: string[] = [], errors: string[] = [], queries: string[] = []
       page.on('pageerror', event => errors.push(event.message))
       await page.route('**/*', async route => {
@@ -100,6 +109,7 @@ it('does not report an empty P&L when polling expires without a ready cache', as
   const browser = await chromium.launch({ headless: true })
   try {
     const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
+    await prepareBrowser(page)
     // Only accelerate the real loader's two-second waits; keep its poll budget unchanged.
     await page.addInitScript(() => {
       const browserWindow: Window = window
@@ -112,6 +122,7 @@ it('does not report an empty P&L when polling expires without a ready cache', as
     await page.route('**/*', route => {
       const request = route.request(), url = new URL(request.url())
       if (request.method() === 'GET' && url.origin === 'http://satorna.test' && url.pathname === '/wb/reports/pnl') return route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      if (request.method() === 'POST' && url.origin === 'http://satorna.test' && url.pathname === '/api/wb/reports/work-demand/release') return route.fulfill({ json: {} })
       if (request.method() === 'GET' && request.resourceType() === 'image') return route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') })
       if (request.method() === 'GET' && url.origin === 'https://fonts.googleapis.com' && url.pathname === '/css2') return route.fulfill({ contentType: 'text/css', body: '' })
       if (url.pathname === '/api/v1/cabinet/team/users') return route.fulfill({ json: { data: [] } })
@@ -138,9 +149,9 @@ it('does not report an empty P&L when polling expires without a ready cache', as
     await page.goto('http://satorna.test/wb/reports/pnl')
     await page.addScriptTag({ content: bundle.code })
     const surface = page.locator('#tab-pnl')
-    await expect.poll(() => cacheReads, { timeout: 20_000 }).toBe(4)
+    await expect.poll(() => polls, { timeout: 20_000 }).toBe(600)
     await surface.getByText(/^(Не удалось загрузить P&L|За выбранный период нет данных)$/).waitFor()
-    expect([starts, polls]).toEqual([1, 150])
+    expect([starts, polls]).toEqual([1, 600])
     expect(await surface.innerText()).toContain('Не удалось загрузить P&L')
     expect(await surface.innerText()).not.toContain('За выбранный период нет данных')
     expect(await surface.locator('[data-report-row]').count()).toBe(0)
@@ -149,7 +160,7 @@ it('does not report an empty P&L when polling expires without a ready cache', as
     await page.reload()
     await page.addScriptTag({ content: bundle.code })
     await surface.getByText('За выбранный период нет данных', { exact: true }).waitFor()
-    expect([starts, polls]).toEqual([1, 150])
+    expect([starts, polls]).toEqual([1, 600])
     expect(unexpected).toEqual([])
     expect(errors).toEqual([])
   } finally { await browser.close() }
@@ -178,6 +189,7 @@ it.each(['abc', 'pnl', 'ads'])('stops a cold %s report poll after navigating to 
   const browser = await chromium.launch({ headless: true })
   try {
     const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1440, height: 1000 } })
+    await prepareBrowser(page)
     let starts = 0, polls = 0
     const unexpected: string[] = [], errors: string[] = []
     page.on('pageerror', error => errors.push(error.message))
@@ -238,6 +250,7 @@ it('reloads the requested Digest period after leaving during a cold refresh', as
   const browser = await chromium.launch({ headless: true })
   try {
     const page = await browser.newPage({ serviceWorkers: 'block' })
+    await prepareBrowser(page)
     let starts = 0, cacheReadsB = 0, readyB = false
     const errors: string[] = [], unexpected: string[] = []
     page.on('pageerror', error => errors.push(error.message))

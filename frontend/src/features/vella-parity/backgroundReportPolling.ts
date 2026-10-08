@@ -1,4 +1,6 @@
-export const BACKGROUND_REPORT_MAX_POLL_ATTEMPTS = 150
+// Large historical ranges may need hundreds of rate-limited campaign reads.
+// Keep polling bounded, but do not stop before a normal collection can finish.
+export const BACKGROUND_REPORT_MAX_POLL_ATTEMPTS = 600
 
 type BackgroundReportJob = {
   state?: string | null

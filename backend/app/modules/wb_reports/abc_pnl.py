@@ -176,13 +176,15 @@ def calculate_management_profit(
     sales_basis_confirmed: bool = False,
     unmapped_components: dict[str, int | None] | None = None,
     resolved_tax_kopecks: int | None = None,
+    resolved_tax_confirmed: bool = False,
     other_wb_expenses_kopecks: int | None = 0,
 ) -> ManagementProfitCalculation:
     """Pure calculation, not policy activation or evidence of financial readiness.
 
     Callers must resolve authorized, complete inputs for one account/period and
-    the effective EconomicsPolicy first. The owner's rate is 750 bps; there is
-    deliberately no global default or write to historical policies here.
+    the effective EconomicsPolicy first. There is deliberately no global
+    default or write to historical policies here. A resolved, confirmed tax
+    preserves dated rates (including 22%) without charging tax a second time.
     ``unmapped_components={}`` is an explicit completed reconciliation; None,
     unknown amounts or nonzero amounts keep profit blocked. An account expense
     must not be reused for filtered rows without an approved allocation.
@@ -213,14 +215,15 @@ def calculate_management_profit(
         type(tax_basis_points) is not int or not 0 <= tax_basis_points <= 10_000
     ):
         raise ValueError("Tax rate must be integer basis points in 0..10000")
-    if type(sales_basis_confirmed) is not bool:
+    if type(sales_basis_confirmed) is not bool or type(resolved_tax_confirmed) is not bool:
         raise ValueError("Sales basis confirmation must be boolean")
     blockers: list[str] = []
     if not sales_basis_confirmed:
         blockers.append("WB_MANAGEMENT_SALES_BASIS_UNCONFIRMED")
     if sales_kopecks is None:
         blockers.append("WB_MANAGEMENT_SALES_MISSING")
-    if tax_basis_points is None:
+    tax_ready = tax_basis_points is not None or (resolved_tax_confirmed and resolved_tax_kopecks is not None)
+    if not tax_ready:
         blockers.append("WB_MANAGEMENT_TAX_POLICY_MISSING")
     for name, amount in expenses.items():
         if amount is None:
@@ -237,7 +240,7 @@ def calculate_management_profit(
         )
         if sales_basis_confirmed
         and sales_kopecks is not None
-        and tax_basis_points is not None
+        and tax_ready
         else None
     )
     before_internal = None
@@ -529,8 +532,9 @@ class WbAbcPnlService:
             acceptance_kopecks=fact.acceptance_kopecks,
             advertising_kopecks=advertising_spend if advertising_complete else None,
             penalty_kopecks=penalty,
-            tax_basis_points=750 if tax_ready else None,
+            tax_basis_points=None,
             resolved_tax_kopecks=tax if tax_ready else None,
+            resolved_tax_confirmed=tax_ready,
             cogs_kopecks=(
                 cogs
                 if cost_state == "configured"
@@ -664,8 +668,9 @@ class WbAbcPnlService:
             acceptance_kopecks=total("acceptance_kopecks"),
             advertising_kopecks=advertising_total,
             penalty_kopecks=total("penalty_kopecks"),
-            tax_basis_points=750 if approved_inputs else None,
+            tax_basis_points=None,
             resolved_tax_kopecks=total("tax_kopecks") if approved_inputs else None,
+            resolved_tax_confirmed=approved_inputs,
             cogs_kopecks=total("cogs_kopecks") if approved_inputs else None,
             internal_expenses_kopecks=0,
             sales_basis_confirmed=True,
@@ -881,7 +886,7 @@ class WbAbcPnlService:
                     and tax is not None
                     and all(
                         policy is not None
-                        and policy.tax_basis_points == 750
+                        and policy.tax_basis_points is not None
                         and policy.tax_value_state == "configured"
                         and policy.tax_evidence_status == "dated"
                         for instant, _basis in economics_daily_by_nm.get(fact.nm_id, [])

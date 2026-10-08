@@ -44,10 +44,11 @@ def row_metrics(row):
 
 def trend(current, previous):
     if current is None or previous is None:
-        return {"direction": "missing", "percent": None}
+        return {"direction": "missing", "percent": None, "delta": None}
     delta = current - previous
     return {"direction": "up" if delta > 0 else "down" if delta < 0 else "flat",
             "percent": round(delta / previous * 100, 1) if previous else (0 if not delta else None),
+            "delta": delta,
             "current": current, "previous": previous}
 
 

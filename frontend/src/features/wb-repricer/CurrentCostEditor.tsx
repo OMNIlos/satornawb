@@ -2,8 +2,9 @@ import { useRef, useState } from 'react'
 import { useAuth } from '@/features/auth/authContext'
 import { authorizationHeaders } from '@/features/auth/authApi'
 import { ApiError, apiData } from '@/lib/api'
+import { invalidateCostViews } from './costInvalidation'
 
-type Cost = { amountKopecks: number | null; costVersionId: number | null; effectiveFrom: string | null }
+type Cost = { amountKopecks: number | null; costVersionId: number | null; effectiveFrom: string | null; source?: string | null }
 type Context = { catalogSkuId: number; linkedProductCount: number; canWrite: boolean; currentCost: Cost }
 const moscowDate = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' })
 
@@ -12,14 +13,15 @@ export function parseCostRubles(raw: string): number {
   if (!/^(?:\d+|\d{1,3}(?:[ \u00a0\u202f]\d{3})+)(?:[,.]\d{1,2})?$/.test(value)) throw new Error('Введите неотрицательную сумму, не больше двух знаков после запятой')
   const [whole, fraction = ''] = value.replace(/[ \u00a0\u202f]/g, '').split(/[,.]/)
   const amount = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'))
-  if (amount > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Слишком большая сумма')
+  if (amount > 2147483647n) throw new Error('Максимальная себестоимость — 21 474 836,47 ₽')
   return Number(amount)
 }
 
-export function CurrentCostEditor({ nmId, onSaved }: { nmId: number; onSaved: () => Promise<void> }) {
+export function CurrentCostEditor({ nmId, initialRubles, onSaved }: { nmId: number; initialRubles?: number | null; onSaved: () => Promise<void> }) {
   const { accessToken } = useAuth()
   const [context, setContext] = useState<Context | null>(null)
-  const [text, setText] = useState('')
+  const [text, setText] = useState(initialRubles == null ? '' : String(initialRubles).replace('.', ','))
+  const dirty = useRef(false)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [sharedConfirmed, setSharedConfirmed] = useState(false)
@@ -35,7 +37,7 @@ export function CurrentCostEditor({ nmId, onSaved }: { nmId: number; onSaved: ()
       setContext(value)
       try { setHistory(await apiData<Cost[]>(`/api/v2/catalog/skus/${value.catalogSkuId}/cost-history`, { headers: authorizationHeaders(accessToken) })) }
       catch { setHistory([]) }
-      if (!preserveInput) setText(format(value.currentCost.amountKopecks))
+      if (!preserveInput && !dirty.current) setText(format(value.currentCost.amountKopecks))
       setMessage(preserveInput ? `Конфликт. Сейчас сохранено: ${format(value.currentCost.amountKopecks) || 'не указано'}. Ваш ввод сохранён; проверьте перед повтором.` : '')
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Не удалось загрузить себестоимость') }
     finally { setBusy(false) }
@@ -52,10 +54,12 @@ export function CurrentCostEditor({ nmId, onSaved }: { nmId: number; onSaved: ()
       const historical = effectiveDate !== moscowDate()
       const saved = await apiData<Cost>(`/api/v2/catalog/skus/${context.catalogSkuId}/${historical ? 'cost' : 'current-cost'}`, {
         method: 'POST', headers: authorizationHeaders(accessToken), body: JSON.stringify(historical
-          ? { amountKopecks: amount, valueState: 'configured', effectiveFrom: `${effectiveDate}T23:59:59.999999+03:00`, sourceReference: command.current.key, evidenceStatus: 'dated' }
+          ? { amountKopecks: amount, valueState: 'configured', effectiveFrom: `${effectiveDate}T00:00:00+03:00`, sourceReference: command.current.key, evidenceStatus: 'dated' }
           : { amountKopecks: amount, expectedCostVersionId: version, sourceReference: command.current.key }),
       })
       command.current = null
+      invalidateCostViews()
+      dirty.current = false
       if (historical) {
         const current = await apiData<Context>(`/api/v2/wb/products/${nmId}/current-cost`, { headers: authorizationHeaders(accessToken) })
         setContext(current); setText(format(current.currentCost.amountKopecks))
@@ -72,14 +76,15 @@ export function CurrentCostEditor({ nmId, onSaved }: { nmId: number; onSaved: ()
   }
   return <div style={{ minWidth: 150, maxWidth: 220 }} onClick={event => event.stopPropagation()}>
       <input aria-label={`Себестоимость ${nmId}, рублей за штуку`} inputMode="decimal" value={text}
-        readOnly={!context || busy || !context.canWrite} aria-busy={busy}
+        readOnly={context !== null && (!context.canWrite || busy)} aria-busy={busy}
         placeholder={busy ? '…' : '—'} title="Себестоимость одной единицы, ₽. Enter — сохранить, Escape — отменить."
         style={{ width: 105, minHeight: 34, padding: '6px 10px', border: '1px solid #2563eb', borderRadius: 6, background: '#eff6ff', color: '#1d4ed8', fontWeight: 600, outlineOffset: 2 }}
         onFocus={() => { if (!context && !busy) void load() }}
         onClick={() => { if (!context && !busy && message) void load() }}
-        onChange={event => { setText(event.target.value); setMessage('Не сохранено') }}
-        onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (!context && !busy) void load(); else void save() } if (event.key === 'Escape') { setText(format(context?.currentCost.amountKopecks ?? null)); setMessage('') } }} />
+        onChange={event => { dirty.current = true; setText(event.target.value); setMessage('Не сохранено') }}
+        onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (!context && !busy) void load(); else void save() } if (event.key === 'Escape') { dirty.current = false; setText(format(context?.currentCost.amountKopecks ?? null)); setMessage('') } }} />
     {context && <>
+      {context.currentCost.source === 'user-example' && <small style={{ display: 'block', color: '#92400e' }}>Примерная себестоимость, не фактическая</small>}
       <button type="button" aria-label={`Сохранить себестоимость ${nmId}`} disabled={busy || !context.canWrite} onClick={() => void save()}>{busy ? '…' : '✓'}</button>
       <label style={{ display: 'block', marginTop: 6, fontSize: 12 }}>Действует с <input type="date" aria-label={`Дата изменения себестоимости ${nmId}`} value={effectiveDate} max={moscowDate()} disabled={busy || !context.canWrite} onChange={event => { setEffectiveDate(event.target.value); setMessage('Не сохранено') }} /></label>
       {context.linkedProductCount > 1 && <label style={{ display: 'block' }}><input type="checkbox" checked={sharedConfirmed} onChange={event => setSharedConfirmed(event.target.checked)} />Общая для {context.linkedProductCount} карточек</label>}

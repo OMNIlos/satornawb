@@ -22,6 +22,15 @@ from app.cabinet.store import AvitoCredentialsSecret
 from app.control_plane.auth import ActorContext
 from app.main import create_app
 from tests.test_avito_stats import AvitoStatsHttpResponse
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_order_asset_store(monkeypatch):
+    from app.avito import listing_photos
+    from app.routers import avito_orders
+    monkeypatch.setattr(listing_photos, "photo_index", lambda _: {})
+    monkeypatch.setattr(avito_orders, "enrich_labels", lambda *_: None)
 
 
 class RecordingAvitoOrdersHttpClient:
@@ -36,6 +45,58 @@ class RecordingAvitoOrdersHttpClient:
             body, status_code = payload
             return AvitoStatsHttpResponse(body, status_code)
         return AvitoStatsHttpResponse(payload)
+
+
+@pytest.mark.parametrize("accounts, expected_status", [(["a"], "closed"), (["a", "b"], "on_return")])
+def test_browser_terminal_status_reconciles_only_unique_saved_account(monkeypatch, accounts, expected_status):
+    cache = {(1, "avito_orders_browser_snapshot"): {
+        "capturedAt": "2026-10-07T10:00:00Z", "collector": {"checkpoint": True},
+        "orders": [], "returns": [{"orderId": "000123", "accountId": account, "status": "on_return",
+            "items": [{"itemId": "000456", "title": "Saved product"}]} for account in accounts],
+    }}
+    monkeypatch.setattr("app.routers.avito_orders.actor_from_request", lambda _: ActorContext(
+        actor_id="user:test", user_id="test", organization_id=1, permission_profile="admin",
+        permissions=frozenset({"cabinet:read"}), email="test@example.test"))
+    monkeypatch.setattr("app.routers.avito_orders.has_permission", lambda *_: True)
+    monkeypatch.setattr("app.routers.avito_orders.get_organization_avito_credentials_secret", lambda _: None)
+    monkeypatch.setattr("app.routers.avito_orders.get_source_cache", lambda org, key, **_: cache.get((org, key)))
+    monkeypatch.setattr("app.routers.avito_orders.save_source_cache", lambda org, key, payload: cache.__setitem__((org, key), payload))
+    monkeypatch.setattr("app.routers.avito_orders.enrich_existing_return_candidates", lambda *_: None)
+    response = TestClient(create_app()).post("/api/v1/avito/orders/browser-snapshot", json={
+        "capturedAt": "2026-10-07T11:00:00Z", "collector": {"checkpoint": True},
+        "returns": [{"orderId": "000123", "status": "closed", "returnStatus": "received", "items": []},
+                    {"orderId": "historical-unknown", "status": "closed", "items": []}],
+    })
+    assert response.status_code == 200
+    rows = cache[(1, "avito_orders_browser_snapshot")]["returns"]
+    assert len(rows) == len(accounts)
+    assert all(row["status"] == expected_status for row in rows)
+    assert all(row["items"][0]["itemId"] == "000456" for row in rows)
+
+
+def test_first_browser_terminal_update_uses_current_credential_queue(monkeypatch):
+    from app.routers import avito_orders
+    credentials = AvitoCredentialsSecret(client_id="synthetic-client", client_secret="synthetic-secret", cached_access_token=None, access_token_expires_at=None)
+    key = avito_orders.scoped_avito_cache_key(avito_orders.AVITO_ORDERS_QUEUE_KEY, "synthetic-client\0synthetic-secret")
+    cache = {(1, key): {"rows": [{"orderId": "api-order", "marketplaceId": "000123", "accountId": "a",
+        "status": "ready_to_ship", "items": [{"itemId": "000456", "title": "Saved product"}]}]}}
+    monkeypatch.setattr(avito_orders, "actor_from_request", lambda _: ActorContext(
+        actor_id="user:test", user_id="test", organization_id=1, permission_profile="admin",
+        permissions=frozenset({"cabinet:read"}), email="test@example.test"))
+    monkeypatch.setattr(avito_orders, "has_permission", lambda *_: True)
+    monkeypatch.setattr(avito_orders, "get_organization_avito_credentials_secret", lambda _: credentials)
+    monkeypatch.setattr(avito_orders, "get_source_cache", lambda org, key, **_: cache.get((org, key)))
+    monkeypatch.setattr(avito_orders, "save_source_cache", lambda org, key, payload: cache.__setitem__((org, key), payload))
+    response = TestClient(create_app()).post("/api/v1/avito/orders/browser-snapshot", json={
+        "capturedAt": "2026-10-07T11:00:00Z", "collector": {"checkpoint": True},
+        "orders": [{"orderId": "000123", "status": "canceled", "items": []}]})
+    assert response.status_code == 200
+    row = cache[(1, avito_orders.AVITO_ORDERS_BROWSER_SNAPSHOT_KEY)]["orders"][0]
+    assert row["accountId"] == "a" and row["status"] == "canceled" and row["orderId"] == "api-order"
+    snapshot = AvitoOrdersBrowserSnapshot.model_validate(cache[(1, avito_orders.AVITO_ORDERS_BROWSER_SNAPSHOT_KEY)])
+    api_row = AvitoOrderRow.model_validate(cache[(1, key)]["rows"][0])
+    avito_orders._reconcile_export_statuses([api_row], avito_orders._browser_snapshot_rows(snapshot, statuses=["canceled"]), None)
+    assert api_row.status == "canceled"
 
 
 def test_live_avito_orders_client_gets_order_management_orders_and_normalizes_rows():
@@ -467,6 +528,7 @@ def test_avito_orders_browser_snapshot_enriches_live_rows(monkeypatch):
                 {
                     "orderId": "ord_1",
                     "marketplaceId": "123456",
+                    "status": "ready_to_ship",
                     "items": [
                         {
                             "itemId": "8098482225",
@@ -614,7 +676,7 @@ def test_avito_orders_extension_token_can_be_regenerated_and_used_for_snapshot(m
         json={
             "capturedAt": "2026-07-22T09:12:00+00:00",
             "pageUrl": "https://www.avito.ru/profile/orders",
-            "orders": [{"orderId": "ord_ext", "marketplaceId": "999999", "items": [{"title": "Футболка", "size": "M"}]}],
+            "orders": [{"orderId": "ord_ext", "marketplaceId": "999999", "status": "ready_to_ship", "items": [{"title": "Футболка", "size": "M"}]}],
         },
     )
 
@@ -721,9 +783,9 @@ def test_avito_orders_picking_list_xlsx_matches_avito_order_rows(monkeypatch):
     assert "avito-picking-list-" in response.headers["content-disposition"]
     assert _xlsx_sheet_names(response.content) == ["Лист подбора"]
     cells = _xlsx_cells(response.content)
-    assert [cells[f"{column}1"] for column in "ABCDEFGHIJ"] == [
+    assert [cells[f"{column}1"] for column in "ABCDEFGHIJK"] == [
         "№", "Фото", "Наименование", "Размер", "Цвет", "Количество, шт.",
-        "Номер отправления", "Стикер", "Номер заказа", "ID товара Авито",
+        "Номер отправления", "Стикер", "Номер заказа", "ID товара Авито", "Пункт приема",
     ]
     assert cells["A2"] == "1"
     assert cells["B2"] == "Фото не получено"

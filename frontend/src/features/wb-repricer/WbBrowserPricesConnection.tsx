@@ -108,6 +108,7 @@ function ConnectionDetails({ accessToken, accountId }: { accessToken: string; ac
 }
 
 function AccountConnection({ accessToken }: { accessToken: string }) {
+  const extensionServer = import.meta.env.VITE_API_BASE_URL || window.location.origin
   const titleId = useId(), accountSelectId = useId()
   const [accounts, setAccounts] = useState<WbAccount[]>([]), [accountId, setAccountId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true), [error, setError] = useState<string | null>(null)
@@ -132,6 +133,7 @@ function AccountConnection({ accessToken }: { accessToken: string }) {
     <div className="profile-token-head"><div>
       <div className="profile-card-title" id={titleId}>Расширение WB: цены и СПП</div>
       <div className="profile-helper-text">Собирает покупательские цены из вашего браузера. Cookies и API-ключ WB передавать не нужно. Ключ расширения не даёт права изменять цены на WB.</div>
+      <div className="profile-helper-text">Адрес сервера для расширения: {extensionServer}. Его можно изменить в настройках расширения.</div>
     </div></div>
     <div className="profile-field">
       <label htmlFor={accountSelectId}>Аккаунт WB для расширения</label>

@@ -5,6 +5,11 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from threading import Barrier, Event
 from types import SimpleNamespace
+import json
+from pathlib import Path
+import select as io_select
+import shutil
+import subprocess
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -88,6 +93,59 @@ def connect(data):
     body = response.json()
     assert body["configured"] is True and body["token"].startswith("sat_wbp_")
     return body, {"Authorization": "Bearer " + body["token"]}
+
+
+def test_actual_extension_worker_to_http_postgres_and_platform_state(data):
+    issued, _ = connect(data)
+    server = 'https://synthetic-vps.example'
+    script = Path(__file__).resolve().parents[2] / 'wb-prices-extension/tests/http-roundtrip.mjs'
+    node = shutil.which('node')
+    assert node, 'Node is required for the extension/backend contract gate'
+    with subprocess.Popen([node, str(script)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, bufsize=1) as child:
+        def reply(value):
+            child.stdin.write(json.dumps(value) + '\n'); child.stdin.flush()
+        reply({'backendUrl': server, 'token': issued['token']})
+        requests = 0
+        try:
+            for _ in range(20):
+                assert io_select.select([child.stdout], [], [], 20)[0], 'Synthetic worker transport timed out'
+                line = child.stdout.readline()
+                assert line, 'Synthetic worker exited before completion'
+                message = json.loads(line)
+                if message['kind'] == 'done':
+                    assert message['result']['ok']
+                    assert message['result']['state']['backendUrl'] == server
+                    assert message['result']['state']['accepted'] == 2
+                    assert issued['token'] not in json.dumps(message)
+                    break
+                requests += 1
+                url = message['url']
+                if url.startswith('https://card.wb.ru/cards/v4/detail?'):
+                    assert 'Authorization' not in message['headers']
+                    reply({'status': 200, 'body': {'products': [
+                        {'id': nm, 'supplierId': 777, 'sizes': [{'optionId': size,
+                          'price': {'basic': 120000, 'product': price}}]}
+                        for nm, size, price in [(101, 1001, 80000), (102, 2001, 160000)]]}})
+                else:
+                    assert url.startswith(server + PREFIX + '/')
+                    response = data.client.request(message['method'], url[len(server):],
+                        headers=message['headers'], content=message.get('body'))
+                    reply({'status': response.status_code, 'body': response.json()})
+            else:
+                pytest.fail('Synthetic worker exceeded its bounded request budget')
+            assert child.wait(timeout=5) == 0
+        finally:
+            if child.poll() is None:
+                child.kill(); child.wait()
+    assert requests == 3  # CRM catalog, synthetic public WB batch, CRM snapshot.
+    persisted = prices(data)
+    assert persisted['items']['101:1001']['buyerPriceNoWalletKopecks'] == 80000
+    assert persisted['items']['102:2001']['buyerPriceNoWalletKopecks'] == 160000
+    # The same endpoint consumed by the real platform connection card reads DB.
+    view = data.client.get(PREFIX + '/connection?marketplaceAccountId=10')
+    assert view.status_code == 200 and view.json()['knownPrices'] == 2
+    assert view.json()['lastObservedAt'] is not None
 
 
 def catalog(data, headers):
@@ -197,6 +255,13 @@ def test_partial_batches_merge_duplicates_and_ignore_older_observations(data):
     assert payload["items"]["101:1001"]["sellerPriceObservedAt"] == data.now.isoformat()
     status = data.client.get(PREFIX + "/connection?marketplaceAccountId=10").json()
     assert status["knownPrices"] == 2 and status["lastObservedAt"] is not None
+    updated = {**first, "observedAt": (data.now + timedelta(seconds=1)).isoformat(),
+               "buyerPriceNoWalletKopecks": 78000, "buyerPriceWithWalletKopecks": 74000}
+    assert submit(data, headers, revision, [updated]).json()["accepted"] == 1
+    replaced = prices(data)
+    assert set(replaced["items"]) == {"101:1001", "102:2001"}
+    assert replaced["items"]["101:1001"]["buyerPriceNoWalletKopecks"] == 78000
+    assert replaced["items"]["101:1001"]["buyerPriceWithWalletKopecks"] == 74000
 
 
 @pytest.mark.parametrize("changes,status", [({"nmId": True}, 422), ({"sizeId": "1001"}, 422),

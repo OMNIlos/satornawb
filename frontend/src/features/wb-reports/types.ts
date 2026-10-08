@@ -180,6 +180,7 @@ export interface ReportChartData {
   xAxisLabel?: string
   yAxisLabel?: string
   points: ChartPoint[]
+  comparisonPoints?: ChartPoint[]
 }
 
 export type TableColumnKind = 'text' | 'number' | 'currency' | 'percent' | 'image' | 'wb-link' | 'abc' | 'promotion'

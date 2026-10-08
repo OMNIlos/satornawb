@@ -40,7 +40,7 @@ const NonNegativeManualCostSchema = z.object({
 })
 export const ManualCostSchema = z.union([
   NonNegativeManualCostSchema,
-  NonNegativeManualCostSchema.extend({ costId: z.literal('tax'), amountKopecks: OptionalMoneyKopecksSchema }),
+  NonNegativeManualCostSchema.extend({ costId: z.enum(['tax', 'storage', 'overhead']), amountKopecks: OptionalMoneyKopecksSchema }),
 ])
 export type ManualCost = z.infer<typeof ManualCostSchema>
 
@@ -237,13 +237,13 @@ export const PnlRowSchema = z.object({
   managerId: z.string().nullable(),
   skuId: z.string().nullable(),
   revenueKopecks: OptionalMoneyKopecksSchema,
-  cogsKopecks: OptionalNonNegativeMoneyKopecksSchema,
-  commissionKopecks: OptionalNonNegativeMoneyKopecksSchema,
-  logisticsKopecks: OptionalNonNegativeMoneyKopecksSchema,
-  storageKopecks: OptionalNonNegativeMoneyKopecksSchema,
+  cogsKopecks: OptionalMoneyKopecksSchema,
+  commissionKopecks: OptionalMoneyKopecksSchema,
+  logisticsKopecks: OptionalMoneyKopecksSchema,
+  storageKopecks: OptionalMoneyKopecksSchema,
   adSpendKopecks: OptionalNonNegativeMoneyKopecksSchema,
   taxKopecks: OptionalMoneyKopecksSchema,
-  overheadKopecks: OptionalNonNegativeMoneyKopecksSchema,
+  overheadKopecks: OptionalMoneyKopecksSchema,
   netProfitKopecks: OptionalMoneyKopecksSchema,
   marginPct: OptionalPctSchema,
   sourceStatus: SourceStatusSchema,
