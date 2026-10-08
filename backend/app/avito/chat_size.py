@@ -1,4 +1,4 @@
-"""Bound, role-aware evidence checks before accepting AI clothing-size output."""
+"""Extract clothing sizes from buyer replies bound to their order and item."""
 import re
 
 from app.avito.orders import AvitoOrdersBrowserOrder, AvitoOrdersBrowserItem, _parsed_time
@@ -34,6 +34,8 @@ def _reply_size(text: str) -> tuple[str | None, str | None]:
     if re.search(r"рост|вес|\bсм\b|\bкг\b|обхват|талия|телефон|номер|руб|₽|цена|\bзаказ\b|количество|\bшт\b|штук|январ|феврал|март|апрел|мая|июн|июл|август|сентябр|октябр|ноябр|декабр", text, re.I):
         return None, "unrelated_numbers"
     explicit_request = bool(re.search(rf"размер\s*{_TOKEN}(?!\w)|{_REQUEST}", text, re.I))
+    if re.search(r"раньше|носил|носила|прошл|обычно|закончился|закончились", text, re.I):
+        return None, "ambiguous_reply"
     if re.search(r"\b(?:или|либо)\b|возможно|наверно", text, re.I) or ("?" in text and not explicit_request):
         return None, "ambiguous_reply"
     if len(sizes) > 1:
@@ -41,7 +43,7 @@ def _reply_size(text: str) -> tuple[str | None, str | None]:
             return None, "multiple_sizes"
         chosen = list(re.finditer(rf"(?:лучше|нужен|нужна|давайте|беру|выбираю|хочу|тогда)\s+(?:размер\s+)?({_TOKEN})(?!\w)", text, re.I))
         return (normalize_size(chosen[-1][1]), None) if chosen else (None, "ambiguous_correction")
-    if re.search(rf"не\s+{_TOKEN}(?!\w)", text, re.I):
+    if re.search(rf"\bне\s+{_TOKEN}(?!\w)|\bне\s+(?:нужен|нужна|надо|хочу|беру|подходит)", text, re.I):
         return None, "rejected_size"
     return sizes[0], None
 

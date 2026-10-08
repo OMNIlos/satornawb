@@ -188,7 +188,7 @@ def test_bound_chat_ai_http_persistence_orders_and_xlsx(monkeypatch, reply, ques
         assert cells['K1'] == 'Пункт приема' and cells['K2'] == 'Яндекс Доставка'
         assert cells['G1'] == 'Номер отправления' and cells['H1'] == 'Стикер'
     # Export must not collect chat or call AI; a second org cannot read this proof.
-    assert len(provider.posts) == 1 and orders._browser_snapshot_from_cache(20) is None
+    assert not provider.posts and orders._browser_snapshot_from_cache(20) is None
     for mode in ('none', 'description', None):
         forged = snapshot().model_dump(mode='json')
         forged['collector']['options']['sizeMode'] = mode

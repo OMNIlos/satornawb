@@ -1,7 +1,7 @@
 name: VPS build and extension integration
 on:
   push:
-    branches: ['codex/vps-release-*']
+    branches: ['main', 'codex/vps-release-*']
   workflow_dispatch:
 permissions:
   contents: read

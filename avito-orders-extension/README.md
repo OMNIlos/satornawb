@@ -14,27 +14,24 @@ Chrome Manifest V3 extension for collecting Avito seller order details that are 
 8. Open `/avito/orders` in Satorna.
 9. Click `Создать токен` or `Перегенерировать токен`.
 10. Paste the long-lived `sat_avito_...` token into the extension popup.
-11. Choose what to collect: product photos, color/article from description, and size from description or chat AI.
+11. Choose what to collect: product photos, color/article from description, and size from description or chat rules.
 12. Click `Собрать всё`; the extension opens `https://www.avito.ru/orders` and collects operational orders, returns, chats, product photos and labels into Satorna. Optional retry tools are under diagnostics.
 
 ## Customer-chat size (0.2.9)
 
-Select «Размер из чата с покупателем (AI)» in collection settings, then collect orders.
+Select «Размер из чата с покупателем» in collection settings, then collect orders.
 Only chats linked from operational order details are read (at most 50 recent
 messages). The collector preserves message authors, IDs, times and exact
 account/order/listing identity. It never scans the entire inbox or sends messages.
 The backend validates the seller's size question or an explicit customer-initiated
-selection (including «М оформляю»), and the latest unambiguous buyer choice before
-confirming the configured AI's structured output against that
-same buyer message. Only a minimal question/reply exchange is sent to AI;
-credentials stay on the server. One checkpoint makes at most one bounded AI call
-(40 candidates); any excess or failed confirmation is explicitly reviewable.
+selection (including «М оформляю»), and confirms the latest unambiguous buyer choice
+using local rules. Sizes require no model, provider credentials or paid API calls.
 
 The normalized size and original answer are saved with provenance. Orders and
 the existing XLSX Size column show confirmed values or a review reason; listing
 sizes are never substituted in this mode. Unknown
 message authors, missing dates, unavailable chat access, multiple-order/item
-ambiguity, or missing server AI configuration require review rather than guesses.
+ambiguity require review rather than guesses.
 Other collection modes and local/production backend configuration are unchanged.
 Unexpected successful-HTTP chat payloads are reported as collection failures,
 not as missing customer replies. Native `hasMore` marks incomplete history;

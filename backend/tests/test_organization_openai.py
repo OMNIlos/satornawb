@@ -92,12 +92,15 @@ def test_avito_ai_prefers_org_key_and_never_falls_back_after_decryption_failure(
     store.save_key(1, key)
     monkeypatch.setattr(orders_ai, 'get_settings', lambda: settings('sk-server-synthetic'))
     client = RecordingClient({'items': []})
-    orders_ai.enrich_avito_orders_snapshot_with_ai(snapshot_with_two_sizes(), client=client, organization_id=1)
+    data = snapshot_with_two_sizes()
+    data.collector['options']['colorFromDescription'] = True
+    data.orders[0].items[0].description = 'Цвет: красный'
+    orders_ai.enrich_avito_orders_snapshot_with_ai(data, client=client, organization_id=1)
     assert client.posts and client.posts[0]['headers']['Authorization'] == 'Bearer ' + key
     with isolated() as session, session.begin():
         row = session.get(OrganizationOpenAiKeyRow, 1)
         row.ciphertext = b'corrupt'
     client.posts.clear()
-    _, metadata = orders_ai.enrich_avito_orders_snapshot_with_ai(snapshot_with_two_sizes(), client=client, organization_id=1)
+    _, metadata = orders_ai.enrich_avito_orders_snapshot_with_ai(data, client=client, organization_id=1)
     assert metadata['reason'] == 'openai_key_storage_unavailable'
     assert not client.posts

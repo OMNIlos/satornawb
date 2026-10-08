@@ -27,7 +27,7 @@ if (origin) {
   await writeFile(resolve(dist, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
   const connectionPath = resolve(dist, 'src/connection.js')
   const connection = await readFile(connectionPath, 'utf8')
-  const marker = "defaultUrl: 'https://satorna-wb.vercel.app'"
+  const marker = "defaultUrl: 'https://comcookie.store'"
   if (connection.split(marker).length !== 2) throw new Error('Unexpected Avito default URL contract')
   await writeFile(connectionPath, connection.replace(marker, `defaultUrl: ${JSON.stringify(origin)}`))
   const wbPath = resolve(root, 'wb-prices-extension/dist/src/connection.js')

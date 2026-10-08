@@ -46,8 +46,8 @@ export function OpenAiKeySettings() {
 
   return <section className="profile-token-card" aria-label="OpenAI API key">
     <div className="profile-token-head">
-      <div><div className="profile-card-title">OpenAI · размеры Авито</div>
-        <div className="profile-helper-text">Ключ компании для распознавания размеров из чатов. Хранится зашифрованным на сервере, не в расширении.</div></div>
+      <div><div className="profile-card-title">OpenAI · поля Авито</div>
+        <div className="profile-helper-text">Размеры из чатов распознаются бесплатно без ключа. Ключ нужен только для необязательного извлечения цвета и артикула из описания. Хранится зашифрованным на сервере, не в расширении.</div></div>
       <span className={`access-badge ${status?.configured || status?.serverConfigured ? 'ok' : ''}`}>
         {!status ? 'проверяем' : status.configured ? 'настроен' : status.serverConfigured ? 'ключ сервера' : 'не настроен'}
       </span>
