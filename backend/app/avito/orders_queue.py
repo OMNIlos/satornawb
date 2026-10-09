@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any
+
+import httpx
 
 from app.avito.orders import (
     AVITO_ORDER_STATUSES,
+    LiveAvitoOrdersClient,
     AvitoOrderRow,
     AvitoOrdersBrowserSnapshot,
     AvitoOrdersFetchRequest,
@@ -105,6 +109,13 @@ def merge_queue_rows(
 
 
 def fetch_full_queue(client: Any, *, previous: list[AvitoOrderRow], snapshot: AvitoOrdersBrowserSnapshot | None) -> tuple[list[AvitoOrderRow], bool, dict[str, Any] | None]:
+    if isinstance(client, LiveAvitoOrdersClient):
+        with httpx.Client(timeout=client.timeout_seconds) as http:
+            return _fetch_full_queue(partial(client.fetch_orders, http_client=http), previous=previous, snapshot=snapshot)
+    return _fetch_full_queue(client.fetch_orders, previous=previous, snapshot=snapshot)
+
+
+def _fetch_full_queue(fetch_orders: Any, *, previous: list[AvitoOrderRow], snapshot: AvitoOrdersBrowserSnapshot | None) -> tuple[list[AvitoOrderRow], bool, dict[str, Any] | None]:
     incoming: dict[tuple[str, str], AvitoOrderRow] = {}
     prior_by_id: dict[str, list[AvitoOrderRow]] = {}
     for old_row in previous:
@@ -119,7 +130,7 @@ def fetch_full_queue(client: Any, *, previous: list[AvitoOrderRow], snapshot: Av
 
     reported_total = 0
     for page in range(1, 101):
-        response = client.fetch_orders(AvitoOrdersFetchRequest(dateFrom=None, statuses=[], limit=20, page=page))
+        response = fetch_orders(AvitoOrdersFetchRequest(dateFrom=None, statuses=[], limit=20, page=page))
         if response.status == "blocked":
             error = response.error.model_dump(mode="json") if response.error else {"code": "avito_request_failed"}
             return previous, False, error
@@ -137,7 +148,7 @@ def fetch_full_queue(client: Any, *, previous: list[AvitoOrderRow], snapshot: Av
     unresolved = {order_key(row) for row in missing}
     for offset in range(0, len(missing), 20):
         ids = [row.orderId for row in missing[offset:offset + 20]]
-        exact = client.fetch_orders(AvitoOrdersFetchRequest(ids=ids, limit=20, page=1))
+        exact = fetch_orders(AvitoOrdersFetchRequest(ids=ids, limit=20, page=1))
         if exact.status == "blocked":
             return previous, False, exact.error.model_dump(mode="json") if exact.error else {"code": "avito_request_failed"}
         for row in exact.orders:

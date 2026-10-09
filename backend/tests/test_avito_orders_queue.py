@@ -279,6 +279,39 @@ class Pages:
         return value if isinstance(value, AvitoOrdersFetchResult) else AvitoOrdersFetchResult(status="synced", orders=value, total=self.total or sum(len(page) for page in self.pages if isinstance(page, list)))
 
 
+@pytest.mark.parametrize("blocked", [False, True])
+def test_live_queue_reuses_and_closes_one_http_session_for_pages_and_exact_lookup(monkeypatch, blocked):
+    import httpx
+    sessions, requests = [], []
+    def handler(request):
+        requests.append(dict(request.url.params))
+        if request.url.params.get("ids"):
+            rows = [{"id": "old", "status": "closed"}]
+        elif request.url.params["page"] == "1":
+            rows = [{"id": f"new-{i}", "status": "ready_to_ship"} for i in range(20)]
+        elif blocked:
+            return httpx.Response(403, json={"error": "forbidden"})
+        else:
+            rows = [{"id": "last", "status": "ready_to_ship"}]
+        return httpx.Response(200, json={"orders": rows, "total": 21})
+    real_client = httpx.Client
+    class Session(real_client):
+        def __init__(self, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(**kwargs)
+            sessions.append(self)
+    monkeypatch.setattr(httpx, "Client", Session)
+    previous = [order("old", "ready_to_ship")]
+    rows, complete, error = fetch_full_queue(LiveAvitoOrdersClient("test-token"), previous=previous, snapshot=None)
+    assert len(sessions) == 1 and sessions[0].is_closed
+    if blocked:
+        assert not complete and error["code"] == "forbidden_scope" and rows == previous
+        assert len(requests) == 2
+    else:
+        assert complete and error is None and len(rows) == 22
+        assert requests[-1]["ids"] == "old"
+
+
 def test_queue_fetches_old_active_order_across_pages_and_moves_status_without_duplicate():
     first = [order(f"order-{index}", "ready_to_ship") for index in range(20)]
     second = [order("old-order", "in_transit")]

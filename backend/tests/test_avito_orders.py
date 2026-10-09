@@ -47,6 +47,22 @@ class RecordingAvitoOrdersHttpClient:
         return AvitoStatsHttpResponse(payload)
 
 
+@pytest.mark.parametrize("failure,expected_status,expected_calls", [
+    ("ConnectTimeout", "synced", 2), ("ReadTimeout", "blocked", 1),
+])
+def test_orders_retries_only_failed_connection_once(failure, expected_status, expected_calls):
+    import httpx
+    calls = []
+    class Client:
+        def get(self, url, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise getattr(httpx, failure)("test failure")
+            return AvitoStatsHttpResponse({"orders": [], "total": 0})
+    result = LiveAvitoOrdersClient("test-token").fetch_orders(AvitoOrdersFetchRequest(), http_client=Client())
+    assert result.status == expected_status and len(calls) == expected_calls
+
+
 @pytest.mark.parametrize("accounts, expected_status", [(["a"], "closed"), (["a", "b"], "on_return")])
 def test_browser_terminal_status_reconciles_only_unique_saved_account(monkeypatch, accounts, expected_status):
     cache = {(1, "avito_orders_browser_snapshot"): {

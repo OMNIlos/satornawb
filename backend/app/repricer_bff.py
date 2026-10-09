@@ -5672,9 +5672,13 @@ def list_repricer_skus(
     return rows
 
 
-def get_repricer_sku_settings(article_id: str, scenario: str = "complete", wb_token: str | None = None) -> dict[str, Any]:
+def get_repricer_sku_settings(
+    article_id: str, scenario: str = "complete", wb_token: str | None = None,
+    *, sku_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     article_id = article_id.strip()
-    for row in list_repricer_skus(scenario, wb_token=wb_token):
+    rows = sku_rows if sku_rows is not None else list_repricer_skus(scenario, wb_token=wb_token)
+    for row in rows:
         if str(row["meta"]["articleId"]).strip() == article_id:
             return row
     raise HTTPException(status_code=404, detail="SKU_NOT_FOUND")

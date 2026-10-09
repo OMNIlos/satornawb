@@ -2149,6 +2149,7 @@ def _list_repricer_skus_for_request(
     wb_token: str | None | object = _WB_TOKEN_NOT_PROVIDED,
     include_promotions: bool = False,
     include_content: bool = False,
+    list_view: bool = True,
     period_days: int | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
@@ -2174,6 +2175,7 @@ def _list_repricer_skus_for_request(
         wb_token=resolved_wb_token if isinstance(resolved_wb_token, str) else None,
         include_promotions=include_promotions,
         include_content=include_content,
+        list_view=list_view,
         period_days=_resolved_days,
         period_suffix=period_suffix,
         range_start=range_start,
@@ -2220,6 +2222,7 @@ def _list_repricer_skus_from_cached_sources(
     wb_token: str | None,
     include_promotions: bool = False,
     include_content: bool = False,
+    list_view: bool = True,
     period_days: int,
     period_suffix: str,
     range_start: Any,
@@ -2268,7 +2271,7 @@ def _list_repricer_skus_from_cached_sources(
         include_promotions=include_promotions,
         include_content=include_content,
         tolerate_content_errors=True,
-        list_view=True,
+        list_view=list_view,
         max_items=max_items,
         cached_goods=cached_goods,
         cached_content_cards=cached_content_cards,
@@ -6320,7 +6323,12 @@ def refresh_sku_baskets(
 @router.get("/api/v1/wb-repricer/sku/{articleId}/settings")
 def get_sku_settings(request: Request, articleId: str, scenario: str = Query(default="complete")) -> dict[str, Any]:
     _hydrate_org_repricer_state(request)
-    return get_repricer_sku_settings(articleId, scenario, wb_token=_request_wb_token(request))
+    token = _request_wb_token(request)
+    rows = None if repricer_bff_module._demo_repricer_data_enabled(token) else _list_repricer_skus_for_request(
+        request, scenario, wb_token=token, include_promotions=True, include_content=True,
+        max_items=None, list_view=False,
+    )
+    return get_repricer_sku_settings(articleId, scenario, wb_token=token, sku_rows=rows)
 
 
 @router.put("/api/v1/wb-repricer/sku/{articleId}/settings")

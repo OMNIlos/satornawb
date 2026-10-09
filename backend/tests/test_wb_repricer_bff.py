@@ -486,6 +486,27 @@ def test_repricer_bff_sku_settings_match_frontend_shape(monkeypatch):
     assert body["settings"]["nightMedianEnabled"] is True
 
 
+@pytest.mark.parametrize("found", [True, False])
+def test_sku_settings_reads_full_uncapped_cached_rows_without_live_wb(monkeypatch, found):
+    row = repricer_bff_module.list_repricer_skus("complete")[0]
+    article = row["meta"]["articleId"]
+    calls = []
+    monkeypatch.setattr(wb_repricer_bff_router, "_request_wb_token", lambda _: "saved-token")
+    monkeypatch.setattr(repricer_bff_module, "list_repricer_skus",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("Opening settings must not call live WB")))
+    def cached(request, scenario, **kwargs):
+        calls.append(kwargs)
+        return [row] if found else []
+    monkeypatch.setattr(wb_repricer_bff_router, "_list_repricer_skus_for_request", cached)
+    api = client()
+    response = api.get(f"/api/v1/wb-repricer/sku/{article}/settings", headers=auth_headers(api, "viewer"))
+    assert response.status_code == (200 if found else 404)
+    if found:
+        assert response.json() == row
+    assert calls == [{"wb_token": "saved-token", "include_promotions": True,
+        "include_content": True, "max_items": None, "list_view": False}]
+
+
 def test_liquidation_start_records_global_changelog(monkeypatch):
     row = repricer_bff_module.list_repricer_skus("complete")[0]
     article_id = row["meta"]["articleId"]

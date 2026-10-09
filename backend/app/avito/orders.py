@@ -539,7 +539,10 @@ class LiveAvitoOrdersClient:
         if request.ids:
             params["ids"] = ",".join(request.ids)
         url = f"{self.base_url}/order-management/1/orders"
-        response = client.get(url, params=params, headers=self._headers())
+        try:
+            response = client.get(url, params=params, headers=self._headers())
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            response = client.get(url, params=params, headers=self._headers())
         status_code = int(getattr(response, "status_code", 200) or 200)
         payload = response.json()
         diagnostics = self._avito_orders_diagnostics(status_code, payload, request_url=url, request_params=params)
