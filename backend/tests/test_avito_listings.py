@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import date
 
 from fastapi.testclient import TestClient
@@ -10,6 +11,24 @@ from app.main import create_app
 from tests.auth_helpers import auth_headers
 from tests.test_avito_stats import RecordingAvitoItemsHttpClient, RecordingAvitoStatsHttpClient
 import pytest
+
+
+def test_live_fetch_resets_optional_analytics_error_between_requests(monkeypatch):
+    client = LiveAvitoListingsClient(access_token="synthetic")
+    monkeypatch.setattr(client, "_http_client", lambda: nullcontext(None))
+    monkeypatch.setattr(client, "_accounts", lambda *_: [AvitoStatsAccount(accountId="a", accountName="Synthetic")])
+    monkeypatch.setattr(client, "_items", lambda *_: [{"itemId": "123", "title": "Saved inventory", "accountId": "a"}])
+    request = AvitoListingsFetchRequest(dateFrom=date(2026, 9, 1), dateTo=date(2026, 9, 7))
+    for unavailable in (False, True, False):
+        def analytics(*_):
+            if unavailable:
+                raise ValueError("Synthetic analytics unavailable")
+            return {"123": {"views": 7}}
+        monkeypatch.setattr(client, "_v2_item_analytics_for_account", analytics)
+        result = client.fetch_listings(request)
+        assert result.status == ("partial" if unavailable else "synced")
+        assert result.rows[0].views == (None if unavailable else 7)
+        assert (result.error is not None) is unavailable
 
 
 def test_inventory_remains_available_when_optional_analytics_fail(monkeypatch):

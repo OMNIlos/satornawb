@@ -74,7 +74,6 @@ class AvitoListingsFetchResult(BaseModel):
 
 class AvitoListingsClient(Protocol):
     def fetch_listings(self, request: AvitoListingsFetchRequest) -> AvitoListingsFetchResult:
-        self.analytics_error = None
         ...
 
     def fetch_listing_details(self, request: AvitoListingDetailsFetchRequest) -> AvitoListingsFetchResult:
@@ -95,6 +94,7 @@ class LiveAvitoListingsClient(LiveAvitoStatsClient):
     """Read-only Avito listings registry with period item analytics."""
 
     def fetch_listings(self, request: AvitoListingsFetchRequest) -> AvitoListingsFetchResult:
+        self.analytics_error = None
         try:
             with self._http_client() as client:
                 accounts = self._accounts(client, request.accountIds)
