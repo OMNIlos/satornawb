@@ -22,16 +22,26 @@ def raw_bundle() -> dict[str, object]:
     )
 
 
-def test_raw_hierarchy_preserves_scope_app_and_exact_totals(raw_bundle):
+@pytest.mark.parametrize("app_type", [0, 1])
+def test_raw_hierarchy_preserves_scope_app_and_exact_totals(raw_bundle, app_type):
+    raw_bundle["fullstats"][0]["payload"][0]["days"][0]["apps"][0]["appType"] = app_type
     evidence = normalize_raw_advertising(PERIOD, raw_bundle)
     assert evidence.source_total_spend_kopecks == 200
     assert evidence.document_total_spend_kopecks == 200
     assert len(evidence.spend_documents) == 2
     leaves = [fact for fact in evidence.facts if fact.fact_scope == "source_sku"]
-    assert [(fact.app_type, fact.spend_kopecks) for fact in leaves] == [(1, 110), (32, 40)]
+    assert [(fact.app_type, fact.spend_kopecks) for fact in leaves] == [(app_type, 110), (32, 40)]
+    assert leaves[0].source_identity.endswith(f"|{app_type}|2001")
     assert leaves[1].clicks == 1
     assert leaves[1].cart_adds == 0
     assert leaves[1].cancel_count == 1
+
+
+@pytest.mark.parametrize("app_type", [None, True, -1, 1.5])
+def test_raw_rejects_invalid_platform_codes(raw_bundle, app_type):
+    raw_bundle["fullstats"][0]["payload"][0]["days"][0]["apps"][0]["appType"] = app_type
+    with pytest.raises(AdvertisingNormalizationError, match="appType"):
+        normalize_raw_advertising(PERIOD, raw_bundle)
 
 
 def test_raw_metrics_distinguish_missing_from_explicit_zero(raw_bundle):

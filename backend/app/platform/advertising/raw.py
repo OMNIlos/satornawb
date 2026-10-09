@@ -338,7 +338,9 @@ def _normalize_fullstats_campaign(period: Period, row: Any) -> list[RawAdvertisi
         for app in apps:
             if not isinstance(app, dict):
                 raise AdvertisingNormalizationError("invalid fullstats app")
-            app_type = _positive_integer(app.get("appType"), "appType")
+            app_type = _integer(app.get("appType"), "appType")
+            if app_type is None:
+                raise AdvertisingNormalizationError("invalid appType")
             app_metric_values = _metrics(app)
             _require_metrics(app_metric_values)
             nms = app.get("nms", [])
@@ -385,7 +387,7 @@ def _fact(
     date_to = business_date if grain == "day" else period.date_to
     source_identity = (
         f"fullstats-v1|{grain}|{fact_scope}|{campaign_id}|{identity_date}|"
-        f"{app_type or ''}|{nm_id or ''}"
+        f"{app_type if app_type is not None else ''}|{nm_id or ''}"
     )
     payload = {
         "source_identity": source_identity,
