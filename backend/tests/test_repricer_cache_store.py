@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
+from alembic import command
 import pytest
 
 from app.repricer_cache.store import (
@@ -90,9 +91,11 @@ def test_period_source_revision_uses_only_tenant_overlapping_source_metadata(dat
 def test_covering_cache_keeps_payload_selection_without_whole_jsonb_cast(
     database, monkeypatch, prefix, slim, newest_metadata,
 ):
-    _, engine = database
+    config, engine = database
     LkOrganizationRow.__table__.create(engine)
     WbRepricerSourceCacheRow.__table__.create(engine)
+    command.stamp(config, "20261008_0092")
+    command.upgrade(config, "20261009_0093")
     first, last = "2026-09-01", "2026-09-02"
     now = datetime(2026, 9, 3, tzinfo=timezone.utc)
     payload = {"dateFrom": first, "dateTo": last, "dailyAggregates": {first: {}, "not-a-date": {}},
@@ -127,8 +130,8 @@ def test_covering_cache_keeps_payload_selection_without_whole_jsonb_cast(
         session.commit()
         statements = []
 
-        def capture(_connection, _cursor, statement, _parameters, _context, _many):
-            statements.append(statement)
+        def capture(_connection, _cursor, statement, parameters, _context, _many):
+            statements.append((statement, parameters))
 
         event.listen(engine, "before_cursor_execute", capture)
         monkeypatch.setattr(store, "_run_db", lambda fn: fn(session))
@@ -138,6 +141,11 @@ def test_covering_cache_keeps_payload_selection_without_whole_jsonb_cast(
             )
         finally:
             event.remove(engine, "before_cursor_execute", capture)
+
+        session.connection().exec_driver_sql("SET LOCAL enable_seqscan = off")
+        statement, parameters = statements[0]
+        plan = session.connection().exec_driver_sql("EXPLAIN " + statement, parameters).scalars().all()
+        assert "ix_wb_source_cache_covering_period" in "\n".join(plan)
 
         session.delete(rows[1])
         session.commit()
@@ -157,7 +165,7 @@ def test_covering_cache_keeps_payload_selection_without_whole_jsonb_cast(
         expected.pop("rows")
     assert result == expected
     assert len(statements) == 1
-    assert "payload::jsonb" not in statements[0]
+    assert "payload::jsonb" not in statements[0][0]
 
 
 def test_source_cache_metadata_is_derived_without_mutating_payload():
