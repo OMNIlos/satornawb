@@ -7,6 +7,7 @@ import pytest
 
 from app.platform.advertising.raw import (
     AdvertisingNormalizationError,
+    _validate_hierarchy,
     normalize_raw_advertising,
 )
 from app.platform.period import Period
@@ -115,6 +116,29 @@ def test_raw_hierarchy_rejects_money_beyond_one_kopeck(raw_bundle, field, parent
 
     with pytest.raises(AdvertisingNormalizationError, match="hierarchy"):
         normalize_raw_advertising(PERIOD, raw_bundle)
+
+
+@pytest.mark.parametrize("field", ["sum", "sum_price"])
+def test_raw_hierarchy_allows_independently_rounded_daily_money(field):
+    _validate_hierarchy(
+        {field: 1.42},
+        [{field: value} for value in (0.36, 0.36, 0.36, 0.36, 0)],
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "parent", "values"),
+    [
+        ("sum", 1.40, [0.36, 0.36, 0.36, 0.36, 0]),
+        ("sum_price", 1.40, [0.36, 0.36, 0.36, 0.36, 0]),
+        ("sum", 1.4299, [0.36, 0.36, 0.36, 0.36, 0]),
+        ("views", 142, [36, 36, 36, 36, 0]),
+        ("sum", None, [0.36] * 5),
+    ],
+)
+def test_raw_hierarchy_keeps_rounding_bounded(field, parent, values):
+    with pytest.raises(AdvertisingNormalizationError, match="hierarchy"):
+        _validate_hierarchy({field: parent}, [{field: value} for value in values])
 
 
 def test_raw_upd_preserves_signed_correction(raw_bundle):

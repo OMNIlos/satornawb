@@ -489,6 +489,12 @@ def _validate_hierarchy(
             if (value := _source_number(child.get(field))) is not None
         ]
         tolerance = _MONEY_HIERARCHY_TOLERANCE if money else 0
+        if money and parent_value is not None and all(
+            value == value.quantize(_MONEY_HIERARCHY_TOLERANCE)
+            for value in [parent_value, *child_values]
+        ):
+            # Match reconciliation's bound for independently rounded kopecks.
+            tolerance *= max(1, (len(child_values) + 1) // 2)
         if child_values and (
             parent_value is None or sum(child_values) > parent_value + tolerance
         ):
